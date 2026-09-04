@@ -191,6 +191,15 @@ async fn worker_deletion_check(
     state: &AppState,
     worker: &Worker,
 ) -> Result<WorkerDeletionCheck, AdminError> {
+    fn canonical_apparatus_or_empty(value: &str) -> String {
+        let trimmed = value.trim();
+        if trimmed.is_empty() || ApparatusId::is_valid(trimmed) {
+            trimmed.to_string()
+        } else {
+            String::new()
+        }
+    }
+
     let refs = worker_activity_refs(worker);
     let active_sessions = state
         .production_maps
@@ -199,12 +208,18 @@ async fn worker_deletion_check(
         .map_err(|_| server_error("worker activity failed"))?;
     let mut active_work = active_sessions
         .into_iter()
-        .map(|session| WorkerDeletionDependency {
-            kind: "active_order".to_string(),
-            label: format!("{} — {}", session.order_id, session.apparatus),
-            apparatus: session.apparatus,
-            order_id: session.order_id,
-            status: session.status.as_str().to_string(),
+        .map(|session| {
+            // Mobile `AdminWorkerDeletionDependency` only accepts empty or
+            // canonical `apparatus:<ns>:<key>`. Keep the human-readable text in
+            // `label`, never break the contract with a legacy display value.
+            let apparatus = canonical_apparatus_or_empty(&session.apparatus);
+            WorkerDeletionDependency {
+                kind: "active_order".to_string(),
+                label: format!("{} — {}", session.order_id, session.apparatus),
+                apparatus,
+                order_id: session.order_id,
+                status: session.status.as_str().to_string(),
+            }
         })
         .collect::<Vec<_>>();
     let open_qolip_checkouts = state
@@ -212,17 +227,26 @@ async fn worker_deletion_check(
         .open_checkouts_for_worker(&refs, &worker.name, 100)
         .await
         .map_err(|_| server_error("worker qolip activity failed"))?;
-    active_work.extend(
-        open_qolip_checkouts
-            .into_iter()
-            .map(|checkout| WorkerDeletionDependency {
-                kind: "qolip_checkout".to_string(),
-                label: format!("{} • {} dona", checkout.qolip_code, checkout.quantity),
-                apparatus: checkout.warehouse,
-                order_id: String::new(),
-                status: checkout.status,
-            }),
-    );
+    active_work.extend(open_qolip_checkouts.into_iter().map(|checkout| {
+        // A warehouse name is not an apparatus id. Mobile treats empty
+        // as "mold only" and stays strict on non-empty values, so keep
+        // warehouse info in the label instead of the id field.
+        let label = if checkout.warehouse.trim().is_empty() {
+            format!("{} • {} dona", checkout.qolip_code, checkout.quantity)
+        } else {
+            format!(
+                "{} • {} dona • {}",
+                checkout.qolip_code, checkout.quantity, checkout.warehouse
+            )
+        };
+        WorkerDeletionDependency {
+            kind: "qolip_checkout".to_string(),
+            label,
+            apparatus: String::new(),
+            order_id: String::new(),
+            status: checkout.status,
+        }
+    }));
 
     let assigned_groups = state
         .worker_groups
@@ -242,7 +266,7 @@ async fn worker_deletion_check(
         .map(|group| WorkerDeletionDependency {
             kind: "worker_group".to_string(),
             label: group.group_code.clone(),
-            apparatus: group.apparatus.clone(),
+            apparatus: canonical_apparatus_or_empty(group.apparatus_id.as_str()),
             order_id: String::new(),
             status: String::new(),
         })
@@ -277,7 +301,9 @@ async fn worker_deletion_check(
                 .into_iter()
                 .map(|apparatus| apparatus.trim().to_string())
                 .filter(|apparatus| {
-                    !apparatus.is_empty() && !apparatus.eq_ignore_ascii_case("worker-settings")
+                    !apparatus.is_empty()
+                        && !apparatus.eq_ignore_ascii_case("worker-settings")
+                        && ApparatusId::is_valid(apparatus)
                 }),
         );
         connections.extend(
