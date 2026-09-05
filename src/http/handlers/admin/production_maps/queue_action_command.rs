@@ -92,6 +92,11 @@ impl QueueActionCommand {
         {
             return Err(bad_request("rezka_frames_only_on_rezka_progress"));
         }
+        if request.rezka_record_frame_index.is_some()
+            && request.order_id.trim().starts_with("training-")
+        {
+            return Err(bad_request("rezka_individual_print_requires_backend"));
+        }
         if request
             .rezka_frames
             .iter()
@@ -100,6 +105,8 @@ impl QueueActionCommand {
                 action,
                 queue_state::ApparatusQueueAction::RollComplete
                     | queue_state::ApparatusQueueAction::Complete
+                    | queue_state::ApparatusQueueAction::Pause
+                    | queue_state::ApparatusQueueAction::DetachRoll
             )
         {
             return Err(bad_request("rezka_frame_issue_only_on_roll_progress"));
@@ -150,6 +157,8 @@ impl QueueActionCommand {
                 freeze_request_id: request.freeze_request_id,
                 freeze_with_issue: request.freeze_with_issue,
                 rezka_frames: request.rezka_frames,
+                rezka_record_frame_index: request.rezka_record_frame_index,
+                rezka_output_cycle: request.rezka_output_cycle,
                 produced_qty,
                 gross_qty: request.gross_qty,
                 uom,

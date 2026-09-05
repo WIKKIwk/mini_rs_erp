@@ -2,7 +2,7 @@ impl ProductionMapService {
     async fn build_output_progress(
         &self,
         context: ProgressBuildContext<'_>,
-        progress: QueueProgressInput,
+        mut progress: QueueProgressInput,
         read_snapshot: Option<&ProgressBuildReadSnapshot>,
     ) -> Result<QueueProgressRecords, ProductionMapError> {
         let ProgressBuildContext {
@@ -188,7 +188,7 @@ impl ProductionMapService {
         if input_progress.contained_kadr_count.is_none() {
             input_progress.contained_kadr_count = session_input_progress.contained_kadr_count;
         }
-        let output_identities = if apparatus::is_rezka_apparatus(canonical) {
+        let mut output_identities = if apparatus::is_rezka_apparatus(canonical) {
             let input_lineage = order_run_input_links_from_payload(&session.payload_json)
                 .map_err(|_| ProductionMapError::ProgressInputInvalid)?;
             let active_rolls = rezka_active_partial_rolls_from_payload(&session.payload_json)
@@ -231,15 +231,36 @@ impl ProductionMapService {
                 &input_progress,
             )]
         };
-        let frame_values = progress_values_for_outputs(
-            canonical,
-            action,
-            &progress,
-            &output_identities,
-            apparatus::is_rezka_apparatus(canonical)
-                && action == queue_state::ApparatusQueueAction::Complete
-                && !chain::is_final_work_stage_node(order_map, &stage.node_id),
-        )?;
+        let report = if apparatus::is_rezka_apparatus(canonical) {
+            Some(RezkaOutputReport::prepare(
+                &session, &mut progress, &mut output_identities,
+            )?)
+        } else {
+            None
+        };
+        let recording = progress.rezka_record_frame_index.is_some();
+        let frame_values = if let Some(index) = progress.rezka_record_frame_index {
+            let value = progress_values_for_outputs(
+                canonical, action, &progress, &output_identities[index - 1..index], false,
+            )?.remove(0);
+            let mut values: Vec<_> = (0..output_identities.len()).map(|_| ProgressOutputValue {
+                quantity: None, metrics: ProgressMetrics::default(), issue_note: String::new(),
+            }).collect();
+            if !report.as_ref().is_some_and(|report| report.is_saved(index - 1)) {
+                values[index - 1] = value;
+            }
+            values
+        } else {
+            progress_values_for_outputs(
+                canonical,
+                action,
+                &progress,
+                &output_identities,
+                apparatus::is_rezka_apparatus(canonical)
+                    && action == queue_state::ApparatusQueueAction::Complete
+                    && !chain::is_final_work_stage_node(order_map, &stage.node_id),
+            )?
+        };
         let frame_issues = if apparatus::is_rezka_apparatus(canonical) {
             rezka_frame_issues_json(&frame_values, output_identities.len(), &input_progress)
         } else {
@@ -254,7 +275,25 @@ impl ProductionMapService {
                 let quantity = value.quantity.as_ref().expect("healthy output");
                 (quantity.produced_qty, quantity.uom.as_str(), value.metrics)
             } else {
-                (0.0, "m", ProgressMetrics::default())
+                // An issue has no output quantity, but closing the cycle must
+                // retain any waste entered in the ordinary completion report.
+                let mut metrics = ProgressMetrics::default();
+                if !recording && matches!(action,
+                    queue_state::ApparatusQueueAction::Complete | queue_state::ApparatusQueueAction::RollComplete)
+                {
+                    let valid = |value: Option<f64>| -> Result<Option<f64>, ProductionMapError> {
+                        value.map(|value| crate::core::quantity::positive_erp_quantity(value)
+                            .ok_or(ProductionMapError::ProgressInputInvalid)).transpose()
+                    };
+                    metrics.total_waste = valid(progress.total_waste)?;
+                    if chain::is_final_work_stage_node(order_map, &stage.node_id)
+                        || action != queue_state::ApparatusQueueAction::Complete {
+                        metrics.rezka_bosma_waste = valid(progress.rezka_bosma_waste)?;
+                        metrics.rezka_lamination_waste = valid(progress.rezka_lamination_waste)?;
+                        metrics.rezka_edge_waste = valid(progress.rezka_edge_waste)?;
+                    }
+                }
+                (0.0, "m", metrics)
             };
         let mut payload_json = preserve_qolip_lineage(
             &session,
@@ -272,6 +311,9 @@ impl ProductionMapService {
             .is_some_and(|items| !items.is_empty())
         {
             payload_json["rezka_frame_issues"] = frame_issues.clone();
+        }
+        if recording {
+            payload_json = session.payload_json.clone();
         }
         let mut session = OrderRunSession {
             status: run_status_for_progress_action(action),
@@ -291,6 +333,9 @@ impl ProductionMapService {
         };
         let mut batches = Vec::with_capacity(output_identities.len());
         for (index, identity) in output_identities.iter().enumerate() {
+            if report.as_ref().is_some_and(|report| report.is_saved(index)) {
+                continue;
+            }
             let frame_value = if progress.rezka_frames.is_empty() {
                 frame_values.first()
             } else {
@@ -311,7 +356,7 @@ impl ProductionMapService {
                 metrics: frame_value.metrics,
                 frame_gross_qty: progress
                     .rezka_frames
-                    .get(index)
+                    .get(if recording { 0 } else { index })
                     .and_then(|frame| frame.gross_qty),
                 description: &description,
             })?;
@@ -334,6 +379,31 @@ impl ProductionMapService {
             .into_iter()
             .map(|recovered| recovered.output_update)
             .collect::<Vec<_>>();
+        // Printed rolls keep their identity, measurements and WIP location.
+        // Completion only attaches the accounting metrics that were not known
+        // at print time; optimistic batch revisions protect concurrent intake.
+        if !recording && let Some(report) = &report {
+            for slot in &report.saved {
+                let metrics = frame_values[slot.frame_index - 1].metrics;
+                if metrics.total_waste.is_some() || metrics.rezka_bosma_waste.is_some()
+                    || metrics.rezka_lamination_waste.is_some() || metrics.rezka_edge_waste.is_some()
+                {
+                    let mut batch = self.store.progress_batch(&slot.batch_id).await?
+                        .ok_or(ProductionMapError::ProgressBatchNotFound)?;
+                    batch.total_waste = metrics.total_waste;
+                    batch.rezka_bosma_waste = metrics.rezka_bosma_waste;
+                    batch.rezka_lamination_waste = metrics.rezka_lamination_waste;
+                    batch.rezka_edge_waste = metrics.rezka_edge_waste;
+                    for (key, value) in [
+                        ("total_waste", metrics.total_waste),
+                        ("rezka_bosma_waste", metrics.rezka_bosma_waste),
+                        ("rezka_lamination_waste", metrics.rezka_lamination_waste),
+                        ("rezka_edge_waste", metrics.rezka_edge_waste),
+                    ] { batch.payload_json[key] = serde_json::json!(value); }
+                    progress_batch_updates.push(batch);
+                }
+            }
+        }
         if let Some(input_batch) = input_batch {
             if matches!(
                 action,
@@ -372,7 +442,9 @@ impl ProductionMapService {
             })
             .into_iter()
             .collect();
-        let mut event = if let Some(index) = first_healthy_index {
+        let event_output_index = frame_values.iter().enumerate().position(|(index, value)|
+            value.quantity.is_some() && !report.as_ref().is_some_and(|report| report.is_saved(index)));
+        let mut event = if let Some(index) = event_output_index {
             let output_identity = output_identities
                 .get(index)
                 .ok_or(ProductionMapError::ProgressInputInvalid)?;
@@ -407,6 +479,26 @@ impl ProductionMapService {
             event.description = description.clone();
             event
         };
+        if !recording && let Some(report) = &report && !report.saved.is_empty() {
+            event.payload_json["rezka_previously_recorded_batches"] = serde_json::json!(
+                report.saved.iter().filter(|slot| !slot.batch_id.is_empty()).map(|slot| &slot.batch_id).collect::<Vec<_>>()
+            );
+            // Waste belongs to the closing report even when its first healthy
+            // roll was already printed or every card was resolved as an issue.
+            // Keep any newly produced roll's quantity metrics on this event.
+            if first_healthy_index.is_none_or(|index| report.is_saved(index)) {
+                event.total_waste = session_metrics.total_waste;
+                event.rezka_bosma_waste = session_metrics.rezka_bosma_waste;
+                event.rezka_lamination_waste = session_metrics.rezka_lamination_waste;
+                event.rezka_edge_waste = session_metrics.rezka_edge_waste;
+                for (key, value) in [
+                    ("total_waste", session_metrics.total_waste),
+                    ("rezka_bosma_waste", session_metrics.rezka_bosma_waste),
+                    ("rezka_lamination_waste", session_metrics.rezka_lamination_waste),
+                    ("rezka_edge_waste", session_metrics.rezka_edge_waste),
+                ] { event.payload_json[key] = serde_json::json!(value); }
+            }
+        }
         if frame_issues
             .as_array()
             .is_some_and(|items| !items.is_empty())
@@ -434,12 +526,27 @@ impl ProductionMapService {
                     .collect(),
             );
         }
-        apply_output_boundary_to_session_payload(
-            &mut session.payload_json,
-            action,
-            &input_progress.batch_id,
-            now,
-        )?;
+        if recording {
+            report.as_ref().expect("validated Rezka recording")
+                .finish_record(&mut session, &progress, &batches)?;
+            event.payload_json["rezka_record_frame_index"] = serde_json::json!(progress.rezka_record_frame_index);
+        } else {
+            apply_output_boundary_to_session_payload(
+                &mut session.payload_json,
+                action,
+                &input_progress.batch_id,
+                now,
+            )?;
+            if report.is_some() {
+                session.payload_json["rezka_output_report"] = serde_json::json!([]);
+                session.payload_json["rezka_output_cycle"] = serde_json::json!(event.event_id);
+                if action.creates_resumable_output()
+                    && report.as_ref().is_some_and(|report| !report.saved.is_empty())
+                {
+                    session.payload_json["rezka_recorded_output_closed"] = serde_json::json!(true);
+                }
+            }
+        }
         let progress_batch = batches.first().cloned();
         Ok(QueueProgressRecords {
             session: Some(session),

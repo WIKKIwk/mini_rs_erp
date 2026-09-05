@@ -131,6 +131,9 @@ pub struct ApparatusQueueOrderActionControl {
     pub previous_stage_ready: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rezka_output_kadr_counts: Vec<i64>,
+    /// Durable per-roll records for the currently open output cycle.
+    #[serde(default)]
+    pub rezka_output_report: serde_json::Value,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rezka_input_lineage: Vec<OrderRunInputLink>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

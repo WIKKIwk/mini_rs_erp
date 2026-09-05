@@ -142,6 +142,8 @@ struct ProgressOutputValue {
     issue_note: String,
 }
 
+include!("rezka_output_report.rs");
+
 fn progress_values_for_outputs(
     canonical: &RuntimeApparatusConfiguration,
     action: queue_state::ApparatusQueueAction,
@@ -153,6 +155,8 @@ fn progress_values_for_outputs(
         if progress.rezka_frames.len() != output_identities.len() {
             return Err(ProductionMapError::RezkaFrameCountMismatch);
         }
+        let first_healthy_index = progress.rezka_frames.iter()
+            .position(|frame| frame.issue_note.trim().is_empty());
         return progress
             .rezka_frames
             .iter()
@@ -164,6 +168,8 @@ fn progress_values_for_outputs(
                         action,
                         queue_state::ApparatusQueueAction::RollComplete
                             | queue_state::ApparatusQueueAction::Complete
+                            | queue_state::ApparatusQueueAction::Pause
+                            | queue_state::ApparatusQueueAction::DetachRoll
                     ) {
                         return Err(ProductionMapError::ProgressInputInvalid);
                     }
@@ -181,7 +187,7 @@ fn progress_values_for_outputs(
                     &frame_progress,
                     rezka_total_waste_only_completion,
                 )?;
-                if index > 0 && !has_explicit_waste {
+                if Some(index) != first_healthy_index && !has_explicit_waste {
                     metrics.rezka_bosma_waste = None;
                     metrics.rezka_lamination_waste = None;
                     metrics.rezka_edge_waste = None;

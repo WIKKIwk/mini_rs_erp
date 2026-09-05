@@ -81,6 +81,14 @@ impl ProductionMapService {
         let known_keys = known_apparatus_storage_keys(&sequences, &all_states);
         let storage_key = queue_state::resolve_apparatus_storage_key(apparatus, &known_keys);
         let canonical = self.resolve_canonical_apparatus_text(&storage_key).await?;
+        if progress.rezka_record_frame_index.is_some()
+            && (!apparatus::is_rezka_apparatus(&canonical)
+                || action != queue_state::ApparatusQueueAction::RollComplete
+                || progress.worker_handoff || progress.remove_roll_from_apparatus
+                || progress.freeze_with_issue || !progress.freeze_request_id.is_empty())
+        {
+            return Err(ProductionMapError::ProgressInputInvalid);
+        }
         let policy = effective_apparatus_queue_policy(canonical.as_ref());
         let stored_sequence = sequences
             .get(&storage_key)
@@ -148,6 +156,13 @@ impl ProductionMapService {
             .as_ref()
             .map(|session| session.stage_node_id.trim().to_string())
             .unwrap_or_default();
+        if action == queue_state::ApparatusQueueAction::Merge
+            && active_session.as_ref().is_some_and(|session| session.payload_json
+                .get("rezka_output_report").and_then(serde_json::Value::as_array)
+                .is_some_and(|frames| !frames.is_empty()))
+        {
+            return Err(ProductionMapError::RezkaOutputCycleConflict);
+        }
         let completion_read_snapshot = if action == queue_state::ApparatusQueueAction::Complete {
             Some(
                 self.completion_progress_build_snapshot(order_id, &progress, active_session.clone())
@@ -239,6 +254,13 @@ impl ProductionMapService {
             sequence: &sequence,
             visible_order_ids: &visible_order_ids,
         });
+        if apparatus::is_rezka_apparatus(&canonical)
+            && let Some(session) = &active_session
+        {
+            event.payload_json["rezka_expected_session_id"] = serde_json::json!(session.session_id);
+            event.payload_json["rezka_expected_output_revision"] = session.payload_json
+                .get("rezka_output_revision").cloned().unwrap_or_else(|| serde_json::json!(0));
+        }
         if stage_reentry {
             event.from_state = queue_state::ApparatusQueueOrderState::Completed;
             event.payload_json["stage_reentry"] = serde_json::json!(true);
@@ -312,6 +334,12 @@ impl ProductionMapService {
                 completion_read_snapshot.as_ref(),
             )
             .await?;
+        if let Some(revision) = event.payload_json.get("rezka_expected_output_revision")
+            .and_then(serde_json::Value::as_u64)
+            && let Some(session) = &mut progress.session
+        {
+            session.payload_json["rezka_output_revision"] = serde_json::json!(revision + 1);
+        }
         if event.stage_node_id.is_empty()
             && let Some(stage_node_id) = progress
                 .session

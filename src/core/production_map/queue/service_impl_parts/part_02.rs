@@ -449,7 +449,7 @@ impl ProductionMapService {
                     }
                 }
 
-                let allowed_actions = allowed_actions_for_control(QueueActionPolicyInput {
+                let mut allowed_actions = allowed_actions_for_control(QueueActionPolicyInput {
                     state,
                     profile: QueueActionPolicyProfile::Live {
                         order_control: control,
@@ -461,6 +461,13 @@ impl ProductionMapService {
                     queue_actionable,
                     start_ready,
                 });
+
+                if active_session.is_some_and(|session| session.payload_json
+                    .get("rezka_output_report").and_then(serde_json::Value::as_array)
+                    .is_some_and(|frames| !frames.is_empty()))
+                {
+                    allowed_actions.retain(|action| *action != queue_state::ApparatusQueueAction::Merge);
+                }
 
                 // Corrupt session payloads must only hide one order's controls.
                 // The write path revalidates everything, so the snapshot keeps
@@ -515,6 +522,15 @@ impl ProductionMapService {
                         stage_node_id,
                         previous_stage_ready,
                         rezka_output_kadr_counts,
+                        rezka_output_report: if is_rezka {
+                            active_session.map(|session| serde_json::json!({
+                                "cycle_id": session.payload_json.get("rezka_output_cycle")
+                                    .and_then(serde_json::Value::as_str)
+                                    .unwrap_or(&session.session_id),
+                                "frames": session.payload_json.get("rezka_output_report")
+                                    .cloned().unwrap_or_else(|| serde_json::json!([])),
+                            })).unwrap_or(serde_json::Value::Null)
+                        } else { serde_json::Value::Null },
                         rezka_input_lineage,
                         rezka_active_partial_rolls,
                         complete_requires_full_report,

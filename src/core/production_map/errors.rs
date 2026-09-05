@@ -185,6 +185,8 @@ pub enum ProductionMapError {
     InvalidRezkaFrameGroups,
     #[error("rezka frame input count does not match kadr count")]
     RezkaFrameCountMismatch,
+    #[error("Rezka output cycle changed or a recorded roll was edited")]
+    RezkaOutputCycleConflict,
     #[error("rezka final roll is required")]
     RezkaFinalRollRequired,
     #[error("progress batch not found")]

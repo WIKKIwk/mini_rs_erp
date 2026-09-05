@@ -159,6 +159,7 @@ fn training_queue_action_controls(
             (
                 order_id.clone(),
                 ApparatusQueueOrderActionControl {
+                    rezka_output_report: serde_json::Value::Null,
                     state,
                     allowed_actions,
                     interaction,

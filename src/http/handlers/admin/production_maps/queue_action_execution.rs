@@ -18,6 +18,7 @@ async fn execute_queue_action(
         &qolip_preparations,
     );
     let frame_specific_metrics = !input.progress.rezka_frames.is_empty();
+    let recording_rezka_frame = input.progress.rezka_record_frame_index.is_some();
     let fallback_gross_qty = input.progress.gross_qty.or(input.progress.finished_goods_kg);
     let fallback_bobina_kg = input.progress.bobina_kg;
     let QueueActionCommand {
@@ -88,7 +89,9 @@ async fn execute_queue_action(
             &order_id,
         ));
     }
-    let print_requests = if action.records_progress_output() {
+    // A card first commits its record, then prints that exact QR through the
+    // reprint endpoint. A printer failure must never repeat the business write.
+    let print_requests = if action.records_progress_output() && !recording_rezka_frame {
         prepared
             .progress_output_batches()
             .iter()

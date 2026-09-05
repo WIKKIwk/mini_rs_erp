@@ -64,7 +64,7 @@ mod apparatus_identity_tests {
 /// The field names intentionally match the existing queue-action contract so a
 /// mobile client can move the same measurements into a per-frame array without
 /// introducing a second vocabulary.
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RezkaFrameProgressInput {
     #[serde(default)]
     pub produced_qty: Option<f64>,
@@ -102,6 +102,8 @@ impl RezkaFrameProgressInput {
             freeze_request_id: base.freeze_request_id.clone(),
             freeze_with_issue: base.freeze_with_issue,
             rezka_frames: Vec::new(),
+            rezka_record_frame_index: None,
+            rezka_output_cycle: String::new(),
             produced_qty: self.produced_qty,
             gross_qty: self.gross_qty,
             uom: if self.produced_qty.is_some() || self.finished_goods_meter.is_some() {
@@ -160,6 +162,10 @@ pub struct QueueProgressInput {
     /// The queue action is canonicalized to `Freeze` before persistence.
     pub freeze_with_issue: bool,
     pub rezka_frames: Vec<RezkaFrameProgressInput>,
+    /// One-based output slot. Records a single roll without closing the output cycle.
+    pub rezka_record_frame_index: Option<usize>,
+    /// Server-issued cycle identity prevents stale dialogs from creating new rolls.
+    pub rezka_output_cycle: String,
     pub produced_qty: Option<f64>,
     pub gross_qty: Option<f64>,
     pub uom: String,

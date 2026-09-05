@@ -231,6 +231,21 @@ impl PostgresProductionMapStore {
             });
         }
         validate_queue_action_event_transition_tx(&mut tx, &write.event).await?;
+        if let Some(expected) = write.event.payload_json.get("rezka_expected_output_revision") {
+            let session_id = write.event.payload_json.get("rezka_expected_session_id")
+                .and_then(serde_json::Value::as_str).unwrap_or_default();
+            let current = sqlx::query_scalar::<_, serde_json::Value>(
+                "SELECT payload_json FROM mini_order_run_sessions
+                 WHERE session_id = $1 AND order_id = $2 FOR UPDATE",
+            ).bind(session_id).bind(&write.event.order_id)
+                .fetch_optional(&mut *tx).await.map_err(|_| ProductionMapError::StoreFailed)?
+                .ok_or(ProductionMapError::RezkaOutputCycleConflict)?;
+            if current.get("rezka_output_revision").cloned()
+                .unwrap_or_else(|| serde_json::json!(0)) != *expected
+            {
+                return Err(ProductionMapError::RezkaOutputCycleConflict);
+            }
+        }
         validate_merge_session_transition_tx(&mut tx, &write.event, write.session.as_ref()).await?;
         let raw_material_stock_committed = !write.raw_material_stock_transitions.is_empty();
         let raw_material_outcome = apply_raw_material_stock_transitions_tx(

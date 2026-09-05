@@ -123,16 +123,20 @@ impl ProductionMapService {
                     .and_then(serde_json::Value::as_bool)
                     == Some(true)
                 || is_requeued;
-            if is_frozen {
+            let recorded_rezka_pause = apparatus::is_rezka_apparatus(canonical)
+                && session.payload_json.get("rezka_recorded_output_closed")
+                    .and_then(serde_json::Value::as_bool) == Some(true);
+            if is_frozen || recorded_rezka_pause {
                 let mut payload_json = std::mem::take(&mut session.payload_json);
                 if !payload_json.is_object() {
                     payload_json = serde_json::json!({});
                 }
                 if let Some(payload) = payload_json.as_object_mut() {
                     payload.remove("requeued_at_tail");
+                    payload.remove("rezka_recorded_output_closed");
                     payload.insert(
                         "resumed_after_freeze".to_string(),
-                        serde_json::json!(true),
+                        serde_json::json!(is_frozen),
                     );
                     payload.insert(
                         "resumed_without_progress_qr".to_string(),

@@ -200,6 +200,17 @@ impl MemoryProductionMapStore {
         write: &QueueActionProgressWrite,
     ) -> Result<QueueActionProgressWriteResult, ProductionMapError> {
         validate_queue_progress_write(write)?;
+        if let Some(expected) = write.event.payload_json.get("rezka_expected_output_revision") {
+            let current = self.active_order_run_session(&write.apparatus, &write.event.order_id)
+                .await?.ok_or(ProductionMapError::RezkaOutputCycleConflict)?;
+            if Some(current.session_id.as_str()) != write.event.payload_json
+                .get("rezka_expected_session_id").and_then(serde_json::Value::as_str)
+                || current.payload_json.get("rezka_output_revision").cloned()
+                    .unwrap_or_else(|| serde_json::json!(0)) != *expected
+            {
+                return Err(ProductionMapError::RezkaOutputCycleConflict);
+            }
+        }
         let write = write.clone();
         if self
             .fail_next_queue_progress_commit

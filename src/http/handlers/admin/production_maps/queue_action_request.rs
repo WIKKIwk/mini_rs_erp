@@ -84,5 +84,9 @@ struct ApparatusQueueActionRequest {
     issue_note: String,
     #[serde(default)]
     rezka_frames: Vec<RezkaFrameProgressInput>,
+    #[serde(default)]
+    rezka_record_frame_index: Option<usize>,
+    #[serde(default)]
+    rezka_output_cycle: String,
     action: queue_state::ApparatusQueueAction,
 }

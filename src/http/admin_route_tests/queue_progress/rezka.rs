@@ -1,6 +1,6 @@
 use super::*;
 
-async fn queue_action_json(
+pub(super) async fn queue_action_json(
     router: &axum::Router,
     token: &str,
     body: serde_json::Value,
