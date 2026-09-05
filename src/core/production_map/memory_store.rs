@@ -1,5 +1,8 @@
+#[path = "capacity/memory_store.rs"]
 mod capacity;
+#[path = "catalog/memory_store.rs"]
 mod maps;
+#[path = "materials/memory_store.rs"]
 mod materials;
 mod queue;
 #[path = "progress_session/runs.rs"]

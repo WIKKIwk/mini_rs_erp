@@ -1,16 +1,22 @@
+#[path = "queue/apparatus.rs"]
 mod apparatus;
 mod apparatus_resolver;
 mod capacity;
 pub mod chain;
 mod compiler;
 mod errors;
+#[path = "compiler/formula.rs"]
 mod formula;
+#[path = "compiler/formula_parser.rs"]
 mod formula_parser;
+#[path = "materials/implementation.rs"]
 pub mod materials;
+#[path = "materials/support.rs"]
 mod materials_support;
 #[cfg(any(test, feature = "verification"))]
 mod memory_store;
 mod opening_wip;
+#[path = "pechat/implementation.rs"]
 pub mod pechat;
 mod prepared_queue_action;
 #[path = "progress_session/mod.rs"]
@@ -18,15 +24,20 @@ mod progress;
 mod queue;
 pub mod queue_state;
 mod service;
+#[path = "astatka/service.rs"]
 mod service_astatka;
 mod service_audit;
 mod service_completion {
     include!("progress_session/service_completion.rs");
 }
+#[path = "capacity/service.rs"]
 mod service_capacity;
+#[path = "capacity/scheduler.rs"]
 mod service_capacity_scheduler;
+#[path = "catalog/service.rs"]
 mod service_maps;
 mod service_opening_wip;
+#[path = "order_control/service.rs"]
 mod service_order_control;
 mod service_progress {
     include!("progress_session/service_progress.rs");
@@ -40,10 +51,15 @@ mod service_progress_metrics {
 mod service_progress_support {
     include!("progress_session/service_progress_support.rs");
 }
+#[path = "paddon/service.rs"]
 mod service_paddon;
+#[path = "qolip/service.rs"]
 mod service_qolip;
+#[path = "queue/support.rs"]
 mod service_queue_support;
+#[path = "transfer/service.rs"]
 mod service_transfer;
+#[path = "wip/service.rs"]
 mod service_wip;
 mod store_port;
 mod types;

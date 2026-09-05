@@ -1,1 +1,0 @@
-include!("astatka/service.rs");

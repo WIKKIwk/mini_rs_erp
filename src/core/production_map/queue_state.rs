@@ -1,3 +1,4 @@
+#[path = "queue/apparatus_identity.rs"]
 mod apparatus;
 #[cfg(kani)]
 mod kani_proofs;

@@ -1,1 +1,0 @@
-include!("materials/stock.rs");

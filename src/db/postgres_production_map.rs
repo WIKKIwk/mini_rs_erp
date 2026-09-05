@@ -21,23 +21,38 @@ use crate::core::production_map::{
 };
 use crate::core::qolip::QolipError;
 
+#[path = "postgres_production_map/astatka/helpers.rs"]
 mod astatka_helpers;
+#[path = "postgres_production_map/capacity/helpers.rs"]
 mod capacity_helpers;
+#[path = "postgres_production_map/catalog/catalog.rs"]
 mod catalog_helpers;
+#[path = "postgres_production_map/completion/requests.rs"]
 mod completion_helpers;
 mod lifecycle;
+#[path = "postgres_production_map/catalog/maps.rs"]
 mod map_helpers;
+#[path = "postgres_production_map/materials/rules.rs"]
 mod material_helpers;
 mod opening_wip_helpers;
+#[path = "postgres_production_map/order_control/helpers.rs"]
 mod order_control_helpers;
+#[path = "postgres_production_map/order_query/helpers.rs"]
 mod order_query_helpers;
+#[path = "postgres_production_map/paddon/helpers.rs"]
 mod paddon_helpers;
+#[path = "postgres_production_map/progress/helpers.rs"]
 mod progress_helpers;
+#[path = "postgres_production_map/qolip/session_helpers.rs"]
 mod qolip_session_helpers;
+#[path = "postgres_production_map/queue/helpers.rs"]
 mod queue_helpers;
+#[path = "postgres_production_map/materials/stock.rs"]
 mod raw_material_stock_helpers;
 mod transaction_locks;
+#[path = "postgres_production_map/transfer/helpers.rs"]
 mod transfer_helpers;
+#[path = "postgres_production_map/wip/query_helpers.rs"]
 mod wip_query_helpers;
 
 use self::astatka_helpers::{
