@@ -61,25 +61,6 @@ fn node_by_id(map: &ProductionMapDefinition) -> BTreeMap<&str, &ProductionMapNod
         .collect()
 }
 
-fn normalize_branch(branch: &str) -> String {
-    let branch = branch.trim();
-    if matches!(branch, "1")
-        || branch.eq_ignore_ascii_case("ha")
-        || branch.eq_ignore_ascii_case("yes")
-        || branch.eq_ignore_ascii_case("true")
-    {
-        "true".to_string()
-    } else if matches!(branch, "0")
-        || branch.eq_ignore_ascii_case("yo'q")
-        || branch.eq_ignore_ascii_case("yoq")
-        || branch.eq_ignore_ascii_case("no")
-        || branch.eq_ignore_ascii_case("false")
-    {
-        "false".to_string()
-    } else {
-        branch.to_ascii_lowercase()
-    }
-}
 
 #[cfg(test)]
 #[path = "../tests.rs"]

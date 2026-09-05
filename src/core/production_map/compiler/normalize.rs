@@ -73,7 +73,7 @@ pub(in crate::core::production_map) fn normalize_map(map: &mut ProductionMapDefi
     }
 }
 
-pub(super) fn normalize_branch(branch: &str) -> String {
+pub(in crate::core::production_map) fn normalize_branch(branch: &str) -> String {
     let branch = branch.trim();
     if matches!(branch, "1")
         || branch.eq_ignore_ascii_case("ha")

@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 
 use super::types::*;
 use graph::topological_order;
-pub(super) use normalize::normalize_map;
+pub(super) use normalize::{normalize_branch, normalize_map};
 #[cfg(any(test, feature = "verification"))]
 pub(super) use normalize::reject_order_number_immutable;
 use operation::compile_node;
