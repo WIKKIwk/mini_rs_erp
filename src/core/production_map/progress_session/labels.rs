@@ -1,6 +1,5 @@
 use super::super::queue_state;
 use super::super::types::{ProductionMapDefinition, ProductionMapError, QueueActionActor};
-use super::ids::queue_action_str;
 use crate::core::quantity::positive_erp_quantity;
 
 pub(in crate::core::production_map) fn valid_progress_qty(
@@ -40,7 +39,7 @@ pub(crate) fn progress_label_item_name_for_stage(
         queue_state::ApparatusQueueAction::DetachRoll => "rulon yechildi",
         queue_state::ApparatusQueueAction::RollComplete => "rulon tugatildi",
         queue_state::ApparatusQueueAction::Complete => "ish tugatildi",
-        _ => queue_action_str(action),
+        _ => action.as_str(),
     };
     let final_stage = if stage_node_id.trim().is_empty() {
         super::super::chain::is_final_work_stage_station(order_map, apparatus)

@@ -16,7 +16,7 @@ pub(super) use closed_orders::{
 };
 pub(super) use ids::{
     completion_request_decision_event_id, progress_event_id, progress_session_id,
-    queue_action_event_id, queue_action_str, unix_seconds,
+    queue_action_event_id, unix_seconds,
 };
 pub(crate) use ids::{progress_batch_id, progress_qr_payload};
 pub(crate) use labels::progress_label_item_name;

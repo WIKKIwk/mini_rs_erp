@@ -423,7 +423,7 @@ pub(super) async fn insert_queue_action_event_tx(
     .bind(apparatus_id.as_str())
     .bind(event.order_id.trim())
     .bind(event.stage_node_id.trim())
-    .bind(queue_action_as_str(event.action))
+    .bind(event.action.as_str())
     .bind(event.from_state.as_str())
     .bind(event.to_state.as_str())
     .bind(event.policy.as_str())
@@ -492,7 +492,7 @@ fn queue_event_identity_matches(
     Ok(existing.apparatus == Some(apparatus_id.as_str())
         && existing.order_id.trim() == event.order_id.trim()
         && existing.stage_node_id.trim() == event.stage_node_id.trim()
-        && existing.action == queue_action_as_str(event.action)
+        && existing.action == event.action.as_str()
         && existing.from_state == event.from_state.as_str()
         && existing.to_state == event.to_state.as_str()
         && existing.policy == event.policy.as_str()
@@ -503,49 +503,6 @@ fn queue_event_identity_matches(
         && existing.payload == &event.payload_json)
 }
 
-pub(super) fn queue_action_from_str(
-    value: &str,
-) -> Option<crate::core::production_map::queue_state::ApparatusQueueAction> {
-    use crate::core::production_map::queue_state::ApparatusQueueAction;
-
-    let value = value.trim();
-    if value.eq_ignore_ascii_case("start") {
-        Some(ApparatusQueueAction::Start)
-    } else if value.eq_ignore_ascii_case("pause") {
-        Some(ApparatusQueueAction::Pause)
-    } else if value.eq_ignore_ascii_case("freeze") {
-        Some(ApparatusQueueAction::Freeze)
-    } else if value.eq_ignore_ascii_case("detach_roll") {
-        Some(ApparatusQueueAction::DetachRoll)
-    } else if value.eq_ignore_ascii_case("resume") {
-        Some(ApparatusQueueAction::Resume)
-    } else if value.eq_ignore_ascii_case("merge") {
-        Some(ApparatusQueueAction::Merge)
-    } else if value.eq_ignore_ascii_case("roll_complete") {
-        Some(ApparatusQueueAction::RollComplete)
-    } else if value.eq_ignore_ascii_case("complete") {
-        Some(ApparatusQueueAction::Complete)
-    } else {
-        None
-    }
-}
-
-pub(super) fn queue_action_as_str(
-    action: crate::core::production_map::queue_state::ApparatusQueueAction,
-) -> &'static str {
-    match action {
-        crate::core::production_map::queue_state::ApparatusQueueAction::Start => "start",
-        crate::core::production_map::queue_state::ApparatusQueueAction::Pause => "pause",
-        crate::core::production_map::queue_state::ApparatusQueueAction::Freeze => "freeze",
-        crate::core::production_map::queue_state::ApparatusQueueAction::DetachRoll => "detach_roll",
-        crate::core::production_map::queue_state::ApparatusQueueAction::Resume => "resume",
-        crate::core::production_map::queue_state::ApparatusQueueAction::Merge => "merge",
-        crate::core::production_map::queue_state::ApparatusQueueAction::RollComplete => {
-            "roll_complete"
-        }
-        crate::core::production_map::queue_state::ApparatusQueueAction::Complete => "complete",
-    }
-}
 
 #[cfg(test)]
 mod tests {

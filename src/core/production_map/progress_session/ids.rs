@@ -16,7 +16,7 @@ pub(in crate::core::production_map) fn queue_action_event_id(
         "production-map-queue:{nanos}:{}:{}:{}",
         apparatus.trim(),
         order_id.trim(),
-        queue_action_str(action)
+        action.as_str()
     )
 }
 
@@ -35,20 +35,6 @@ pub(in crate::core::production_map) fn completion_request_decision_event_id(
     )
 }
 
-pub(in crate::core::production_map) fn queue_action_str(
-    action: queue_state::ApparatusQueueAction,
-) -> &'static str {
-    match action {
-        queue_state::ApparatusQueueAction::Start => "start",
-        queue_state::ApparatusQueueAction::Pause => "pause",
-        queue_state::ApparatusQueueAction::Freeze => "freeze",
-        queue_state::ApparatusQueueAction::DetachRoll => "detach_roll",
-        queue_state::ApparatusQueueAction::Resume => "resume",
-        queue_state::ApparatusQueueAction::Merge => "merge",
-        queue_state::ApparatusQueueAction::RollComplete => "roll_complete",
-        queue_state::ApparatusQueueAction::Complete => "complete",
-    }
-}
 
 pub(in crate::core::production_map) fn unix_seconds() -> i64 {
     SystemTime::now()
@@ -81,7 +67,7 @@ pub(in crate::core::production_map) fn progress_event_id(
         "order-progress:{stamp}:{}:{}:{}",
         sanitize_id(session_id),
         sanitize_id(order_id),
-        queue_action_str(action)
+        action.as_str()
     )
 }
 
@@ -95,7 +81,7 @@ pub(crate) fn progress_batch_id(
         "progress-batch:{stamp}:{}:{}:{}",
         sanitize_id(apparatus),
         sanitize_id(order_id),
-        queue_action_str(action)
+        action.as_str()
     )
 }
 

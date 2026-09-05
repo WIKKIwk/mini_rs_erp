@@ -59,6 +59,42 @@ pub enum ApparatusQueueAction {
 }
 
 impl ApparatusQueueAction {
+    pub fn parse(value: &str) -> Option<Self> {
+        let value = value.trim();
+        if value.eq_ignore_ascii_case("start") {
+            Some(Self::Start)
+        } else if value.eq_ignore_ascii_case("pause") {
+            Some(Self::Pause)
+        } else if value.eq_ignore_ascii_case("freeze") {
+            Some(Self::Freeze)
+        } else if value.eq_ignore_ascii_case("detach_roll") {
+            Some(Self::DetachRoll)
+        } else if value.eq_ignore_ascii_case("resume") {
+            Some(Self::Resume)
+        } else if value.eq_ignore_ascii_case("merge") {
+            Some(Self::Merge)
+        } else if value.eq_ignore_ascii_case("roll_complete") {
+            Some(Self::RollComplete)
+        } else if value.eq_ignore_ascii_case("complete") {
+            Some(Self::Complete)
+        } else {
+            None
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Start => "start",
+            Self::Pause => "pause",
+            Self::Freeze => "freeze",
+            Self::DetachRoll => "detach_roll",
+            Self::Resume => "resume",
+            Self::Merge => "merge",
+            Self::RollComplete => "roll_complete",
+            Self::Complete => "complete",
+        }
+    }
+
     pub const fn creates_resumable_output(self) -> bool {
         matches!(self, Self::Pause | Self::DetachRoll)
     }

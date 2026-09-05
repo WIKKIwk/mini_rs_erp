@@ -6,6 +6,31 @@ use super::*;
 use crate::core::production_map::ProductionMapError;
 
 #[test]
+fn action_encoding_preserves_persisted_and_wire_names() {
+    use ApparatusQueueAction::*;
+    for (action, name) in [
+        (Start, "start"),
+        (Pause, "pause"),
+        (Freeze, "freeze"),
+        (DetachRoll, "detach_roll"),
+        (Resume, "resume"),
+        (Merge, "merge"),
+        (RollComplete, "roll_complete"),
+        (Complete, "complete"),
+    ] {
+        assert_eq!(action.as_str(), name);
+        assert_eq!(ApparatusQueueAction::parse(name), Some(action));
+        assert_eq!(
+            ApparatusQueueAction::parse(&format!(" {} ", name.to_uppercase())),
+            Some(action)
+        );
+        assert_eq!(serde_json::to_value(action).unwrap(), name);
+    }
+    assert_eq!(ApparatusQueueAction::parse(""), None);
+    assert_eq!(ApparatusQueueAction::parse("unknown"), None);
+}
+
+#[test]
 fn progress_output_actions_have_one_canonical_classification() {
     for action in [
         ApparatusQueueAction::Pause,

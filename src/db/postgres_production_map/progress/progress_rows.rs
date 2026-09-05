@@ -118,7 +118,7 @@ pub(super) fn queue_action_log_from_row(
         apparatus: row.apparatus,
         order_id: row.order_id,
         stage_node_id: row.stage_node_id,
-        action: queue_action_from_str(&row.action).ok_or(ProductionMapError::StoreFailed)?,
+        action: queue_state::ApparatusQueueAction::parse(&row.action).ok_or(ProductionMapError::StoreFailed)?,
         from_state: queue_state::ApparatusQueueOrderState::parse(&row.from_state)
             .ok_or(ProductionMapError::StoreFailed)?,
         to_state: queue_state::ApparatusQueueOrderState::parse(&row.to_state)
@@ -175,7 +175,7 @@ pub(super) fn progress_batch_from_row(
         completed_at_unix: row.completed_at_unix,
         apparatus: row.apparatus,
         order_id: row.order_id,
-        action: queue_action_from_str(&row.action).ok_or(ProductionMapError::StoreFailed)?,
+        action: queue_state::ApparatusQueueAction::parse(&row.action).ok_or(ProductionMapError::StoreFailed)?,
         status: OrderProgressBatchStatus::parse(&row.status)
             .ok_or(ProductionMapError::StoreFailed)?,
         produced_qty: row.produced_qty,

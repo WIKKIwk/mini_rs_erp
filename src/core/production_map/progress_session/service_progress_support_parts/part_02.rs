@@ -28,7 +28,7 @@ pub(super) fn progress_session_payload(
     input_progress: &SessionProgressLinks,
 ) -> serde_json::Value {
     let mut payload = serde_json::json!({
-        "last_action": queue_action_str(action),
+        "last_action": action.as_str(),
         "last_qty": produced_qty,
         "last_uom": uom,
         "input_progress_batch_id": input_progress.batch_id,
@@ -211,7 +211,7 @@ fn progress_batch_payload(
         "order_title": order_map.title.trim(),
         "customer_name": order_map.customer_name.trim(),
         "apparatus": apparatus,
-        "action": queue_action_str(action),
+        "action": action.as_str(),
     });
     metrics.write_payload_fields(&mut payload, description);
     payload
@@ -223,7 +223,7 @@ pub(super) fn progress_event_payload(
     description: &str,
 ) -> serde_json::Value {
     let mut payload = serde_json::json!({
-        "event": queue_action_str(action),
+        "event": action.as_str(),
     });
     metrics.write_payload_fields(&mut payload, description);
     payload
