@@ -27,9 +27,8 @@ mod service;
 #[path = "astatka/service.rs"]
 mod service_astatka;
 mod service_audit;
-mod service_completion {
-    include!("progress_session/service_completion.rs");
-}
+#[path = "progress_session/service_completion.rs"]
+mod service_completion;
 #[path = "capacity/service.rs"]
 mod service_capacity;
 #[path = "capacity/scheduler.rs"]
@@ -39,18 +38,14 @@ mod service_maps;
 mod service_opening_wip;
 #[path = "order_control/service.rs"]
 mod service_order_control;
-mod service_progress {
-    include!("progress_session/service_progress.rs");
-}
-mod service_progress_correction {
-    include!("progress_session/service_progress_correction.rs");
-}
-mod service_progress_metrics {
-    include!("progress_session/service_progress_metrics.rs");
-}
-mod service_progress_support {
-    include!("progress_session/service_progress_support.rs");
-}
+#[path = "progress_session/service_progress.rs"]
+mod service_progress;
+#[path = "progress_session/service_progress_correction.rs"]
+mod service_progress_correction;
+#[path = "progress_session/service_progress_metrics.rs"]
+mod service_progress_metrics;
+#[path = "progress_session/service_progress_support.rs"]
+mod service_progress_support;
 #[path = "paddon/service.rs"]
 mod service_paddon;
 #[path = "qolip/service.rs"]

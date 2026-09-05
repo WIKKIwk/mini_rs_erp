@@ -4,12 +4,10 @@ mod control;
 #[path = "catalog/definition.rs"]
 mod definition;
 mod lifecycle;
-mod progress {
-    include!("progress_session/progress.rs");
-}
-mod progress_status {
-    include!("progress_session/progress_status.rs");
-}
+#[path = "progress_session/progress.rs"]
+mod progress;
+#[path = "progress_session/progress_status.rs"]
+mod progress_status;
 #[path = "paddon/types.rs"]
 mod paddon;
 #[path = "queue/types.rs"]
