@@ -136,25 +136,13 @@ impl ProductionMapService {
         }
         let sequences = self.store.apparatus_sequences().await?;
         let all_states = self.store.apparatus_queue_states().await?;
-        let known_keys = sequences
-            .keys()
-            .chain(all_states.keys())
-            .map(|key| key.as_str())
-            .filter(|key| !queue_state::apparatus_search_key(key).is_empty())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .map(|key| key.to_string())
-            .collect::<Vec<_>>();
-        let storage_key = queue_state::resolve_apparatus_storage_key(apparatus, &known_keys);
         let current_sequence = sequences
-            .get(&storage_key)
-            .or_else(|| sequences.get(apparatus))
+            .get(apparatus)
             .map(Vec::as_slice)
             .unwrap_or_default();
         let empty_states = BTreeMap::new();
         let states = all_states
-            .get(&storage_key)
-            .or_else(|| all_states.get(apparatus))
+            .get(apparatus)
             .unwrap_or(&empty_states);
         let frozen_order_ids = self
             .store
@@ -495,7 +483,7 @@ impl ProductionMapService {
         let mut result = BTreeMap::new();
 
         for apparatus in &known_keys {
-            let storage_key = queue_state::resolve_apparatus_storage_key(apparatus, &known_keys);
+            let storage_key = apparatus.trim().to_string();
             // Snapshot reads must stay fail-soft: one map referencing a deleted or
             // deactivated apparatus must not take the whole live stream down for
             // every operator. Write paths keep their strict validation.

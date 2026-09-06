@@ -20,20 +20,7 @@ pub fn canonical_apparatus_id(value: &str) -> Option<ApparatusId> {
     ApparatusId::new(value.trim().to_string()).ok()
 }
 
-pub fn canonical_apparatus_key(value: &str) -> String {
-    let value = value.trim();
-    if ApparatusId::is_valid(value) {
-        value.to_string()
-    } else {
-        String::new()
-    }
-}
-
-pub fn apparatus_ids_match(left: &str, right: &str) -> bool {
-    let left = left.trim();
-    let right = right.trim();
-    left == right && ApparatusId::is_valid(left)
-}
+pub use queue_state::{apparatus_ids_match, apparatus_search_key as canonical_apparatus_key};
 
 /// Compare a topology stage identity. Apparatus stages use canonical
 /// `ApparatusId`; non-apparatus task stages use their stable graph identity.

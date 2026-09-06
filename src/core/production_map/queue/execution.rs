@@ -78,8 +78,7 @@ impl ProductionMapService {
         {
             return Err(ProductionMapError::OrderFrozen);
         }
-        let known_keys = known_apparatus_storage_keys(&sequences, &all_states);
-        let storage_key = queue_state::resolve_apparatus_storage_key(apparatus, &known_keys);
+        let storage_key = apparatus.to_string();
         let canonical = self.resolve_canonical_apparatus_text(&storage_key).await?;
         if progress.rezka_record_frame_index.is_some()
             && (!apparatus::is_rezka_apparatus(&canonical)

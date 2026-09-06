@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::apparatus::visible_order_ids_for_apparatus;
 use super::progress::{effective_apparatus_queue_policy, queue_action_event_id, unix_seconds};
 use super::service_queue_support::{
-    QueueActionEventInput, known_apparatus_storage_keys, order_has_frozen_queue_state,
+    QueueActionEventInput, order_has_frozen_queue_state,
     parsed_queue_states, queue_action_event, sequence_updates_for_frozen_transition,
     serialized_queue_states,
 };
@@ -441,7 +441,6 @@ async fn prepare_direct_freeze_queue_write(
     let sequences = service.store.apparatus_sequences().await?;
     let order_controls = service.store.order_control_states().await?;
     let maps = service.store.maps().await?;
-    let known_keys = known_apparatus_storage_keys(&sequences, &all_states);
     let target_apparatus = target_session
         .map(|session| session.apparatus.trim().to_string())
         .or_else(|| {
@@ -456,7 +455,7 @@ async fn prepare_direct_freeze_queue_write(
     let Some(target_apparatus) = target_apparatus else {
         return Ok(None);
     };
-    let storage_key = queue_state::resolve_apparatus_storage_key(&target_apparatus, &known_keys);
+    let storage_key = queue_state::apparatus_search_key(&target_apparatus);
     let canonical = service
         .resolve_canonical_apparatus_text(&storage_key)
         .await?;
@@ -576,7 +575,6 @@ async fn restore_frozen_queue_after_unfreeze(
         .store
         .order_run_sessions_for_order(&record.order_id)
         .await?;
-    let known_keys = known_apparatus_storage_keys(&sequences, &all_states);
     let maps = service.store.maps().await?;
     let target_apparatus = record
         .freeze_request
@@ -599,7 +597,7 @@ async fn restore_frozen_queue_after_unfreeze(
             })
         })
         .ok_or(ProductionMapError::OrderFreezeTargetNotFound)?;
-    let storage_key = queue_state::resolve_apparatus_storage_key(&target_apparatus, &known_keys);
+    let storage_key = queue_state::apparatus_search_key(&target_apparatus);
     let canonical = service
         .resolve_canonical_apparatus_text(&storage_key)
         .await?;

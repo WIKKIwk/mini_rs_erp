@@ -41,15 +41,7 @@ impl ProductionMapService {
         let all_states = self.store.apparatus_queue_states().await?;
         let canonical = self.resolve_canonical_apparatus_text(apparatus).await?;
         let policy = effective_apparatus_queue_policy(&canonical);
-        let known_keys = sequences
-            .keys()
-            .chain(all_states.keys())
-            .map(|key| key.as_str())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .map(|key| key.to_string())
-            .collect::<Vec<_>>();
-        let storage_key = queue_state::resolve_apparatus_storage_key(apparatus, &known_keys);
+        let storage_key = apparatus.to_string();
         let stored_sequence = sequences.get(&storage_key).cloned().unwrap_or_default();
         let all_maps = self.store.maps().await?;
         let visible_order_ids = visible_order_ids_for_apparatus(&all_maps, apparatus);

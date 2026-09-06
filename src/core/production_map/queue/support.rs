@@ -54,21 +54,6 @@ pub(super) fn validate_queue_action_request(
     Ok(())
 }
 
-pub(super) fn known_apparatus_storage_keys(
-    sequences: &BTreeMap<String, Vec<String>>,
-    all_states: &BTreeMap<String, BTreeMap<String, String>>,
-) -> Vec<String> {
-    sequences
-        .keys()
-        .chain(all_states.keys())
-        .map(|key| key.as_str())
-        .filter(|key| queue_state::is_canonical_apparatus_id(key))
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .map(|key| key.to_string())
-        .collect()
-}
-
 pub(super) fn parsed_queue_states(
     states: &BTreeMap<String, String>,
 ) -> BTreeMap<String, queue_state::ApparatusQueueOrderState> {
@@ -146,13 +131,11 @@ pub(super) fn sequence_updates_for_frozen_transition(
         .filter(|key| !queue_state::apparatus_search_key(key).is_empty())
         .cloned()
         .collect::<BTreeSet<_>>();
-    let known_keys = known_apparatus.iter().cloned().collect::<Vec<_>>();
     let mut updates = BTreeMap::new();
     let mut seen_storage_keys = BTreeSet::new();
 
     for requested_apparatus in known_apparatus {
-        let storage_key =
-            queue_state::resolve_apparatus_storage_key(&requested_apparatus, &known_keys);
+        let storage_key = requested_apparatus.trim().to_string();
         if !seen_storage_keys.insert(storage_key.clone()) {
             continue;
         }

@@ -13,5 +13,5 @@ pub use super::queue::{
 };
 pub use apparatus::{
     apparatus_ids_match, apparatus_matches_assigned, apparatus_search_key,
-    is_canonical_apparatus_id, next_stage_apparatus_matches, resolve_apparatus_storage_key,
+    is_canonical_apparatus_id,
 };

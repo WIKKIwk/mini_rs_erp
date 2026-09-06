@@ -228,17 +228,13 @@ fn unordered_action_allows_start_when_other_order_is_paused() {
 }
 
 #[test]
-fn resolve_apparatus_storage_key_requires_exact_canonical_id() {
-    let keys = vec![
-        "apparatus:catalog:press-007".to_string(),
-        "apparatus:catalog:godex-demo".to_string(),
-    ];
+fn apparatus_storage_key_requires_exact_canonical_id() {
     assert_eq!(
-        resolve_apparatus_storage_key("apparatus:catalog:press-007", &keys),
+        apparatus_search_key(" apparatus:catalog:press-007 "),
         "apparatus:catalog:press-007"
     );
     assert_eq!(
-        resolve_apparatus_storage_key("7 ta rangli pechat - A", &keys),
+        apparatus_search_key("7 ta rangli pechat - A"),
         ""
     );
 }
@@ -254,11 +250,11 @@ fn apparatus_ids_match_requires_canonical_id() {
 
 #[test]
 fn next_stage_identity_match_requires_canonical_id() {
-    assert!(next_stage_apparatus_matches(
+    assert!(apparatus_ids_match(
         "apparatus:catalog:lam-001",
         "apparatus:catalog:lam-001"
     ));
-    assert!(!next_stage_apparatus_matches(
+    assert!(!apparatus_ids_match(
         "apparatus:catalog:lam-001",
         "apparatus:catalog:lam-002"
     ));
