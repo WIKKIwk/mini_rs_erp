@@ -523,8 +523,14 @@ impl ProductionMapService {
         request: MaterialScanProgressAction<'_>,
     ) -> Result<ApparatusQueueActionResult, ProductionMapError> {
         let _guard = self.queue_action_guard().await;
+        let material_barcodes = parse_material_barcodes(
+            request.material_barcodes.iter().map(String::as_str),
+        );
         let prepared = self
-            .prepare_apparatus_queue_action_with_material_scan_and_progress(request)
+            .prepare_apparatus_queue_action_with_material_scan_and_progress(MaterialScanProgressAction {
+                material_barcodes: &material_barcodes,
+                ..request
+            })
             .await?;
         self.commit_prepared_queue_action(prepared).await
     }
