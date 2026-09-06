@@ -39,7 +39,7 @@ async fn execute_queue_action(
                 action,
                 assigned_apparatus: &assigned_apparatus,
                 actor: queue_action_actor(principal),
-                material_barcode: &materials.combined_barcode,
+                material_barcodes: &materials.scan_barcodes,
                 state_material_barcodes: &state_material_barcodes,
                 progress,
                 qolip_validation,
@@ -61,12 +61,7 @@ async fn execute_queue_action(
         .collect::<Vec<_>>();
     let mut raw_material_stock_transitions = Vec::new();
     if matches!(action, queue_state::ApparatusQueueAction::Start) {
-        let material_stock_barcodes = materials
-            .combined_barcode
-            .split(',')
-            .map(|barcode| barcode.trim().to_string())
-            .filter(|barcode| !barcode.is_empty())
-            .collect::<Vec<_>>();
+        let material_stock_barcodes = materials.scan_barcodes.clone();
         if !prepared.material_scan_skipped() && !material_stock_barcodes.is_empty() {
             raw_material_stock_transitions.push(RawMaterialStockTransition::new(
                 RawMaterialStockTransitionKind::InUse,

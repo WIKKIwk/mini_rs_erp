@@ -222,7 +222,7 @@ async fn start_with_qolip(
             action: queue_state::ApparatusQueueAction::Start,
             assigned_apparatus: &assigned_apparatus,
             actor,
-            material_barcode: "",
+            material_barcodes: &[],
             state_material_barcodes: &[],
             progress: QueueProgressInput::default(),
             qolip_validation: Some(qolip_validation(order_id)),

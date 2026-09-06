@@ -13,7 +13,7 @@ struct QueueActionCommand {
 struct QueueActionMaterialInput {
     legacy_barcode: String,
     barcodes: Vec<String>,
-    combined_barcode: String,
+    scan_barcodes: Vec<String>,
     qolip_codes: Vec<String>,
 }
 
@@ -136,10 +136,14 @@ impl QueueActionCommand {
         };
         let qr_payload = effective_progress_qr_payload(&request.qr_payload, &request.progress_qr)
             .to_string();
-        let combined_barcode = if request.material_barcodes.is_empty() {
-            request.material_barcode.clone()
+        let scan_barcodes = if request.material_barcodes.is_empty() {
+            split_material_barcodes(&request.material_barcode)
         } else {
-            request.material_barcodes.join(",")
+            request
+                .material_barcodes
+                .iter()
+                .flat_map(|value| split_material_barcodes(value))
+                .collect()
         };
         let qolip_codes = normalized_qolip_codes(&request.qolip_codes, &request.qolip_code);
 
@@ -150,7 +154,7 @@ impl QueueActionCommand {
             materials: QueueActionMaterialInput {
                 legacy_barcode: request.material_barcode,
                 barcodes: request.material_barcodes,
-                combined_barcode,
+                scan_barcodes,
                 qolip_codes,
             },
             progress: QueueProgressInput {
@@ -197,6 +201,15 @@ impl QueueActionCommand {
             },
         })
     }
+}
+
+fn split_material_barcodes(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|barcode| !barcode.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
 }
 
 fn normalized_qolip_codes(codes: &[String], legacy_code: &str) -> Vec<String> {

@@ -416,9 +416,19 @@ pub(super) fn normalize_barcode(value: &str) -> String {
     value.trim().to_ascii_uppercase()
 }
 
-pub(super) fn normalized_barcodes(value: &str) -> BTreeSet<String> {
+pub(super) fn split_barcode_values(value: &str) -> Vec<String> {
     value
         .split(',')
+        .map(str::trim)
+        .filter(|barcode| !barcode.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+pub(super) fn normalized_barcodes_list(values: &[String]) -> BTreeSet<String> {
+    values
+        .iter()
+        .flat_map(|value| value.split(','))
         .map(normalize_barcode)
         .filter(|item| !item.is_empty())
         .collect()

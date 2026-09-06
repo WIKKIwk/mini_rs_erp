@@ -179,7 +179,7 @@ mod tests {
         assert_eq!(command.print.submitted_uom, "m");
         assert_eq!(command.progress.qr_payload, "WIP-LEGACY-1");
         assert_eq!(command.progress.description, "legacy completion note");
-        assert_eq!(command.materials.combined_barcode, "RAW-1,RAW-2");
+        assert_eq!(command.materials.scan_barcodes, ["RAW-1", "RAW-2"]);
         assert_eq!(command.materials.qolip_codes, ["qolip-a", "QOLIP-B"]);
     }
 

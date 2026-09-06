@@ -5074,7 +5074,7 @@ async fn pause_first_stage_batch(
             action: queue_state::ApparatusQueueAction::Start,
             assigned_apparatus: &assigned_apparatus,
             actor: actor.clone(),
-            material_barcode: "",
+            material_barcodes: &[],
             state_material_barcodes: &[],
             progress: QueueProgressInput::default(),
             qolip_validation: ApparatusId::new(first.to_string()).ok().and_then(|id| {
@@ -5138,7 +5138,7 @@ async fn start_first_stage(
             action: queue_state::ApparatusQueueAction::Start,
             assigned_apparatus: &assigned_apparatus,
             actor,
-            material_barcode: "",
+            material_barcodes: &[],
             state_material_barcodes: &[],
             progress: QueueProgressInput::default(),
             qolip_validation,
