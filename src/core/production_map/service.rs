@@ -46,18 +46,7 @@ fn stage_states_for_snapshot(
     logs_by_order: &BTreeMap<String, Vec<ProductionOrderLogEntry>>,
 ) -> BTreeMap<String, BTreeMap<String, String>> {
     let mut result = BTreeMap::new();
-    let mut controls_by_identity = BTreeMap::new();
-    for (apparatus, orders) in controls {
-        let apparatus = apparatus.trim();
-        if !crate::core::apparatus_standard::ApparatusId::is_valid(apparatus) {
-            continue;
-        }
-        for (order_id, control) in orders {
-            controls_by_identity
-                .entry((apparatus, order_id.as_str()))
-                .or_insert(control);
-        }
-    }
+    // queue_action_controls_for_snapshot already keys controls by canonical apparatus ID.
     for map in maps {
         let order_id = map.id.trim();
         if order_id.is_empty() {
@@ -100,8 +89,7 @@ fn stage_states_for_snapshot(
         for (apparatus, occurrences) in stages_by_apparatus {
             let control = controls
                 .get(apparatus)
-                .and_then(|orders| orders.get(order_id))
-                .or_else(|| controls_by_identity.get(&(apparatus, order_id)).copied());
+                .and_then(|orders| orders.get(order_id));
             let Some(control) = control else {
                 continue;
             };

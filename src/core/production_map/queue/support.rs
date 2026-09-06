@@ -306,18 +306,6 @@ fn queue_action_event_payload(
     })
 }
 
-pub(super) fn downgrade_completed_state_to_pending(
-    order_id: &str,
-    saved: &mut BTreeMap<String, String>,
-    event: &mut ApparatusQueueActionEvent,
-) {
-    let to_state = queue_state::ApparatusQueueOrderState::Pending;
-    saved.insert(order_id.to_string(), to_state.as_str().to_string());
-    event.to_state = to_state;
-    event.payload_json["to_state"] = serde_json::json!(to_state.as_str());
-    event.payload_json["batch_complete_order_state"] = serde_json::json!("pending");
-}
-
 pub(super) fn finished_goods_qty_uom(
     batch: &OrderProgressBatch,
 ) -> Result<(f64, String), ProductionMapError> {

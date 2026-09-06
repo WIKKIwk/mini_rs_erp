@@ -30,104 +30,54 @@ pub(crate) struct QueueActionPolicyInput {
 pub(crate) fn allowed_actions_for_control(
     input: QueueActionPolicyInput,
 ) -> Vec<ApparatusQueueAction> {
-    let mut actions = Vec::new();
-
-    match input.state {
+    use ApparatusQueueAction::*;
+    let candidates: &[(ApparatusQueueAction, bool)] = match input.state {
         ApparatusQueueOrderState::Pending if input.requeued_session => {
-            if input.pending_actionable {
-                actions.push(ApparatusQueueAction::Resume);
-            }
+            // Requeued work resumes from Pending without a normal Start transition.
+            return if input.pending_actionable {
+                vec![Resume]
+            } else {
+                Vec::new()
+            };
         }
         ApparatusQueueOrderState::Pending => {
-            push_standard_action(
-                &mut actions,
-                input.state,
-                ApparatusQueueAction::Start,
-                input.pending_actionable && input.start_ready,
-            );
+            &[(Start, input.pending_actionable && input.start_ready)]
         }
-        ApparatusQueueOrderState::InProgress => {
-            append_in_progress_actions(&mut actions, input.state, input.profile);
-        }
+        ApparatusQueueOrderState::InProgress => match input.profile {
+            QueueActionPolicyProfile::Live {
+                order_control, is_rezka, merge_ready,
+            } => &[
+                (Pause, matches!(order_control,
+                    OrderControlState::Active | OrderControlState::FreezeRequested)),
+                (Freeze, order_control == OrderControlState::Active),
+                (Merge, order_control == OrderControlState::Active && merge_ready),
+                (RollComplete, order_control == OrderControlState::Active && is_rezka),
+                (Complete, order_control == OrderControlState::Active),
+            ],
+            QueueActionPolicyProfile::Training { is_rezka } => &[
+                (Pause, true),
+                (DetachRoll, true),
+                (Complete, true),
+                (RollComplete, is_rezka),
+            ],
+        },
         ApparatusQueueOrderState::Paused => {
-            push_standard_action(
-                &mut actions,
-                input.state,
-                ApparatusQueueAction::Resume,
-                input.queue_actionable && profile_allows_resume(input.profile),
-            );
+            let resume_allowed = match input.profile {
+                QueueActionPolicyProfile::Live { order_control, .. } => {
+                    order_control == OrderControlState::Active
+                }
+                QueueActionPolicyProfile::Training { .. } => true,
+            };
+            &[(Resume, input.queue_actionable && resume_allowed)]
         }
-        ApparatusQueueOrderState::Frozen | ApparatusQueueOrderState::Completed => {}
-    }
-
-    actions
-}
-
-fn append_in_progress_actions(
-    actions: &mut Vec<ApparatusQueueAction>,
-    state: ApparatusQueueOrderState,
-    profile: QueueActionPolicyProfile,
-) {
-    match profile {
-        QueueActionPolicyProfile::Live {
-            order_control,
-            is_rezka,
-            merge_ready,
-        } => {
-            push_standard_action(
-                actions,
-                state,
-                ApparatusQueueAction::Pause,
-                matches!(
-                    order_control,
-                    OrderControlState::Active | OrderControlState::FreezeRequested
-                ),
-            );
-            let active = order_control == OrderControlState::Active;
-            push_standard_action(actions, state, ApparatusQueueAction::Freeze, active);
-            push_standard_action(
-                actions,
-                state,
-                ApparatusQueueAction::Merge,
-                active && merge_ready,
-            );
-            push_standard_action(
-                actions,
-                state,
-                ApparatusQueueAction::RollComplete,
-                active && is_rezka,
-            );
-            push_standard_action(actions, state, ApparatusQueueAction::Complete, active);
-        }
-        QueueActionPolicyProfile::Training { is_rezka } => {
-            // Preserve the synthetic workspace contract order while sharing
-            // the same state-transition authority as the live queue.
-            push_standard_action(actions, state, ApparatusQueueAction::Pause, true);
-            push_standard_action(actions, state, ApparatusQueueAction::DetachRoll, true);
-            push_standard_action(actions, state, ApparatusQueueAction::Complete, true);
-            push_standard_action(actions, state, ApparatusQueueAction::RollComplete, is_rezka);
-        }
-    }
-}
-
-fn profile_allows_resume(profile: QueueActionPolicyProfile) -> bool {
-    match profile {
-        QueueActionPolicyProfile::Live { order_control, .. } => {
-            order_control == OrderControlState::Active
-        }
-        QueueActionPolicyProfile::Training { .. } => true,
-    }
-}
-
-fn push_standard_action(
-    actions: &mut Vec<ApparatusQueueAction>,
-    state: ApparatusQueueOrderState,
-    action: ApparatusQueueAction,
-    enabled: bool,
-) {
-    if enabled && next_queue_state(state, action).is_ok() {
-        actions.push(action);
-    }
+        ApparatusQueueOrderState::Frozen | ApparatusQueueOrderState::Completed => &[],
+    };
+    candidates
+        .iter()
+        .filter_map(|&(action, enabled)| {
+            (enabled && next_queue_state(input.state, action).is_ok()).then_some(action)
+        })
+        .collect()
 }
 
 #[cfg(test)]
