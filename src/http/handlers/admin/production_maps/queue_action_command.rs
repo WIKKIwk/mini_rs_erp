@@ -136,15 +136,14 @@ impl QueueActionCommand {
         };
         let qr_payload = effective_progress_qr_payload(&request.qr_payload, &request.progress_qr)
             .to_string();
-        let scan_barcodes = if request.material_barcodes.is_empty() {
-            split_material_barcodes(&request.material_barcode)
+        let barcode_fields = if request.material_barcodes.is_empty() {
+            std::slice::from_ref(&request.material_barcode)
         } else {
-            request
-                .material_barcodes
-                .iter()
-                .flat_map(|value| split_material_barcodes(value))
-                .collect()
+            request.material_barcodes.as_slice()
         };
+        let scan_barcodes = crate::core::production_map::parse_material_barcodes(
+            barcode_fields.iter().map(String::as_str),
+        );
         let qolip_codes = normalized_qolip_codes(&request.qolip_codes, &request.qolip_code);
 
         Ok(Self {
@@ -201,15 +200,6 @@ impl QueueActionCommand {
             },
         })
     }
-}
-
-fn split_material_barcodes(value: &str) -> Vec<String> {
-    value
-        .split(',')
-        .map(str::trim)
-        .filter(|barcode| !barcode.is_empty())
-        .map(ToOwned::to_owned)
-        .collect()
 }
 
 fn normalized_qolip_codes(codes: &[String], legacy_code: &str) -> Vec<String> {

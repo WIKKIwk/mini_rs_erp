@@ -286,12 +286,12 @@ impl ProductionMapService {
         let rule = self.material_rule_for_apparatus(&apparatus_id).await?;
         let assignments_for_policy: &[RawMaterialAssignment] =
             if rule.is_some() { &assignments } else { &[] };
-        let material_barcodes = split_barcode_values(material_barcodes);
+        let material_barcodes = parse_material_barcodes(std::iter::once(material_barcodes));
         Ok(build_raw_material_start_requirements(
             rule.as_ref(),
             assignments_for_policy,
             state_material_barcodes,
-            &material_barcodes,
+            &normalized_barcodes_list(&material_barcodes),
         ))
     }
 
@@ -505,7 +505,7 @@ impl ProductionMapService {
         if !assigned_apparatus_contains(&apparatus_id, assigned_apparatus) {
             return Err(ProductionMapError::ApparatusNotAssigned);
         }
-        let material_barcodes = split_barcode_values(material_barcode);
+        let material_barcodes = parse_material_barcodes(std::iter::once(material_barcode));
         self.validate_material_scan(
             apparatus,
             order_id,
@@ -640,7 +640,7 @@ impl ProductionMapService {
             rule.as_ref(),
             &assignments,
             state_material_barcodes,
-            material_barcodes,
+            &scanned,
         );
         if assignments.is_empty() {
             if !scanned.is_empty() {
@@ -817,14 +817,14 @@ pub(super) fn build_raw_material_start_requirements(
     rule: Option<&ApparatusMaterialRule>,
     assignments: &[RawMaterialAssignment],
     state_material_barcodes: &[String],
-    material_barcodes: &[String],
+    scanned: &BTreeSet<String>,
 ) -> RawMaterialStartRequirements {
     let assignment_refs = assignments.iter().collect::<Vec<_>>();
     build_raw_material_start_requirements_refs(
         rule,
         &assignment_refs,
         state_material_barcodes,
-        material_barcodes,
+        scanned,
     )
 }
 
@@ -832,7 +832,7 @@ pub(super) fn build_raw_material_start_requirements_refs(
     rule: Option<&ApparatusMaterialRule>,
     assignments: &[&RawMaterialAssignment],
     state_material_barcodes: &[String],
-    material_barcodes: &[String],
+    scanned: &BTreeSet<String>,
 ) -> RawMaterialStartRequirements {
     let policy = rule.map(|rule| rule.start_policy).unwrap_or_default();
     let requires_material = rule.is_some_and(|rule| rule.requires_material);
@@ -846,7 +846,6 @@ pub(super) fn build_raw_material_start_requirements_refs(
         .map(|barcode| normalize_barcode(barcode))
         .filter(|barcode| assigned.contains(barcode))
         .collect::<BTreeSet<_>>();
-    let scanned = normalized_barcodes_list(material_barcodes);
     let requirement_groups = rule.map(effective_requirement_groups).unwrap_or_default();
     let assignments_satisfied = if assignments.is_empty() {
         !requires_material
@@ -866,7 +865,7 @@ pub(super) fn build_raw_material_start_requirements_refs(
                     || !assignments.is_empty()
                         && !scanned.is_empty()
                         && scanned.is_subset(&assigned)
-                        && scanned == staged,
+                        && *scanned == staged,
             )
         }
         RawMaterialStartPolicy::RequirementGroups => {

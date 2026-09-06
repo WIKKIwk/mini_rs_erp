@@ -184,6 +184,28 @@ mod tests {
     }
 
     #[test]
+    fn material_scan_input_preserves_legacy_precedence_order_and_duplicates() {
+        for (legacy, values, expected) in [
+            (" raw-a, RAW-b ,,raw-a ", vec![], vec!["raw-a", "RAW-b", "raw-a"]),
+            ("ignored", vec![" raw-a, RAW-b ", "", "raw-a"], vec!["raw-a", "RAW-b", "raw-a"]),
+            ("ignored", vec![" , "], vec![]),
+            ("", vec![], vec![]),
+        ] {
+            let (command, _) = command_from_json(
+                serde_json::json!({
+                    "action": "start", "material_barcode": legacy,
+                    "material_barcodes": values,
+                }),
+                ExecutionOperation::Print,
+            );
+            assert_eq!(command.materials.scan_barcodes, expected);
+            // Training retains its distinct legacy fallback at the HTTP boundary.
+            assert_eq!(command.materials.legacy_barcode, legacy);
+            assert_eq!(command.materials.barcodes, values);
+        }
+    }
+
+    #[test]
     fn queue_decision_requires_rezka_progress_metrics() {
         let (mut command, apparatus) = command_from_json(
             serde_json::json!({

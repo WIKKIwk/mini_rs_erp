@@ -711,7 +711,7 @@ impl ProductionMapService {
                                 rule.as_ref(),
                                 &assignments,
                                 &[],
-                                &[],
+                                &BTreeSet::new(),
                             );
                             let material_scan_required = material_requirements.requires_material
                                 || !material_requirements.assigned_barcodes.is_empty();

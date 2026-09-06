@@ -71,6 +71,7 @@ pub use materials::{
     RawMaterialAssignment, RawMaterialAssignmentDeleteInput, RawMaterialAssignmentInput,
     RawMaterialStartPolicy, RawMaterialStartRequirements, TrustedQolipStartValidation,
 };
+pub(crate) use materials_support::parse_material_barcodes;
 #[cfg(any(test, feature = "verification"))]
 pub use memory_store::MemoryProductionMapStore;
 pub use opening_wip::*;

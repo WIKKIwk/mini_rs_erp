@@ -416,9 +416,10 @@ pub(super) fn normalize_barcode(value: &str) -> String {
     value.trim().to_ascii_uppercase()
 }
 
-pub(super) fn split_barcode_values(value: &str) -> Vec<String> {
-    value
-        .split(',')
+pub(crate) fn parse_material_barcodes<'a>(values: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    values
+        .into_iter()
+        .flat_map(|value| value.split(','))
         .map(str::trim)
         .filter(|barcode| !barcode.is_empty())
         .map(ToOwned::to_owned)
@@ -428,8 +429,7 @@ pub(super) fn split_barcode_values(value: &str) -> Vec<String> {
 pub(super) fn normalized_barcodes_list(values: &[String]) -> BTreeSet<String> {
     values
         .iter()
-        .flat_map(|value| value.split(','))
-        .map(normalize_barcode)
+        .map(|value| normalize_barcode(value))
         .filter(|item| !item.is_empty())
         .collect()
 }
