@@ -90,8 +90,8 @@ impl QolipService {
 
     pub async fn checkouts(
         &self,
-        _principal: &Principal,
-        _is_admin: bool,
+        principal: &Principal,
+        is_admin: bool,
         block: Option<&str>,
         status: &str,
         limit: usize,
@@ -102,7 +102,17 @@ impl QolipService {
         if block.is_some() {
             return self.store.checkouts(block, None, status, limit).await;
         }
-        self.store.checkouts(None, None, status, limit).await
+        // Ombor izolatsiyasi: blok ko'rsatilmaganda admin hammasi,
+        // qolipchi faqat o'z bloklaridagini ko'radi.
+        if is_admin {
+            return self.store.checkouts(None, None, status, limit).await;
+        }
+        let assigned = self.assigned_blocks(principal).await?;
+        let allowed: Vec<String> =
+            assigned.into_iter().map(|block| block.name).collect();
+        self.store
+            .checkouts(None, Some(&allowed), status, limit)
+            .await
     }
 
     pub async fn open_checkouts_for_worker(

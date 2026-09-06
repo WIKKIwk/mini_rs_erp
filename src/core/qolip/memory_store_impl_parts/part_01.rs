@@ -82,8 +82,56 @@ impl MemoryQolipStore {
         query: &str,
         limit: usize,
         with_qolip_only: bool,
+        allowed_blocks: Option<&[String]>,
     ) -> Result<Vec<QolipProduct>, QolipError> {
         let query = query.trim().to_lowercase();
+        // Ombor izolatsiyasi: None = hammasi, Some = faqat ruxsat bloklar +
+        // unplaced (hech qayerda joylashmagan) qoliplar.
+        let allowed: Option<BTreeSet<String>> = allowed_blocks.map(|blocks| {
+            blocks
+                .iter()
+                .map(|block| block.trim().to_lowercase())
+                .filter(|block| !block.is_empty())
+                .collect()
+        });
+        if let Some(blocks) = &allowed {
+            if blocks.is_empty() {
+                return Ok(Vec::new());
+            }
+        }
+        let placement: std::collections::HashMap<String, String> = {
+            let mut map = std::collections::HashMap::new();
+            for location in self.locations.read().await.iter() {
+                let key = location.qolip_code.trim().to_lowercase();
+                if !key.is_empty() {
+                    map.entry(key)
+                        .or_insert_with(|| location.block.trim().to_lowercase());
+                }
+            }
+            for checkout in self.checkouts.read().await.iter().filter(|checkout| {
+                checkout.status.trim().eq_ignore_ascii_case("open")
+            }) {
+                let key = checkout.qolip_code.trim().to_lowercase();
+                if !key.is_empty() {
+                    map.entry(key)
+                        .or_insert_with(|| checkout.block.trim().to_lowercase());
+                }
+            }
+            map
+        };
+        let is_visible = |qolip_code: &str| -> bool {
+            let Some(blocks) = &allowed else {
+                return true;
+            };
+            let key = qolip_code.trim().to_lowercase();
+            if key.is_empty() {
+                return true;
+            }
+            match placement.get(&key) {
+                None => true,
+                Some(block) => blocks.contains(block),
+            }
+        };
         let in_use_codes = {
             let checkouts = self.checkouts.read().await;
             checkouts
@@ -107,6 +155,9 @@ impl MemoryQolipStore {
             for spec in specs.values() {
                 let qolip_key = spec.qolip_code.trim().to_lowercase();
                 if qolip_key.is_empty() || !seen_qolip_codes.insert(qolip_key.clone()) {
+                    continue;
+                }
+                if !is_visible(&spec.qolip_code) {
                     continue;
                 }
                 let item_key = spec.item_code.trim().to_lowercase();
@@ -150,6 +201,9 @@ impl MemoryQolipStore {
                 if qolip_key.is_empty() || !seen_qolip_codes.insert(qolip_key.clone()) {
                     continue;
                 }
+                if !is_visible(&location.qolip_code) {
+                    continue;
+                }
                 let item_key = location.item_code.trim().to_lowercase();
                 item_codes_with_qolip.insert(item_key.clone());
                 let base = products_by_code
@@ -191,6 +245,9 @@ impl MemoryQolipStore {
             {
                 let qolip_key = checkout.qolip_code.trim().to_lowercase();
                 if qolip_key.is_empty() || !seen_qolip_codes.insert(qolip_key.clone()) {
+                    continue;
+                }
+                if !is_visible(&checkout.qolip_code) {
                     continue;
                 }
                 let item_key = checkout.item_code.trim().to_lowercase();

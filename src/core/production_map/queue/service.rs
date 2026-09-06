@@ -644,16 +644,18 @@ impl ProductionMapService {
                 let active_order_is_this = active_order_id
                     .is_none_or(|active_order_id| active_order_id == order_id.trim());
                 let requeued_session = active_session.is_some_and(order_run_session_was_requeued);
-                let queue_actionable = state.is_active()
-                    || actionable_order_id == Some(order_id.trim())
-                    || (state == queue_state::ApparatusQueueOrderState::Pending
-                        && !previous_stage_not_configured
-                        && (opening_wip_mode == ApparatusQueuePreviousWipMode::ScanRequired
-                            || (previous_stage.is_some()
-                                && (previous_stage_ready
-                                    || previous_wip_mode
-                                        == ApparatusQueuePreviousWipMode::ScanRequired)))
-                        && active_order_is_this);
+                let queue_actionable = active_order_is_this
+                    && (state.is_active()
+                        || state == queue_state::ApparatusQueueOrderState::Paused
+                        || policy == ApparatusQueuePolicy::FreePick
+                        || actionable_order_id == Some(order_id.trim())
+                        || (state == queue_state::ApparatusQueueOrderState::Pending
+                            && !previous_stage_not_configured
+                            && (opening_wip_mode == ApparatusQueuePreviousWipMode::ScanRequired
+                                || (previous_stage.is_some()
+                                    && (previous_stage_ready
+                                        || previous_wip_mode
+                                            == ApparatusQueuePreviousWipMode::ScanRequired)))));
                 let mut complete_requires_full_report = false;
                 let mut complete_requires_rezka_total_waste_only = false;
                 let mut start_ready = false;
@@ -667,9 +669,13 @@ impl ProductionMapService {
                     opening_wip_mode,
                     ..ApparatusQueueWorkerInteraction::default()
                 };
-                let pending_actionable = queue_actionable
-                    && control == OrderControlState::Active
-                    && (policy == ApparatusQueuePolicy::FreePick || active_order_is_this);
+                let pending_actionable =
+                    queue_actionable && control == OrderControlState::Active;
+                let queue_blocking_reason = if active_order_is_this {
+                    "waiting_sequence"
+                } else {
+                    "apparatus_busy"
+                };
 
                 match state {
                     queue_state::ApparatusQueueOrderState::Pending if requeued_session => {
@@ -677,7 +683,7 @@ impl ProductionMapService {
                             interaction.mode = ApparatusQueueInteractionMode::RequeuedReady;
                         } else {
                             interaction.mode = ApparatusQueueInteractionMode::RequeuedWaiting;
-                            interaction.blocking_reason_code = "waiting_sequence".to_string();
+                            interaction.blocking_reason_code = queue_blocking_reason.to_string();
                         }
                     }
                     queue_state::ApparatusQueueOrderState::Pending => {
@@ -730,7 +736,7 @@ impl ProductionMapService {
                                     "waiting_previous_stage".to_string();
                             } else if !pending_actionable {
                                 interaction.mode = ApparatusQueueInteractionMode::FreshStartBlocked;
-                                interaction.blocking_reason_code = "waiting_sequence".to_string();
+                                interaction.blocking_reason_code = queue_blocking_reason.to_string();
                             } else {
                                 interaction.start_materials_mode = start_materials_mode;
                                 interaction.material_scan_required = start_materials_mode
@@ -815,6 +821,9 @@ impl ProductionMapService {
                         interaction.material_intake_allowed = control == OrderControlState::Active;
                         interaction.assigned_materials_display_only =
                             control != OrderControlState::Active;
+                        if !active_order_is_this {
+                            interaction.blocking_reason_code = "apparatus_busy".to_string();
+                        }
                     }
                     queue_state::ApparatusQueueOrderState::Frozen => {
                         interaction.mode = ApparatusQueueInteractionMode::Frozen;

@@ -68,8 +68,9 @@ impl QolipStorePort for PostgresQolipStore {
         query: &str,
         limit: usize,
         with_qolip_only: bool,
+        allowed_blocks: Option<&[String]>,
     ) -> Result<Vec<QolipProduct>, QolipError> {
-        load_products(&self.pool, query, limit, with_qolip_only).await
+        load_products(&self.pool, query, limit, with_qolip_only, allowed_blocks).await
     }
 
     async fn product_spec(&self, item_code: &str) -> Result<Option<QolipProductSpec>, QolipError> {

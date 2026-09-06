@@ -72,6 +72,56 @@ fn first_actionable_prioritizes_in_progress_order() {
 }
 
 #[test]
+fn paused_work_does_not_own_the_apparatus_queue() {
+    let sequence = vec!["a".to_string(), "b".to_string()];
+    let mut states = BTreeMap::from([("a".to_string(), ApparatusQueueOrderState::Paused)]);
+    assert!(!ApparatusQueueOrderState::Paused.is_active());
+    assert_eq!(first_actionable_order_id(&sequence, &states), Some("b"));
+    states.insert("b".to_string(), ApparatusQueueOrderState::InProgress);
+    assert_eq!(first_actionable_order_id(&sequence, &states), Some("b"));
+}
+
+#[test]
+fn strict_queue_can_switch_between_paused_orders_without_parallel_execution() {
+    use ApparatusQueueAction::*;
+    use ApparatusQueueOrderState as S;
+    let sequence = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+    let mut states = BTreeMap::new();
+    for (order, action) in [("a", Start), ("a", Pause), ("b", Start)] {
+        apply_queue_action(&sequence, &mut states, order, action).unwrap();
+    }
+    let before = states.clone();
+    for (order, action) in [("a", Resume), ("c", Start)] {
+        assert_eq!(
+            apply_queue_action(&sequence, &mut states, order, action),
+            Err(ProductionMapError::QueueActionNotAllowed)
+        );
+        assert_eq!(states, before);
+    }
+    apply_queue_action(&sequence, &mut states, "b", DetachRoll).unwrap();
+    // Either paused order can be resumed; its position is not an execution lock.
+    apply_queue_action(&sequence, &mut states, "b", Resume).unwrap();
+    apply_queue_action(&sequence, &mut states, "b", Complete).unwrap();
+    apply_queue_action(&sequence, &mut states, "a", Resume).unwrap();
+    assert_eq!(states["a"], S::InProgress);
+    assert_eq!(states["b"], S::Completed);
+}
+
+#[test]
+fn free_pick_resume_cannot_create_two_active_orders() {
+    let mut states = BTreeMap::from([
+        ("a".to_string(), ApparatusQueueOrderState::Paused),
+        ("b".to_string(), ApparatusQueueOrderState::InProgress),
+    ]);
+    let before = states.clone();
+    assert_eq!(
+        apply_unordered_queue_action(&mut states, "a", ApparatusQueueAction::Resume),
+        Err(ProductionMapError::QueueActionNotAllowed)
+    );
+    assert_eq!(states, before);
+}
+
+#[test]
 fn effective_sequence_appends_unsequenced_orders_oldest_first() {
     let visible = vec!["zakaz-new".to_string(), "zakaz-old".to_string()];
     assert_eq!(

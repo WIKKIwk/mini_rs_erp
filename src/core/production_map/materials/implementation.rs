@@ -240,14 +240,14 @@ impl ProductionMapService {
         let apparatus_id = parse_apparatus_id(apparatus)?;
         self.validated_material_apparatus(&apparatus_id).await?;
         let queue_states = self.store.apparatus_queue_states().await?;
-        let is_active = queue_states.iter().any(|(candidate, states)| {
+        let intake_allowed = queue_states.iter().any(|(candidate, states)| {
             canonical_apparatuses_match(candidate, &apparatus_id)
                 && states
                     .get(order_id.trim())
                     .and_then(|state| queue_state::ApparatusQueueOrderState::parse(state))
-                    .is_some_and(queue_state::ApparatusQueueOrderState::is_active)
+                    .is_some_and(queue_state::ApparatusQueueOrderState::allows_material_intake)
         });
-        if !is_active {
+        if !intake_allowed {
             return Ok(false);
         }
         Ok(!self
@@ -385,14 +385,14 @@ impl ProductionMapService {
             return Err(ProductionMapError::ApparatusNotAssigned);
         }
         let queue_states = self.store.apparatus_queue_states().await?;
-        let is_active = queue_states.iter().any(|(apparatus, states)| {
+        let intake_allowed = queue_states.iter().any(|(apparatus, states)| {
             canonical_apparatuses_match(apparatus, &assignment.apparatus_id)
                 && states
                     .get(&assignment.order_id)
                     .and_then(|state| queue_state::ApparatusQueueOrderState::parse(state))
-                    .is_some_and(queue_state::ApparatusQueueOrderState::is_active)
+                    .is_some_and(queue_state::ApparatusQueueOrderState::allows_material_intake)
         });
-        if !is_active {
+        if !intake_allowed {
             return Err(ProductionMapError::RawMaterialOrderNotActive);
         }
         if let Some(control) = self

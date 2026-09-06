@@ -914,6 +914,7 @@ impl QolipStorePort for FlippingCheckoutStore {
         _query: &str,
         _limit: usize,
         _with_qolip_only: bool,
+        _allowed_blocks: Option<&[String]>,
     ) -> Result<Vec<QolipProduct>, QolipError> {
         Ok(Vec::new())
     }

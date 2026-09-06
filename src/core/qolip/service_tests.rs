@@ -284,10 +284,27 @@ async fn assigned_blocks_include_direct_block_assignments() {
 }
 
 #[tokio::test]
-async fn checkouts_without_block_return_full_open_debt_ledger() {
+async fn checkouts_without_block_are_limited_to_assigned_blocks() {
     let service = QolipService::new(std::sync::Arc::new(CheckoutLedgerStore));
     let checkouts = service
         .checkouts(&principal(), false, None, "open", 100)
+        .await
+        .expect("checkouts");
+
+    assert_eq!(
+        checkouts
+            .iter()
+            .map(|checkout| checkout.block.as_str())
+            .collect::<Vec<_>>(),
+        vec!["A"]
+    );
+}
+
+#[tokio::test]
+async fn checkouts_without_block_return_full_ledger_for_admin() {
+    let service = QolipService::new(std::sync::Arc::new(CheckoutLedgerStore));
+    let checkouts = service
+        .checkouts(&principal(), true, None, "open", 100)
         .await
         .expect("checkouts");
 
@@ -519,6 +536,7 @@ impl QolipStorePort for CheckoutLedgerStore {
         _query: &str,
         _limit: usize,
         _with_qolip_only: bool,
+        _allowed_blocks: Option<&[String]>,
     ) -> Result<Vec<QolipProduct>, QolipError> {
         Ok(Vec::new())
     }
@@ -637,6 +655,7 @@ impl QolipStorePort for DirectBlockAssignmentStore {
         _query: &str,
         _limit: usize,
         _with_qolip_only: bool,
+        _allowed_blocks: Option<&[String]>,
     ) -> Result<Vec<QolipProduct>, QolipError> {
         Ok(Vec::new())
     }

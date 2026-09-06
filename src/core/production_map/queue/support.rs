@@ -548,6 +548,20 @@ mod active_sequence_barrier_tests {
     }
 
     #[test]
+    fn paused_order_does_not_block_sequence_changes() {
+        let states = BTreeMap::from([("a".to_string(), "paused".to_string())]);
+        assert_eq!(
+            validate_active_sequence_barrier(
+                &ids(&["a", "b", "c"]),
+                &ids(&["b", "c", "a"]),
+                &states,
+                &BTreeSet::new(),
+            ),
+            Ok(())
+        );
+    }
+
+    #[test]
     fn unchanged_active_prefix_is_allowed() {
         assert_eq!(
             validate_active_sequence_barrier(

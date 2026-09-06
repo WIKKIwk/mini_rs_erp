@@ -2244,6 +2244,101 @@ async fn raw_material_requirement_groups_need_distinct_scanned_materials() {
 }
 
 #[tokio::test]
+async fn laminatsiya_pause_switch_keeps_wip_and_blocks_only_running_work() {
+    use queue_state::ApparatusQueueAction as A;
+    let store = Arc::new(MemoryProductionMapStore::new());
+    let service = default_service_with_store(store.clone()).await;
+    let first = FLOW_PECHAT_ID;
+    let second = LAMINATION_2_ID;
+    let actor = QueueActionActor {
+        role: "aparatchi".to_string(),
+        ref_: "worker-pause-switch".to_string(),
+        display_name: "Pause Switch".to_string(),
+    };
+    let orders = ["zakaz-switch-a", "zakaz-switch-b", "zakaz-switch-c"];
+    let waiting = "zakaz-switch-waiting";
+    for order in orders.into_iter().chain([waiting]) {
+        service.upsert_map(two_stage_map(order, first, second)).await.unwrap();
+    }
+    service.set_apparatus_sequence(first, orders.into_iter().chain([waiting])
+        .map(str::to_string).collect()).await.unwrap();
+    service.set_apparatus_sequence(second, [waiting].into_iter().chain(orders)
+        .map(str::to_string).collect()).await.unwrap();
+    let mut inputs = Vec::new();
+    for order in orders {
+        inputs.push(pause_first_stage_batch(&service, order, first, &actor, 20.0)
+            .await.expect("prepare upstream WIP while earlier work is paused"));
+    }
+    let report = QueueProgressInput {
+        produced_qty: Some(10.0),
+        uom: "m".to_string(),
+        finished_goods_meter: Some(10.0),
+        finished_goods_kg: Some(5.0),
+        bobina_kg: Some(1.0),
+        lamination_print_leftover_rolls: Some(1.0),
+        lamination_film_leftover_rolls: Some(1.0),
+        total_waste: Some(0.5),
+        ..QueueProgressInput::default()
+    };
+    let run = |order: &'static str, action, input| {
+        let actor = actor.clone();
+        let service = &service;
+        async move {
+            service.apply_apparatus_queue_action_with_progress(
+                second, order, action, &[second.to_string()], actor, input,
+            ).await
+        }
+    };
+    for index in 0..2 {
+        let started = run(orders[index], A::Start, QueueProgressInput {
+            qr_payload: inputs[index].qr_payload.clone(),
+            ..QueueProgressInput::default()
+        }).await.expect("ready work starts past pending and paused orders");
+        assert_eq!(started.session.as_ref().unwrap().status, OrderRunStatus::Active);
+        let controls = service.queue_action_controls().await.unwrap();
+        assert!(controls[second][orders[index]].allowed_actions.contains(&A::Pause));
+        if index == 1 {
+            assert!(!controls[second][orders[0]].allowed_actions.contains(&A::Resume));
+            assert_eq!(controls[second][orders[0]].interaction.blocking_reason_code, "apparatus_busy");
+            assert!(!controls[second][orders[2]].allowed_actions.contains(&A::Start));
+            for (order, action, input) in [
+                (orders[0], A::Resume, QueueProgressInput::default()),
+                (orders[2], A::Start, QueueProgressInput {
+                    qr_payload: inputs[2].qr_payload.clone(),
+                    ..QueueProgressInput::default()
+                }),
+            ] {
+                assert_eq!(run(order, action, input).await,
+                    Err(ProductionMapError::QueueActionNotAllowed));
+            }
+        }
+        let detached = run(orders[index], A::DetachRoll, report.clone())
+            .await.expect("running work can detach past an earlier paused order");
+        assert_eq!(detached.states[orders[index]], "paused");
+        assert_eq!(detached.session.as_ref().unwrap().status, OrderRunStatus::RollDetached);
+        let output = detached.progress_batch.unwrap();
+        assert_eq!(output.parent_batch_id, inputs[index].batch_id);
+        assert_eq!(output.wip_status, OrderProgressBatchWipStatus::Waiting);
+    }
+    let controls = service.queue_action_controls().await.unwrap();
+    for order in &orders[..2] {
+        assert!(controls[second][*order].allowed_actions.contains(&A::Resume));
+    }
+    assert!(controls[second][orders[2]].allowed_actions.contains(&A::Start));
+    run(orders[1], A::Resume, QueueProgressInput::default())
+        .await.expect("later paused order can resume while apparatus is idle");
+    run(orders[1], A::Complete, report)
+        .await.expect("later order can complete despite earlier paused work");
+    let resumed = run(orders[0], A::Resume, QueueProgressInput::default())
+        .await.expect("original paused order can resume after the other work finishes");
+    let session = resumed.session.unwrap();
+    assert_eq!(session.status, OrderRunStatus::Active);
+    assert_eq!(session.payload_json["input_progress_batch_id"], inputs[0].batch_id);
+    assert_eq!(store.progress_batch(&inputs[0].batch_id).await.unwrap().unwrap().wip_status,
+        OrderProgressBatchWipStatus::InUse);
+}
+
+#[tokio::test]
 async fn paused_next_order_resumes_after_previous_order_completed() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
     let service = default_service_with_store(store.clone()).await;

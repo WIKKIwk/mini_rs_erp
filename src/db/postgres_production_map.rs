@@ -1063,7 +1063,7 @@ impl PostgresProductionMapStore {
             &[assignment.apparatus_id.as_str()],
         )
         .await?;
-        let active_state = sqlx::query_scalar::<_, String>(
+        let intake_allowed = sqlx::query_scalar::<_, String>(
             "SELECT state
              FROM mini_queue_states
              WHERE canonical_apparatus_id = $1
@@ -1078,8 +1078,10 @@ impl PostgresProductionMapStore {
         .and_then(|state| {
             crate::core::production_map::queue_state::ApparatusQueueOrderState::parse(&state)
         })
-        .is_some_and(crate::core::production_map::queue_state::ApparatusQueueOrderState::is_active);
-        if !active_state {
+        .is_some_and(
+            crate::core::production_map::queue_state::ApparatusQueueOrderState::allows_material_intake,
+        );
+        if !intake_allowed {
             return Err(ProductionMapError::RawMaterialOrderNotActive);
         }
         let control_state = sqlx::query_scalar::<_, String>(

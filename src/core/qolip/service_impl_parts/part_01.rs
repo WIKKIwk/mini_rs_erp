@@ -95,7 +95,33 @@ impl QolipService {
         with_qolip_only: bool,
     ) -> Result<Vec<QolipProduct>, QolipError> {
         self.store
-            .products(query, limit.clamp(1, 20_000), with_qolip_only)
+            .products(query, limit.clamp(1, 20_000), with_qolip_only, None)
+            .await
+    }
+
+    /// Ombor izolatsiyali ro'yxat: admin hammasi, qolipchi faqat o'z
+    /// bloklaridagi + hali joylanmagan qoliplarni ko'radi.
+    pub async fn products_for_principal(
+        &self,
+        principal: &Principal,
+        is_admin: bool,
+        query: &str,
+        limit: usize,
+        with_qolip_only: bool,
+    ) -> Result<Vec<QolipProduct>, QolipError> {
+        if is_admin {
+            return self.products(query, limit, with_qolip_only).await;
+        }
+        let assigned = self.assigned_blocks(principal).await?;
+        let allowed: Vec<String> =
+            assigned.into_iter().map(|block| block.name).collect();
+        self.store
+            .products(
+                query,
+                limit.clamp(1, 20_000),
+                with_qolip_only,
+                Some(&allowed),
+            )
             .await
     }
 
@@ -223,7 +249,7 @@ impl QolipService {
         }
         Ok(self
             .store
-            .products(item_name, 50, true)
+            .products(item_name, 50, true, None)
             .await?
             .into_iter()
             .any(|product| {
@@ -336,7 +362,7 @@ impl QolipService {
         } else {
             item_code
         };
-        let products = self.store.products(query, 100, false).await?;
+        let products = self.store.products(query, 100, false, None).await?;
         if !item_code.is_empty() {
             return Ok(products
                 .into_iter()

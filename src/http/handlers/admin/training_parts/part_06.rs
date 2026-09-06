@@ -34,10 +34,10 @@ fn training_queue_action_controls(
                 .copied()
                 .unwrap_or(queue_state::ApparatusQueueOrderState::Pending);
             let active_order_is_this = active_order_id.is_none_or(|active| active == order_id);
-            let queue_actionable = state.is_active()
-                || (state == queue_state::ApparatusQueueOrderState::Pending
-                    && active_order_is_this
-                    && actionable_order_id == Some(order_id.as_str()));
+            let queue_actionable = active_order_is_this
+                && (state.is_active()
+                    || state == queue_state::ApparatusQueueOrderState::Paused
+                    || actionable_order_id == Some(order_id.as_str()));
             let previous_stage = saved_map
                 .and_then(|saved| training_input_stage_for_map(&saved.map, apparatus))
                 .unwrap_or_default();

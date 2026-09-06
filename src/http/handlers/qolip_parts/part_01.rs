@@ -190,9 +190,15 @@ pub async fn products(
     }
     let principal = authenticated_principal(&state, &headers).await?;
     ensure_qolip_access(&state, &principal).await?;
+    let is_admin = state
+        .admin
+        .principal_has_capability(&principal, Capability::AdminAccess)
+        .await;
     let products = state
         .qolip
-        .products(
+        .products_for_principal(
+            &principal,
+            is_admin,
             query.q.as_deref().unwrap_or(""),
             query.limit.unwrap_or(50),
             query.with_qolip.unwrap_or(false) || query.with_qolip_only.unwrap_or(false),

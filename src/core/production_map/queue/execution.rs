@@ -207,9 +207,7 @@ impl ProductionMapService {
             {
                 return Err(ProductionMapError::QueueActionNotAllowed);
             }
-            if policy == ApparatusQueuePolicy::StrictSequence
-                && queue_state::first_actionable_order_id(&sequence, &parsed) != Some(order_id)
-            {
+            if parsed.iter().any(|(id, state)| id != order_id && state.is_active()) {
                 return Err(ProductionMapError::QueueActionNotAllowed);
             }
             parsed.insert(

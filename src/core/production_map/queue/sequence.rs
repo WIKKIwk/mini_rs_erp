@@ -62,13 +62,15 @@ pub fn first_actionable_order_id<'a>(
             .copied()
             .unwrap_or(ApparatusQueueOrderState::Pending)
         {
-            ApparatusQueueOrderState::InProgress | ApparatusQueueOrderState::Paused => {
+            ApparatusQueueOrderState::InProgress => {
                 return Some(id);
             }
             ApparatusQueueOrderState::Pending => {
                 first_pending.get_or_insert(id);
             }
-            ApparatusQueueOrderState::Frozen | ApparatusQueueOrderState::Completed => {}
+            ApparatusQueueOrderState::Paused
+            | ApparatusQueueOrderState::Frozen
+            | ApparatusQueueOrderState::Completed => {}
         }
     }
     first_pending

@@ -26,6 +26,7 @@ pub trait QolipStorePort: Send + Sync {
         query: &str,
         limit: usize,
         with_qolip_only: bool,
+        allowed_blocks: Option<&[String]>,
     ) -> Result<Vec<QolipProduct>, QolipError>;
     async fn product_spec(&self, item_code: &str) -> Result<Option<QolipProductSpec>, QolipError>;
     async fn product_specs(&self, item_code: &str) -> Result<Vec<QolipProductSpec>, QolipError> {

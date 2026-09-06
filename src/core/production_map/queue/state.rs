@@ -41,6 +41,10 @@ impl ApparatusQueueOrderState {
     }
 
     pub fn is_active(self) -> bool {
+        self == Self::InProgress
+    }
+
+    pub fn allows_material_intake(self) -> bool {
         matches!(self, Self::InProgress | Self::Paused)
     }
 }

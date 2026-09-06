@@ -90,7 +90,7 @@ mod tests {
             .await
             .expect("second spec");
 
-        let products = store.products("Kross", 20, true).await.expect("products");
+        let products = store.products("Kross", 20, true, None).await.expect("products");
 
         assert_eq!(
             products
@@ -109,7 +109,7 @@ mod tests {
             .delete_product_specs(&["QOLIP-Z9".to_string()])
             .await
             .expect("delete first spec");
-        let remaining = store.products("Kross", 20, true).await.expect("products");
+        let remaining = store.products("Kross", 20, true, None).await.expect("products");
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].first_qolip_code, "QOLIP-Z9");
     }
@@ -157,7 +157,7 @@ mod tests {
             .await
             .expect("rename spec");
 
-        let products = store.products("Kross", 20, true).await.expect("products");
+        let products = store.products("Kross", 20, true, None).await.expect("products");
         assert_eq!(products.len(), 1);
         assert_eq!(products[0].qolip_code, "Q-NEW");
         assert!(
@@ -221,7 +221,7 @@ mod tests {
             .expect("legacy location");
 
         let products = store
-            .products("legacy customer", 20, true)
+            .products("legacy customer", 20, true, None)
             .await
             .expect("legacy catalog");
         assert_eq!(products.len(), 1);
@@ -255,7 +255,7 @@ mod tests {
         store.checkouts.write().await.push(open_checkout);
 
         let products = store
-            .products("legacy debt", 20, true)
+            .products("legacy debt", 20, true, None)
             .await
             .expect("legacy debt catalog");
         assert_eq!(products.len(), 1);
@@ -383,7 +383,7 @@ mod tests {
             .await
             .expect("open checkout");
 
-        let products = store.products("", 20, true).await.expect("products");
+        let products = store.products("", 20, true, None).await.expect("products");
         assert!(
             !products
                 .iter()
@@ -404,7 +404,7 @@ mod tests {
             .await
             .expect_err("batch containing open checkout must fail");
         assert_eq!(error, QolipError::QolipInUse);
-        assert_eq!(store.products("", 20, true).await.unwrap().len(), 2);
+        assert_eq!(store.products("", 20, true, None).await.unwrap().len(), 2);
 
         let deleted = store
             .delete_product_specs(&["Q-1".to_string()])
@@ -412,7 +412,7 @@ mod tests {
             .expect("delete free spec");
         assert_eq!(deleted, 1);
         assert!(store.location_by_qolip_code("Q-1").await.unwrap().is_none());
-        let remaining = store.products("", 20, true).await.unwrap();
+        let remaining = store.products("", 20, true, None).await.unwrap();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].qolip_code, "Q-2");
     }

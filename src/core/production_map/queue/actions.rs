@@ -14,17 +14,17 @@ pub fn apply_queue_action(
     if order_id.is_empty() {
         return Err(ProductionMapError::MissingId);
     }
-    let current = states
-        .get(order_id)
-        .copied()
-        .unwrap_or(ApparatusQueueOrderState::Pending);
-    let actionable = first_actionable_order_id(sequence, states)
-        .ok_or(ProductionMapError::QueueActionNotAllowed)?;
-    if actionable != order_id {
+    if !sequence.iter().any(|id| id.trim() == order_id) {
         return Err(ProductionMapError::QueueActionNotAllowed);
     }
-    states.insert(order_id.to_string(), next_queue_state(current, action)?);
-    Ok(())
+    // Sequence priority selects fresh work. Paused work is resumable when the
+    // apparatus is idle, and an already running order owns its stop actions.
+    if action == ApparatusQueueAction::Start
+        && first_actionable_order_id(sequence, states) != Some(order_id)
+    {
+        return Err(ProductionMapError::QueueActionNotAllowed);
+    }
+    apply_unordered_queue_action(states, order_id, action)
 }
 
 pub fn apply_unordered_queue_action(
@@ -36,7 +36,7 @@ pub fn apply_unordered_queue_action(
     if order_id.is_empty() {
         return Err(ProductionMapError::MissingId);
     }
-    if matches!(action, ApparatusQueueAction::Start)
+    if matches!(action, ApparatusQueueAction::Start | ApparatusQueueAction::Resume)
         && states.iter().any(|(id, state)| {
             id.trim() != order_id && *state == ApparatusQueueOrderState::InProgress
         })

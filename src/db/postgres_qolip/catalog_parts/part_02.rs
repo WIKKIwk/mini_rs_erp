@@ -3,9 +3,25 @@ pub(super) async fn load_products(
     query: &str,
     limit: usize,
     with_qolip_only: bool,
+    allowed_blocks: Option<&[String]>,
 ) -> Result<Vec<QolipProduct>, QolipError> {
     let query = query.trim().to_lowercase();
     let pattern = format!("%{query}%");
+    // Ombor izolatsiyasi: None = admin/hammasi, Some = faqat shu bloklardagi
+    // joylashgan qoliplar + hali hech qaysi blokka qo'yilmagan (unplaced)
+    // qoliplar. Blokga ega bo'lmagan katalog qatorlari ham ko'rinadi.
+    let allowed: Option<Vec<String>> = allowed_blocks.map(|blocks| {
+        blocks
+            .iter()
+            .map(|block| block.trim().to_lowercase())
+            .filter(|block| !block.is_empty())
+            .collect()
+    });
+    if let Some(blocks) = &allowed {
+        if blocks.is_empty() {
+            return Ok(Vec::new());
+        }
+    }
     let rows = sqlx::query_as::<_, QolipProductRow>(
         r#"
         WITH RECURSIVE group_path(group_name, node_name, parent_name) AS (
@@ -200,6 +216,32 @@ pub(super) async fn load_products(
                   )
             )
           )
+          AND (
+            $5 IS NULL
+            OR btrim(COALESCE(product.qolip_code, '')) = ''
+            OR (
+              NOT EXISTS (
+                SELECT 1 FROM mini_qolip_locations loc
+                WHERE lower(loc.qolip_code) = lower(product.qolip_code)
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM mini_qolip_checkouts co
+                WHERE lower(co.qolip_code) = lower(product.qolip_code)
+                  AND lower(co.status) = 'open'
+              )
+            )
+            OR EXISTS (
+              SELECT 1 FROM mini_qolip_locations loc
+              WHERE lower(loc.qolip_code) = lower(product.qolip_code)
+                AND lower(loc.block) = ANY($5)
+            )
+            OR EXISTS (
+              SELECT 1 FROM mini_qolip_checkouts co
+              WHERE lower(co.qolip_code) = lower(product.qolip_code)
+                AND lower(co.status) = 'open'
+                AND lower(co.block) = ANY($5)
+            )
+          )
         ORDER BY lower(product.name), lower(product.code), lower(COALESCE(product.qolip_code, ''))
         LIMIT $3
         "#,
@@ -208,6 +250,7 @@ pub(super) async fn load_products(
     .bind(pattern)
     .bind(limit.max(1) as i64)
     .bind(with_qolip_only)
+    .bind(allowed)
     .fetch_all(pool)
     .await
     .map_err(|_| QolipError::StoreFailed)?;

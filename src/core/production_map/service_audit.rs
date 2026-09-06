@@ -42,7 +42,7 @@ impl ProductionMapService {
                     "duplicate_active_queue_assignment",
                     &order_id,
                     &apparatuses.join(","),
-                    "an order is active or paused on more than one apparatus",
+                    "an order is in progress on more than one apparatus",
                 ));
             }
         }
@@ -393,7 +393,10 @@ fn audit_session(
                 ),
             ));
         }
-    } else if state.is_some_and(ApparatusQueueOrderState::is_active) {
+    } else if matches!(
+        state,
+        Some(ApparatusQueueOrderState::InProgress | ApparatusQueueOrderState::Paused)
+    ) {
         violations.push(ProductionWorkflowAuditViolation::new(
             "completed_session_active_queue",
             order_id,
@@ -766,7 +769,10 @@ fn audit_transfers(
             queue_state_for_apparatus_order(queue_states, &transfer.from_apparatus, order_id);
         let target_state =
             queue_state_for_apparatus_order(queue_states, &transfer.to_apparatus, order_id);
-        if source_state.is_some_and(ApparatusQueueOrderState::is_active)
+        if matches!(
+            source_state,
+            Some(ApparatusQueueOrderState::InProgress | ApparatusQueueOrderState::Paused)
+        )
             || target_state != Some(ApparatusQueueOrderState::Paused)
         {
             violations.push(ProductionWorkflowAuditViolation::new(

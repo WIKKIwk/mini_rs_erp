@@ -26,8 +26,9 @@ impl QolipStorePort for MemoryQolipStore {
         query: &str,
         limit: usize,
         with_qolip_only: bool,
+        allowed_blocks: Option<&[String]>,
     ) -> Result<Vec<QolipProduct>, QolipError> {
-        MemoryQolipStore::products(self, query, limit, with_qolip_only).await
+        MemoryQolipStore::products(self, query, limit, with_qolip_only, allowed_blocks).await
     }
 
     async fn product_spec(&self, item_code: &str) -> Result<Option<QolipProductSpec>, QolipError> {
