@@ -7,6 +7,140 @@ use sqlx::Row;
 use super::fixtures::{TestDatabase, apparatus_state, draft, metadata};
 
 #[tokio::test]
+async fn factory_map_json_unlink_frees_object_without_changing_equipment() {
+    let database = TestDatabase::create("map_unlink").await;
+    let service = database.service();
+    let created = service
+        .create(
+            draft("physical-asset:map-unlink", "Map machine"),
+            metadata("command:map-create"),
+        )
+        .await
+        .unwrap();
+    let id = created.revision.apparatus_id.clone();
+    let old_placement = created.revision.placement.clone();
+    let unlink =
+        serde_json::from_value::<CanonicalApparatusPatch>(serde_json::json!({"placement": null}))
+            .unwrap();
+    let detached = service
+        .patch(
+            id.clone(),
+            1,
+            unlink.clone(),
+            metadata("command:map-unlink"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(detached.runtime_projection.placement, None);
+    let mut expected = created.revision.to_draft();
+    expected.placement = None;
+    assert_eq!(detached.revision.to_draft(), expected);
+    assert_eq!(
+        service
+            .current_projection(&id)
+            .await
+            .unwrap()
+            .unwrap()
+            .placement,
+        None
+    );
+
+    let mut other = draft("physical-asset:map-other", "Other machine");
+    other.placement = old_placement;
+    service
+        .create(other, metadata("command:map-reuse"))
+        .await
+        .unwrap();
+    let rebind = serde_json::from_value::<CanonicalApparatusPatch>(
+        serde_json::json!({"placement": {"factory_map_object_id": "node:20"}}),
+    )
+    .unwrap();
+    service
+        .patch(id.clone(), 2, rebind, metadata("command:map-rebind"))
+        .await
+        .unwrap();
+    assert!(matches!(
+        service
+            .patch(id.clone(), 1, unlink, metadata("command:map-stale-unlink"))
+            .await,
+        Err(CanonicalApparatusError::RevisionConflict)
+    ));
+    let saved = service.current_projection(&id).await.unwrap().unwrap();
+    assert_eq!(
+        saved.placement.as_ref().unwrap().factory_map_object_id,
+        "node:20"
+    );
+    assert_eq!(apparatus_state(&database.pool, &id).await.drift, 0);
+    database.close().await;
+}
+
+#[tokio::test]
+async fn factory_map_parallel_attachment_has_one_owner_and_rolls_back_loser() {
+    let database = TestDatabase::create("map_race").await;
+    let service = database.service();
+    let a = service
+        .create(
+            draft("physical-asset:map-a", "Machine A"),
+            metadata("command:map-a"),
+        )
+        .await
+        .unwrap();
+    let b = service
+        .create(
+            draft("physical-asset:map-b", "Machine B"),
+            metadata("command:map-b"),
+        )
+        .await
+        .unwrap();
+    let patch = serde_json::from_value::<CanonicalApparatusPatch>(
+        serde_json::json!({"placement": {"factory_map_object_id": "node:7"}}),
+    )
+    .unwrap();
+    let (a_result, b_result) = tokio::join!(
+        service.patch(
+            a.revision.apparatus_id.clone(),
+            1,
+            patch.clone(),
+            metadata("command:map-a-attach")
+        ),
+        service.patch(
+            b.revision.apparatus_id.clone(),
+            1,
+            patch,
+            metadata("command:map-b-attach")
+        ),
+    );
+    let (winner, loser, failure) = match (a_result, b_result) {
+        (Ok(_), Err(error)) => (&a, &b, error),
+        (Err(error), Ok(_)) => (&b, &a, error),
+        other => panic!("expected exactly one owner: {other:?}"),
+    };
+    assert!(matches!(failure, CanonicalApparatusError::AlreadyExists));
+    let loser_state = apparatus_state(&database.pool, &loser.revision.apparatus_id).await;
+    assert_eq!(loser_state.revisions, 1);
+    assert_eq!(loser_state.outbox, 1);
+    assert_eq!(loser_state.head_revision, Some(1));
+    assert_eq!(loser_state.drift, 0);
+    let rows = service.list_runtime_projections().await.unwrap();
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row
+                .placement
+                .as_ref()
+                .is_some_and(|p| p.factory_map_object_id == "node:7"))
+            .count(),
+        1
+    );
+    assert_eq!(
+        apparatus_state(&database.pool, &winner.revision.apparatus_id)
+            .await
+            .drift,
+        0
+    );
+    database.close().await;
+}
+
+#[tokio::test]
 async fn canonical_repository_round_trips_artifact_and_all_projections() {
     let database = TestDatabase::create("roundtrip").await;
     let service = database.service();

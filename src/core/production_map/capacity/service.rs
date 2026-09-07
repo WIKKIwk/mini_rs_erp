@@ -59,7 +59,7 @@ impl ProductionMapService {
                 }
             }
         }
-        for session in self.store.order_run_sessions_for_audit().await? {
+        for session in self.store.active_order_run_sessions_for_apparatus(profile.apparatus_id.as_str()).await? {
             let session_apparatus_id = canonical_apparatus_id(&session.apparatus)
                 .ok_or(ProductionMapError::StoreFailed)?;
             if session.status == OrderRunStatus::Active

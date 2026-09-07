@@ -24,9 +24,8 @@ impl ProductionMapService {
         let order_id = required_existing_order_id(self, order_id).await?;
         Ok(self
             .store
-            .order_control_states()
+            .order_control_by_id(&order_id)
             .await?
-            .remove(&order_id)
             .unwrap_or_else(|| OrderControlRecord::active(&order_id)))
     }
 
@@ -277,10 +276,9 @@ async fn required_existing_order_id(
     }
     if !service
         .store
-        .maps()
+        .map_by_id(order_id)
         .await?
-        .iter()
-        .any(|map| map.id.trim() == order_id)
+        .is_some()
     {
         return Err(ProductionMapError::MapNotFound);
     }
@@ -293,9 +291,8 @@ async fn current_order_control(
 ) -> Result<OrderControlRecord, ProductionMapError> {
     Ok(service
         .store
-        .order_control_states()
+        .order_control_by_id(order_id)
         .await?
-        .remove(order_id)
         .unwrap_or_else(|| OrderControlRecord::active(order_id)))
 }
 

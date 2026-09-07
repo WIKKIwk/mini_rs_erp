@@ -229,6 +229,10 @@ pub enum ProductionMapError {
     OpeningWipDeleteForbidden,
     #[error("paddon input is invalid")]
     PaddonInvalidInput,
+    #[error("paddon changed; scan again")]
+    PaddonReceiptConflict,
+    #[error("paddon already received")]
+    PaddonAlreadyReceived,
     #[error("paddon code sequence is exhausted")]
     PaddonCodeExhausted,
     #[error("paddon was not found")]

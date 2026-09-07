@@ -12,7 +12,21 @@ use crate::db::postgres_raw_material_events::{
 pub(super) async fn load_raw_material_assignments(
     pool: &PgPool,
 ) -> Result<Vec<RawMaterialAssignment>, ProductionMapError> {
-    let rows = sqlx::query_as::<_, (String, serde_json::Value)>(
+    load_raw_material_assignments_scoped(pool, None).await
+}
+
+pub(super) async fn load_raw_material_assignments_for_order(
+    pool: &PgPool,
+    order_id: &str,
+) -> Result<Vec<RawMaterialAssignment>, ProductionMapError> {
+    load_raw_material_assignments_scoped(pool, Some(order_id.trim())).await
+}
+
+async fn load_raw_material_assignments_scoped(
+    pool: &PgPool,
+    order_id: Option<&str>,
+) -> Result<Vec<RawMaterialAssignment>, ProductionMapError> {
+    let mut query = sqlx::QueryBuilder::<Postgres>::new(
         "SELECT canonical_apparatus_id, payload_json
          FROM mini_raw_material_assignments
          WHERE canonical_apparatus_id IS NOT NULL
@@ -20,10 +34,13 @@ pub(super) async fn load_raw_material_assignments(
                SELECT 1
                FROM mini_apparatus master
                WHERE master.id = mini_raw_material_assignments.canonical_apparatus_id
-           )
-         ORDER BY updated_at DESC",
-    )
-    .fetch_all(pool)
+           )",
+    );
+    if let Some(order_id) = order_id {
+        query.push(" AND order_id = ").push_bind(order_id);
+    }
+    query.push(" ORDER BY updated_at DESC");
+    let rows = query.build_query_as::<(String, serde_json::Value)>().fetch_all(pool)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
 

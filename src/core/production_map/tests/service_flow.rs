@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crate::core::apparatus_standard::test_support::{TestApparatusSpec, canonical_draft};
 use crate::core::apparatus_standard::{
@@ -30,6 +30,9 @@ const LAMINATION_2_ID: &str = "apparatus:default:asset-008";
 const REZKA_ID: &str = "apparatus:default:asset-010";
 
 struct SnapshotSessionReadProbeStore {
+    measure_parallel_reads: AtomicBool,
+    active_reads: AtomicUsize,
+    peak_reads: AtomicUsize,
     inner: Arc<dyn ProductionMapStorePort>,
     singular_active_session_reads: AtomicUsize,
     batch_session_reads: AtomicUsize,
@@ -40,6 +43,9 @@ struct SnapshotSessionReadProbeStore {
 impl SnapshotSessionReadProbeStore {
     fn new(inner: Arc<dyn ProductionMapStorePort>) -> Self {
         Self {
+            measure_parallel_reads: AtomicBool::new(false),
+            active_reads: AtomicUsize::new(0),
+            peak_reads: AtomicUsize::new(0),
             inner,
             singular_active_session_reads: AtomicUsize::new(0),
             batch_session_reads: AtomicUsize::new(0),
@@ -47,11 +53,20 @@ impl SnapshotSessionReadProbeStore {
             batch_progress_batch_reads: AtomicUsize::new(0),
         }
     }
+
+    async fn observe_read(&self) {
+        if !self.measure_parallel_reads.load(Ordering::Relaxed) { return; }
+        let active = self.active_reads.fetch_add(1, Ordering::SeqCst) + 1;
+        self.peak_reads.fetch_max(active, Ordering::SeqCst);
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        self.active_reads.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 #[async_trait]
 impl ProductionMapStorePort for SnapshotSessionReadProbeStore {
     async fn maps(&self) -> Result<Vec<ProductionMapDefinition>, ProductionMapError> {
+        self.observe_read().await;
         self.inner.maps().await
     }
 
@@ -78,10 +93,12 @@ impl ProductionMapStorePort for SnapshotSessionReadProbeStore {
     }
 
     async fn order_control_states(&self) -> Result<OrderControlMap, ProductionMapError> {
+        self.observe_read().await;
         self.inner.order_control_states().await
     }
 
     async fn apparatus_sequences(&self) -> Result<ApparatusSequenceMap, ProductionMapError> {
+        self.observe_read().await;
         self.inner.apparatus_sequences().await
     }
 
@@ -96,6 +113,7 @@ impl ProductionMapStorePort for SnapshotSessionReadProbeStore {
     }
 
     async fn apparatus_queue_states(&self) -> Result<ApparatusQueueStateMap, ProductionMapError> {
+        self.observe_read().await;
         self.inner.apparatus_queue_states().await
     }
 
@@ -271,6 +289,51 @@ async fn live_snapshot_reads_active_sessions_in_one_batch() {
         1,
         "snapshot must load progress batches in one batch"
     );
+}
+
+#[tokio::test]
+async fn queue_preflight_overlaps_independent_reads_without_relaxing_state_checks() {
+    let memory = Arc::new(MemoryProductionMapStore::new());
+    let probe = Arc::new(SnapshotSessionReadProbeStore::new(memory.clone()));
+    let apparatus_service = apparatus_service_for(&[(FLOW_PECHAT_ID, "Flow pechat test")]).await;
+    let service = ProductionMapService::new(probe.clone(),
+        Arc::new(CanonicalServiceApparatusResolver::new(apparatus_service)));
+    let order_id = "zakaz-parallel-preflight";
+    service.upsert_map(apparatus_stage_map(order_id, FLOW_PECHAT_ID)).await.unwrap();
+    service.set_apparatus_sequence(FLOW_PECHAT_ID, vec![order_id.into()]).await.unwrap();
+    probe.measure_parallel_reads.store(true, Ordering::Relaxed);
+    let actor = QueueActionActor {
+        role: "aparatchi".into(), ref_: "parallel-worker".into(), display_name: "Worker".into(),
+    };
+    let assigned = vec![FLOW_PECHAT_ID.to_string()];
+    let guard = service.queue_action_guard().await;
+    let prepared = service.prepare_apparatus_queue_action_with_progress(
+        FLOW_PECHAT_ID, order_id, queue_state::ApparatusQueueAction::Start,
+        &assigned, actor.clone(), QueueProgressInput::default()).await.unwrap();
+    assert_eq!(probe.peak_reads.load(Ordering::SeqCst), 4,
+        "all four independent reads must overlap rather than serialize");
+    assert!(memory.apparatus_queue_states().await.unwrap().is_empty(),
+        "preflight must not mutate queue state");
+    drop(prepared);
+    memory.put_apparatus_queue_states(FLOW_PECHAT_ID,
+        BTreeMap::from([(order_id.to_string(), "in_progress".to_string())])).await.unwrap();
+    assert!(service.prepare_apparatus_queue_action_with_progress(
+        FLOW_PECHAT_ID, order_id, queue_state::ApparatusQueueAction::Start,
+        &assigned, actor, QueueProgressInput::default()).await.is_err(),
+        "a second start is still rejected against current state");
+    drop(guard);
+}
+
+#[tokio::test]
+async fn snapshot_epoch_is_shared_by_clones_and_changes_on_service_restart() {
+    let service = ProductionMapService::new_for_test(Arc::new(MemoryProductionMapStore::new()));
+    let clone = service.clone();
+    let restarted = ProductionMapService::new_for_test(Arc::new(MemoryProductionMapStore::new()));
+    assert_eq!(service.snapshot_epoch(), clone.snapshot_epoch());
+    assert_ne!(service.snapshot_epoch(), restarted.snapshot_epoch());
+    let epoch = service.snapshot_epoch().to_string();
+    service.notify_live();
+    assert_eq!(service.snapshot_epoch(), epoch);
 }
 
 #[tokio::test]

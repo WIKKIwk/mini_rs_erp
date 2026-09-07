@@ -444,6 +444,8 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         }
         ProductionMapError::OpeningWipDeleteForbidden => forbidden(),
         ProductionMapError::PaddonInvalidInput => bad_request("paddon_invalid_input"),
+        ProductionMapError::PaddonReceiptConflict => conflict("paddon_receipt_conflict"),
+        ProductionMapError::PaddonAlreadyReceived => conflict("paddon_already_received"),
         ProductionMapError::PaddonCodeExhausted => conflict("paddon_code_exhausted"),
         ProductionMapError::PaddonNotFound => not_found("paddon_not_found"),
         ProductionMapError::PaddonItemAlreadyAssigned => conflict("paddon_item_already_assigned"),

@@ -42,6 +42,8 @@ mod order_control_helpers;
 mod order_query_helpers;
 #[path = "postgres_production_map/paddon/helpers.rs"]
 mod paddon_helpers;
+#[path = "postgres_production_map/paddon/receipts.rs"]
+mod paddon_receipts;
 #[path = "postgres_production_map/progress/helpers.rs"]
 mod progress_helpers;
 #[path = "postgres_production_map/paddon/output_assignment.rs"]
@@ -132,11 +134,20 @@ use self::wip_query_helpers::load_wip_progress_batches;
 #[derive(Clone)]
 pub struct PostgresProductionMapStore {
     pool: PgPool,
+    // Replays pre-optimization reads for DB parity and A/B benchmarks only.
+    #[cfg(test)]
+    legacy_queue_reads: bool,
 }
 
 impl PostgresProductionMapStore {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self { pool, #[cfg(test)] legacy_queue_reads: false }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_legacy_queue_reads(mut self) -> Self {
+        self.legacy_queue_reads = true;
+        self
     }
 }
 

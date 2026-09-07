@@ -14,11 +14,22 @@ use tokio::sync::{Mutex, OwnedMutexGuard, RwLock, broadcast};
 
 const LIVE_NOTIFY_CAPACITY: usize = 256;
 
-#[derive(Default)]
 struct ProductionSnapshotCache {
+    epoch: String,
     revision: AtomicU64,
     snapshot: RwLock<Option<CachedProductionSnapshot>>,
     rebuild_lock: Mutex<()>,
+}
+
+impl Default for ProductionSnapshotCache {
+    fn default() -> Self {
+        Self {
+            epoch: format!("{:032x}", rand::random::<u128>()),
+            revision: AtomicU64::new(0),
+            snapshot: RwLock::new(None),
+            rebuild_lock: Mutex::new(()),
+        }
+    }
 }
 
 struct CachedProductionSnapshot {
@@ -262,6 +273,10 @@ impl ProductionMapService {
     pub fn notify_live(&self) {
         self.snapshot_cache.revision.fetch_add(1, Ordering::AcqRel);
         let _ = self.live_notify.send(());
+    }
+
+    pub fn snapshot_epoch(&self) -> &str {
+        &self.snapshot_cache.epoch
     }
 
     pub async fn live_snapshot(&self) -> Result<ProductionMapLiveSnapshot, ProductionMapError> {

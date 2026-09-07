@@ -127,6 +127,105 @@ struct FinishedGoodsReceiveRequest {
     warehouse: String,
 }
 
+#[derive(serde::Deserialize)]
+pub struct WerkaPaddonQuery {
+    code: String,
+}
+
+pub async fn werka_paddon_preview(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WerkaPaddonQuery>,
+) -> Result<Response, AdminError> {
+    let principal = authorize_any_capability(&state, &headers, &[Capability::WerkaAccess]).await?;
+    if principal.role != PrincipalRole::Werka {
+        return Err(forbidden());
+    }
+    let warehouses = state
+        .warehouses
+        .assigned_warehouse_names(&principal)
+        .await
+        .map_err(warehouse_error)?;
+    if warehouses.is_empty() {
+        return Err(forbidden());
+    }
+    let receipt = state
+        .production_maps
+        .paddon_receipt(&query.code)
+        .await
+        .map_err(production_map_error)?;
+    if let Some(ref receipt) = receipt {
+        if !warehouses.iter().any(|w| w == &receipt.warehouse) {
+            return Err(forbidden());
+        }
+    }
+    let snapshot = state
+        .production_maps
+        .paddon_scan_snapshot(&query.code)
+        .await
+        .map_err(production_map_error)?;
+    let eligible = if receipt.is_some() {
+        false
+    } else {
+        match state
+            .production_maps
+            .validate_paddon_receiving_items(&snapshot.items)
+            .await
+        {
+            Ok(()) => true,
+            Err(
+                ProductionMapError::PaddonInvalidInput
+                | ProductionMapError::ProgressBatchNotAccepted
+                | ProductionMapError::ProgressInputInvalid
+                | ProductionMapError::MapNotFound,
+            ) => false,
+            Err(error) => return Err(production_map_error(error)),
+        }
+    };
+    Ok(json_response(serde_json::json!({
+        "paddon": snapshot.paddon, "items": snapshot.items,
+        "snapshot_token": crate::core::production_map::paddon_snapshot_token(&snapshot),
+        "warehouses": warehouses, "can_receive": eligible, "receipt": receipt,
+    })))
+}
+
+#[derive(serde::Deserialize)]
+pub struct WerkaPaddonReceiveRequest {
+    code: String,
+    warehouse: String,
+    expected_batch_ids: Vec<String>,
+    snapshot_token: String,
+}
+
+pub async fn werka_paddon_receive(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<WerkaPaddonReceiveRequest>,
+) -> Result<Response, AdminError> {
+    let principal = authorize_any_capability(&state, &headers, &[Capability::WerkaAccess]).await?;
+    if principal.role != PrincipalRole::Werka {
+        return Err(forbidden());
+    }
+    let warehouse = assigned_finished_goods_warehouse(&state, &principal, &input.warehouse).await?;
+    let receipt = state
+        .production_maps
+        .receive_paddon(
+            &input.code,
+            &warehouse,
+            &input.expected_batch_ids,
+            &input.snapshot_token,
+            queue_action_actor(&principal),
+        )
+        .await
+        .map_err(production_map_error)?;
+    state
+        .warehouse_events
+        .notify_updated(&warehouse, "finished_goods_stock");
+    Ok(json_response(
+        serde_json::json!({"ok": true, "receipt": receipt}),
+    ))
+}
+
 pub async fn production_map_finished_goods_receive(
     State(state): State<AppState>,
     method: Method,

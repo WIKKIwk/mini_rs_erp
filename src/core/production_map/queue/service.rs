@@ -244,16 +244,16 @@ impl ProductionMapService {
             return Err(ProductionMapError::MissingId);
         }
         let order_ids = [order_id.to_string()];
-        let (lifecycles, order_controls) = tokio::try_join!(
+        let (lifecycles, order_control) = tokio::try_join!(
             self.store.production_order_lifecycles(&order_ids),
-            self.store.order_control_states(),
+            self.store.order_control_by_id(order_id),
         )?;
         let record = lifecycles
             .get(order_id)
             .ok_or(ProductionMapError::MapNotFound)?;
         let mut status = ProductionOrderStatusDetail::from_persisted_projection(record);
-        if order_controls
-            .get(order_id)
+        if order_control
+            .as_ref()
             .is_some_and(|control| control.state == OrderControlState::Frozen)
         {
             status.force_frozen();

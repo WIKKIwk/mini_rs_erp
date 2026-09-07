@@ -414,12 +414,7 @@ impl ProductionMapService {
         map_id: &str,
     ) -> Result<Option<ProductionMapDefinition>, ProductionMapError> {
         let map_id = map_id.trim().to_ascii_lowercase();
-        Ok(self
-            .store
-            .maps()
-            .await?
-            .into_iter()
-            .find(|map| map.id.trim() == map_id))
+        self.store.map_by_id(&map_id).await
     }
 
     pub async fn restore_map(

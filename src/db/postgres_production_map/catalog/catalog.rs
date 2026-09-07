@@ -12,10 +12,12 @@ use super::transaction_locks::lock_apparatus_tx;
 pub(super) async fn load_maps(
     pool: &PgPool,
 ) -> Result<Vec<ProductionMapDefinition>, ProductionMapError> {
+    // Stable tie-breaker keeps implicit queue order identical to scoped reads,
+    // even when a batch saves several maps at the same transaction timestamp.
     let rows = sqlx::query_scalar::<_, serde_json::Value>(
         "SELECT map_json
          FROM mini_production_maps
-         ORDER BY updated_at DESC",
+         ORDER BY updated_at DESC, id ASC",
     )
     .fetch_all(pool)
     .await
@@ -35,6 +37,46 @@ pub(super) async fn load_maps(
             }
         })
         .collect())
+}
+
+pub(super) async fn load_map_by_id(
+    pool: &PgPool,
+    map_id: &str,
+) -> Result<Option<ProductionMapDefinition>, ProductionMapError> {
+    let payload = sqlx::query_scalar::<_, serde_json::Value>(
+        "SELECT map_json FROM mini_production_maps WHERE id = $1",
+    ).bind(map_id.trim()).fetch_optional(pool).await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    Ok(payload.and_then(|payload| match serde_json::from_value(payload) {
+        Ok(map) => Some(map),
+        Err(error) => {
+            tracing::warn!(?error, "skipping stored production map with invalid payload");
+            None
+        }
+    }))
+}
+
+pub(super) async fn load_maps_for_apparatus(
+    pool: &PgPool,
+    apparatus: &str,
+) -> Result<Vec<ProductionMapDefinition>, ProductionMapError> {
+    // Node projections are written atomically with map_json. This is only a
+    // candidate filter: Rust still applies chain/alternative/visibility rules.
+    let rows = sqlx::query_scalar::<_, serde_json::Value>(
+        "SELECT map_json FROM mini_production_maps
+         WHERE id IN (
+             SELECT map_id FROM mini_production_map_nodes
+             WHERE canonical_apparatus_id = $1 OR canonical_alternative_apparatus_id = $1
+         ) ORDER BY updated_at DESC, id ASC",
+    ).bind(apparatus.trim()).fetch_all(pool).await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    Ok(rows.into_iter().filter_map(|payload| match serde_json::from_value(payload) {
+        Ok(map) => Some(map),
+        Err(error) => {
+            tracing::warn!(?error, "skipping stored production map with invalid payload");
+            None
+        }
+    }).collect())
 }
 
 pub(super) async fn load_maps_by_lifecycle_statuses(

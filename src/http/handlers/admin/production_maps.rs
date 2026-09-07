@@ -81,6 +81,7 @@ pub use self::raw_materials::{
     raw_material_start_requirements, raw_material_stock,
 };
 pub use self::wip::{production_map_finished_goods_receive, production_map_wip_batches};
+pub use self::wip::{werka_paddon_preview, werka_paddon_receive};
 
 include!("production_maps_parts/part_01.rs");
 include!("production_maps_parts/part_02.rs");

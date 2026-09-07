@@ -190,17 +190,17 @@ async fn send_production_map_live_snapshot(
         }
         Err(error) => Err(error),
     };
-    let completed_orders = service
-        .completed_queue_orders_for_actor(&actor_ref, 200)
-        .await;
-    let completion_requests = if include_completion_requests {
-        service.completion_requests(200).await
-    } else {
-        Ok(Vec::new())
-    };
-    let completion_request_decisions = service
-        .completion_request_decisions_for_actor(&actor_ref, 200)
-        .await;
+    let (completed_orders, completion_requests, completion_request_decisions) = tokio::join!(
+        service.completed_queue_orders_for_actor(&actor_ref, 200),
+        async {
+            if include_completion_requests {
+                service.completion_requests(200).await
+            } else {
+                Ok(Vec::new())
+            }
+        },
+        service.completion_request_decisions_for_actor(&actor_ref, 200),
+    );
     match (
         snapshot,
         completed_orders,
@@ -220,6 +220,7 @@ async fn send_production_map_live_snapshot(
                 // today, but can use `rev` to detect a missed update and
                 // resync instead of sitting on stale state.
                 "rev": revision,
+                "epoch": service.snapshot_epoch(),
                 "maps": &snapshot.maps,
                 "sequences": &snapshot.sequences,
                 "visible_order_ids": &snapshot.visible_order_ids,

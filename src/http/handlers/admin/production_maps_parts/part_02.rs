@@ -1,7 +1,16 @@
 /// Apparatus order sequences are stored server-side so every device (admin
 /// and worker) sees the same queue order.
+#[derive(Default, serde::Deserialize)]
+pub struct ProductionMapSequenceQuery {
+    #[serde(default)]
+    apparatus: String,
+    #[serde(default)]
+    order_id: String,
+}
+
 pub async fn production_map_sequence(
     State(state): State<AppState>,
+    Query(query): Query<ProductionMapSequenceQuery>,
     method: Method,
     headers: HeaderMap,
     body: Bytes,
@@ -20,6 +29,13 @@ pub async fn production_map_sequence(
     .await?;
     match method {
         Method::GET => {
+            let apparatus = query.apparatus.trim();
+            let order_id = query.order_id.trim();
+            if apparatus.is_empty() != order_id.is_empty()
+                || (!apparatus.is_empty() && !queue_state::is_canonical_apparatus_id(apparatus))
+            {
+                return Err(bad_request("canonical apparatus and order_id are required together"));
+            }
             // Canonical initial snapshot: same authority as the live stream
             // (`ProductionMapLiveSnapshot` + monotonic revision + maps).
             // Additive only: old mobiles ignore `rev`/`maps`.
@@ -33,10 +49,32 @@ pub async fn production_map_sequence(
             )
             .await
             .map_err(super::training::training_workspace_error)?;
+            if !apparatus.is_empty() {
+                // Same canonical snapshot and authorization as the full GET;
+                // only its wire projection is smaller. No maps, compilation
+                // results or customer lookup on an action-control refresh.
+                return Ok(json_response(serde_json::json!({
+                    "ok": true,
+                    "rev": revision,
+                    "epoch": state.production_maps.snapshot_epoch(),
+                    "maps": [],
+                    "sequences": { apparatus: snapshot.sequences.get(apparatus).cloned().unwrap_or_default() },
+                    "visible_order_ids": { apparatus: snapshot.visible_order_ids.get(apparatus).cloned().unwrap_or_default() },
+                    "queue_states": { apparatus: snapshot.queue_states.get(apparatus).cloned().unwrap_or_default() },
+                    "stage_states": { order_id: snapshot.stage_states.get(order_id).cloned().unwrap_or_default() },
+                    "queue_policies": snapshot.queue_policies.iter().filter(|policy| policy.apparatus_id.as_str() == apparatus).collect::<Vec<_>>(),
+                    "queue_action_controls": { apparatus: snapshot.queue_action_controls.get(apparatus).map(|controls| controls.iter().filter(|(id, _)| id.as_str() == order_id).collect::<std::collections::BTreeMap<_, _>>()).unwrap_or_default() },
+                    "order_controls": &snapshot.order_controls,
+                    "order_statuses": {},
+                    "frozen_orders_by_apparatus": {},
+                    "order_customers": {},
+                })));
+            }
             let order_customers = production_map_order_customers(&state, &snapshot.maps).await;
             Ok(json_response(serde_json::json!({
                 "ok": true,
                 "rev": revision,
+                "epoch": state.production_maps.snapshot_epoch(),
                 "maps": &snapshot.maps,
                 "sequences": &snapshot.sequences,
                 "visible_order_ids": &snapshot.visible_order_ids,
@@ -161,7 +199,7 @@ pub(super) async fn raw_material_barcodes_for_order_apparatus(
 ) -> Result<Vec<String>, AdminError> {
     let assignments = state
         .production_maps
-        .raw_material_assignments()
+        .raw_material_assignments_for_order(order_id)
         .await
         .map_err(production_map_error)?;
     Ok(assignments

@@ -232,6 +232,13 @@ impl ProductionMapService {
         self.store.raw_material_assignments().await
     }
 
+    pub async fn raw_material_assignments_for_order(
+        &self,
+        order_id: &str,
+    ) -> Result<Vec<RawMaterialAssignment>, ProductionMapError> {
+        self.store.raw_material_assignments_for_order(order_id.trim()).await
+    }
+
     pub async fn raw_material_intake_is_available(
         &self,
         order_id: &str,
@@ -739,7 +746,7 @@ impl ProductionMapService {
     ) -> Result<Vec<RawMaterialAssignment>, ProductionMapError> {
         Ok(self
             .store
-            .raw_material_assignments()
+            .raw_material_assignments_for_order(order_id)
             .await?
             .into_iter()
             .filter(|assignment| {

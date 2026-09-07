@@ -53,7 +53,21 @@ struct OrderFreezeAuditRow {
 pub(super) async fn load_order_control_states(
     pool: &PgPool,
 ) -> Result<BTreeMap<String, OrderControlRecord>, ProductionMapError> {
-    let rows = sqlx::query_as::<_, OrderControlRow>(
+    load_order_control_states_scoped(pool, None).await
+}
+
+pub(super) async fn load_order_control_by_id(
+    pool: &PgPool,
+    order_id: &str,
+) -> Result<Option<OrderControlRecord>, ProductionMapError> {
+    Ok(load_order_control_states_scoped(pool, Some(order_id.trim())).await?.remove(order_id.trim()))
+}
+
+async fn load_order_control_states_scoped(
+    pool: &PgPool,
+    order_id: Option<&str>,
+) -> Result<BTreeMap<String, OrderControlRecord>, ProductionMapError> {
+    let mut query = sqlx::QueryBuilder::<Postgres>::new(
         r#"SELECT
              control.order_id,
              control.state,
@@ -73,10 +87,13 @@ pub(super) async fn load_order_control_states(
              request.transitioned_at_unix AS request_transitioned_at_unix
            FROM mini_order_control_states control
            LEFT JOIN mini_order_freeze_requests request
-             ON request.request_id = control.freeze_request_id
-           ORDER BY control.order_id ASC"#,
-    )
-    .fetch_all(pool)
+             ON request.request_id = control.freeze_request_id"#,
+    );
+    if let Some(order_id) = order_id {
+        query.push(" WHERE control.order_id = ").push_bind(order_id);
+    }
+    query.push(" ORDER BY control.order_id ASC");
+    let rows = query.build_query_as::<OrderControlRow>().fetch_all(pool)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
 

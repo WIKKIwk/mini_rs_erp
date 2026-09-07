@@ -51,6 +51,9 @@ mod service_progress_metrics;
 mod service_progress_support;
 #[path = "paddon/service.rs"]
 mod service_paddon;
+#[path = "paddon/receive.rs"]
+mod service_paddon_receive;
+pub(crate) use service_paddon_receive::{validate_receipt_retry, paddon_snapshot_token};
 #[path = "qolip/service.rs"]
 mod service_qolip;
 #[path = "queue/support.rs"]

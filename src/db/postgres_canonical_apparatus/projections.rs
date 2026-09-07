@@ -67,7 +67,18 @@ pub(super) async fn write_runtime_projection(
     .bind(runtime.lifecycle.state.as_str())
     .execute(&mut **tx)
     .await
-    .map_err(|_| CanonicalApparatusError::Persistence)?;
+    .map_err(|error| {
+        // A concurrent map attachment can win after the client's availability
+        // check. Keep the unique index authoritative, but report a conflict,
+        // not a generic storage outage; the surrounding transaction rolls back.
+        if error.as_database_error().is_some_and(|error| {
+            error.constraint() == Some("idx_mini_apparatus_factory_map_object_id_unique")
+        }) {
+            CanonicalApparatusError::AlreadyExists
+        } else {
+            CanonicalApparatusError::Persistence
+        }
+    })?;
     Ok(())
 }
 

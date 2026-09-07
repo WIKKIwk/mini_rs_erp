@@ -89,6 +89,26 @@
   ],
   "cases": [
     {
+      "name": "worker_scoped_queue_snapshot_requires_auth",
+      "request": {"method": "GET", "uri": "/v1/mobile/admin/production-maps/sequence?apparatus=apparatus:test:latency&order_id=zakaz-latency"},
+      "expect": {"status": 401}
+    },
+    {
+      "name": "worker_scoped_queue_snapshot_preserves_empty_contract",
+      "request": {"method": "GET", "uri": "/v1/mobile/admin/production-maps/sequence?apparatus=apparatus:test:latency&order_id=zakaz-latency", "role": "admin"},
+      "expect": {"status": 200, "body": {"ok": true, "maps": [], "queue_states": {"apparatus:test:latency": {}}, "queue_action_controls": {"apparatus:test:latency": {}}}, "body_paths": [{"path": ["epoch"], "length": 32}]}
+    },
+    {
+      "name": "worker_scoped_queue_snapshot_rejects_display_identity",
+      "request": {"method": "GET", "uri": "/v1/mobile/admin/production-maps/sequence?apparatus=Bosma&order_id=zakaz-latency", "role": "admin"},
+      "expect": {"status": 400}
+    },
+    {
+      "name": "worker_scoped_queue_snapshot_requires_both_scope_ids",
+      "request": {"method": "GET", "uri": "/v1/mobile/admin/production-maps/sequence?apparatus=apparatus:test:latency", "role": "admin"},
+      "expect": {"status": 400}
+    },
+    {
       "name": "me_rejects_anonymous",
       "request": {"method": "GET", "uri": "/v1/mobile/me"},
       "expect": {"status": 401}

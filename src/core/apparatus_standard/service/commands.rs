@@ -48,6 +48,48 @@ pub struct CanonicalApparatusPatch {
     pub execution_profile: Option<ExecutionProfile>,
     pub policies: Option<ApparatusOperationalPolicies>,
     pub capacity: Option<ApparatusCapacity>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_placement_patch",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub placement: Option<Option<FactoryMapPlacement>>,
     pub training: Option<TrainingProfile>,
+}
+
+// PATCH must distinguish an omitted field (keep) from JSON null (unlink).
+// Serde's default Option<Option<T>> deserializer collapses both to None.
+fn deserialize_placement_patch<'de, D>(
+    deserializer: D,
+) -> Result<Option<Option<FactoryMapPlacement>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<FactoryMapPlacement>::deserialize(deserializer).map(Some)
+}
+
+#[cfg(test)]
+mod placement_patch_tests {
+    use super::*;
+
+    #[test]
+    fn placement_patch_distinguishes_keep_unlink_and_attach() {
+        for (json, expected) in [
+            (serde_json::json!({}), None),
+            (serde_json::json!({"placement": null}), Some(None)),
+            (
+                serde_json::json!({"placement": {"factory_map_object_id": "node:7"}}),
+                Some(Some(FactoryMapPlacement {
+                    factory_map_object_id: "node:7".into(),
+                })),
+            ),
+        ] {
+            let patch: CanonicalApparatusPatch = serde_json::from_value(json).unwrap();
+            assert_eq!(patch.placement, expected);
+            let encoded = serde_json::to_value(&patch).unwrap();
+            assert_eq!(encoded.get("placement").is_some(), expected.is_some());
+            let decoded: CanonicalApparatusPatch = serde_json::from_value(encoded).unwrap();
+            assert_eq!(decoded.placement, expected);
+        }
+    }
 }

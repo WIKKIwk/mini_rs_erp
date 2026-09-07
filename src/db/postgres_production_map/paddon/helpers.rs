@@ -26,6 +26,7 @@ struct PaddonRow {
 #[derive(FromRow)]
 struct PaddonLockRow {
     id: String,
+    receipt_json: Option<serde_json::Value>,
 }
 
 #[derive(FromRow)]
@@ -203,8 +204,8 @@ async fn lock_paddon(
     tx: &mut Transaction<'_, Postgres>,
     code: &str,
 ) -> Result<PaddonLockRow, ProductionMapError> {
-    sqlx::query_as::<_, PaddonLockRow>(
-        "SELECT id
+    let row = sqlx::query_as::<_, PaddonLockRow>(
+        "SELECT id, receipt_json
          FROM mini_paddons
          WHERE code = $1
          FOR UPDATE",
@@ -213,7 +214,9 @@ async fn lock_paddon(
     .fetch_optional(&mut **tx)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?
-    .ok_or(ProductionMapError::PaddonNotFound)
+    .ok_or(ProductionMapError::PaddonNotFound)?;
+    if row.receipt_json.is_some() { return Err(ProductionMapError::PaddonAlreadyReceived); }
+    Ok(row)
 }
 
 fn new_item_id() -> String {

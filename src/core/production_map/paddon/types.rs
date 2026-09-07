@@ -2,6 +2,23 @@ use serde::{Deserialize, Serialize};
 
 use super::progress::OrderProgressBatch;
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PaddonReceipt {
+    pub paddon: PaddonSummary,
+    pub items: Vec<OrderProgressBatch>,
+    pub stocks: Vec<super::FinishedGoodsStockEntry>,
+    pub warehouse: String,
+    pub accepted_by_ref: String,
+    pub accepted_by_display_name: String,
+    pub accepted_at_unix: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct PaddonReceiveWrite {
+    pub originals: Vec<OrderProgressBatch>,
+    pub receipt: PaddonReceipt,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaddonSummary {
     pub id: String,

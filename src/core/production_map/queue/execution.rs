@@ -72,9 +72,23 @@ impl ProductionMapService {
             }
             OrderControlState::Frozen => return Err(ProductionMapError::OrderFrozen),
         }
-        let sequences = self.store.apparatus_sequences().await?;
-        let all_states = self.store.apparatus_queue_states().await?;
-        let order_controls = self.store.order_control_states().await?;
+        // Independent reads under the same mutation guard. Keep every domain
+        // check and the transaction's final state validation, without adding
+        // four database round trips to the worker's critical path in series.
+        let (sequences, all_states, order_controls, all_maps) = tokio::try_join!(
+            self.store.apparatus_sequences(),
+            self.store.apparatus_queue_states(),
+            self.store.order_control_states(),
+            async {
+                // Freeze edits sequences across stations; it retains the full
+                // map set. Normal actions need only candidate station maps.
+                if queue_action == queue_state::ApparatusQueueAction::Freeze {
+                    self.store.maps().await
+                } else {
+                    self.store.maps_for_apparatus(apparatus).await
+                }
+            },
+        )?;
         if queue_action == queue_state::ApparatusQueueAction::Freeze
             && control.state == OrderControlState::Active
             && order_has_frozen_queue_state(&all_states, order_id)
@@ -96,7 +110,6 @@ impl ProductionMapService {
             .get(&storage_key)
             .map(Vec::as_slice)
             .unwrap_or_default();
-        let all_maps = self.store.maps().await?;
         let visible_order_ids = visible_order_ids_for_apparatus(&all_maps, apparatus);
         let frozen_order_ids = order_controls
             .iter()

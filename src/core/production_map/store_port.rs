@@ -184,6 +184,15 @@ fn is_warehouse_processing_marker(value: &str) -> bool {
 pub trait ProductionMapStorePort: Send + Sync {
     // Maps and apparatus sequence persistence.
     async fn maps(&self) -> StoreResult<Vec<ProductionMapDefinition>>;
+    /// Fresh point read; persistent stores override the compatibility fallback.
+    async fn map_by_id(&self, map_id: &str) -> StoreResult<Option<ProductionMapDefinition>> {
+        Ok(self.maps().await?.into_iter().find(|map| map.id.trim() == map_id.trim()))
+    }
+    /// A superset of maps containing this station, in the same order as maps().
+    /// Callers still apply the authoritative chain/alternative-stage rules.
+    async fn maps_for_apparatus(&self, _apparatus: &str) -> StoreResult<Vec<ProductionMapDefinition>> {
+        self.maps().await
+    }
     async fn maps_by_lifecycle_statuses(
         &self,
         statuses: &[ProductionOrderLifecycleStatus],
@@ -261,6 +270,9 @@ pub trait ProductionMapStorePort: Send + Sync {
     async fn delete_map(&self, map_id: &str) -> StoreResult<()>;
     async fn order_control_states(&self) -> StoreResult<OrderControlMap> {
         Ok(BTreeMap::new())
+    }
+    async fn order_control_by_id(&self, order_id: &str) -> StoreResult<Option<OrderControlRecord>> {
+        Ok(self.order_control_states().await?.remove(order_id.trim()))
     }
     async fn order_freeze_requests_for_audit(&self) -> StoreResult<Vec<OrderFreezeAuditRecord>> {
         Ok(Vec::new())
@@ -450,6 +462,11 @@ pub trait ProductionMapStorePort: Send + Sync {
     }
     async fn order_run_sessions_for_audit(&self) -> StoreResult<Vec<OrderRunSession>> {
         Ok(Vec::new())
+    }
+    async fn active_order_run_sessions_for_apparatus(&self, apparatus: &str) -> StoreResult<Vec<OrderRunSession>> {
+        Ok(self.order_run_sessions_for_audit().await?.into_iter()
+            .filter(|session| session.status == OrderRunStatus::Active && session.apparatus.trim() == apparatus.trim())
+            .collect())
     }
     async fn bosma_astatka_reports_for_order(
         &self,
@@ -658,6 +675,12 @@ pub trait ProductionMapStorePort: Send + Sync {
     ) -> StoreResult<()> {
         self.put_order_progress_batch(batch).await
     }
+    async fn paddon_receipt(&self, _code: &str) -> StoreResult<Option<PaddonReceipt>> {
+        Ok(None)
+    }
+    async fn receive_paddon(&self, _write: PaddonReceiveWrite) -> StoreResult<PaddonReceipt> {
+        Err(ProductionMapError::StoreFailed)
+    }
     async fn put_apparatus_queue_states_with_event_and_progress(
         &self,
         write: &QueueActionProgressWrite,
@@ -716,6 +739,10 @@ pub trait ProductionMapStorePort: Send + Sync {
     // Raw material assignment persistence. Apparatus material rules are
     // canonical runtime projections and have no independent store API.
     async fn raw_material_assignments(&self) -> StoreResult<Vec<RawMaterialAssignment>>;
+    async fn raw_material_assignments_for_order(&self, order_id: &str) -> StoreResult<Vec<RawMaterialAssignment>> {
+        Ok(self.raw_material_assignments().await?.into_iter()
+            .filter(|assignment| assignment.order_id.trim() == order_id.trim()).collect())
+    }
     async fn put_raw_material_assignment(
         &self,
         assignment: RawMaterialAssignment,

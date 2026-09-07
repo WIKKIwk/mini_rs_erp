@@ -11,6 +11,8 @@ use crate::http::handlers::{
 
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
+        .route("/v1/mobile/werka/paddons/preview", get(crate::http::handlers::admin::werka_paddon_preview))
+        .route("/v1/mobile/werka/paddons/receive", axum::routing::post(crate::http::handlers::admin::werka_paddon_receive))
         .route("/v1/mobile/preparation/snapshot", get(crate::http::handlers::preparation::snapshot))
         .route("/v1/mobile/preparation/materials", axum::routing::post(crate::http::handlers::preparation::material))
         .route("/v1/mobile/preparation/receipts", axum::routing::post(crate::http::handlers::preparation::receipt))

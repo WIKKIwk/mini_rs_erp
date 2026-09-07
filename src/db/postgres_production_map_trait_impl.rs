@@ -1,7 +1,52 @@
 #[async_trait]
 impl ProductionMapStorePort for PostgresProductionMapStore {
+    async fn paddon_receipt(&self, code: &str) -> Result<Option<crate::core::production_map::PaddonReceipt>, ProductionMapError> {
+        paddon_receipts::load(&self.pool, code).await
+    }
+
+    async fn receive_paddon(&self, write: crate::core::production_map::PaddonReceiveWrite) -> Result<crate::core::production_map::PaddonReceipt, ProductionMapError> {
+        paddon_receipts::commit(&self.pool, write).await
+    }
     async fn maps(&self) -> Result<Vec<ProductionMapDefinition>, ProductionMapError> {
         PostgresProductionMapStore::maps(self).await
+    }
+
+    async fn map_by_id(&self, map_id: &str) -> Result<Option<ProductionMapDefinition>, ProductionMapError> {
+        #[cfg(test)]
+        if self.legacy_queue_reads {
+            return Ok(self.maps().await?.into_iter().find(|map| map.id.trim() == map_id.trim()));
+        }
+        catalog_helpers::load_map_by_id(&self.pool, map_id).await
+    }
+
+    async fn maps_for_apparatus(&self, apparatus: &str) -> Result<Vec<ProductionMapDefinition>, ProductionMapError> {
+        #[cfg(test)]
+        if self.legacy_queue_reads { return self.maps().await; }
+        catalog_helpers::load_maps_for_apparatus(&self.pool, apparatus).await
+    }
+
+    async fn order_control_by_id(&self, order_id: &str) -> Result<Option<OrderControlRecord>, ProductionMapError> {
+        #[cfg(test)]
+        if self.legacy_queue_reads { return Ok(self.order_control_states().await?.remove(order_id.trim())); }
+        order_control_helpers::load_order_control_by_id(&self.pool, order_id).await
+    }
+
+    async fn raw_material_assignments_for_order(&self, order_id: &str) -> Result<Vec<RawMaterialAssignment>, ProductionMapError> {
+        #[cfg(test)]
+        if self.legacy_queue_reads {
+            return Ok(self.raw_material_assignments().await?.into_iter()
+                .filter(|assignment| assignment.order_id.trim() == order_id.trim()).collect());
+        }
+        material_helpers::load_raw_material_assignments_for_order(&self.pool, order_id).await
+    }
+
+    async fn active_order_run_sessions_for_apparatus(&self, apparatus: &str) -> Result<Vec<OrderRunSession>, ProductionMapError> {
+        #[cfg(test)]
+        if self.legacy_queue_reads {
+            return Ok(self.order_run_sessions_for_audit().await?.into_iter()
+                .filter(|session| session.status == crate::core::production_map::OrderRunStatus::Active && session.apparatus.trim() == apparatus.trim()).collect());
+        }
+        order_query_helpers::load_active_order_run_sessions_for_apparatus(&self.pool, apparatus).await
     }
 
     async fn maps_by_lifecycle_statuses(

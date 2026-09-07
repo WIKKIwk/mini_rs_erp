@@ -96,6 +96,7 @@ mod suppliers_customers;
 mod system_monitor;
 mod users_settings;
 mod warehouses_groups;
+mod werka_paddon_receipt;
 mod workers;
 
 use self::fakes::*;

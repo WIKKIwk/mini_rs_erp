@@ -628,6 +628,20 @@ pub(super) async fn receive_finished_goods_batch_tx(
     batch: &OrderProgressBatch,
     stock: &FinishedGoodsStockEntry,
 ) -> Result<(), ProductionMapError> {
+    // Individual-roll receiving must not overwrite a concurrent pallet receipt.
+    // Acquire the same advisory locks before row locks as all progress writes.
+    let apparatuses: Vec<_> = [&batch.apparatus, &batch.current_apparatus, &batch.next_apparatus,
+        &batch.used_by_apparatus, &batch.processed_by_apparatus].into_iter()
+        .map(String::as_str).filter(|a| !a.trim().is_empty() && !is_warehouse_processing_marker(a)).collect();
+    lock_order_and_apparatuses_tx(tx, &batch.order_id, &apparatuses).await?;
+    let current_status = sqlx::query_scalar::<_, String>(
+        "SELECT wip_status FROM mini_progress_batches WHERE batch_id = $1 FOR UPDATE",
+    ).bind(&batch.batch_id).fetch_optional(&mut **tx).await
+        .map_err(|_| ProductionMapError::StoreFailed)?
+        .ok_or(ProductionMapError::ProgressBatchNotFound)?;
+    if current_status != "waiting" {
+        return Err(ProductionMapError::ProgressBatchNotAccepted);
+    }
     put_order_progress_batch_tx(tx, batch).await?;
     sqlx::query(
         "INSERT INTO mini_finished_goods_stock (

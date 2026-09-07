@@ -210,7 +210,7 @@ pub(super) async fn raw_material_state_barcodes_for_order_apparatus(
 ) -> Result<Vec<String>, AdminError> {
     let assignment_barcodes = state
         .production_maps
-        .raw_material_assignments()
+        .raw_material_assignments_for_order(order_id)
         .await
         .map_err(production_map_error)?
         .into_iter()

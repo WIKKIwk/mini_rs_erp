@@ -16,6 +16,7 @@ mod warehouse;
 mod preparation;
 mod worker;
 mod worker_group;
+mod worker_hot_path;
 
 use std::sync::Arc;
 
