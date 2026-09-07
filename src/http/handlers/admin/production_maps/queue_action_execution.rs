@@ -29,6 +29,7 @@ async fn execute_queue_action(
         progress,
         completion: _,
         print,
+        output_paddon_code,
     } = input;
     let mut prepared = state
         .production_maps
@@ -47,6 +48,7 @@ async fn execute_queue_action(
         )
         .await
         .map_err(production_map_error)?;
+    prepared.attach_output_paddon(&output_paddon_code);
     if !qolip_preparations.is_empty() {
         prepared.attach_qolip_codes(
             &qolip_preparations

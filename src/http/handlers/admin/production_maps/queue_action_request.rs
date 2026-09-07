@@ -90,5 +90,7 @@ struct ApparatusQueueActionRequest {
     rezka_record_frame_index: Option<usize>,
     #[serde(default)]
     rezka_output_cycle: String,
+    #[serde(default)]
+    output_paddon_code: String,
     action: queue_state::ApparatusQueueAction,
 }

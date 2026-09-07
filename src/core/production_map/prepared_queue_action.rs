@@ -32,6 +32,19 @@ pub struct PreparedApparatusQueueAction {
 }
 
 impl PreparedApparatusQueueAction {
+    /// Only newly produced batches are assigned. Replays, issues, and updates
+    /// to previously printed rolls must never change pallet membership.
+    pub(crate) fn attach_output_paddon(&mut self, code: &str) {
+        let code = code.trim();
+        if code.is_empty() || self.progress_output_batches().is_empty() {
+            return;
+        }
+        self.event.payload_json["output_paddon_code"] = serde_json::json!(code);
+        if let Some(event) = &mut self.progress_event {
+            event.payload_json["output_paddon_code"] = serde_json::json!(code);
+        }
+    }
+
     pub fn progress_output_batches(&self) -> &[OrderProgressBatch] {
         if self.progress_batches.is_empty() {
             self.progress_batch.as_slice()

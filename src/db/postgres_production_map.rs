@@ -44,6 +44,8 @@ mod order_query_helpers;
 mod paddon_helpers;
 #[path = "postgres_production_map/progress/helpers.rs"]
 mod progress_helpers;
+#[path = "postgres_production_map/paddon/output_assignment.rs"]
+mod output_paddon_assignment;
 #[path = "postgres_production_map/qolip/session_helpers.rs"]
 mod qolip_session_helpers;
 #[path = "postgres_production_map/queue/helpers.rs"]
@@ -881,6 +883,7 @@ impl PostgresProductionMapStore {
             });
         }
         validate_queue_action_event_transition_tx(&mut tx, &write.event).await?;
+        let output_paddon = output_paddon_assignment::lock_for_output(&mut tx, write).await?;
         if let Some(expected) = write.event.payload_json.get("bosma_closing_expected_payload") {
             let session_id = write.event.payload_json.get("bosma_closing_session_id")
                 .and_then(serde_json::Value::as_str).unwrap_or_default();
@@ -1010,6 +1013,9 @@ impl PostgresProductionMapStore {
         }
         for batch in &write.progress_batch_updates {
             put_order_progress_batch_tx(&mut tx, batch).await?;
+        }
+        if let Some(paddon_id) = output_paddon {
+            output_paddon_assignment::assign_outputs(&mut tx, &paddon_id, write).await?;
         }
         for batch in &write.opening_wip_batch_updates {
             update_opening_wip_batch_tx(&mut tx, batch).await?;

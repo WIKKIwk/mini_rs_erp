@@ -84,6 +84,32 @@ mod tests {
     }
 
     #[test]
+    fn output_paddon_requires_rezka_output_and_preserves_the_selected_code() {
+        for action in ["pause", "detach_roll", "roll_complete", "complete"] {
+            let (command, _) = command_from_json(serde_json::json!({
+                "apparatus":"apparatus:catalog:test-001", "order_id":"zakaz-paddon",
+                "action":action, "output_paddon_code":" 00001 ",
+            }), ExecutionOperation::Cut);
+            assert_eq!(command.output_paddon_code, "00001");
+        }
+        for (operation, action, order) in [
+            (ExecutionOperation::Print, "complete", "zakaz-paddon"),
+            (ExecutionOperation::Cut, "start", "zakaz-paddon"),
+            (ExecutionOperation::Cut, "roll_complete", "training-paddon"),
+        ] {
+            let request = serde_json::from_value(serde_json::json!({
+                "apparatus":"apparatus:catalog:test-001", "order_id":order,
+                "action":action, "output_paddon_code":"00001",
+            })).unwrap();
+            let apparatus = QueueApparatusMetadata {
+                id: ApparatusId::new("apparatus:catalog:test-001").unwrap(),
+                display_name:"Test".into(),operation,qolip_scan_required:false,
+            };
+            assert!(QueueActionCommand::from_request(request,&apparatus,&principal(PrincipalRole::Aparatchi)).is_err());
+        }
+    }
+
+    #[test]
     fn qolip_scan_uses_canonical_tooling_policy_not_pechat_classification() {
         let pechat = QueueApparatusMetadata {
             id: ApparatusId::new("apparatus:catalog:pechat-001").unwrap(),

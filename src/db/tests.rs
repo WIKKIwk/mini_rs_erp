@@ -7,6 +7,7 @@ mod inventory_movements;
 mod mini_order;
 mod opening_wip;
 mod production_map;
+mod rezka_output_paddon;
 mod bosma_astatka;
 mod qolip_checkout;
 mod rezka_lineage_cutover;

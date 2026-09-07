@@ -7,6 +7,7 @@ struct QueueActionCommand {
     progress: QueueProgressInput,
     completion: QueueActionCompletionInput,
     print: QueueActionPrintInput,
+    output_paddon_code: String,
 }
 
 #[derive(Debug, Clone)]
@@ -99,6 +100,14 @@ impl QueueActionCommand {
         {
             return Err(bad_request("rezka_frames_only_on_rezka_progress"));
         }
+        if !request.output_paddon_code.trim().is_empty()
+            && (!apparatus.is_rezka() || !action.records_progress_output()
+                || request.worker_handoff || request.remove_roll_from_apparatus
+                || request.order_id.trim().starts_with("training-")
+                || request.output_paddon_code.trim().len() > 128)
+        {
+            return Err(bad_request("paddon_invalid_input"));
+        }
         if request.rezka_record_frame_index.is_some()
             && request.order_id.trim().starts_with("training-")
         {
@@ -155,6 +164,7 @@ impl QueueActionCommand {
 
         Ok(Self {
             apparatus: apparatus.id.to_string(),
+            output_paddon_code: request.output_paddon_code.trim().to_string(),
             order_id: request.order_id,
             action,
             materials: QueueActionMaterialInput {

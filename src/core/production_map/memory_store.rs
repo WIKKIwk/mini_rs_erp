@@ -677,6 +677,11 @@ impl MemoryProductionMapStore {
         write: &QueueActionProgressWrite,
     ) -> Result<QueueActionProgressWriteResult, ProductionMapError> {
         validate_queue_progress_write(write)?;
+        // This store has no pallet persistence. Never report an assigned
+        // output as successful when the production PostgreSQL path is absent.
+        if write.event.payload_json.get("output_paddon_code").is_some() {
+            return Err(ProductionMapError::StoreFailed);
+        }
         if let Some(expected) = write.event.payload_json.get("bosma_expected_sequence") {
             let sequences = self.apparatus_sequences().await?;
             let states = self.apparatus_queue_states().await?;
