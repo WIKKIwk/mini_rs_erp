@@ -121,6 +121,7 @@ fn required_system_role(value: Option<&str>) -> Result<PrincipalRole, AdminError
     {
         "qolipchi" => Ok(PrincipalRole::Qolipchi),
         "boyoqchi" | "bo'yoqchi" | "bo‘yoqchi" => Ok(PrincipalRole::Boyoqchi),
+        "tayyorlov_masteri" => Ok(PrincipalRole::TayyorlovMasteri),
         _ => Err(bad_request("system user role is invalid")),
     }
 }
@@ -129,6 +130,7 @@ fn system_role_key(role: &PrincipalRole) -> &'static str {
     match role {
         PrincipalRole::Qolipchi => "qolipchi",
         PrincipalRole::Boyoqchi => "boyoqchi",
+        PrincipalRole::TayyorlovMasteri => "tayyorlov_masteri",
         _ => "system_user",
     }
 }

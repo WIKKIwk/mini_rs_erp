@@ -17,7 +17,7 @@ use super::super::progress::{
 use super::super::service::QueueProgressRecords;
 use super::super::service_progress::ProgressBuildReadSnapshot;
 use super::super::service_progress_support::{
-    session_progress_links, wip_batch_was_consumed_by_producer,
+    bosma_closing_output, validate_bosma_closing_metrics, session_progress_links, wip_batch_was_consumed_by_producer,
 };
 use super::super::service_queue_support::*;
 use super::super::store_port::{ApparatusQueueStateMap, OrderControlMap};
@@ -153,10 +153,21 @@ impl ProductionMapService {
                 (control.state == OrderControlState::Frozen).then_some(order_id)
             })
             .collect::<BTreeSet<_>>();
+        let canonical = self.resolve_canonical_apparatus_text(apparatus).await?;
+        let mut barrier_states = states.clone();
+        if pechat::is_pechat_apparatus(&canonical) {
+            for state in barrier_states.values_mut() {
+                if queue_state::ApparatusQueueOrderState::parse(state)
+                    == Some(queue_state::ApparatusQueueOrderState::Paused)
+                {
+                    *state = "in_progress".to_string();
+                }
+            }
+        }
         validate_active_sequence_barrier(
             current_sequence,
             &order_ids,
-            states,
+            &barrier_states,
             &frozen_order_ids,
         )?;
         self.store
@@ -558,8 +569,16 @@ impl ProductionMapService {
                 (*state == queue_state::ApparatusQueueOrderState::InProgress)
                     .then_some(order_id.as_str())
             });
-            let actionable_order_id =
-                queue_state::first_actionable_order_id(&sequence, &effective_states);
+            let is_bosma = pechat::is_pechat_apparatus(canonical);
+            let detached_order_ids = order_inputs.iter().filter_map(|input| {
+                input.active_session.filter(|session| session.status == OrderRunStatus::RollDetached)
+                    .map(|_| input.order_id.to_string())
+            }).collect::<BTreeSet<_>>();
+            let actionable_order_id = if is_bosma {
+                bosma_startable_order_id(&sequence, &effective_states, &detached_order_ids)
+            } else {
+                queue_state::first_actionable_order_id(&sequence, &effective_states)
+            };
             let mut apparatus_controls = BTreeMap::new();
 
             for input in &order_inputs {
@@ -647,9 +666,9 @@ impl ProductionMapService {
                 let queue_actionable = active_order_is_this
                     && (state.is_active()
                         || state == queue_state::ApparatusQueueOrderState::Paused
-                        || policy == ApparatusQueuePolicy::FreePick
+                        || (!is_bosma && policy == ApparatusQueuePolicy::FreePick)
                         || actionable_order_id == Some(order_id.trim())
-                        || (state == queue_state::ApparatusQueueOrderState::Pending
+                        || (!is_bosma && state == queue_state::ApparatusQueueOrderState::Pending
                             && !previous_stage_not_configured
                             && (opening_wip_mode == ApparatusQueuePreviousWipMode::ScanRequired
                                 || (previous_stage.is_some()
@@ -846,6 +865,16 @@ impl ProductionMapService {
                     queue_actionable,
                     start_ready,
                 });
+                let closing_output_batch_id = if state == queue_state::ApparatusQueueOrderState::Paused
+                    && control == OrderControlState::Active
+                    && pechat::is_pechat_apparatus(canonical)
+                {
+                    active_session.and_then(|session| bosma_closing_output(session, batches))
+                        .map(|batch| batch.batch_id.clone()).unwrap_or_default()
+                } else { String::new() };
+                if !closing_output_batch_id.is_empty() {
+                    allowed_actions.push(queue_state::ApparatusQueueAction::Complete);
+                }
 
                 if active_session.is_some_and(|session| session.payload_json
                     .get("rezka_output_report").and_then(serde_json::Value::as_array)
@@ -919,6 +948,7 @@ impl ProductionMapService {
                         rezka_input_lineage,
                         rezka_active_partial_rolls,
                         complete_requires_full_report,
+                        closing_output_batch_id,
                         complete_requires_rezka_total_waste_only,
                         freeze_request: order_control
                             .and_then(|control| control.freeze_request.clone()),

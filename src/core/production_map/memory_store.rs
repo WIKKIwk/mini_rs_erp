@@ -677,6 +677,27 @@ impl MemoryProductionMapStore {
         write: &QueueActionProgressWrite,
     ) -> Result<QueueActionProgressWriteResult, ProductionMapError> {
         validate_queue_progress_write(write)?;
+        if let Some(expected) = write.event.payload_json.get("bosma_expected_sequence") {
+            let sequences = self.apparatus_sequences().await?;
+            let states = self.apparatus_queue_states().await?;
+            if serde_json::json!(sequences.get(&write.apparatus).cloned().unwrap_or_default()) != *expected
+                || Some(&serde_json::json!(states.get(&write.apparatus).cloned().unwrap_or_default()))
+                    != write.event.payload_json.get("bosma_expected_queue_states")
+            {
+                return Err(ProductionMapError::QueueActionNotAllowed);
+            }
+        }
+        if let Some(expected) = write.event.payload_json.get("bosma_closing_expected_payload") {
+            let current = self.active_order_run_session(&write.apparatus, &write.event.order_id)
+                .await?.ok_or(ProductionMapError::QueueActionNotAllowed)?;
+            if current.status != OrderRunStatus::RollDetached
+                || Some(current.session_id.as_str()) != write.event.payload_json
+                    .get("bosma_closing_session_id").and_then(serde_json::Value::as_str)
+                || current.payload_json != *expected
+            {
+                return Err(ProductionMapError::QueueActionNotAllowed);
+            }
+        }
         if let Some(expected) = write.event.payload_json.get("rezka_expected_output_revision") {
             let current = self.active_order_run_session(&write.apparatus, &write.event.order_id)
                 .await?.ok_or(ProductionMapError::RezkaOutputCycleConflict)?;

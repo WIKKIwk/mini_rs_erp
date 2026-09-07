@@ -6,7 +6,7 @@ use crate::app::AppState;
 use crate::core::auth::models::Principal;
 use crate::core::authz::Capability;
 use crate::core::gscale::GscaleServiceError;
-use crate::core::qolip::{QolipBlock, QolipError};
+use crate::core::qolip::{QolipBlock, QolipError, QolipProductSpec, QolipProductSpecUpsert};
 use crate::core::warehouses::WarehouseError;
 use crate::http::handlers::auth::bearer_token;
 
@@ -56,7 +56,7 @@ pub(super) async fn accessible_qolip_warehouse(
     }
     let assigned = state
         .qolip
-        .assigned_warehouses(principal)
+        .warehouses_for_principal(principal, false)
         .await
         .map_err(qolip_error)?;
     if warehouse.is_empty() && assigned.len() == 1 {
@@ -66,6 +66,116 @@ pub(super) async fn accessible_qolip_warehouse(
         .into_iter()
         .find(|item| item.trim().eq_ignore_ascii_case(warehouse))
         .ok_or_else(forbidden)
+}
+
+pub(super) async fn ensure_qolip_owner_access(
+    state: &AppState,
+    principal: &Principal,
+    spec: &QolipProductSpec,
+) -> Result<(), (StatusCode, Json<QolipErrorResponse>)> {
+    if state
+        .admin
+        .principal_has_capability(principal, Capability::AdminAccess)
+        .await
+    {
+        return Ok(());
+    }
+    // Unknown legacy ownership is never treated as shared inventory.
+    if spec.warehouse.trim().is_empty() {
+        return Err(forbidden());
+    }
+    accessible_qolip_warehouse(state, principal, &spec.warehouse).await?;
+    Ok(())
+}
+
+pub(super) async fn qolip_code_is_accessible(
+    state: &AppState,
+    principal: &Principal,
+    code: &str,
+) -> Result<bool, (StatusCode, Json<QolipErrorResponse>)> {
+    if state
+        .admin
+        .principal_has_capability(principal, Capability::AdminAccess)
+        .await
+    {
+        return Ok(true);
+    }
+    let Some(spec) = state
+        .qolip
+        .product_spec_by_qolip_code(code)
+        .await
+        .map_err(qolip_error)?
+    else {
+        return Ok(false);
+    };
+    match ensure_qolip_owner_access(state, principal, &spec).await {
+        Ok(()) => Ok(true),
+        Err((StatusCode::FORBIDDEN, _)) => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+pub(super) async fn visible_qolip_locations(
+    state: &AppState,
+    principal: &Principal,
+    locations: Vec<crate::core::qolip::QolipLocation>,
+) -> Result<Vec<crate::core::qolip::QolipLocation>, (StatusCode, Json<QolipErrorResponse>)> {
+    let mut visible = Vec::new();
+    for location in locations {
+        if qolip_code_is_accessible(state, principal, &location.qolip_code).await? {
+            visible.push(location);
+        }
+    }
+    Ok(visible)
+}
+
+pub(super) async fn resolve_qolip_spec_warehouse(
+    state: &AppState,
+    principal: &Principal,
+    input: &mut QolipProductSpecUpsert,
+) -> Result<(), (StatusCode, Json<QolipErrorResponse>)> {
+    let code = if input.previous_qolip_code.trim().is_empty() {
+        &input.qolip_code
+    } else {
+        &input.previous_qolip_code
+    };
+    let existing = state
+        .qolip
+        .product_spec_by_qolip_code(code)
+        .await
+        .map_err(qolip_error)?;
+    if let Some(spec) = existing {
+        ensure_qolip_owner_access(state, principal, &spec).await?;
+        if !spec.warehouse.trim().is_empty() {
+            if !input.warehouse.trim().is_empty()
+                && !input
+                    .warehouse
+                    .trim()
+                    .eq_ignore_ascii_case(spec.warehouse.trim())
+            {
+                return Err(conflict("qolip_warehouse_mismatch"));
+            }
+            input.warehouse = spec.warehouse;
+        }
+    }
+    if input.warehouse.trim().is_empty() {
+        let is_admin = state
+            .admin
+            .principal_has_capability(principal, Capability::AdminAccess)
+            .await;
+        let warehouses = state
+            .qolip
+            .warehouses_for_principal(principal, is_admin)
+            .await
+            .map_err(qolip_error)?;
+        if warehouses.len() == 1 {
+            input.warehouse = warehouses[0].clone();
+        } else {
+            return Err(bad_request("warehouse_required"));
+        }
+    }
+    input.warehouse = accessible_qolip_warehouse(state, principal, &input.warehouse).await?;
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]

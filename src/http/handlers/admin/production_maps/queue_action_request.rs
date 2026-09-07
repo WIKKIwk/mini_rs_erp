@@ -67,6 +67,8 @@ struct ApparatusQueueActionRequest {
     #[serde(default)]
     full_completion_report_required: bool,
     #[serde(default)]
+    complete_without_output: bool,
+    #[serde(default)]
     worker_handoff: bool,
     #[serde(default)]
     remove_roll_from_apparatus: bool,

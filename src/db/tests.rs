@@ -7,10 +7,12 @@ mod inventory_movements;
 mod mini_order;
 mod opening_wip;
 mod production_map;
+mod bosma_astatka;
 mod qolip_checkout;
 mod rezka_lineage_cutover;
 mod training_workspace;
 mod warehouse;
+mod preparation;
 mod worker;
 mod worker_group;
 

@@ -259,6 +259,29 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         PostgresProductionMapStore::order_run_sessions_for_orders(self, order_ids).await
     }
 
+    async fn bosma_astatka_reports_for_order(
+        &self,
+        order_id: &str,
+    ) -> Result<Vec<BosmaAstatkaReport>, ProductionMapError> {
+        let rows = sqlx::query_scalar::<_, serde_json::Value>(
+            "SELECT report_json FROM mini_bosma_astatka_reports WHERE order_id = $1 ORDER BY to_at_unix, report_id",
+        ).bind(order_id.trim()).fetch_all(&self.pool).await
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        rows.into_iter().map(|row| serde_json::from_value(row)
+            .map_err(|_| ProductionMapError::StoreFailed)).collect()
+    }
+
+    async fn put_bosma_astatka_report(&self, report: BosmaAstatkaReport) -> Result<(), ProductionMapError> {
+        let payload = serde_json::to_value(&report).map_err(|_| ProductionMapError::StoreFailed)?;
+        sqlx::query("INSERT INTO mini_bosma_astatka_reports
+            (report_id, order_id, apparatus, from_at_unix, to_at_unix, report_json)
+            VALUES ($1, $2, $3, $4, $5, $6)")
+            .bind(&report.report_id).bind(&report.order_id).bind(&report.apparatus)
+            .bind(report.from_at_unix).bind(report.to_at_unix).bind(payload)
+            .execute(&self.pool).await.map_err(|_| ProductionMapError::StoreFailed)?;
+        Ok(())
+    }
+
     async fn laminatsiya_astatka_reports_for_order(
         &self,
         order_id: &str,

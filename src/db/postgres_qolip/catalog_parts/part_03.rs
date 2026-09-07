@@ -52,6 +52,7 @@ async fn save_product_spec_tx(
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          ON CONFLICT (lower(qolip_code)) DO NOTHING
          RETURNING item_code, item_name, item_group, qolip_code, size,
+             COALESCE(payload_json->>'warehouse', '') AS warehouse,
              COALESCE(payload_json->>'color', '') AS color,
              created_by_role, created_by_ref, created_by_name",
     )
@@ -312,6 +313,7 @@ pub(super) async fn rename_product_spec(
              created_by_name = $9, payload_json = $10, updated_at = now()
          WHERE lower(qolip_code) = $1
          RETURNING item_code, item_name, item_group, qolip_code, size,
+             COALESCE(payload_json->>'warehouse', '') AS warehouse,
              COALESCE(payload_json->>'color', '') AS color,
              created_by_role, created_by_ref, created_by_name",
     )

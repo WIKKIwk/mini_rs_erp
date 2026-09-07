@@ -28,3 +28,4 @@ pub mod postgres_worker_group;
 
 #[cfg(test)]
 mod tests;
+pub mod postgres_preparation;

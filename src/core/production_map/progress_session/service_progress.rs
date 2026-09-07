@@ -935,7 +935,9 @@ impl ProductionMapService {
         if input_progress.contained_kadr_count.is_none() {
             input_progress.contained_kadr_count = session_input_progress.contained_kadr_count;
         }
-        let mut output_identities = if apparatus::is_rezka_apparatus(canonical) {
+        let mut output_identities = if progress.complete_without_output {
+            Vec::new()
+        } else if apparatus::is_rezka_apparatus(canonical) {
             let input_lineage = order_run_input_links_from_payload(&session.payload_json)
                 .map_err(|_| ProductionMapError::ProgressInputInvalid)?;
             let active_rolls = rezka_active_partial_rolls_from_payload(&session.payload_json)
@@ -986,7 +988,9 @@ impl ProductionMapService {
             None
         };
         let recording = progress.rezka_record_frame_index.is_some();
-        let frame_values = if let Some(index) = progress.rezka_record_frame_index {
+        let frame_values = if progress.complete_without_output {
+            Vec::new()
+        } else if let Some(index) = progress.rezka_record_frame_index {
             let value = progress_values_for_outputs(
                 canonical, action, &progress, &output_identities[index - 1..index], false,
             )?.remove(0);
@@ -1017,7 +1021,13 @@ impl ProductionMapService {
             .iter()
             .position(|value| value.quantity.is_some());
         let (session_qty, session_uom, session_metrics) =
-            if let Some(index) = first_healthy_index {
+            if progress.complete_without_output {
+                (0.0, "m", ProgressMetrics {
+                    total_waste: progress.total_waste,
+                    return_ink_kg: progress.return_ink_kg,
+                    ..ProgressMetrics::default()
+                })
+            } else if let Some(index) = first_healthy_index {
                 let value = &frame_values[index];
                 let quantity = value.quantity.as_ref().expect("healthy output");
                 (quantity.produced_qty, quantity.uom.as_str(), value.metrics)
@@ -1226,6 +1236,11 @@ impl ProductionMapService {
             event.description = description.clone();
             event
         };
+        if progress.complete_without_output {
+            event.total_waste = session_metrics.total_waste;
+            event.return_ink_kg = session_metrics.return_ink_kg;
+            session_metrics.write_payload_fields(&mut event.payload_json, &description);
+        }
         if !recording && let Some(report) = &report && !report.saved.is_empty() {
             event.payload_json["rezka_previously_recorded_batches"] = serde_json::json!(
                 report.saved.iter().filter(|slot| !slot.batch_id.is_empty()).map(|slot| &slot.batch_id).collect::<Vec<_>>()
@@ -1293,6 +1308,12 @@ impl ProductionMapService {
                     session.payload_json["rezka_recorded_output_closed"] = serde_json::json!(true);
                 }
             }
+        }
+        if action == queue_state::ApparatusQueueAction::DetachRoll
+            && pechat::is_pechat_apparatus(canonical)
+            && let Some(batch) = batches.first()
+        {
+            session.payload_json["last_detached_output_batch_id"] = serde_json::json!(batch.batch_id);
         }
         let progress_batch = batches.first().cloned();
         Ok(QueueProgressRecords {

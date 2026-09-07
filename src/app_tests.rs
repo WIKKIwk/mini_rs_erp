@@ -279,6 +279,7 @@ async fn app_state_admin_catalog_fails_closed_without_postgres() {
 
 fn calculate_order_template(code: &str) -> CalculateOrderTemplate {
     CalculateOrderTemplate {
+        print_val_size_mm: None,
         id: String::new(),
         code: code.to_string(),
         name: "CPP 600".to_string(),
@@ -317,6 +318,7 @@ fn calculate_order_template(code: &str) -> CalculateOrderTemplate {
 
 fn test_production_map(id: &str, order_number: &str) -> ProductionMapDefinition {
     ProductionMapDefinition {
+        print_val_size_mm: None,
         id: id.to_string(),
         product_code: "ITEM-333".to_string(),
         title: "test map".to_string(),

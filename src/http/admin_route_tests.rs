@@ -62,6 +62,7 @@ use crate::core::workers::{MemoryWorkerStore, WorkerService, WorkerUpsert};
 use crate::store::calculate_order_store::CalculateOrderStore;
 
 mod admin_edge_cases;
+mod preparation;
 mod apparatus_aasx;
 mod apparatus_collections;
 mod auth_roles;
@@ -71,15 +72,18 @@ mod boyoqchi_returned_paint;
 mod completion_rejections;
 mod completion_requests;
 mod factory_locations;
+mod flexo_edge_allowance;
 mod fakes;
 mod inventory_movements;
 mod item_groups;
 mod opening_wip;
+mod print_val;
 mod production_map_basic;
 mod production_map_canonical_snapshot;
 mod production_map_save_order;
 mod production_map_validation;
 mod qolip_blocks;
+mod qolip_warehouse_ownership;
 mod qolip_cell_qr;
 mod qolip_checkout;
 mod qolip_return_move;
@@ -582,6 +586,7 @@ async fn provision_test_qolip(router: &axum::Router, token: &str, order_id: &str
             &serde_json::json!({
                 "item_code": item_code,
                 "item_name": item_name,
+                "warehouse": "Qolip ombor",
                 "item_group": "Tayyor mahsulot Test",
                 "qolip_code": qolip_code,
                 "size": 42,

@@ -140,6 +140,9 @@ pub struct ApparatusQueueOrderActionControl {
     pub rezka_active_partial_rolls: Vec<RezkaActivePartialRoll>,
     #[serde(default)]
     pub complete_requires_full_report: bool,
+    /// Nonempty only when a detached Bosma session can close with accounting only.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub closing_output_batch_id: String,
     #[serde(default)]
     pub complete_requires_rezka_total_waste_only: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]

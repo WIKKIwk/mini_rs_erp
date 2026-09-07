@@ -58,7 +58,7 @@ fn effective_return_ink_kg(
         Some(report) if report.status == ReturnedPaintStatus::Completed => {
             let total =
                 returned_paint_astatka_total(&report.items).map_err(returned_paint_queue_error)?;
-            Ok((total > 0.0).then_some(total))
+            Ok((total > 0.0 || input.progress.complete_without_output).then_some(total))
         }
         Some(_) => Ok(None),
         None => Ok(input.progress.return_ink_kg),

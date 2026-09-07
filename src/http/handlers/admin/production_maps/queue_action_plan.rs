@@ -67,6 +67,13 @@ fn plan_queue_action(
     returned_paint_report_attached: bool,
     freeze_safe_stop_with_issue: bool,
 ) -> Result<QueueActionDecision, AdminError> {
+    if input.progress.complete_without_output {
+        // These are closing accounts, not a second output (including legitimate
+        // zero waste/returned paint). The service revalidates the detached cycle.
+        input.progress.return_ink_kg = return_ink_kg;
+        input.progress.returned_paint_report_attached = returned_paint_report_attached;
+        return Ok(QueueActionDecision::Execute);
+    }
     let metrics = QueueMetricCoverage::from_command(
         input,
         apparatus,

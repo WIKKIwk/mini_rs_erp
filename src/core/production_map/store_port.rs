@@ -10,6 +10,7 @@ use super::capacity::*;
 use super::materials::RawMaterialAssignment;
 use super::opening_wip::*;
 use super::types::*;
+use super::BosmaAstatkaReport;
 
 
 pub type StoreResult<T> = Result<T, ProductionMapError>;
@@ -449,6 +450,15 @@ pub trait ProductionMapStorePort: Send + Sync {
     }
     async fn order_run_sessions_for_audit(&self) -> StoreResult<Vec<OrderRunSession>> {
         Ok(Vec::new())
+    }
+    async fn bosma_astatka_reports_for_order(
+        &self,
+        _order_id: &str,
+    ) -> StoreResult<Vec<BosmaAstatkaReport>> {
+        Err(ProductionMapError::StoreFailed)
+    }
+    async fn put_bosma_astatka_report(&self, _report: BosmaAstatkaReport) -> StoreResult<()> {
+        Err(ProductionMapError::StoreFailed)
     }
     async fn laminatsiya_astatka_reports_for_order(
         &self,

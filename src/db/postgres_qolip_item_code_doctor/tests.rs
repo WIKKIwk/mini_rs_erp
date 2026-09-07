@@ -167,11 +167,11 @@ async fn seed_test_data(pool: &sqlx::PgPool) {
         )
         VALUES
             ('TG-a6b78c3080f65879', 'Magnus', 'tayyor mahsulot', '5913-1', 700,
-             '{"item_code":"TG-a6b78c3080f65879","item_name":"Magnus","item_group":"tayyor mahsulot"}'::jsonb),
+             '{"warehouse":"Qolip ombor","item_code":"TG-a6b78c3080f65879","item_name":"Magnus","item_group":"tayyor mahsulot"}'::jsonb),
             ('TG-a6b78c3080f65879', 'Magnus', 'tayyor mahsulot', '5913-2', 700,
-             '{"item_code":"TG-a6b78c3080f65879","item_name":"Magnus","item_group":"tayyor mahsulot"}'::jsonb),
-            ('TG-AMBIGUOUS-A', 'Ambiguous product', 'tayyor mahsulot', 'AMB-A-1', 100, '{}'::jsonb),
-            ('TG-AMBIGUOUS-B', 'Ambiguous product', 'tayyor mahsulot', 'AMB-B-1', 100, '{}'::jsonb);
+             '{"warehouse":"Qolip ombor","item_code":"TG-a6b78c3080f65879","item_name":"Magnus","item_group":"tayyor mahsulot"}'::jsonb),
+            ('TG-AMBIGUOUS-A', 'Ambiguous product', 'tayyor mahsulot', 'AMB-A-1', 100, '{"warehouse":"Qolip ombor"}'::jsonb),
+            ('TG-AMBIGUOUS-B', 'Ambiguous product', 'tayyor mahsulot', 'AMB-B-1', 100, '{"warehouse":"Qolip ombor"}'::jsonb);
 
         INSERT INTO mini_qolip_locations (
             id, block, item_code, item_name, qolip_code, size, quantity, payload_json

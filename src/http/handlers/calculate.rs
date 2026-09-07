@@ -252,6 +252,7 @@ fn principal_owner_key(principal: &Principal) -> String {
         PrincipalRole::Aparatchi => "aparatchi",
         PrincipalRole::Qolipchi => "qolipchi",
         PrincipalRole::Boyoqchi => "boyoqchi",
+        PrincipalRole::TayyorlovMasteri => "tayyorlov_masteri",
         PrincipalRole::MaterialTaminotchi => "material_taminotchi",
         PrincipalRole::Admin => "admin",
     };

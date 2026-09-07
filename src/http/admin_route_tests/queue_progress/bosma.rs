@@ -1,6 +1,57 @@
 use super::*;
 
 #[tokio::test]
+async fn bosma_closing_http_keeps_output_and_persists_accounting() {
+    let state = test_state();
+    state.admin.upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+        principal_role: PrincipalRole::Aparatchi, principal_ref: "bosma-closer".into(),
+        role_id: "aparatchi".into(), assigned_apparatus: vec!["apparatus:default:bosma_8".into()],
+        assigned_item_groups: Vec::new(),
+    }).await.unwrap();
+    let admin = session(&state, PrincipalRole::Admin).await;
+    let worker = session_for(&state, PrincipalRole::Aparatchi, "bosma-closer").await;
+    let router = build_router(state);
+    let order = "zakaz-bosma-closing-http";
+    let station = "apparatus:default:bosma_8";
+    let response = router.clone().oneshot(request_with_body("PUT", "/v1/mobile/admin/production-maps",
+        &admin, &pechat_order_map_json(order, "Closing", "BCLOSE", station))).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    provision_test_qolip(&router, &admin, order).await;
+    let start = with_test_qolip(&serde_json::json!({"apparatus":station,"order_id":order,"action":"start"}).to_string(), order);
+    let response = router.clone().oneshot(request_with_body("POST", "/v1/mobile/admin/production-maps/queue-action", &worker, &start)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = router.clone().oneshot(request_with_body("POST", "/v1/mobile/admin/production-maps/queue-action", &worker,
+        &serde_json::json!({"apparatus":station,"order_id":order,"action":"pause","finished_goods_kg":12,"finished_goods_meter":80}).to_string())).await.unwrap();
+    let status = response.status();
+    let detached = json_body(response).await;
+    assert_eq!(status, StatusCode::OK, "{detached}");
+    let mut close = serde_json::json!({"apparatus":station,"order_id":order,"action":"complete",
+        "complete_without_output":true,"progress_batch_id":detached["progress_batch"]["batch_id"],"total_waste":0,
+        "returned_paint_items":[
+            {"usage":"rasxot","category":"colors","name":"Oq","values":{"Mix":9,"Oq":0,"Qora":0}},
+            {"usage":"astatka","category":"colors","name":"Oq","values":{"Mix":0,"Oq":0,"Qora":0}}
+        ]});
+    close["finished_goods_kg"] = serde_json::json!(12);
+    let rejected = router.clone().oneshot(request_with_body("POST", "/v1/mobile/admin/production-maps/queue-action", &worker, &close.to_string())).await.unwrap();
+    assert_eq!(rejected.status(), StatusCode::BAD_REQUEST, "must not accept duplicate output");
+    close.as_object_mut().unwrap().remove("finished_goods_kg");
+    let response = router.clone().oneshot(request_with_body("POST", "/v1/mobile/admin/production-maps/queue-action", &worker, &close.to_string())).await.unwrap();
+    let status = response.status();
+    let body = json_body(response).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["states"][order], "completed");
+    assert_eq!(body["session"]["status"], "completed");
+    assert_eq!(body["progress_event"]["produced_qty"], 0.0);
+    assert_eq!(body["progress_event"]["total_waste"], 0.0);
+    assert_eq!(body["progress_event"]["return_ink_kg"], 0.0);
+    assert!(body["progress_batch"].is_null());
+    assert_eq!(body["progress_batches"], serde_json::json!([]));
+    assert_eq!(body["prints"], serde_json::json!([]));
+    let retry = router.oneshot(request_with_body("POST", "/v1/mobile/admin/production-maps/queue-action", &worker, &close.to_string())).await.unwrap();
+    assert_eq!(retry.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn bosma_complete_requires_or_persists_completion_metrics() {
     let print_requests = Arc::new(Mutex::new(Vec::<ScaleDriverPrintRequest>::new()));
     let mut state = test_state();

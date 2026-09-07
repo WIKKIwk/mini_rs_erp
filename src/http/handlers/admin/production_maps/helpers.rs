@@ -239,6 +239,7 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         }
         ProductionMapError::MapNotFound => not_found("map_not_found"),
         ProductionMapError::InvalidOrderQty => bad_request("invalid_order_qty"),
+        ProductionMapError::InvalidPrintValSize => bad_request("invalid_print_val_size"),
         ProductionMapError::InvalidNodeQty(_) => bad_request("invalid_node_qty"),
         ProductionMapError::InvalidLocation(_) => bad_request("invalid_location"),
         ProductionMapError::UnknownFormulaVariable(_) => bad_request("unknown_formula_variable"),
@@ -552,6 +553,7 @@ fn principal_role_code(role: &PrincipalRole) -> &'static str {
         PrincipalRole::Aparatchi => "aparatchi",
         PrincipalRole::Qolipchi => "qolipchi",
         PrincipalRole::Boyoqchi => "boyoqchi",
+        PrincipalRole::TayyorlovMasteri => "tayyorlov_masteri",
         PrincipalRole::MaterialTaminotchi => "material_taminotchi",
         PrincipalRole::Admin => "admin",
     }

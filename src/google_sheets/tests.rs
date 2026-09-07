@@ -11,6 +11,7 @@ use crate::core::production_map::{
 #[test]
 fn order_sheet_row_matches_legacy_excel_columns() {
     let map = ProductionMapDefinition {
+        print_val_size_mm: None,
         id: "zakaz-7775".to_string(),
         product_code: "ITEM-1".to_string(),
         title: "fibre Mahsulot: XXL pack 70 sht".to_string(),
@@ -83,6 +84,7 @@ fn order_sheet_row_matches_legacy_excel_columns() {
 #[test]
 fn order_sheet_row_marks_flexo_orders_with_f() {
     let map = ProductionMapDefinition {
+        print_val_size_mm: None,
         id: "zakaz-1123".to_string(),
         product_code: "ITEM-F".to_string(),
         title: "fleksa lec Mahsulot".to_string(),
@@ -154,6 +156,7 @@ fn test_map(
     apparatus_id: &str,
 ) -> ProductionMapDefinition {
     ProductionMapDefinition {
+        print_val_size_mm: None,
         id: id.to_string(),
         product_code: "ITEM-1".to_string(),
         title: "Test order".to_string(),

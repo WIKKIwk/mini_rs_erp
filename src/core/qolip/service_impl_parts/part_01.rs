@@ -77,7 +77,16 @@ impl QolipService {
             warehouses.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
             Ok(warehouses)
         } else {
-            self.store.assigned_warehouses(principal).await
+            let assigned = self.store.assigned_warehouses(principal).await?;
+            let blocks = self.store.all_blocks().await?;
+            let mut warehouses = assigned.into_iter().map(|name| {
+                blocks.iter().find(|block| block.name.trim().eq_ignore_ascii_case(name.trim()))
+                    .map(|block| block.warehouse.clone()).unwrap_or(name)
+            }).collect::<Vec<_>>();
+            warehouses.retain(|name| !name.trim().is_empty());
+            warehouses.sort_by_key(|name| name.to_lowercase());
+            warehouses.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+            Ok(warehouses)
         }
     }
 
@@ -99,8 +108,7 @@ impl QolipService {
             .await
     }
 
-    /// Ombor izolatsiyali ro'yxat: admin hammasi, qolipchi faqat o'z
-    /// bloklaridagi + hali joylanmagan qoliplarni ko'radi.
+    /// Qoliplar joylashtirilganidan qat'i nazar, saqlangan egasi bo'yicha ajratiladi.
     pub async fn products_for_principal(
         &self,
         principal: &Principal,
@@ -112,9 +120,7 @@ impl QolipService {
         if is_admin {
             return self.products(query, limit, with_qolip_only).await;
         }
-        let assigned = self.assigned_blocks(principal).await?;
-        let allowed: Vec<String> =
-            assigned.into_iter().map(|block| block.name).collect();
+        let allowed = self.warehouses_for_principal(principal, false).await?;
         self.store
             .products(
                 query,
@@ -131,8 +137,16 @@ impl QolipService {
         principal: &Principal,
     ) -> Result<QolipProductSpec, QolipError> {
         let previous_qolip_code = trim_owned(std::mem::take(&mut input.previous_qolip_code));
-        let normalized = normalize_product_spec(input, principal)?;
+        let mut normalized = normalize_product_spec(input, principal)?;
         if !previous_qolip_code.is_empty() {
+            if let Some(existing) = self.store.product_spec_by_qolip_code(&previous_qolip_code).await? {
+                if !existing.warehouse.trim().is_empty() {
+                    normalized.warehouse = existing.warehouse;
+                }
+                normalized.created_by_role = existing.created_by_role;
+                normalized.created_by_ref = existing.created_by_ref;
+                normalized.created_by_name = existing.created_by_name;
+            }
             return match self
                 .store
                 .rename_product_spec(&previous_qolip_code, normalized.clone())

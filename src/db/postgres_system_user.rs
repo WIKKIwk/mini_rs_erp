@@ -107,6 +107,7 @@ fn role_as_str(role: &PrincipalRole) -> Result<&'static str, SystemUserError> {
     match role {
         PrincipalRole::Qolipchi => Ok("qolipchi"),
         PrincipalRole::Boyoqchi => Ok("boyoqchi"),
+        PrincipalRole::TayyorlovMasteri => Ok("tayyorlov_masteri"),
         _ => Err(SystemUserError::InvalidRole),
     }
 }
@@ -115,6 +116,7 @@ fn role_from_str(role: &str) -> Result<PrincipalRole, SystemUserError> {
     match role.trim().to_lowercase().as_str() {
         "qolipchi" => Ok(PrincipalRole::Qolipchi),
         "boyoqchi" => Ok(PrincipalRole::Boyoqchi),
+        "tayyorlov_masteri" => Ok(PrincipalRole::TayyorlovMasteri),
         _ => Err(SystemUserError::InvalidRole),
     }
 }

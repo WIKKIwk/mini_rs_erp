@@ -126,6 +126,7 @@ async fn postgres_calculate_order_store_round_trips_and_dedupes_quick_templates(
 
 fn test_template(code: &str, width_mm: f64, kg: f64) -> CalculateOrderTemplate {
     CalculateOrderTemplate {
+        print_val_size_mm: None,
         id: String::new(),
         code: code.to_string(),
         name: "Qurt".to_string(),

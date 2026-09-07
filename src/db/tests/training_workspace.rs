@@ -346,6 +346,7 @@ fn training_map(
     });
 
     ProductionMapDefinition {
+        print_val_size_mm: None,
         id: id.to_string(),
         product_code: format!("{id}-product"),
         title: "Training map apparatus reference test".to_string(),

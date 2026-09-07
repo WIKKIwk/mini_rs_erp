@@ -224,8 +224,9 @@ pub async fn product_specs(
     ensure_qolip_access(&state, &principal).await?;
     match method {
         Method::POST => {
-            let input: QolipProductSpecUpsert =
+            let mut input: QolipProductSpecUpsert =
                 serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json"))?;
+            resolve_qolip_spec_warehouse(&state, &principal, &mut input).await?;
             let spec = state
                 .qolip
                 .upsert_product_spec(input, &principal)
@@ -238,6 +239,7 @@ pub async fn product_specs(
                     "name": spec.item_name,
                     "item_group": spec.item_group,
                     "qolip_code": spec.qolip_code,
+                    "warehouse": spec.warehouse,
                     "size": spec.size,
                     "color": spec.color,
                     "has_qolip_spec": true,
@@ -248,6 +250,12 @@ pub async fn product_specs(
         Method::DELETE => {
             let input: QolipProductSpecDelete =
                 serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json"))?;
+            // Validate the complete batch before deleting anything.
+            for code in &input.qolip_codes {
+                let spec = state.qolip.product_spec_by_qolip_code(code).await
+                    .map_err(qolip_error)?.ok_or_else(forbidden)?;
+                ensure_qolip_owner_access(&state, &principal, &spec).await?;
+            }
             let deleted_count = state
                 .qolip
                 .delete_product_specs(input.qolip_codes)
@@ -273,8 +281,11 @@ pub async fn product_specs_batch(
     }
     let principal = authenticated_principal(&state, &headers).await?;
     ensure_qolip_access(&state, &principal).await?;
-    let input: QolipProductSpecBatchUpsert =
+    let mut input: QolipProductSpecBatchUpsert =
         serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json"))?;
+    for spec in &mut input.specs {
+        resolve_qolip_spec_warehouse(&state, &principal, spec).await?;
+    }
     let specs = state
         .qolip
         .upsert_product_specs(input.specs, &principal)
@@ -288,6 +299,7 @@ pub async fn product_specs_batch(
                 "name": spec.item_name,
                 "item_group": spec.item_group,
                 "qolip_code": spec.qolip_code,
+                "warehouse": spec.warehouse,
                 "size": spec.size,
                 "color": spec.color,
                 "has_qolip_spec": true,
@@ -321,13 +333,17 @@ pub async fn locations(
                     .map_err(qolip_error)?;
                 if assigned.len() == 1 {
                     block_query = assigned[0].name.clone();
-                } else if assigned.is_empty()
-                    && !state
+                } else if !state
                         .admin
                         .principal_has_capability(&principal, Capability::AdminAccess)
                         .await
                 {
-                    return Err(forbidden());
+                    let mut locations = Vec::new();
+                    for block in assigned {
+                        locations.extend(state.qolip.locations(&block.name).await.map_err(qolip_error)?);
+                    }
+                    let locations = visible_qolip_locations(&state, &principal, locations).await?;
+                    return Ok(Json(serde_json::json!({"ok": true, "locations": locations})));
                 }
             }
             let block = match accessible_qolip_block(&state, &principal, &block_query).await? {
@@ -335,6 +351,7 @@ pub async fn locations(
                 None => block_query,
             };
             let locations = state.qolip.locations(&block).await.map_err(qolip_error)?;
+            let locations = visible_qolip_locations(&state, &principal, locations).await?;
             Ok(Json(serde_json::json!({
                 "ok": true,
                 "locations": locations,

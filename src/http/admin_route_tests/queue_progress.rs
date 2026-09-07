@@ -2,6 +2,7 @@ pub(super) use super::*;
 
 mod basic;
 mod bosma;
+mod bosma_astatka;
 mod laminatsiya;
 mod laminatsiya_notices;
 mod qolip_chain;

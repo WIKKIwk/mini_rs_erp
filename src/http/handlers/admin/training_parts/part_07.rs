@@ -17,6 +17,7 @@ pub async fn training_production_map_save_with_order(
 
     let mut input: TrainingMapSaveWithOrderRequest = parse_json(&body)?;
     validate_template(&input.template).map_err(training_calculate_error)?;
+    input.map.print_val_size_mm = input.template.print_val_size_mm;
     input.map.customer_name = input.template.customer.trim().to_string();
     if input.template.kg > 0.0 {
         let material_catalog = state

@@ -471,6 +471,7 @@ fn role_key(role: &PrincipalRole) -> &'static str {
         PrincipalRole::Aparatchi => "aparatchi",
         PrincipalRole::Qolipchi => "qolipchi",
         PrincipalRole::Boyoqchi => "boyoqchi",
+        PrincipalRole::TayyorlovMasteri => "tayyorlov_masteri",
         PrincipalRole::MaterialTaminotchi => "material_taminotchi",
         PrincipalRole::Admin => "admin",
     }
@@ -484,6 +485,7 @@ fn parse_role(value: &str) -> Result<PrincipalRole, ReturnedPaintError> {
         "aparatchi" => Ok(PrincipalRole::Aparatchi),
         "qolipchi" => Ok(PrincipalRole::Qolipchi),
         "boyoqchi" => Ok(PrincipalRole::Boyoqchi),
+        "tayyorlov_masteri" => Ok(PrincipalRole::TayyorlovMasteri),
         "material_taminotchi" => Ok(PrincipalRole::MaterialTaminotchi),
         "admin" => Ok(PrincipalRole::Admin),
         _ => Err(ReturnedPaintError::StoreFailed),

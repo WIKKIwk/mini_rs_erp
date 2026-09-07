@@ -26,6 +26,12 @@ const INVENTORY_MOVEMENT_ROLES: &[PrincipalRole] = &[
 
 pub(super) const CAPABILITY_CATALOG: &[CapabilityDefinition] = &[
     CapabilityDefinition {
+        capability: Capability::PreparationAccess,
+        code: "preparation.access",
+        label: "Tayyorlov masteri ish joyi",
+        default_roles: &[PrincipalRole::TayyorlovMasteri],
+    },
+    CapabilityDefinition {
         capability: Capability::AdminAccess,
         code: "admin.access",
         label: "Admin panel",

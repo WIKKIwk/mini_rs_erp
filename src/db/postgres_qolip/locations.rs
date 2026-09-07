@@ -38,6 +38,23 @@ pub(super) async fn save_location(
         .await
         .map_err(|_| QolipError::StoreFailed)?;
 
+    // Legacy clients can receive a mold directly into a cell. Persist its receipt
+    // ownership too, so subsequent moves never become the ownership source.
+    sqlx::query(
+        "INSERT INTO mini_qolip_product_specs (
+            item_code,item_name,item_group,qolip_code,size,
+            created_by_role,created_by_ref,created_by_name,payload_json
+         ) SELECT $1,$2,COALESCE((SELECT item_group FROM mini_items WHERE lower(code)=lower($1) LIMIT 1),''),
+                  $3,$4,$5,$6,$7,jsonb_build_object('warehouse',
+                      COALESCE(mini_qolip_assigned_warehouse($5,$6),$8))
+         WHERE NOT EXISTS (SELECT 1 FROM mini_qolip_product_specs WHERE lower(qolip_code)=lower($3))
+         ON CONFLICT (lower(qolip_code)) DO NOTHING",
+    )
+    .bind(&location.item_code).bind(&location.item_name).bind(&location.qolip_code)
+    .bind(location.size).bind(&location.created_by_role).bind(&location.created_by_ref)
+    .bind(&location.created_by_name).bind(&location.warehouse)
+    .execute(&mut *tx).await.map_err(|_| QolipError::StoreFailed)?;
+
     sqlx::query(
         "DELETE FROM mini_qolip_locations
          WHERE lower(qolip_code) = lower($1)

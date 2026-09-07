@@ -583,6 +583,7 @@ async fn postgres_wip_batches_scan_past_first_page_for_matching_apparatus() {
 
 fn test_map(id: &str, order_number: &str, product_code: &str) -> ProductionMapDefinition {
     ProductionMapDefinition {
+        print_val_size_mm: None,
         id: id.to_string(),
         product_code: product_code.to_string(),
         title: "Test map".to_string(),

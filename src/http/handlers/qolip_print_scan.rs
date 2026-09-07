@@ -34,13 +34,21 @@ pub async fn scan(
         .await
         .map_err(qolip_error)?
         .ok_or_else(|| bad_request("qolip_code_not_found"))?;
-    let location = state
+    ensure_qolip_owner_access(&state, &principal, &spec).await?;
+    let mut location = state
         .qolip
         .location_by_qolip_code(qr)
         .await
         .map_err(qolip_error)?;
-    if let Some(location) = &location {
-        let _ = accessible_qolip_block(&state, &principal, &location.block).await?;
+    if let Some(existing) = &location {
+        match accessible_qolip_block(&state, &principal, &existing.block).await {
+            Ok(_) => {},
+            Err((StatusCode::FORBIDDEN, _)) => {
+                // An old incorrect placement must not hide an owned mold's QR.
+                location = None;
+            },
+            Err(error) => return Err(error),
+        }
     }
 
     Ok(Json(serde_json::json!({
@@ -51,6 +59,7 @@ pub async fn scan(
             "name": spec.item_name,
             "item_group": spec.item_group,
             "qolip_code": spec.qolip_code,
+            "warehouse": spec.warehouse,
             "size": spec.size,
             "color": spec.color,
             "has_qolip_spec": true,
@@ -192,6 +201,7 @@ pub async fn code_qr_print(
         .await
         .map_err(qolip_error)?
         .ok_or_else(|| bad_request("qolip_code_not_found"))?;
+    ensure_qolip_owner_access(&state, &principal, &spec).await?;
     let client_print = input.print_transport.trim().eq_ignore_ascii_case("offline");
     let print_request = ProgressLabelPrintRequest {
         driver_url: input.driver_url,

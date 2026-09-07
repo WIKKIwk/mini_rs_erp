@@ -20,6 +20,7 @@ use crate::core::production_map::{
     RezkaAstatkaReport, WipProgressBatchQuery, validate_queue_progress_write,
 };
 use crate::core::qolip::QolipError;
+use crate::core::production_map::BosmaAstatkaReport;
 
 #[path = "postgres_production_map/astatka/helpers.rs"]
 mod astatka_helpers;
@@ -880,6 +881,19 @@ impl PostgresProductionMapStore {
             });
         }
         validate_queue_action_event_transition_tx(&mut tx, &write.event).await?;
+        if let Some(expected) = write.event.payload_json.get("bosma_closing_expected_payload") {
+            let session_id = write.event.payload_json.get("bosma_closing_session_id")
+                .and_then(serde_json::Value::as_str).unwrap_or_default();
+            let current = sqlx::query_as::<_, (String, serde_json::Value)>(
+                "SELECT status, payload_json FROM mini_order_run_sessions
+                 WHERE session_id = $1 AND order_id = $2 AND canonical_apparatus_id = $3 FOR UPDATE",
+            ).bind(session_id).bind(&write.event.order_id).bind(&write.apparatus)
+                .fetch_optional(&mut *tx).await.map_err(|_| ProductionMapError::StoreFailed)?
+                .ok_or(ProductionMapError::QueueActionNotAllowed)?;
+            if current.0 != "roll_detached" || current.1 != *expected {
+                return Err(ProductionMapError::QueueActionNotAllowed);
+            }
+        }
         if let Some(expected) = write.event.payload_json.get("rezka_expected_output_revision") {
             let session_id = write.event.payload_json.get("rezka_expected_session_id")
                 .and_then(serde_json::Value::as_str).unwrap_or_default();

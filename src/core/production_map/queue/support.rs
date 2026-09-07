@@ -186,6 +186,43 @@ pub(super) fn validate_requested_queue_state(
         .ok_or(ProductionMapError::QueueActionNotAllowed)
 }
 
+/// Bosma keeps its first unfinished order as a barrier. A detached roll opens
+/// exactly one adjacent slot in the worker list, which hides completed orders.
+/// Other unfinished orders must never be skipped to find pending work.
+pub(super) fn bosma_startable_order_id<'a>(
+    sequence: &'a [String],
+    states: &BTreeMap<String, queue_state::ApparatusQueueOrderState>,
+    detached_order_ids: &BTreeSet<String>,
+) -> Option<&'a str> {
+    use queue_state::ApparatusQueueOrderState as S;
+    if states.values().any(|state| *state == S::InProgress) {
+        return None;
+    }
+    for (index, order_id) in sequence.iter().enumerate() {
+        let order_id = order_id.trim();
+        if order_id.is_empty() {
+            continue;
+        }
+        match states.get(order_id).copied().unwrap_or(S::Pending) {
+            S::Completed | S::Frozen => continue,
+            S::Pending => return Some(order_id),
+            S::Paused if detached_order_ids.contains(order_id) => {
+                let next = sequence[index + 1..]
+                    .iter()
+                    .map(|id| id.trim())
+                    .find(|id| {
+                        !id.is_empty()
+                            && states.get(*id).copied().unwrap_or(S::Pending) != S::Completed
+                    })?;
+                return (states.get(next).copied().unwrap_or(S::Pending) == S::Pending)
+                    .then_some(next);
+            }
+            _ => return None,
+        }
+    }
+    None
+}
+
 pub(super) fn apply_queue_policy(
     policy: ApparatusQueuePolicy,
     previous_progress_ready: bool,

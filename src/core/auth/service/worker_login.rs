@@ -41,7 +41,7 @@ impl AuthService {
             .await
     }
 
-    async fn login_system_user_by_role(
+    pub(super) async fn login_system_user_by_role(
         &self,
         normalized_phone: &str,
         code: &str,

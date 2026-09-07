@@ -51,6 +51,7 @@ impl MemoryQolipStore {
 
     fn legacy_spec(location: &QolipLocation, item_group: Option<&str>) -> QolipProductSpec {
         QolipProductSpec {
+            warehouse: location.warehouse.clone(),
             item_code: location.item_code.clone(),
             item_name: location.item_name.clone(),
             item_group: item_group.unwrap_or_default().to_string(),
@@ -68,6 +69,7 @@ impl MemoryQolipStore {
         item_group: Option<&str>,
     ) -> QolipProductSpec {
         QolipProductSpec {
+            warehouse: checkout.warehouse.clone(),
             item_code: checkout.item_code.clone(),
             item_name: checkout.item_name.clone(),
             item_group: item_group

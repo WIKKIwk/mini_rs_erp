@@ -45,6 +45,9 @@ pub struct CalculateOrderTemplate {
     pub frame_product_size_mm: f64,
     #[serde(default)]
     pub frame_count: f64,
+    /// Overrides only print-apparatus compatibility; frame/material dimensions stay intact.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub print_val_size_mm: Option<f64>,
     #[serde(default = "default_edge_allowance")]
     pub edge_allowance_mm: f64,
     #[serde(default)]
@@ -130,6 +133,14 @@ pub trait CalculateOrderStorePort: Send + Sync {
 }
 
 pub fn validate_template(template: &CalculateOrderTemplate) -> Result<(), CalculateOrderError> {
+    if template
+        .print_val_size_mm
+        .is_some_and(|size| !size.is_finite() || size <= 0.0)
+    {
+        return Err(CalculateOrderError::InvalidInput(
+            "val razmeri noto'g'ri".to_string(),
+        ));
+    }
     if template.name.trim().is_empty() {
         return Err(CalculateOrderError::InvalidInput(
             "zakaz nomi kerak".to_string(),
@@ -252,6 +263,43 @@ mod tests {
     #[test]
     fn accepts_single_layer_template() {
         validate_template(&valid_template()).expect("single-layer template");
+    }
+
+    #[test]
+    fn print_val_size_preserves_frame_dimensions_and_legacy_defaults() {
+        let template = hydrate_template_dimensions(CalculateOrderTemplate {
+            frame_product_size_mm: 320.0,
+            frame_count: 2.0,
+            edge_allowance_mm: 15.0,
+            print_val_size_mm: Some(850.0),
+            ..valid_template()
+        });
+        validate_template(&template).expect("valid val override");
+        let mut json = serde_json::to_value(template).expect("serialize");
+        let restored: CalculateOrderTemplate =
+            serde_json::from_value(json.clone()).expect("decode");
+        assert_eq!(restored.print_val_size_mm, Some(850.0));
+        assert_eq!(restored.width_mm, 655.0);
+        assert_eq!(restored.frame_product_size_mm, 320.0);
+        assert_eq!(restored.frame_count, 2.0);
+        json.as_object_mut().unwrap().remove("print_val_size_mm");
+        let legacy: CalculateOrderTemplate = serde_json::from_value(json).expect("legacy decode");
+        assert_eq!(legacy.print_val_size_mm, None);
+        assert_eq!(legacy.width_mm, 655.0);
+    }
+
+    #[test]
+    fn print_val_size_must_be_finite_and_positive() {
+        for size in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            let template = CalculateOrderTemplate {
+                print_val_size_mm: Some(size),
+                ..valid_template()
+            };
+            assert!(
+                validate_template(&template).is_err(),
+                "invalid size: {size}"
+            );
+        }
     }
 
     #[test]

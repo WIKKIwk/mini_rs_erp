@@ -118,6 +118,25 @@ pub(super) async fn validate_queue_action_event_transition_tx(
     if current_state.trim() != event.from_state.as_str() {
         return Err(ProductionMapError::QueueActionNotAllowed);
     }
+    if let Some(expected) = event.payload_json.get("bosma_expected_sequence") {
+        // The apparatus lock is already held: do not start from a stale
+        // neighbour exception after a reorder or another worker action.
+        let sequence = sqlx::query_scalar::<_, serde_json::Value>(
+            "SELECT order_ids FROM mini_queue_sequences WHERE canonical_apparatus_id = $1 FOR UPDATE",
+        ).bind(apparatus_id.as_str()).fetch_optional(&mut **tx).await
+            .map_err(|_| ProductionMapError::StoreFailed)?
+            .unwrap_or_else(|| serde_json::json!([]));
+        let states = sqlx::query_as::<_, (String, String)>(
+            "SELECT order_id, state FROM mini_queue_states WHERE canonical_apparatus_id = $1 FOR UPDATE",
+        ).bind(apparatus_id.as_str()).fetch_all(&mut **tx).await
+            .map_err(|_| ProductionMapError::StoreFailed)?
+            .into_iter().collect::<BTreeMap<_, _>>();
+        if sequence != *expected
+            || Some(&serde_json::json!(states)) != event.payload_json.get("bosma_expected_queue_states")
+        {
+            return Err(ProductionMapError::QueueActionNotAllowed);
+        }
+    }
     Ok(())
 }
 

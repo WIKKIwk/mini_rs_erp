@@ -105,6 +105,7 @@ pub struct AppState {
     pub telegram: TelegramService,
     pub warehouse_events: WarehouseEventHub,
     pub raw_material_events: Option<PostgresRawMaterialEventStore>,
+    pub preparation: Option<crate::db::postgres_preparation::PostgresPreparationStore>,
     pub system_monitor_hub: SystemMonitorHub,
     pub backup_doctor: BackupDoctor,
     #[allow(dead_code)]
@@ -313,6 +314,8 @@ impl AppState {
             telegram,
             warehouse_events,
             raw_material_events,
+            preparation: postgres_pool::postgres_pool("preparation")
+                .map(crate::db::postgres_preparation::PostgresPreparationStore::new),
             system_monitor_hub,
             backup_doctor,
             mini_engine,

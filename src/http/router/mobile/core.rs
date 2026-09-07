@@ -11,6 +11,10 @@ use crate::http::handlers::{
 
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
+        .route("/v1/mobile/preparation/snapshot", get(crate::http::handlers::preparation::snapshot))
+        .route("/v1/mobile/preparation/materials", axum::routing::post(crate::http::handlers::preparation::material))
+        .route("/v1/mobile/preparation/receipts", axum::routing::post(crate::http::handlers::preparation::receipt))
+        .route("/v1/mobile/preparation/consumptions", axum::routing::post(crate::http::handlers::preparation::consumption))
         .route(
             "/v1/mobile/app-update/android",
             get(app_update::android_metadata),

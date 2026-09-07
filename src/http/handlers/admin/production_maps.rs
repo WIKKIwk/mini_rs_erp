@@ -40,7 +40,7 @@ mod raw_material_reprint;
 mod raw_materials;
 mod wip;
 
-pub use self::astatka::{production_map_laminatsiya_astatka, production_map_rezka_astatka};
+pub use self::astatka::{production_map_bosma_astatka, production_map_laminatsiya_astatka, production_map_rezka_astatka};
 pub use self::completion::{
     production_map_closed_orders, production_map_completed_orders,
     production_map_completion_request_decision, production_map_completion_request_decisions,

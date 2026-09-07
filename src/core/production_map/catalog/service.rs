@@ -479,7 +479,7 @@ impl ProductionMapService {
                     &source,
                     &target,
                     map.roll_count,
-                    map.width_mm,
+                    map.print_compatibility_width_mm(),
                 )
             {
                 return Err(ProductionMapError::MoveNotAllowed);
@@ -539,7 +539,7 @@ impl ProductionMapService {
                 &source,
                 &target,
                 map.roll_count,
-                map.width_mm,
+                map.print_compatibility_width_mm(),
             )
         {
             return Err(ProductionMapError::MoveNotAllowed);

@@ -119,6 +119,7 @@ async fn postgres_mini_order_sink_saves_order_and_product_rows() {
 
 fn test_map() -> ProductionMapDefinition {
     ProductionMapDefinition {
+        print_val_size_mm: None,
         id: "zakaz-9001".to_string(),
         product_code: "ITEM-9001".to_string(),
         title: "Mini order map".to_string(),
@@ -168,6 +169,7 @@ fn test_node(id: &str, kind: ProductionMapNodeKind, title: &str, y: f64) -> Prod
 
 fn test_template() -> CalculateOrderTemplate {
     CalculateOrderTemplate {
+        print_val_size_mm: None,
         id: String::new(),
         code: "9001".to_string(),
         name: "Mini mahsulot".to_string(),

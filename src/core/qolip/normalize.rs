@@ -113,6 +113,7 @@ pub(super) fn normalize_product_spec(
     principal: &Principal,
 ) -> Result<QolipProductSpec, QolipError> {
     let QolipProductSpecUpsert {
+        warehouse,
         item_code,
         item_name,
         item_group,
@@ -138,6 +139,7 @@ pub(super) fn normalize_product_spec(
         return Err(QolipError::InvalidSize);
     }
     Ok(QolipProductSpec {
+        warehouse: trim_owned(warehouse),
         item_code,
         item_name,
         item_group,
@@ -158,6 +160,7 @@ pub fn role_code(role: &PrincipalRole) -> &'static str {
         PrincipalRole::Aparatchi => "aparatchi",
         PrincipalRole::Qolipchi => "qolipchi",
         PrincipalRole::Boyoqchi => "boyoqchi",
+        PrincipalRole::TayyorlovMasteri => "tayyorlov_masteri",
         PrincipalRole::MaterialTaminotchi => "material_taminotchi",
         PrincipalRole::Admin => "admin",
     }

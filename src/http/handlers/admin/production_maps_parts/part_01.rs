@@ -289,6 +289,7 @@ pub async fn production_map_save_with_order(
     let mut input: ProductionMapSaveWithOrderRequest = parse_json(&body)?;
     if let Some(template) = &input.template {
         validate_template(template).map_err(calculate_order_error)?;
+        input.map.print_val_size_mm = template.print_val_size_mm;
         input.map.customer_name = template.customer.trim().to_string();
         if template.kg > 0.0 {
             let material_catalog = state

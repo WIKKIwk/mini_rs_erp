@@ -160,7 +160,7 @@ pub async fn user_list(
         .map(str::trim)
         .map(str::to_ascii_lowercase);
     let mut page = match role.as_deref() {
-        Some("qolipchi" | "boyoqchi") => {
+        Some("qolipchi" | "boyoqchi" | "tayyorlov_masteri") => {
             system_users::system_user_list_page(&state, &query).await?
         }
         Some("worker" | "ishchi" | "aparatchi" | "apparatchi") => {

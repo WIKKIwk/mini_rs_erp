@@ -292,6 +292,7 @@ impl AdminService {
             let role_label = match user.role {
                 PrincipalRole::Qolipchi => "Qolipchi",
                 PrincipalRole::Boyoqchi => "Bo‘yoqchi",
+                PrincipalRole::TayyorlovMasteri => "Tayyorlov masteri",
                 _ => "System user",
             };
             entries.push(AdminUserListEntry {

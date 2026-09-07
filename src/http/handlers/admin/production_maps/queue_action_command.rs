@@ -50,6 +50,13 @@ impl QueueActionCommand {
         );
         let explicit_worker_freeze = action == queue_state::ApparatusQueueAction::Freeze
             && request.freeze_request_id.trim().is_empty();
+        if request.complete_without_output
+            && (action != queue_state::ApparatusQueueAction::Complete
+                || !apparatus.is_pechat()
+                || request.order_id.trim().starts_with("training-"))
+        {
+            return Err(bad_request("queue_action_not_allowed"));
+        }
         if request.freeze_with_issue || explicit_worker_freeze {
             if principal.role != PrincipalRole::Aparatchi {
                 return Err(forbidden());
@@ -157,6 +164,7 @@ impl QueueActionCommand {
                 qolip_codes,
             },
             progress: QueueProgressInput {
+                complete_without_output: request.complete_without_output,
                 freeze_request_id: request.freeze_request_id,
                 freeze_with_issue: request.freeze_with_issue,
                 rezka_frames: request.rezka_frames,

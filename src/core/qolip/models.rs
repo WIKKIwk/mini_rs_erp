@@ -8,6 +8,8 @@ pub struct QolipBlock {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QolipProduct {
+    #[serde(default)]
+    pub warehouse: String,
     pub code: String,
     pub name: String,
     pub item_group: String,
@@ -26,6 +28,8 @@ pub struct QolipProduct {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QolipProductSpec {
+    #[serde(default)]
+    pub warehouse: String,
     pub item_code: String,
     pub item_name: String,
     pub item_group: String,
@@ -40,6 +44,8 @@ pub struct QolipProductSpec {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 pub struct QolipProductSpecUpsert {
+    #[serde(default)]
+    pub warehouse: String,
     #[serde(default)]
     pub item_code: String,
     #[serde(default)]

@@ -175,6 +175,7 @@ pub(super) fn apply_authoritative_calculation(
         .map(|result| result.rounded_length)
         .ok_or_else(|| bad_request("calculate result is empty"))?;
     map.width_mm = Some(response.width_mm);
+    map.print_val_size_mm = template.print_val_size_mm;
     map.order_kg = Some(response.kg);
     // The legacy map field carries the production target, including waste.
     map.base_length = Some(planned_length);

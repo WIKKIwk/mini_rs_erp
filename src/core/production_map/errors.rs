@@ -36,6 +36,8 @@ pub enum ProductionMapError {
     MapNotFound,
     #[error("order quantity must be positive")]
     InvalidOrderQty,
+    #[error("invalid print val size")]
+    InvalidPrintValSize,
     #[error("node quantity must be positive: {0}")]
     InvalidNodeQty(String),
     #[error("invalid location: {0}")]

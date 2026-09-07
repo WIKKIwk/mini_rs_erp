@@ -158,6 +158,26 @@ impl ProductionMapService {
             .as_ref()
             .map(|session| session.stage_node_id.trim().to_string())
             .unwrap_or_default();
+        let closing_output_batch_id = if progress.complete_without_output {
+            if queue_action != queue_state::ApparatusQueueAction::Complete
+                || from_state != queue_state::ApparatusQueueOrderState::Paused
+                || !pechat::is_pechat_apparatus(&canonical)
+            {
+                return Err(ProductionMapError::QueueActionNotAllowed);
+            }
+            validate_bosma_closing_metrics(&progress)?;
+            let session = active_session.as_ref().ok_or(ProductionMapError::QueueActionNotAllowed)?;
+            let batches = self.store.progress_batches_for_order(order_id).await?;
+            let output = bosma_closing_output(session, &batches)
+                .ok_or(ProductionMapError::QueueActionNotAllowed)?;
+            if progress.progress_batch_id.trim() != output.batch_id {
+                return Err(ProductionMapError::QueueActionNotAllowed);
+            }
+            let id = output.batch_id.clone();
+            // This id is an optimistic closing anchor, not a new input roll.
+            progress.progress_batch_id.clear();
+            Some(id)
+        } else { None };
         if queue_action == queue_state::ApparatusQueueAction::Merge
             && active_session.as_ref().is_some_and(|session| session.payload_json
                 .get("rezka_output_report").and_then(serde_json::Value::as_array)
@@ -199,9 +219,23 @@ impl ProductionMapService {
         let requeued_resume = requeued_session
             && queue_action == queue_state::ApparatusQueueAction::Resume
             && from_state == queue_state::ApparatusQueueOrderState::Pending;
+        let bosma_sequence_start = pechat::is_pechat_apparatus(&canonical)
+            && (queue_action == queue_state::ApparatusQueueAction::Start || requeued_resume);
+        if bosma_sequence_start {
+            let sessions = self.store.active_order_run_sessions_for_orders(&sequence).await?;
+            let detached_order_ids = sessions.values().flatten().filter(|session| {
+                session.apparatus == storage_key && session.status == OrderRunStatus::RollDetached
+            }).map(|session| session.order_id.clone()).collect::<BTreeSet<_>>();
+            if bosma_startable_order_id(&sequence, &parsed, &detached_order_ids) != Some(order_id) {
+                return Err(ProductionMapError::QueueActionNotAllowed);
+            }
+        }
         let remove_roll_from_apparatus = queue_action == queue_state::ApparatusQueueAction::DetachRoll
             && progress.remove_roll_from_apparatus;
-        if remove_roll_from_apparatus {
+        if closing_output_batch_id.is_some() {
+            // This releases only this paused order; another running order is untouched.
+            parsed.insert(order_id.to_string(), queue_state::ApparatusQueueOrderState::Completed);
+        } else if remove_roll_from_apparatus {
             if !apparatus::is_laminatsiya_apparatus(&canonical)
                 || from_state != queue_state::ApparatusQueueOrderState::Paused
             {
@@ -253,6 +287,18 @@ impl ProductionMapService {
             sequence: &sequence,
             visible_order_ids: &visible_order_ids,
         });
+        if bosma_sequence_start {
+            event.payload_json["bosma_expected_sequence"] = serde_json::json!(stored_sequence);
+            event.payload_json["bosma_expected_queue_states"] =
+                serde_json::json!(stored_states.cloned().unwrap_or_default());
+        }
+        if let Some(batch_id) = &closing_output_batch_id {
+            let session = active_session.as_ref().ok_or(ProductionMapError::QueueActionNotAllowed)?;
+            event.payload_json["complete_without_output"] = serde_json::json!(true);
+            event.payload_json["closing_output_batch_id"] = serde_json::json!(batch_id);
+            event.payload_json["bosma_closing_session_id"] = serde_json::json!(session.session_id);
+            event.payload_json["bosma_closing_expected_payload"] = session.payload_json.clone();
+        }
         if apparatus::is_rezka_apparatus(&canonical)
             && let Some(session) = &active_session
         {
@@ -322,6 +368,16 @@ impl ProductionMapService {
                 completion_read_snapshot.as_ref(),
             )
             .await?;
+        if let Some(batch_id) = &closing_output_batch_id {
+            if let Some(session) = &mut progress.session {
+                session.payload_json["complete_without_output"] = serde_json::json!(true);
+                session.payload_json["closing_output_batch_id"] = serde_json::json!(batch_id);
+            }
+            if let Some(progress_event) = &mut progress.progress_event {
+                progress_event.payload_json["complete_without_output"] = serde_json::json!(true);
+                progress_event.payload_json["closing_output_batch_id"] = serde_json::json!(batch_id);
+            }
+        }
         if let Some(revision) = event.payload_json.get("rezka_expected_output_revision")
             .and_then(serde_json::Value::as_u64)
             && let Some(session) = &mut progress.session

@@ -9,6 +9,12 @@ use super::normalize::normalize_branch;
 use crate::core::apparatus_standard::ApparatusId;
 
 pub(super) fn validate_map(map: &ProductionMapDefinition) -> Result<(), ProductionMapError> {
+    if map
+        .print_val_size_mm
+        .is_some_and(|size| !size.is_finite() || size <= 0.0)
+    {
+        return Err(ProductionMapError::InvalidPrintValSize);
+    }
     if map.id.trim().is_empty() {
         return Err(ProductionMapError::MissingId);
     }

@@ -57,7 +57,7 @@ impl AdminService {
     ) -> Result<AdminSystemUserDetail, AdminPortError> {
         let mut existing = self.existing_state_codes().await?;
         let mut state = self.state_for(&user.id).await?;
-        if state.removed || !matches!(user.role, PrincipalRole::Qolipchi | PrincipalRole::Boyoqchi)
+        if state.removed || !matches!(user.role, PrincipalRole::Qolipchi | PrincipalRole::Boyoqchi | PrincipalRole::TayyorlovMasteri)
         {
             return Err(AdminPortError::NotFound);
         }
@@ -66,6 +66,7 @@ impl AdminService {
         let prefix = match user.role {
             PrincipalRole::Qolipchi => "50",
             PrincipalRole::Boyoqchi => "80",
+            PrincipalRole::TayyorlovMasteri => "90",
             _ => return Err(AdminPortError::NotFound),
         };
         state.custom_code = random_code(prefix, &mut existing);

@@ -95,6 +95,7 @@ mod tests {
     fn order_notification_contains_core_order_fields() {
         let notification = TelegramOrderNotification::from_order(
             ProductionMapDefinition {
+                print_val_size_mm: None,
                 id: "zakaz-2731".to_string(),
                 product_code: "MOLLY".to_string(),
                 title: "Molly".to_string(),

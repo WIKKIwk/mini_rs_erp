@@ -688,6 +688,7 @@ impl RezkaFrameProgressInput {
         inherit_global_waste: bool,
     ) -> QueueProgressInput {
         QueueProgressInput {
+            complete_without_output: false,
             freeze_request_id: base.freeze_request_id.clone(),
             freeze_with_issue: base.freeze_with_issue,
             rezka_frames: Vec::new(),
@@ -746,6 +747,9 @@ impl RezkaFrameProgressInput {
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct QueueProgressInput {
+    /// Close an already recorded Bosma output without manufacturing another roll.
+    /// progress_batch_id identifies the detached output shown in the server contract.
+    pub complete_without_output: bool,
     pub freeze_request_id: String,
     /// Backward-compatible marker for the legacy pause-plus-issue request.
     /// The queue action is canonicalized to `Freeze` before persistence.

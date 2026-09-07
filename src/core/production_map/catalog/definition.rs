@@ -29,6 +29,9 @@ pub struct ProductionMapDefinition {
     pub roll_count: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width_mm: Option<f64>,
+    /// Optional val size for print compatibility, never the material or Rezka width.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub print_val_size_mm: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub order_kg: Option<f64>,
     /// Planned production meters including waste and rounding; legacy wire name.
@@ -38,6 +41,12 @@ pub struct ProductionMapDefinition {
     pub nodes: Vec<ProductionMapNode>,
     #[serde(default)]
     pub edges: Vec<ProductionMapEdge>,
+}
+
+impl ProductionMapDefinition {
+    pub fn print_compatibility_width_mm(&self) -> Option<f64> {
+        self.print_val_size_mm.or(self.width_mm)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -26,6 +26,9 @@ pub mod queue_state;
 mod service;
 #[path = "astatka/service.rs"]
 mod service_astatka;
+#[path = "astatka/bosma.rs"]
+mod service_bosma_astatka;
+pub use service_bosma_astatka::BosmaAstatkaReport;
 mod service_audit;
 #[path = "progress_session/service_completion.rs"]
 mod service_completion;

@@ -132,6 +132,7 @@ async fn qolip_code_qr_print_uses_code_as_stable_payload() {
             "/v1/mobile/qolip/product-specs",
             &token,
             r#"{
+                "warehouse":"Qolip ombor",
                 "item_code":"ITEM-001",
                 "item_name":"Kross qolip",
                 "item_group":"Qolip",

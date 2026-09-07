@@ -400,6 +400,46 @@ mod rezka_output_kadr_count_tests {
     }
 }
 
+/// A detached output may already be downstream; closing must not reclaim it.
+pub(super) fn bosma_closing_output<'a>(
+    session: &OrderRunSession,
+    batches: &'a [OrderProgressBatch],
+) -> Option<&'a OrderProgressBatch> {
+    if session.status != OrderRunStatus::RollDetached {
+        return None;
+    }
+    let anchor = session.payload_json.get("last_detached_output_batch_id")
+        .and_then(serde_json::Value::as_str);
+    batches.iter().filter(|batch| {
+        batch.session_id == session.session_id
+            && batch.order_id == session.order_id
+            && batch.apparatus == session.apparatus
+            && batch.action == queue_state::ApparatusQueueAction::DetachRoll
+            && batch.status == OrderProgressBatchStatus::RollDetached
+            && anchor.is_none_or(|id| id == batch.batch_id)
+    }).max_by(|a, b| (a.completed_at_unix, &a.batch_id).cmp(&(b.completed_at_unix, &b.batch_id)))
+}
+
+pub(super) fn validate_bosma_closing_metrics(progress: &QueueProgressInput) -> Result<(), ProductionMapError> {
+    let nonnegative = |value: f64| value.is_finite() && value >= 0.0;
+    if !progress.total_waste.is_some_and(nonnegative)
+        || progress.return_ink_kg.is_some_and(|value| !nonnegative(value))
+        || (progress.return_ink_kg.is_none() && !progress.returned_paint_report_attached)
+        || [progress.produced_qty, progress.gross_qty, progress.finished_goods_kg,
+            progress.finished_goods_meter, progress.bobina_kg, progress.diameter,
+            progress.lamination_print_leftover_rolls, progress.lamination_film_leftover_rolls,
+            progress.rezka_bosma_waste, progress.rezka_lamination_waste, progress.rezka_edge_waste]
+            .iter().any(Option::is_some)
+        || !progress.rezka_frames.is_empty() || progress.rezka_record_frame_index.is_some()
+        || !progress.qr_payload.trim().is_empty()
+        || progress.worker_handoff || progress.remove_roll_from_apparatus
+        || progress.freeze_with_issue || !progress.freeze_request_id.is_empty()
+    {
+        return Err(ProductionMapError::ProgressInputInvalid);
+    }
+    Ok(())
+}
+
 pub(super) fn run_status_for_progress_action(
     action: queue_state::ApparatusQueueAction,
 ) -> OrderRunStatus {

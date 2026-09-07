@@ -67,6 +67,7 @@ fn alternative_node_with_label(
 
 fn hotlunch_map() -> ProductionMapDefinition {
     ProductionMapDefinition {
+        print_val_size_mm: None,
         id: "zakaz-hot".to_string(),
         product_code: "HOT".to_string(),
         title: "Hotlunch".to_string(),

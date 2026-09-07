@@ -271,6 +271,19 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         MemoryProductionMapStore::order_run_sessions_for_order(self, order_id).await
     }
 
+    async fn bosma_astatka_reports_for_order(
+        &self,
+        order_id: &str,
+    ) -> Result<Vec<BosmaAstatkaReport>, ProductionMapError> {
+        Ok(self.bosma_astatka_reports.read().await.iter()
+            .filter(|report| report.order_id == order_id.trim()).cloned().collect())
+    }
+
+    async fn put_bosma_astatka_report(&self, report: BosmaAstatkaReport) -> Result<(), ProductionMapError> {
+        self.bosma_astatka_reports.write().await.push(report);
+        Ok(())
+    }
+
     async fn laminatsiya_astatka_reports_for_order(
         &self,
         order_id: &str,

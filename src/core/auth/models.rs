@@ -13,6 +13,7 @@ pub enum PrincipalRole {
     Boyoqchi,
     MaterialTaminotchi,
     Admin,
+    TayyorlovMasteri,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

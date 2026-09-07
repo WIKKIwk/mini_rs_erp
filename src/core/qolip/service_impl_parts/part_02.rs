@@ -20,6 +20,12 @@ impl QolipService {
             input.qolip_code = spec.qolip_code;
             input.size = spec.size;
         }
+        if let Some(spec) = self.store.product_spec_by_qolip_code(&input.qolip_code).await? {
+            if spec.warehouse.trim().is_empty()
+                || !spec.warehouse.trim().eq_ignore_ascii_case(input.warehouse.trim()) {
+                return Err(QolipError::LocationIdentityMismatch);
+            }
+        }
         let normalized = normalize_location(input, principal)?;
         self.store.put_location(normalized).await
     }

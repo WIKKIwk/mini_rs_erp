@@ -220,6 +220,7 @@ async fn pechat_queue_start_requires_matching_qolip_code_scan() {
                 "/v1/mobile/qolip/product-specs",
                 &token,
                 &serde_json::json!({
+                    "warehouse": "Qolip ombor",
                     "item_code": "ITEM-QOLIP",
                     "item_name": "Test qolip order",
                     "item_group": "Tayyor mahsulot",
@@ -549,6 +550,7 @@ async fn catalog_qolip_starts_without_checkout_and_is_locked_by_active_order() {
             "/v1/mobile/qolip/product-specs",
             &admin_token,
             r#"{
+                "warehouse":"Qolip ombor",
                 "item_code":"ITEM-SHARED-QOLIP",
                 "item_name":"Shared qolip order",
                 "item_group":"Tayyor mahsulot",
@@ -734,6 +736,7 @@ async fn failed_queue_commit_does_not_checkout_qolip() {
             "/v1/mobile/qolip/product-specs",
             &admin_token,
             r#"{
+                "warehouse":"Qolip ombor",
                 "item_code":"ITEM-QOLIP-ATOMIC",
                 "item_name":"Atomic qolip order",
                 "item_group":"Tayyor mahsulot",
@@ -921,6 +924,14 @@ impl QolipStorePort for FlippingCheckoutStore {
 
     async fn product_spec(&self, _item_code: &str) -> Result<Option<QolipProductSpec>, QolipError> {
         Ok(None)
+    }
+
+    async fn product_spec_by_qolip_code(&self, code: &str) -> Result<Option<QolipProductSpec>, QolipError> {
+        Ok(Some(QolipProductSpec {
+            warehouse: "Qolip ombor".to_string(),
+            qolip_code: code.to_string(),
+            ..QolipProductSpec::default()
+        }))
     }
 
     async fn put_product_spec(

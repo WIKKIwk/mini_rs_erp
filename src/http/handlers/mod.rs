@@ -21,3 +21,4 @@ pub mod stock_entry;
 pub mod supplier;
 pub mod telegram;
 pub mod werka;
+pub mod preparation;

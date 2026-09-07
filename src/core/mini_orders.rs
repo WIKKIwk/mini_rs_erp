@@ -116,6 +116,7 @@ mod tests {
 
     fn test_map(id: &str, order_number: &str) -> ProductionMapDefinition {
         ProductionMapDefinition {
+            print_val_size_mm: None,
             id: id.to_string(),
             product_code: "ITEM-1".to_string(),
             title: "Test map".to_string(),

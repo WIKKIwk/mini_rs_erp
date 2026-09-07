@@ -82,55 +82,19 @@ impl MemoryQolipStore {
         query: &str,
         limit: usize,
         with_qolip_only: bool,
-        allowed_blocks: Option<&[String]>,
+        allowed_warehouses: Option<&[String]>,
     ) -> Result<Vec<QolipProduct>, QolipError> {
         let query = query.trim().to_lowercase();
-        // Ombor izolatsiyasi: None = hammasi, Some = faqat ruxsat bloklar +
-        // unplaced (hech qayerda joylashmagan) qoliplar.
-        let allowed: Option<BTreeSet<String>> = allowed_blocks.map(|blocks| {
-            blocks
-                .iter()
-                .map(|block| block.trim().to_lowercase())
-                .filter(|block| !block.is_empty())
-                .collect()
+        let allowed: Option<BTreeSet<String>> = allowed_warehouses.map(|warehouses| {
+            warehouses.iter().map(|value| value.trim().to_lowercase()).collect()
         });
-        if let Some(blocks) = &allowed {
-            if blocks.is_empty() {
-                return Ok(Vec::new());
-            }
+        if allowed.as_ref().is_some_and(|warehouses| warehouses.is_empty()) {
+            return Ok(Vec::new());
         }
-        let placement: std::collections::HashMap<String, String> = {
-            let mut map = std::collections::HashMap::new();
-            for location in self.locations.read().await.iter() {
-                let key = location.qolip_code.trim().to_lowercase();
-                if !key.is_empty() {
-                    map.entry(key)
-                        .or_insert_with(|| location.block.trim().to_lowercase());
-                }
-            }
-            for checkout in self.checkouts.read().await.iter().filter(|checkout| {
-                checkout.status.trim().eq_ignore_ascii_case("open")
-            }) {
-                let key = checkout.qolip_code.trim().to_lowercase();
-                if !key.is_empty() {
-                    map.entry(key)
-                        .or_insert_with(|| checkout.block.trim().to_lowercase());
-                }
-            }
-            map
-        };
-        let is_visible = |qolip_code: &str| -> bool {
-            let Some(blocks) = &allowed else {
-                return true;
-            };
-            let key = qolip_code.trim().to_lowercase();
-            if key.is_empty() {
-                return true;
-            }
-            match placement.get(&key) {
-                None => true,
-                Some(block) => blocks.contains(block),
-            }
+        let is_visible = |warehouse: &str| -> bool {
+            allowed.as_ref().is_none_or(|warehouses| {
+                !warehouse.trim().is_empty() && warehouses.contains(&warehouse.trim().to_lowercase())
+            })
         };
         let in_use_codes = {
             let checkouts = self.checkouts.read().await;
@@ -157,7 +121,7 @@ impl MemoryQolipStore {
                 if qolip_key.is_empty() || !seen_qolip_codes.insert(qolip_key.clone()) {
                     continue;
                 }
-                if !is_visible(&spec.qolip_code) {
+                if !is_visible(&spec.warehouse) {
                     continue;
                 }
                 let item_key = spec.item_code.trim().to_lowercase();
@@ -166,6 +130,7 @@ impl MemoryQolipStore {
                     .get(&item_key)
                     .map(|index| &products[*index]);
                 let item = QolipProduct {
+                    warehouse: spec.warehouse.clone(),
                     code: spec.item_code.clone(),
                     name: base
                         .map(|product| product.name.clone())
@@ -201,7 +166,7 @@ impl MemoryQolipStore {
                 if qolip_key.is_empty() || !seen_qolip_codes.insert(qolip_key.clone()) {
                     continue;
                 }
-                if !is_visible(&location.qolip_code) {
+                if !is_visible(&location.warehouse) {
                     continue;
                 }
                 let item_key = location.item_code.trim().to_lowercase();
@@ -210,6 +175,7 @@ impl MemoryQolipStore {
                     .get(&item_key)
                     .map(|index| &products[*index]);
                 let item = QolipProduct {
+                    warehouse: location.warehouse.clone(),
                     code: location.item_code.clone(),
                     name: base
                         .map(|product| product.name.clone())
@@ -247,7 +213,7 @@ impl MemoryQolipStore {
                 if qolip_key.is_empty() || !seen_qolip_codes.insert(qolip_key.clone()) {
                     continue;
                 }
-                if !is_visible(&checkout.qolip_code) {
+                if !is_visible(&checkout.warehouse) {
                     continue;
                 }
                 let item_key = checkout.item_code.trim().to_lowercase();
@@ -256,6 +222,7 @@ impl MemoryQolipStore {
                     .get(&item_key)
                     .map(|index| &products[*index]);
                 let item = QolipProduct {
+                    warehouse: checkout.warehouse.clone(),
                     code: checkout.item_code.clone(),
                     name: base
                         .map(|product| product.name.clone())
@@ -290,6 +257,11 @@ impl MemoryQolipStore {
                     continue;
                 }
                 let mut item = product.clone();
+                // This branch is a shared product picker row, not a mold record.
+                item.qolip_code.clear();
+                item.first_qolip_code.clear();
+                item.warehouse.clear();
+                item.has_qolip_spec = false;
                 item.is_in_use = false;
                 if memory_product_matches(&item, &query) {
                     items.push(item);

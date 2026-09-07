@@ -35,9 +35,15 @@ pub async fn checkouts(
                 )
                 .await
                 .map_err(qolip_error)?;
+            let mut visible = Vec::new();
+            for checkout in checkouts {
+                if qolip_code_is_accessible(&state, &principal, &checkout.qolip_code).await? {
+                    visible.push(checkout);
+                }
+            }
             Ok(Json(serde_json::json!({
                 "ok": true,
-                "checkouts": checkouts,
+                "checkouts": visible,
             })))
         }
         Method::POST => {
@@ -50,6 +56,9 @@ pub async fn checkouts(
                 .map_err(qolip_error)?
                 .ok_or_else(|| bad_request("location_not_found"))?;
             let _ = accessible_qolip_block(&state, &principal, &location.block).await?;
+            if !qolip_code_is_accessible(&state, &principal, &location.qolip_code).await? {
+                return Err(forbidden());
+            }
             let worker_id = input.worker_id.trim();
             if worker_id.is_empty() {
                 return Err(bad_request("worker_required"));
@@ -106,6 +115,9 @@ pub async fn checkout_return(
         .map_err(qolip_error)?
         .ok_or_else(|| bad_request("checkout_not_found"))?;
     let _ = accessible_qolip_block(&state, &principal, &checkout.block).await?;
+    if !qolip_code_is_accessible(&state, &principal, &checkout.qolip_code).await? {
+        return Err(forbidden());
+    }
     let returned = state
         .qolip
         .return_checkout(input)
@@ -137,6 +149,9 @@ pub async fn location_move(
         .map_err(qolip_error)?
         .ok_or_else(|| bad_request("location_not_found"))?;
     let _ = accessible_qolip_block(&state, &principal, &location.block).await?;
+    if !qolip_code_is_accessible(&state, &principal, &location.qolip_code).await? {
+        return Err(forbidden());
+    }
     let requested_block = input.block.trim();
     if requested_block.is_empty() || requested_block.eq_ignore_ascii_case(location.block.trim()) {
         input.block = location.block.clone();
@@ -195,6 +210,9 @@ pub async fn location_move_batch(
             .map_err(qolip_error)?
             .ok_or_else(|| bad_request("location_not_found"))?;
         let _ = accessible_qolip_block(&state, &principal, &location.block).await?;
+        if !qolip_code_is_accessible(&state, &principal, &location.qolip_code).await? {
+            return Err(forbidden());
+        }
         let requested_block = input.block.trim();
         if requested_block.is_empty() || requested_block.eq_ignore_ascii_case(location.block.trim())
         {

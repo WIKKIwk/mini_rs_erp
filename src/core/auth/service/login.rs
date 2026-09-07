@@ -36,6 +36,7 @@ impl AuthService {
             PrincipalRole::Aparatchi => self.login_aparatchi(&normalized_phone, code).await,
             PrincipalRole::Qolipchi => self.login_qolipchi(&normalized_phone, code).await,
             PrincipalRole::Boyoqchi => self.login_boyoqchi(&normalized_phone, code).await,
+            PrincipalRole::TayyorlovMasteri => self.login_system_user_by_role(&normalized_phone, code, role).await,
             PrincipalRole::MaterialTaminotchi => {
                 self.login_material_taminotchi(normalized_phone, code, &identity)
                     .await
@@ -121,6 +122,8 @@ impl AuthService {
             Ok(PrincipalRole::Qolipchi)
         } else if trimmed.starts_with("80") {
             Ok(PrincipalRole::Boyoqchi)
+        } else if trimmed.starts_with("90") {
+            Ok(PrincipalRole::TayyorlovMasteri)
         } else if trimmed.starts_with("70") || trimmed.starts_with("60") {
             Ok(PrincipalRole::MaterialTaminotchi)
         } else if trimmed.starts_with("30") {

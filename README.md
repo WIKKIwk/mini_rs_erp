@@ -252,6 +252,13 @@ flowchart LR
     Variables --> Tasks
 ```
 
+Order templates and production maps accept optional `print_val_size_mm` (finite,
+positive mm) for print-apparatus compatibility and rerouting only. Missing/null
+uses the original width rules. Saving with an order template copies or clears
+this override; `width_mm`, frame size/count, material calculations, and Rezka
+frame snapshots remain frame-based. The field lives in existing JSON payloads;
+no database migration is required.
+
 The formula system intentionally supports a narrow, auditable expression model:
 
 - arithmetic formulas are evaluated against named numeric variables;
