@@ -414,7 +414,7 @@ async fn production_map_save_with_order_recalculates_map_fields_from_template() 
             "item_code": "ITEM-CALC",
             "frame_product_size_mm": 635.0,
             "frame_count": 1.0,
-            "waste_percent": 5.0,
+            "waste_percent": 11.0,
             "roll_count": 7,
             "first_layer_material": "pet",
             "first_layer_micron": "12",
@@ -423,6 +423,31 @@ async fn production_map_save_with_order_recalculates_map_fields_from_template() 
             "kg": 500.0
         }
     });
+
+    let mut calculate_request = body["template"].clone();
+    calculate_request["layers"] = serde_json::json!([
+        { "material": "pet", "micron": "12" },
+        { "material": "pe oq", "micron": "30" }
+    ]);
+    let calculated = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/calculate",
+            &token,
+            &calculate_request.to_string(),
+        ))
+        .await
+        .expect("calculate with waste");
+    let status = calculated.status();
+    let calculation = json_body(calculated).await;
+    assert_eq!(status, StatusCode::OK, "{calculation}");
+    let expected_length = &calculation["results"][0]["rounded_length"];
+    assert!(
+        expected_length.as_f64().expect("planned length")
+            > calculation["results"][0]["base_length"]
+                .as_f64()
+                .expect("net length")
+    );
 
     let response = build_router(state.clone())
         .oneshot(request_with_body(
@@ -438,12 +463,7 @@ async fn production_map_save_with_order_recalculates_map_fields_from_template() 
     let saved_map = &value["saved"]["map"];
     assert_eq!(saved_map["width_mm"], serde_json::json!(650.0));
     assert_eq!(saved_map["order_kg"], serde_json::json!(500.0));
-    assert_ne!(saved_map["base_length"], serde_json::json!(1.0));
-    assert!(
-        saved_map["base_length"]
-            .as_f64()
-            .is_some_and(|value| value > 0.0)
-    );
+    assert_eq!(&saved_map["base_length"], expected_length);
 
     let fetched = build_router(state)
         .oneshot(request(

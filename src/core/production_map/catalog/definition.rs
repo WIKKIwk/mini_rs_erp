@@ -31,6 +31,7 @@ pub struct ProductionMapDefinition {
     pub width_mm: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub order_kg: Option<f64>,
+    /// Planned production meters including waste and rounding; legacy wire name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_length: Option<f64>,
     #[serde(default)]

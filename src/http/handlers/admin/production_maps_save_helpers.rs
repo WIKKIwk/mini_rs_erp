@@ -169,14 +169,15 @@ pub(super) fn apply_authoritative_calculation(
     )
     .map_err(|error| bad_request(&error))?;
 
-    let base_length = response
+    let planned_length = response
         .results
         .first()
-        .map(|result| result.base_length)
+        .map(|result| result.rounded_length)
         .ok_or_else(|| bad_request("calculate result is empty"))?;
     map.width_mm = Some(response.width_mm);
     map.order_kg = Some(response.kg);
-    map.base_length = Some(base_length);
+    // The legacy map field carries the production target, including waste.
+    map.base_length = Some(planned_length);
     map.roll_count = response.roll_count;
     Ok(())
 }
