@@ -7,10 +7,10 @@ struct BosmaAstatkaRequest {
     apparatus: String,
     order_id: String,
     total_waste: f64,
-    finished_goods_meter: f64,
-    finished_goods_kg: f64,
+    finished_goods_meter: Option<f64>,
+    finished_goods_kg: Option<f64>,
     #[serde(alias = "babina_kg")]
-    bobina_kg: f64,
+    bobina_kg: Option<f64>,
     #[serde(default)]
     returned_paint_items: Vec<crate::core::returned_paint::ReturnedPaintItem>,
     #[serde(default)]

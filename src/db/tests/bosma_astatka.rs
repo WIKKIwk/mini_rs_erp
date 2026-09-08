@@ -51,6 +51,29 @@ async fn bosma_astatka_postgres_roundtrip_without_production_output() {
         .await
         .unwrap();
     assert_eq!(reloaded, vec![report.clone()]);
+    assert_eq!(reloaded[0].finished_goods_meter, Some(80.0));
+    assert_eq!(reloaded[0].finished_goods_kg, Some(12.0));
+    assert_eq!(reloaded[0].bobina_kg, Some(1.0));
+    let mut waste_only = report.clone();
+    waste_only.report_id.push_str(":waste-only");
+    waste_only.returned_paint.id = waste_only.report_id.clone();
+    waste_only.to_at_unix += 1;
+    waste_only.finished_goods_meter = None;
+    waste_only.finished_goods_kg = None;
+    waste_only.bobina_kg = None;
+    let payload = serde_json::to_value(&waste_only).unwrap();
+    for field in ["finished_goods_meter", "finished_goods_kg", "bobina_kg"] {
+        assert!(payload.get(field).is_none(), "{field}");
+    }
+    store
+        .put_bosma_astatka_report(waste_only.clone())
+        .await
+        .unwrap();
+    let reloaded = PostgresProductionMapStore::new(pool.clone())
+        .bosma_astatka_reports_for_order(&report.order_id)
+        .await
+        .unwrap();
+    assert_eq!(reloaded, vec![report.clone(), waste_only]);
     assert!(
         store
             .progress_batches_for_order(&report.order_id)

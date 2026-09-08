@@ -53,7 +53,6 @@ async fn bosma_astatka_http_reports_without_changing_running_paused_or_completed
     provision_test_qolip(&router, &admin, order).await;
     let payload = serde_json::json!({
         "apparatus": station, "order_id": order, "total_waste": 0,
-        "finished_goods_meter": 80, "finished_goods_kg": 12, "bobina_kg": 1,
         "description": "Astatka hisoboti",
         "returned_paint_items": [
             {"usage":"rasxot","category":"colors","name":"Oq","values":{"Mix":9,"Oq":0,"Qora":0}},
@@ -127,6 +126,9 @@ async fn bosma_astatka_http_reports_without_changing_running_paused_or_completed
         }
         let mut command = payload.clone();
         command["action"] = serde_json::json!(action);
+        command["finished_goods_meter"] = serde_json::json!(80);
+        command["finished_goods_kg"] = serde_json::json!(12);
+        command["bobina_kg"] = serde_json::json!(1);
         command["total_waste"] = serde_json::json!(1);
         command["description"] = serde_json::json!("");
         if action != "complete" {
@@ -162,29 +164,48 @@ async fn bosma_astatka_http_reports_without_changing_running_paused_or_completed
         wait_for_progress_print_request_count(&prints, expected_prints).await;
         let before = operational_state(&store, order).await;
         let print_count = prints.lock().await.len();
-        let response = router
-            .clone()
-            .oneshot(request_with_body(
-                "POST",
-                endpoint,
-                &worker,
-                &payload.to_string(),
-            ))
-            .await
-            .unwrap();
-        let status = response.status();
-        let response = json_body(response).await;
-        assert_eq!(status, StatusCode::OK, "{response}");
-        let report = &response["report"];
-        assert_eq!(report["total_waste"], 0.0);
-        assert_eq!(report["returned_paint"]["sender_ref"], "astatka-worker");
-        assert_eq!(report["returned_paint"]["items"][1]["values"]["Mix"], "1");
-        if let Some(previous) = previous_to {
-            assert_eq!(report["from_at_unix"], previous);
+        for legacy in [false, true] {
+            let mut report_payload = payload.clone();
+            if legacy {
+                report_payload["finished_goods_meter"] = serde_json::json!(80);
+                report_payload["finished_goods_kg"] = serde_json::json!(12);
+                report_payload["bobina_kg"] = serde_json::json!(1);
+            }
+            let response = router
+                .clone()
+                .oneshot(request_with_body(
+                    "POST",
+                    endpoint,
+                    &worker,
+                    &report_payload.to_string(),
+                ))
+                .await
+                .unwrap();
+            let status = response.status();
+            let response = json_body(response).await;
+            assert_eq!(status, StatusCode::OK, "{response}");
+            let report = &response["report"];
+            assert_eq!(report["total_waste"], 0.0);
+            for (field, expected_value) in [
+                ("finished_goods_meter", 80.0),
+                ("finished_goods_kg", 12.0),
+                ("bobina_kg", 1.0),
+            ] {
+                if legacy {
+                    assert_eq!(report[field], expected_value);
+                } else {
+                    assert!(report.get(field).is_none(), "{field}");
+                }
+            }
+            assert_eq!(report["returned_paint"]["sender_ref"], "astatka-worker");
+            assert_eq!(report["returned_paint"]["items"][1]["values"]["Mix"], "1");
+            if let Some(previous) = previous_to {
+                assert_eq!(report["from_at_unix"], previous);
+            }
+            previous_to = Some(report["to_at_unix"].clone());
+            assert_eq!(operational_state(&store, order).await, before);
+            assert_eq!(prints.lock().await.len(), print_count);
         }
-        previous_to = Some(report["to_at_unix"].clone());
-        assert_eq!(operational_state(&store, order).await, before);
-        assert_eq!(prints.lock().await.len(), print_count);
     }
     assert_eq!(
         store
@@ -192,7 +213,7 @@ async fn bosma_astatka_http_reports_without_changing_running_paused_or_completed
             .await
             .unwrap()
             .len(),
-        3
+        6
     );
     for field in [
         "total_waste",
@@ -232,6 +253,6 @@ async fn bosma_astatka_http_reports_without_changing_running_paused_or_completed
             .await
             .unwrap()
             .len(),
-        3
+        6
     );
 }

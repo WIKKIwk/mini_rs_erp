@@ -11,9 +11,13 @@ pub struct BosmaAstatkaReport {
     pub from_at_unix: i64,
     pub to_at_unix: i64,
     pub total_waste: f64,
-    pub finished_goods_meter: f64,
-    pub finished_goods_kg: f64,
-    pub bobina_kg: f64,
+    // Optional legacy output metrics; new astatka reports only record waste/paint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_goods_meter: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_goods_kg: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bobina_kg: Option<f64>,
     pub returned_paint: ReturnedPaintRequest,
     pub description: String,
 }
@@ -37,6 +41,7 @@ impl ProductionMapService {
                 report.bobina_kg,
             ]
             .iter()
+            .flatten()
             .any(|value| !value.is_finite() || *value <= 0.0)
             || report.returned_paint.order_id != report.order_id
             || report.returned_paint.apparatus != report.apparatus
