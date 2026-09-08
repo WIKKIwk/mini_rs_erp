@@ -12,6 +12,8 @@ mod progress_status;
 mod paddon;
 #[path = "queue/types.rs"]
 mod queue;
+#[path = "queue/work_activity.rs"]
+mod work_activity;
 
 pub use super::errors::ProductionMapError;
 pub use audit::*;
@@ -23,3 +25,4 @@ pub use paddon::*;
 pub use progress::*;
 pub use progress_status::*;
 pub use queue::*;
+pub use work_activity::*;

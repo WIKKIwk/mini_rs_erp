@@ -14,6 +14,7 @@ mod rezka_lineage_cutover;
 mod training_workspace;
 mod warehouse;
 mod preparation;
+mod raw_material_split;
 mod worker;
 mod worker_group;
 mod worker_hot_path;

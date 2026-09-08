@@ -34,6 +34,27 @@ fn config() -> AppConfig {
     }
 }
 
+#[tokio::test]
+async fn raw_material_split_role_login_is_independent_and_blocked_users_are_denied() {
+    use crate::core::system_users::{SystemUserService,MemorySystemUserStore,SystemUserUpsert};
+    let users=Arc::new(SystemUserService::new(Arc::new(MemorySystemUserStore::new())));
+    let user=users.upsert_user(SystemUserUpsert { id:"raw-cutter".into(),role:PrincipalRole::HomashyoRezkachi,
+        name:"Cutter".into(),phone:"+998901112291".into() }).await.unwrap();
+    assert_eq!(users.users(&PrincipalRole::HomashyoRezkachi,"",10).await.unwrap(),vec![user]);
+    assert!(users.users(&PrincipalRole::Qolipchi,"",10).await.unwrap().is_empty());
+    for blocked in [false,true] {
+        let states=Arc::new(FakeStateLookup { states:BTreeMap::from([("raw-cutter".into(),
+            AdminAccessState {custom_code:"911234567890".into(),blocked,removed:false})]) });
+        let auth=AuthService::new(&config()).with_system_user_dependencies(users.clone(),states);
+        let result=auth.login("+998901112291","911234567890").await;
+        if blocked {assert_eq!(result.unwrap_err(),AuthError::InvalidCredentials);}
+        else {let principal=result.unwrap();assert_eq!(principal.role,PrincipalRole::HomashyoRezkachi);assert_eq!(principal.ref_,"raw-cutter");}
+        for code in ["91ABCDEF1234","401234567890","901234567890"] {
+            assert!(auth.login("+998901112291",code).await.is_err());
+        }
+    }
+}
+
 #[test]
 fn normalizes_phone_like_go() {
     assert_eq!(normalize_phone("888862440").unwrap(), "+998888862440");

@@ -130,6 +130,7 @@ fn encode_role(role: &PrincipalRole) -> u8 {
         PrincipalRole::MaterialTaminotchi => 6,
         PrincipalRole::Boyoqchi => 7,
         PrincipalRole::TayyorlovMasteri => 9,
+        PrincipalRole::HomashyoRezkachi => 10,
     }
 }
 
@@ -144,7 +145,20 @@ fn decode_role(role: u8) -> Result<PrincipalRole, BoxedError> {
         6 => Ok(PrincipalRole::MaterialTaminotchi),
         7 => Ok(PrincipalRole::Boyoqchi),
         9 => Ok(PrincipalRole::TayyorlovMasteri),
+        10 => Ok(PrincipalRole::HomashyoRezkachi),
         _ => Err("invalid stored session principal role".into()),
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn raw_material_split_session_codec_preserves_existing_role_bytes() {
+    assert_eq!(encode_role(&PrincipalRole::HomashyoRezkachi),10);
+    assert_eq!(decode_role(10).unwrap(),PrincipalRole::HomashyoRezkachi);
+    for (byte,role) in [(0,PrincipalRole::Supplier),(1,PrincipalRole::Werka),(2,PrincipalRole::Customer),
+        (3,PrincipalRole::Admin),(4,PrincipalRole::Aparatchi),(5,PrincipalRole::Qolipchi),
+        (6,PrincipalRole::MaterialTaminotchi),(7,PrincipalRole::Boyoqchi),(9,PrincipalRole::TayyorlovMasteri)] {
+        assert_eq!(encode_role(&role),byte);assert_eq!(decode_role(byte).unwrap(),role);
     }
 }
 

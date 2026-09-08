@@ -199,6 +199,14 @@ impl ProductionMapService {
         )?;
         normalize_self_consumed_wip_history(&mut batches);
         let mut maps_by_id = maps_by_order_id(loaded_maps);
+        // A detached final-stage roll may predate a map extension. Resolve its
+        // missing destination before filtering, without rewriting WIP history.
+        if batches.iter().any(progress_batch_needs_location_repair) {
+            if !load_maps {
+                maps_by_id = maps_by_order_id(self.store.maps().await?);
+            }
+            repair_wip_progress_batch_locations(&mut batches, &maps_by_id);
+        }
         if !requested_next_apparatus.is_empty() {
             batches.retain(|batch| {
                 maps_by_id
@@ -224,12 +232,6 @@ impl ProductionMapService {
                     .get(batch.order_id.trim())
                     .is_none_or(|control| control.state != OrderControlState::Frozen)
             });
-        }
-        if batches.iter().any(progress_batch_needs_location_repair) {
-            if !load_maps {
-                maps_by_id = maps_by_order_id(self.store.maps().await?);
-            }
-            repair_wip_progress_batch_locations(&mut batches, &maps_by_id);
         }
         for batch in &mut batches {
             batch.refresh_status_detail();

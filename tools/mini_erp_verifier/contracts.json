@@ -1,8 +1,8 @@
 {
   "protocol": 1,
   "route_snapshot": {
-    "count": 250,
-    "sha256": "d925785f34577848fd5d62d69ec4c03c99f14f0f84f207f950e5015869403042"
+    "count": 261,
+    "sha256": "922703673e60b78385d1abda21aebc2d1bdc77fb569b812142dde17bde2c9b23"
   },
   "access_matrices": [
     {
@@ -17,7 +17,8 @@
         "qolipchi",
         "boyoqchi",
         "material_taminotchi",
-        "admin"
+        "admin",
+        "homashyo_rezkachi"
       ],
       "allowed_status": 200,
       "anonymous_status": 401,
@@ -88,6 +89,52 @@
     }
   ],
   "cases": [
+{"name":"raw_material_split_snapshot_anonymous","request":{"method":"GET","uri":"/v1/mobile/raw-material-split/snapshot"},"expect":{"status":401}},
+{"name":"raw_material_split_snapshot_supplier","request":{"method":"GET","uri":"/v1/mobile/raw-material-split/snapshot","role":"supplier"},"expect":{"status":403}},
+{"name":"raw_material_split_snapshot_werka","request":{"method":"GET","uri":"/v1/mobile/raw-material-split/snapshot","role":"werka"},"expect":{"status":403}},
+{"name":"raw_material_split_snapshot_customer","request":{"method":"GET","uri":"/v1/mobile/raw-material-split/snapshot","role":"customer"},"expect":{"status":403}},
+{"name":"raw_material_split_snapshot_aparatchi","request":{"method":"GET","uri":"/v1/mobile/raw-material-split/snapshot","role":"aparatchi"},"expect":{"status":403}},
+{"name":"raw_material_split_snapshot_qolipchi","request":{"method":"GET","uri":"/v1/mobile/raw-material-split/snapshot","role":"qolipchi"},"expect":{"status":403}},
+{"name":"raw_material_split_snapshot_boyoqchi","request":{"method":"GET","uri":"/v1/mobile/raw-material-split/snapshot","role":"boyoqchi"},"expect":{"status":403}},
+{"name":"raw_material_split_snapshot_material_taminotchi","request":{"method":"GET","uri":"/v1/mobile/raw-material-split/snapshot","role":"material_taminotchi"},"expect":{"status":403}},
+{"name":"raw_material_split_snapshot_admin","request":{"method":"GET","uri":"/v1/mobile/raw-material-split/snapshot","role":"admin"},"expect":{"status":403}},
+{"name":"raw_material_split_snapshot_homashyo_rezkachi","request":{"method":"GET","uri":"/v1/mobile/raw-material-split/snapshot","role":"homashyo_rezkachi"},"expect":{"status":503}},
+{"name":"raw_material_split_snapshot_wrong_method","request":{"method":"DELETE","uri":"/v1/mobile/raw-material-split/snapshot","role":"homashyo_rezkachi"},"expect":{"status":405}},
+{"name":"raw_material_split_source_anonymous","request":{"method":"GET","uri":"/v1/mobile/raw-material-split/source?barcode=parent"},"expect":{"status":401}},
+{"name":"raw_material_split_source_supplier","request":{"method":"GET","uri":"/v1/mobile/raw-material-split/source?barcode=parent","role":"supplier"},"expect":{"status":403}},
+{"name":"raw_material_split_source_werka","request":{"method":"GET","uri":"/v1/mobile/raw-material-split/source?barcode=parent","role":"werka"},"expect":{"status":403}},
+{"name":"raw_material_split_source_customer","request":{"method":"GET","uri":"/v1/mobile/raw-material-split/source?barcode=parent","role":"customer"},"expect":{"status":403}},
+{"name":"raw_material_split_source_aparatchi","request":{"method":"GET","uri":"/v1/mobile/raw-material-split/source?barcode=parent","role":"aparatchi"},"expect":{"status":403}},
+{"name":"raw_material_split_source_qolipchi","request":{"method":"GET","uri":"/v1/mobile/raw-material-split/source?barcode=parent","role":"qolipchi"},"expect":{"status":403}},
+{"name":"raw_material_split_source_boyoqchi","request":{"method":"GET","uri":"/v1/mobile/raw-material-split/source?barcode=parent","role":"boyoqchi"},"expect":{"status":403}},
+{"name":"raw_material_split_source_material_taminotchi","request":{"method":"GET","uri":"/v1/mobile/raw-material-split/source?barcode=parent","role":"material_taminotchi"},"expect":{"status":403}},
+{"name":"raw_material_split_source_admin","request":{"method":"GET","uri":"/v1/mobile/raw-material-split/source?barcode=parent","role":"admin"},"expect":{"status":403}},
+{"name":"raw_material_split_source_homashyo_rezkachi","request":{"method":"GET","uri":"/v1/mobile/raw-material-split/source?barcode=parent","role":"homashyo_rezkachi"},"expect":{"status":503}},
+{"name":"raw_material_split_source_wrong_method","request":{"method":"DELETE","uri":"/v1/mobile/raw-material-split/source?barcode=parent","role":"homashyo_rezkachi"},"expect":{"status":405}},
+{"name":"raw_material_split_split_anonymous","request":{"method":"POST","uri":"/v1/mobile/raw-material-split/split","body":{"request_id":"split-verify-001","source_barcode":"parent","expected_revision":"1.000000","expected_kg":"100","expected_width_mm":"1000","expected_micron":"20","waste_kg":"2","outputs":[{"kg":"39","width_mm":"400"},{"kg":"59","width_mm":"600"}]}},"expect":{"status":401}},
+{"name":"raw_material_split_split_supplier","request":{"method":"POST","uri":"/v1/mobile/raw-material-split/split","role":"supplier","body":{"request_id":"split-verify-001","source_barcode":"parent","expected_revision":"1.000000","expected_kg":"100","expected_width_mm":"1000","expected_micron":"20","waste_kg":"2","outputs":[{"kg":"39","width_mm":"400"},{"kg":"59","width_mm":"600"}]}},"expect":{"status":403}},
+{"name":"raw_material_split_split_werka","request":{"method":"POST","uri":"/v1/mobile/raw-material-split/split","role":"werka","body":{"request_id":"split-verify-001","source_barcode":"parent","expected_revision":"1.000000","expected_kg":"100","expected_width_mm":"1000","expected_micron":"20","waste_kg":"2","outputs":[{"kg":"39","width_mm":"400"},{"kg":"59","width_mm":"600"}]}},"expect":{"status":403}},
+{"name":"raw_material_split_split_customer","request":{"method":"POST","uri":"/v1/mobile/raw-material-split/split","role":"customer","body":{"request_id":"split-verify-001","source_barcode":"parent","expected_revision":"1.000000","expected_kg":"100","expected_width_mm":"1000","expected_micron":"20","waste_kg":"2","outputs":[{"kg":"39","width_mm":"400"},{"kg":"59","width_mm":"600"}]}},"expect":{"status":403}},
+{"name":"raw_material_split_split_aparatchi","request":{"method":"POST","uri":"/v1/mobile/raw-material-split/split","role":"aparatchi","body":{"request_id":"split-verify-001","source_barcode":"parent","expected_revision":"1.000000","expected_kg":"100","expected_width_mm":"1000","expected_micron":"20","waste_kg":"2","outputs":[{"kg":"39","width_mm":"400"},{"kg":"59","width_mm":"600"}]}},"expect":{"status":403}},
+{"name":"raw_material_split_split_qolipchi","request":{"method":"POST","uri":"/v1/mobile/raw-material-split/split","role":"qolipchi","body":{"request_id":"split-verify-001","source_barcode":"parent","expected_revision":"1.000000","expected_kg":"100","expected_width_mm":"1000","expected_micron":"20","waste_kg":"2","outputs":[{"kg":"39","width_mm":"400"},{"kg":"59","width_mm":"600"}]}},"expect":{"status":403}},
+{"name":"raw_material_split_split_boyoqchi","request":{"method":"POST","uri":"/v1/mobile/raw-material-split/split","role":"boyoqchi","body":{"request_id":"split-verify-001","source_barcode":"parent","expected_revision":"1.000000","expected_kg":"100","expected_width_mm":"1000","expected_micron":"20","waste_kg":"2","outputs":[{"kg":"39","width_mm":"400"},{"kg":"59","width_mm":"600"}]}},"expect":{"status":403}},
+{"name":"raw_material_split_split_material_taminotchi","request":{"method":"POST","uri":"/v1/mobile/raw-material-split/split","role":"material_taminotchi","body":{"request_id":"split-verify-001","source_barcode":"parent","expected_revision":"1.000000","expected_kg":"100","expected_width_mm":"1000","expected_micron":"20","waste_kg":"2","outputs":[{"kg":"39","width_mm":"400"},{"kg":"59","width_mm":"600"}]}},"expect":{"status":403}},
+{"name":"raw_material_split_split_admin","request":{"method":"POST","uri":"/v1/mobile/raw-material-split/split","role":"admin","body":{"request_id":"split-verify-001","source_barcode":"parent","expected_revision":"1.000000","expected_kg":"100","expected_width_mm":"1000","expected_micron":"20","waste_kg":"2","outputs":[{"kg":"39","width_mm":"400"},{"kg":"59","width_mm":"600"}]}},"expect":{"status":403}},
+{"name":"raw_material_split_split_homashyo_rezkachi","request":{"method":"POST","uri":"/v1/mobile/raw-material-split/split","role":"homashyo_rezkachi","body":{"request_id":"split-verify-001","source_barcode":"parent","expected_revision":"1.000000","expected_kg":"100","expected_width_mm":"1000","expected_micron":"20","waste_kg":"2","outputs":[{"kg":"39","width_mm":"400"},{"kg":"59","width_mm":"600"}]}},"expect":{"status":503}},
+{"name":"raw_material_split_split_wrong_method","request":{"method":"GET","uri":"/v1/mobile/raw-material-split/split","role":"homashyo_rezkachi"},"expect":{"status":405}},
+{"name":"raw_material_split_print_anonymous","request":{"method":"POST","uri":"/v1/mobile/raw-material-split/print","body":{"split_id":"saved-1","barcode":"child-1","driver_url":"http://127.0.0.1:1","printer":"godex","print_mode":"label"}},"expect":{"status":401}},
+{"name":"raw_material_split_print_supplier","request":{"method":"POST","uri":"/v1/mobile/raw-material-split/print","role":"supplier","body":{"split_id":"saved-1","barcode":"child-1","driver_url":"http://127.0.0.1:1","printer":"godex","print_mode":"label"}},"expect":{"status":403}},
+{"name":"raw_material_split_print_werka","request":{"method":"POST","uri":"/v1/mobile/raw-material-split/print","role":"werka","body":{"split_id":"saved-1","barcode":"child-1","driver_url":"http://127.0.0.1:1","printer":"godex","print_mode":"label"}},"expect":{"status":403}},
+{"name":"raw_material_split_print_customer","request":{"method":"POST","uri":"/v1/mobile/raw-material-split/print","role":"customer","body":{"split_id":"saved-1","barcode":"child-1","driver_url":"http://127.0.0.1:1","printer":"godex","print_mode":"label"}},"expect":{"status":403}},
+{"name":"raw_material_split_print_aparatchi","request":{"method":"POST","uri":"/v1/mobile/raw-material-split/print","role":"aparatchi","body":{"split_id":"saved-1","barcode":"child-1","driver_url":"http://127.0.0.1:1","printer":"godex","print_mode":"label"}},"expect":{"status":403}},
+{"name":"raw_material_split_print_qolipchi","request":{"method":"POST","uri":"/v1/mobile/raw-material-split/print","role":"qolipchi","body":{"split_id":"saved-1","barcode":"child-1","driver_url":"http://127.0.0.1:1","printer":"godex","print_mode":"label"}},"expect":{"status":403}},
+{"name":"raw_material_split_print_boyoqchi","request":{"method":"POST","uri":"/v1/mobile/raw-material-split/print","role":"boyoqchi","body":{"split_id":"saved-1","barcode":"child-1","driver_url":"http://127.0.0.1:1","printer":"godex","print_mode":"label"}},"expect":{"status":403}},
+{"name":"raw_material_split_print_material_taminotchi","request":{"method":"POST","uri":"/v1/mobile/raw-material-split/print","role":"material_taminotchi","body":{"split_id":"saved-1","barcode":"child-1","driver_url":"http://127.0.0.1:1","printer":"godex","print_mode":"label"}},"expect":{"status":403}},
+{"name":"raw_material_split_print_admin","request":{"method":"POST","uri":"/v1/mobile/raw-material-split/print","role":"admin","body":{"split_id":"saved-1","barcode":"child-1","driver_url":"http://127.0.0.1:1","printer":"godex","print_mode":"label"}},"expect":{"status":403}},
+{"name":"raw_material_split_print_homashyo_rezkachi","request":{"method":"POST","uri":"/v1/mobile/raw-material-split/print","role":"homashyo_rezkachi","body":{"split_id":"saved-1","barcode":"child-1","driver_url":"http://127.0.0.1:1","printer":"godex","print_mode":"label"}},"expect":{"status":503}},
+{"name":"raw_material_split_print_wrong_method","request":{"method":"GET","uri":"/v1/mobile/raw-material-split/print","role":"homashyo_rezkachi"},"expect":{"status":405}},
+{"name":"raw_material_split_has_no_legacy_rezka_permission","request":{"method":"GET","uri":"/v1/mobile/rezka/source?barcode=parent","role":"homashyo_rezkachi"},"expect":{"status":403}},
+{"name":"raw_material_split_me_role","request":{"method":"GET","uri":"/v1/mobile/me","role":"homashyo_rezkachi"},"expect":{"status":200,"body":{"role":"homashyo_rezkachi"}}},
     {
       "name": "worker_scoped_queue_snapshot_requires_auth",
       "request": {"method": "GET", "uri": "/v1/mobile/admin/production-maps/sequence?apparatus=apparatus:test:latency&order_id=zakaz-latency"},

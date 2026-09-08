@@ -22,3 +22,4 @@ pub mod supplier;
 pub mod telegram;
 pub mod werka;
 pub mod preparation;
+pub mod raw_material_split;

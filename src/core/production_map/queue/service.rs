@@ -929,6 +929,9 @@ impl ProductionMapService {
                 apparatus_controls.insert(
                     order_id.trim().to_string(),
                     ApparatusQueueOrderActionControl {
+                        work_activity: ApparatusQueueWorkActivity::from_session(
+                            active_session, state, &stage_node_id,
+                        ),
                         state,
                         allowed_actions,
                         interaction,

@@ -293,6 +293,7 @@ impl AdminService {
                 PrincipalRole::Qolipchi => "Qolipchi",
                 PrincipalRole::Boyoqchi => "Bo‘yoqchi",
                 PrincipalRole::TayyorlovMasteri => "Tayyorlov masteri",
+                PrincipalRole::HomashyoRezkachi => "Homashyo rezkachisi",
                 _ => "System user",
             };
             entries.push(AdminUserListEntry {

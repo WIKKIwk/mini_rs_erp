@@ -286,9 +286,11 @@ async fn validate_warehouse_assignee(
     input: &WarehouseAssignmentUpsert,
 ) -> Result<(), AdminError> {
     match input.principal_role {
-        PrincipalRole::Werka | PrincipalRole::MaterialTaminotchi | PrincipalRole::Qolipchi => {
-            Ok(())
-        }
+        PrincipalRole::Werka
+        | PrincipalRole::MaterialTaminotchi
+        | PrincipalRole::Qolipchi
+        | PrincipalRole::TayyorlovMasteri
+        | PrincipalRole::HomashyoRezkachi => Ok(()),
         PrincipalRole::Aparatchi => {
             let workers = state
                 .workers

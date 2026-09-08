@@ -29,3 +29,4 @@ pub mod postgres_worker_group;
 #[cfg(test)]
 mod tests;
 pub mod postgres_preparation;
+pub mod postgres_raw_material_split;

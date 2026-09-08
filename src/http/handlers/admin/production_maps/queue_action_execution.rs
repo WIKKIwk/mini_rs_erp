@@ -211,11 +211,19 @@ async fn execute_queue_action(
     );
     let print = prints.first().cloned().unwrap_or(serde_json::Value::Null);
     let order_control = result.order_control;
+    let work_activity = result.session.as_ref().and_then(|session| {
+        let state = result.states.get(&order_id)
+            .and_then(|value| queue_state::ApparatusQueueOrderState::parse(value))?;
+        crate::core::production_map::ApparatusQueueWorkActivity::from_session(
+            Some(session), state, &session.stage_node_id,
+        )
+    });
     let mut response = serde_json::json!({
         "ok": true,
         "states": result.states,
         "order_status": result.order_status,
         "session": result.session,
+        "work_activity": work_activity,
         "progress_event": result.progress_event,
         "progress_batch": result.progress_batch,
         "progress_batches": result.progress_batches,

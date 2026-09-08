@@ -1,7 +1,6 @@
 use super::*;
-use axum::body::Body;
 use axum::extract::State;
-use axum::http::{HeaderMap, Method, StatusCode, Uri, header};
+use axum::http::{HeaderMap, Method, Uri};
 use axum::response::Response;
 
 /// Serves the calculate-page photo linked to a production order for the order
@@ -52,16 +51,13 @@ pub async fn production_map_order_image_view(
         return Err(not_found("rasm topilmadi"));
     };
     let image = state
-        .calculate_orders
-        .get_image_global(&image_id)
+        .order_image_cache
+        .get(state.calculate_orders.as_ref(), None, &image_id,
+            crate::http::handlers::calculate_image::wants_thumbnail(&uri))
         .await
         .map_err(|_| server_error("order image store failed"))?
         .ok_or_else(|| not_found("rasm topilmadi"))?;
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, image.image_mime)
-        .header(header::CACHE_CONTROL, "private, max-age=86400")
-        .body(Body::from(image.body))
+    crate::http::handlers::calculate_image::image_response(image, &headers)
         .map_err(|_| server_error("order image response failed"))
 }
 
@@ -74,28 +70,11 @@ async fn template_image_id_for_map(
     state: &AppState,
     map: &ProductionMapDefinition,
 ) -> Result<Option<String>, AdminError> {
-    let templates = state
+    state
         .calculate_orders
-        .list_all()
+        .image_id_for_order(&crate::core::calculate_orders::OrderImageLookup::for_map(map))
         .await
-        .map_err(|_| server_error("order template lookup failed"))?;
-    let map_id = map.id.trim();
-    let order_number = map.order_number.trim();
-    let code = map.code.trim();
-    for template in &templates {
-        let matches = (!template.source_map_id.trim().is_empty()
-            && template.source_map_id.trim() == map_id)
-            || (!order_number.is_empty() && template.order_number.trim() == order_number)
-            || (!code.is_empty() && template.code.trim() == code);
-        if !matches {
-            continue;
-        }
-        let image_id = template.image_id.trim().to_string();
-        if !image_id.is_empty() {
-            return Ok(Some(image_id));
-        }
-    }
-    Ok(None)
+        .map_err(|_| server_error("order template lookup failed"))
 }
 
 fn query_value(uri: &Uri, key: &str) -> Option<String> {

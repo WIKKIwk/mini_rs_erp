@@ -34,6 +34,7 @@ pub fn system_role_definitions() -> Vec<RoleDefinition> {
         (PrincipalRole::Qolipchi, "qolipchi", "Qolipchi"),
         (PrincipalRole::Boyoqchi, "boyoqchi", "Bo‘yoqchi"),
         (PrincipalRole::TayyorlovMasteri, "tayyorlov_masteri", "Tayyorlov masteri"),
+        (PrincipalRole::HomashyoRezkachi, "homashyo_rezkachi", "Homashyo rezkachisi"),
         (
             PrincipalRole::MaterialTaminotchi,
             "material_taminotchi",

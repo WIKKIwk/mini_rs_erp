@@ -49,6 +49,11 @@ pub async fn login(
     {
         return Err(login_error(AuthError::InvalidCredentials));
     }
+    if principal.role == PrincipalRole::HomashyoRezkachi
+        && !state.admin.principal_has_capability(&principal, Capability::RawMaterialSplitAccess).await
+    {
+        return Err(login_error(AuthError::InvalidCredentials));
+    }
     let werka_home = if principal.role == PrincipalRole::Werka {
         state.werka.home(20).await.map_err(|error| {
             tracing::error!(%error, "werka home lookup failed during login");

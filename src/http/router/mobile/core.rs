@@ -11,6 +11,10 @@ use crate::http::handlers::{
 
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
+        .route("/v1/mobile/raw-material-split/snapshot", get(crate::http::handlers::raw_material_split::snapshot))
+        .route("/v1/mobile/raw-material-split/source", get(crate::http::handlers::raw_material_split::source))
+        .route("/v1/mobile/raw-material-split/split", axum::routing::post(crate::http::handlers::raw_material_split::split))
+        .route("/v1/mobile/raw-material-split/print", axum::routing::post(crate::http::handlers::raw_material_split::print))
         .route("/v1/mobile/werka/paddons/preview", get(crate::http::handlers::admin::werka_paddon_preview))
         .route("/v1/mobile/werka/paddons/receive", axum::routing::post(crate::http::handlers::admin::werka_paddon_receive))
         .route("/v1/mobile/preparation/snapshot", get(crate::http::handlers::preparation::snapshot))

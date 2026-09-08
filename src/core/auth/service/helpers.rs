@@ -56,7 +56,7 @@ pub(super) fn blank_default(value: &str, fallback: &str) -> String {
 pub(super) fn requires_numeric_access_code(role: &PrincipalRole) -> bool {
     matches!(
         role,
-        PrincipalRole::Aparatchi | PrincipalRole::Qolipchi | PrincipalRole::Boyoqchi | PrincipalRole::TayyorlovMasteri
+        PrincipalRole::Aparatchi | PrincipalRole::Qolipchi | PrincipalRole::Boyoqchi | PrincipalRole::TayyorlovMasteri | PrincipalRole::HomashyoRezkachi
     )
 }
 

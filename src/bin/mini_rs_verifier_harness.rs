@@ -197,6 +197,7 @@ async fn role_tokens(
         ("boyoqchi", PrincipalRole::Boyoqchi),
         ("material_taminotchi", PrincipalRole::MaterialTaminotchi),
         ("admin", PrincipalRole::Admin),
+        ("homashyo_rezkachi", PrincipalRole::HomashyoRezkachi),
     ];
     let mut tokens = BTreeMap::new();
     for (name, role) in roles {

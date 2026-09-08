@@ -15,6 +15,7 @@ pub enum Capability {
     CustomerAccess,
     BoyoqchiAccess,
     PreparationAccess,
+    RawMaterialSplitAccess,
     ReturnedPaintRequestCreate,
     ReturnedPaintRequestRead,
     PushTokenManage,

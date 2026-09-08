@@ -10,6 +10,18 @@ import verify
 
 
 class HarnessFreshnessTests(unittest.TestCase):
+    def test_raw_material_split_role_participates_in_access_matrices(self) -> None:
+        cases = verify.expanded_cases({"cases": [], "access_matrices": [{
+            "name": "split", "uri": "/split", "methods": ["GET"],
+            "allowed_roles": ["homashyo_rezkachi"], "allowed_status": 200,
+            "anonymous_status": 401, "forbidden_status": 403,
+        }]})
+        by_role = {case["request"].get("role"): case["expect"]["status"] for case in cases}
+        self.assertEqual(by_role["homashyo_rezkachi"], 200)
+        self.assertEqual(by_role["aparatchi"], 403)
+        self.assertEqual(by_role[None], 401)
+        self.assertEqual(len(cases), len(verify.ROLES) + 1)
+
     def test_workflows_are_batched_into_fresh_harnesses(self) -> None:
         contract = {
             "protocol": 1,

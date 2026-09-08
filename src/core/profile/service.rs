@@ -83,6 +83,7 @@ impl ProfileService {
             | PrincipalRole::Qolipchi
             | PrincipalRole::Boyoqchi
             | PrincipalRole::TayyorlovMasteri
+            | PrincipalRole::HomashyoRezkachi
             | PrincipalRole::MaterialTaminotchi
             | PrincipalRole::Admin => {}
         }

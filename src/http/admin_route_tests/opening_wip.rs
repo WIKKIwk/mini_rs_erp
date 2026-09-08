@@ -544,6 +544,16 @@ async fn opening_wip_from_print_source_reopens_completed_lamination() {
     let started_body = json_body(started).await;
     assert_eq!(started_status, StatusCode::OK, "{started_body:?}");
     assert_eq!(started_body["states"][order_id], "in_progress");
+    assert_eq!(started_body["work_activity"]["worker_role"], "aparatchi");
+    assert_eq!(started_body["work_activity"]["worker_ref"], started_body["session"]["worker_ref"]);
+    assert_eq!(started_body["work_activity"]["state"], "in_progress");
+    let activity_snapshot = router.clone().oneshot(request(
+        "GET", "/v1/mobile/admin/production-maps/sequence", &admin_token,
+    )).await.expect("worker activity in shared snapshot");
+    assert_eq!(activity_snapshot.status(), StatusCode::OK);
+    let activity_snapshot = json_body(activity_snapshot).await;
+    assert_eq!(activity_snapshot["queue_action_controls"][LAMINATION_ID][order_id]["work_activity"],
+        started_body["work_activity"], "mutation and cached REST snapshot must agree for every viewer");
 
     let in_use = router
         .clone()

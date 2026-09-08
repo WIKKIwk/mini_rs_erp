@@ -3,6 +3,17 @@ use crate::core::apparatus_standard::ApparatusId;
 use crate::core::auth::models::PrincipalRole;
 
 #[test]
+fn raw_material_split_role_has_only_its_independent_workspace_capability() {
+    assert_eq!(capability_codes_for_role(PrincipalRole::HomashyoRezkachi),vec!["raw_material.split"]);
+    let role=system_role_definitions().into_iter().find(|r|r.id=="homashyo_rezkachi").unwrap();
+    assert_eq!(role.base_role,Some(PrincipalRole::HomashyoRezkachi));
+    assert_eq!(role.label,"Homashyo rezkachisi");
+    for old in [PrincipalRole::Admin,PrincipalRole::Werka,PrincipalRole::Aparatchi,PrincipalRole::MaterialTaminotchi] {
+        assert!(!capability_codes_for_role(old).iter().any(|c|c=="raw_material.split"));
+    }
+}
+
+#[test]
 fn aparatchi_system_role_assigns_to_customer_principal() {
     let roles = system_role_definitions();
     let role = roles

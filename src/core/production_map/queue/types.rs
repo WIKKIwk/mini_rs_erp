@@ -119,6 +119,8 @@ pub struct ApparatusQueueWorkerInteraction {
 /// still revalidated by the queue action command before it is committed.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ApparatusQueueOrderActionControl {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub work_activity: Option<super::ApparatusQueueWorkActivity>,
     pub state: queue_state::ApparatusQueueOrderState,
     #[serde(default)]
     pub allowed_actions: Vec<queue_state::ApparatusQueueAction>,

@@ -199,8 +199,9 @@ pub async fn calculate_order_image_view_route(
         .ok_or_else(|| bad_request("invalid_input", "id kerak"))?;
     let key = principal_owner_key(&principal);
     let image = state
-        .calculate_orders
-        .get_image(&key, &image_id)
+        .order_image_cache
+        .get(state.calculate_orders.as_ref(), Some(&key), &image_id,
+            super::calculate_image::wants_thumbnail(&uri))
         .await
         .map_err(store_error)?
         .ok_or_else(|| {
@@ -209,11 +210,7 @@ pub async fn calculate_order_image_view_route(
                 Json(CalculateErrorResponse::new("not_found", "rasm topilmadi")),
             )
         })?;
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, image.image_mime)
-        .header(header::CACHE_CONTROL, "private, max-age=86400")
-        .body(Body::from(image.body))
+    super::calculate_image::image_response(image, &headers)
         .map_err(|_| store_error(CalculateOrderError::StoreFailed))
 }
 
@@ -253,6 +250,7 @@ fn principal_owner_key(principal: &Principal) -> String {
         PrincipalRole::Qolipchi => "qolipchi",
         PrincipalRole::Boyoqchi => "boyoqchi",
         PrincipalRole::TayyorlovMasteri => "tayyorlov_masteri",
+        PrincipalRole::HomashyoRezkachi => "homashyo_rezkachi",
         PrincipalRole::MaterialTaminotchi => "material_taminotchi",
         PrincipalRole::Admin => "admin",
     };

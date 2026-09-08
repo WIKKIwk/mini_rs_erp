@@ -17,6 +17,9 @@ use async_trait::async_trait;
 
 use super::fixtures::{apparatus_stage_map, canonical_apparatus_stage_map, sample_map};
 
+#[path = "service_flow_map_extension.rs"]
+mod map_extension;
+
 const FLOW_REZKA_ID: &str = "apparatus:test:flow-rezka";
 const FLOW_PECHAT_ID: &str = "apparatus:test:flow-pechat";
 const FLOW_LAMINATION_ID: &str = "apparatus:test:flow-lamination";
@@ -262,6 +265,13 @@ async fn live_snapshot_reads_active_sessions_in_one_batch() {
         .expect("queue states");
 
     let snapshot = service.live_snapshot().await.expect("live snapshot");
+    for control in snapshot.queue_action_controls[FLOW_PECHAT_ID].values() {
+        let activity = control.work_activity.as_ref().expect("durable worker activity");
+        assert_eq!(activity.worker_ref, "worker-1");
+        assert_eq!(activity.state, queue_state::ApparatusQueueOrderState::InProgress);
+        assert!(serde_json::to_value(control).unwrap()["work_activity"]["worker_ref"] == "worker-1");
+    }
+    service.live_snapshot().await.expect("cached snapshot");
     assert_eq!(
         snapshot
             .queue_action_controls

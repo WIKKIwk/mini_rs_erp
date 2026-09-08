@@ -26,6 +26,12 @@ const INVENTORY_MOVEMENT_ROLES: &[PrincipalRole] = &[
 
 pub(super) const CAPABILITY_CATALOG: &[CapabilityDefinition] = &[
     CapabilityDefinition {
+        capability: Capability::RawMaterialSplitAccess,
+        code: "raw_material.split",
+        label: "Homashyo rezkachisi ish joyi",
+        default_roles: &[PrincipalRole::HomashyoRezkachi],
+    },
+    CapabilityDefinition {
         capability: Capability::PreparationAccess,
         code: "preparation.access",
         label: "Tayyorlov masteri ish joyi",

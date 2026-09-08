@@ -1,6 +1,80 @@
 use super::*;
 
 #[tokio::test]
+async fn preparation_warehouse_assignment_is_admin_only_and_visible_to_master() {
+    let state = test_state();
+    let admin = session(&state, PrincipalRole::Admin).await;
+    let principal = Principal {
+        role: PrincipalRole::TayyorlovMasteri,
+        display_name: "Tayyorlov masteri".to_string(),
+        legal_name: String::new(),
+        ref_: "prep-warehouse".to_string(),
+        phone: String::new(),
+        avatar_url: String::new(),
+    };
+    let master = state.sessions.create(principal.clone()).await.unwrap();
+    let payload = serde_json::json!({
+        "warehouse": "Tayyorlov ombori",
+        "principal_role": "tayyorlov_masteri",
+        "principal_ref": principal.ref_,
+        "display_name": "Tayyorlov masteri",
+    })
+    .to_string();
+
+    let denied = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/warehouses/assignments",
+            &master,
+            &payload,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    assert!(
+        state
+            .warehouses
+            .warehouse_assignments("")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    let created = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/warehouses/assignments",
+            &admin,
+            &payload,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::OK);
+    let assignment = json_body(created).await;
+    assert_eq!(assignment["principal_role"], "tayyorlov_masteri");
+    assert_eq!(assignment["principal_ref"], principal.ref_);
+
+    let listed = build_router(state.clone())
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/warehouses/assignments",
+            &admin,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(listed.status(), StatusCode::OK);
+    assert_eq!(json_body(listed).await[0], assignment);
+    assert_eq!(
+        state
+            .warehouses
+            .assigned_warehouse_keys(&principal)
+            .await
+            .unwrap(),
+        vec!["Tayyorlov ombori".to_string()],
+    );
+}
+
+#[tokio::test]
 async fn preparation_system_role_create_login_list_scope_and_fail_closed() {
     let mut state = test_state();
     state.preparation = None;

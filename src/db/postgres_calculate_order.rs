@@ -5,6 +5,7 @@ use sqlx::PgPool;
 
 use crate::core::calculate_orders::{
     CalculateOrderError, CalculateOrderImage, CalculateOrderStorePort, CalculateOrderTemplate,
+    OrderImageLookup,
     hydrate_template_dimensions, hydrate_template_layers, validate_template,
 };
 use crate::core::formula::{DEFAULT_EDGE_ALLOWANCE_MM, derive_width_mm};
@@ -22,6 +23,31 @@ impl PostgresCalculateOrderStore {
 
 #[async_trait]
 impl CalculateOrderStorePort for PostgresCalculateOrderStore {
+    async fn image_id_for_order(
+        &self, lookup: &OrderImageLookup,
+    ) -> Result<Option<String>, CalculateOrderError> {
+        // Fetch only image-reference metadata, never the full template archive.
+        // order_number is a JSON field, not a relational table column.
+        let rows = sqlx::query_scalar::<_, serde_json::Value>(
+            "SELECT jsonb_build_object(
+                'source_map_id', coalesce(payload_json->>'source_map_id', ''),
+                'order_number', coalesce(payload_json->>'order_number', ''),
+                'code', code, 'item_code', item_code, 'product', product_name,
+                'width_mm', coalesce(payload_json->'width_mm', '0'::jsonb),
+                'image_id', coalesce(payload_json->>'image_id', ''))
+             FROM mini_quick_order_templates
+             WHERE btrim(payload_json->>'source_map_id') = ANY($1)
+                OR btrim(payload_json->>'order_number') = ANY($2)
+                OR btrim(code) = ANY($2)
+                OR lower(btrim(item_code)) = ANY($3)
+                OR lower(btrim(product_name)) = ANY($3)",
+        ).bind(&lookup.source_ids).bind(&lookup.order_keys).bind(&lookup.product_keys)
+            .fetch_all(&self.pool).await.map_err(|_| CalculateOrderError::StoreFailed)?;
+        let candidates = rows.into_iter().map(serde_json::from_value)
+            .collect::<Result<Vec<CalculateOrderTemplate>, _>>()
+            .map_err(|_| CalculateOrderError::StoreFailed)?;
+        Ok(lookup.resolve(&candidates))
+    }
     async fn list(
         &self,
         owner_key: &str,

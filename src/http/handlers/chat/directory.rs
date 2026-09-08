@@ -104,7 +104,7 @@ pub(super) async fn resolve_target(
                 avatar_url: detail.avatar_url,
             })
         }
-        PrincipalRole::Qolipchi | PrincipalRole::Boyoqchi | PrincipalRole::TayyorlovMasteri => {
+        PrincipalRole::Qolipchi | PrincipalRole::Boyoqchi | PrincipalRole::TayyorlovMasteri | PrincipalRole::HomashyoRezkachi => {
             let user = state
                 .system_users
                 .users_by_ids(&[ref_.to_string()])
@@ -238,7 +238,7 @@ async fn load_directory_entries(
         }
     }
 
-    for role in [PrincipalRole::Qolipchi, PrincipalRole::Boyoqchi, PrincipalRole::TayyorlovMasteri] {
+    for role in [PrincipalRole::Qolipchi, PrincipalRole::Boyoqchi, PrincipalRole::TayyorlovMasteri, PrincipalRole::HomashyoRezkachi] {
         if let Ok(users) = state.system_users.users(&role, query, 500).await {
             for user in users {
                 let detail = match state.admin.system_user_detail(user).await {

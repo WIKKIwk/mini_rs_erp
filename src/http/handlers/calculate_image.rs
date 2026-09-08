@@ -13,6 +13,33 @@ pub(crate) const ORDER_IMAGE_WEBP_QUALITY: f32 = 82.0;
 /// Rejects decompression bombs before they can exhaust memory.
 const ORDER_IMAGE_MAX_PIXELS: u64 = 50_000_000;
 
+/// Shared HTTP contract for both authorized image routes. The original URL
+/// stays full-resolution; clients explicitly opt into the versioned thumbnail.
+pub(crate) fn wants_thumbnail(uri: &axum::http::Uri) -> bool {
+    uri.query().is_some_and(|query| query.split('&').any(|value| value == "variant=thumb-v1"))
+}
+
+pub(crate) fn image_response(
+    image: crate::core::order_image_cache::CachedOrderImage,
+    headers: &axum::http::HeaderMap,
+) -> Result<axum::response::Response, axum::http::Error> {
+    use axum::http::{StatusCode, header};
+    let unchanged = headers.get(header::IF_NONE_MATCH).and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.split(',').any(|tag| {
+            let tag = tag.trim().strip_prefix("W/").unwrap_or(tag.trim());
+            tag == image.etag || tag == "*"
+        }));
+    axum::response::Response::builder()
+        .status(if unchanged { StatusCode::NOT_MODIFIED } else { StatusCode::OK })
+        .header(header::CONTENT_TYPE, image.mime)
+        .header(header::ETAG, image.etag)
+        // Revalidate mutable order links; Mobile caches known image versions.
+        // Private is intentional: never bypass ERP authorization at the CDN.
+        .header(header::CACHE_CONTROL, "private, max-age=0, must-revalidate")
+        .header(header::VARY, "Authorization")
+        .body(if unchanged { axum::body::Body::empty() } else { axum::body::Body::from(image.body) })
+}
+
 pub(crate) struct OptimizedOrderImage {
     pub body: Vec<u8>,
     pub file_name: String,

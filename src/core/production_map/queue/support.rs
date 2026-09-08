@@ -396,7 +396,20 @@ fn repair_next_apparatus_field(
     let Some(map) = maps_by_id.get(batch.order_id.trim()) else {
         return;
     };
-    if let Some(next) = chain::next_work_stage_station(map, &batch.current_apparatus) {
+    // Preserve occurrence identity when the same apparatus appears twice, or
+    // when the original source node was removed by a later map edit.
+    let source_node = batch
+        .payload_json
+        .get("stage_node_id")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    let Some(source) = chain::work_stage_for_station(map, &batch.current_apparatus, source_node)
+    else {
+        return;
+    };
+    if let Some(next) = chain::next_work_stage_for_node(map, &source.node_id)
+        .and_then(|stage| stage.apparatus_id)
+    {
         batch.next_apparatus = next;
     }
 }

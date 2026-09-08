@@ -81,6 +81,7 @@ mod print_val;
 mod production_map_basic;
 mod production_map_canonical_snapshot;
 mod production_map_save_order;
+mod order_images;
 mod production_map_validation;
 mod qolip_blocks;
 mod qolip_warehouse_ownership;

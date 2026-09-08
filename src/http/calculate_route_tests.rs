@@ -313,7 +313,7 @@ async fn calculate_order_image_upload_and_view_are_owner_scoped() {
 
     std::fs::remove_dir_all(image_dir.path()).expect("remove image dir");
 
-    let view = build_router(state)
+    let view = build_router(state.clone())
         .oneshot(
             Request::builder()
                 .method("GET")
@@ -325,6 +325,8 @@ async fn calculate_order_image_upload_and_view_are_owner_scoped() {
         .await
         .expect("view response");
     let status = view.status();
+    let etag = view.headers()[header::ETAG].to_str().unwrap().to_string();
+    assert_eq!(view.headers()[header::CACHE_CONTROL], "private, max-age=0, must-revalidate");
     let content_type = view
         .headers()
         .get(header::CONTENT_TYPE)
@@ -339,6 +341,26 @@ async fn calculate_order_image_upload_and_view_are_owner_scoped() {
     assert_eq!(content_type, "image/webp");
     assert_eq!(bytes.len() as u64, stored_size);
     assert!(bytes.starts_with(b"RIFF"), "stored webp container");
+    let revalidated = build_router(state.clone()).oneshot(
+        Request::builder().uri(image_url)
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .header(header::IF_NONE_MATCH, &etag).body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(revalidated.status(), StatusCode::NOT_MODIFIED);
+    assert!(to_bytes(revalidated.into_body(), usize::MAX).await.unwrap().is_empty());
+    let denied = build_router(state.clone()).oneshot(
+        Request::builder().uri(image_url).header(header::IF_NONE_MATCH, &etag)
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(denied.status(), StatusCode::UNAUTHORIZED, "cache hits must still authorize");
+    let thumb = build_router(state).oneshot(request("GET",
+        &format!("{image_url}&variant=thumb-v1"), &token, "")).await.unwrap();
+    assert_eq!(thumb.status(), StatusCode::OK);
+    let thumb = to_bytes(thumb.into_body(), usize::MAX).await.unwrap();
+    let source = image::load_from_memory(&bytes).unwrap();
+    let small = image::load_from_memory(&thumb).unwrap();
+    assert!(small.width() <= source.width().min(256));
+    assert!(small.height() <= source.height().min(256));
 }
 
 #[tokio::test]

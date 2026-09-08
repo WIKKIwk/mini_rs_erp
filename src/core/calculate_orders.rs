@@ -5,6 +5,9 @@ use thiserror::Error;
 use crate::core::formula::{DEFAULT_EDGE_ALLOWANCE_MM, LayerInput, derive_width_mm};
 use crate::core::quantity::deserialize_optional_integer_count;
 
+mod image_reference;
+pub use image_reference::OrderImageLookup;
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 pub struct CalculateOrderTemplate {
     #[serde(default)]
@@ -129,6 +132,14 @@ pub trait CalculateOrderStorePort: Send + Sync {
         _image_id: &str,
     ) -> Result<Option<CalculateOrderImage>, CalculateOrderError> {
         Ok(None)
+    }
+
+    /// Compatibility lookup for old orders without an image_id. Production
+    /// stores can resolve one id without fetching the entire template archive.
+    async fn image_id_for_order(
+        &self, lookup: &OrderImageLookup,
+    ) -> Result<Option<String>, CalculateOrderError> {
+        Ok(lookup.resolve(&self.list_all().await?))
     }
 }
 

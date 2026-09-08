@@ -38,6 +38,7 @@ ROLES = (
     "boyoqchi",
     "material_taminotchi",
     "admin",
+    "homashyo_rezkachi",
 )
 
 

@@ -108,6 +108,7 @@ fn role_as_str(role: &PrincipalRole) -> Result<&'static str, SystemUserError> {
         PrincipalRole::Qolipchi => Ok("qolipchi"),
         PrincipalRole::Boyoqchi => Ok("boyoqchi"),
         PrincipalRole::TayyorlovMasteri => Ok("tayyorlov_masteri"),
+        PrincipalRole::HomashyoRezkachi => Ok("homashyo_rezkachi"),
         _ => Err(SystemUserError::InvalidRole),
     }
 }
@@ -117,6 +118,7 @@ fn role_from_str(role: &str) -> Result<PrincipalRole, SystemUserError> {
         "qolipchi" => Ok(PrincipalRole::Qolipchi),
         "boyoqchi" => Ok(PrincipalRole::Boyoqchi),
         "tayyorlov_masteri" => Ok(PrincipalRole::TayyorlovMasteri),
+        "homashyo_rezkachi" => Ok(PrincipalRole::HomashyoRezkachi),
         _ => Err(SystemUserError::InvalidRole),
     }
 }

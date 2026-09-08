@@ -134,6 +134,7 @@ fn principal_role_key(role: &PrincipalRole) -> &'static str {
         PrincipalRole::Qolipchi => "qolipchi",
         PrincipalRole::Boyoqchi => "boyoqchi",
         PrincipalRole::TayyorlovMasteri => "tayyorlov_masteri",
+        PrincipalRole::HomashyoRezkachi => "homashyo_rezkachi",
         PrincipalRole::MaterialTaminotchi => "material_taminotchi",
         PrincipalRole::Admin => "admin",
     }

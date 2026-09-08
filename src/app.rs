@@ -81,6 +81,7 @@ pub struct AppState {
     pub factory_locations: FactoryLocationService,
     pub inventory_movements: InventoryMovementService,
     pub calculate_orders: Arc<dyn CalculateOrderStorePort>,
+    pub order_image_cache: Arc<crate::core::order_image_cache::OrderImageCache>,
     pub calculate_materials: Arc<dyn CalculateMaterialStorePort>,
     pub training_workspace: Option<PostgresTrainingWorkspaceStore>,
     pub chat: ChatService,
@@ -106,6 +107,8 @@ pub struct AppState {
     pub warehouse_events: WarehouseEventHub,
     pub raw_material_events: Option<PostgresRawMaterialEventStore>,
     pub preparation: Option<crate::db::postgres_preparation::PostgresPreparationStore>,
+    pub raw_material_split: Option<crate::db::postgres_raw_material_split::PostgresRawMaterialSplitStore>,
+    pub raw_material_split_printer: Arc<dyn crate::core::gscale::ports::ScaleDriverPort>,
     pub system_monitor_hub: SystemMonitorHub,
     pub backup_doctor: BackupDoctor,
     #[allow(dead_code)]
@@ -261,6 +264,7 @@ impl AppState {
         chat.start_delivery_worker(push.clone());
         let rps_batch = RpsBatchService::new(build_rps_batch_store());
         let scale_driver = build_scale_driver(&config);
+        let raw_material_split_printer = scale_driver.clone();
         let warehouse_events = WarehouseEventHub::new();
         let system_monitor_hub = SystemMonitorHub::new();
         let backup_doctor = BackupDoctor::from_env();
@@ -290,6 +294,7 @@ impl AppState {
             factory_locations,
             inventory_movements,
             calculate_orders,
+            order_image_cache: Arc::new(crate::core::order_image_cache::OrderImageCache::default()),
             calculate_materials,
             training_workspace,
             chat,
@@ -316,6 +321,9 @@ impl AppState {
             raw_material_events,
             preparation: postgres_pool::postgres_pool("preparation")
                 .map(crate::db::postgres_preparation::PostgresPreparationStore::new),
+            raw_material_split: postgres_pool::postgres_pool("raw_material_split")
+                .map(crate::db::postgres_raw_material_split::PostgresRawMaterialSplitStore::new),
+            raw_material_split_printer,
             system_monitor_hub,
             backup_doctor,
             mini_engine,

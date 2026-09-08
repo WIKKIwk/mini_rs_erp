@@ -860,7 +860,10 @@ fn has_unprocessed_previous_wips_from_batches<'a>(
                     &batch.apparatus,
                     &previous_apparatus,
                 )
-                && chain::stage_ids_match_for_map(order_map, &batch.next_apparatus, apparatus)
+                // Output made before a downstream map extension has no stored
+                // destination. It is still outstanding input from this stage.
+                && (batch.next_apparatus.trim().is_empty()
+                    || chain::stage_ids_match_for_map(order_map, &batch.next_apparatus, apparatus))
                 && (stage_node_id.trim().is_empty()
                     || progress_batch_next_stage_node_id(batch).is_empty()
                     || progress_batch_next_stage_node_id(batch) == stage_node_id.trim())
