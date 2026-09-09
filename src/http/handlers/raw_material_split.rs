@@ -100,6 +100,19 @@ pub struct PrintInput {
     pub printer: String,
     pub print_mode: String,
 }
+
+pub async fn report_issue(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<SplitIssueCreate>,
+) -> Result<Json<Value>, ApiError> {
+    let actor = authorize(&state, &headers).await?;
+    store(&state)?
+        .report_issue(&actor, input)
+        .await
+        .map(Json)
+        .map_err(error)
+}
 /// Printing reads the immutable saved output. It never submits a material receipt
 /// or modifies inventory, including after an uncertain printer response.
 pub async fn print(

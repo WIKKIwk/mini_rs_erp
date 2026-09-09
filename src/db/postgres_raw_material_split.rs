@@ -54,8 +54,15 @@ impl PostgresRawMaterialSplitStore {
         let history: Vec<Value>=sqlx::query_scalar("SELECT response_json || jsonb_build_object('created_at',created_at)
             FROM mini_raw_material_splits WHERE owner_ref=$1 ORDER BY created_at DESC,id DESC LIMIT 100")
             .bind(owner).fetch_all(&mut *tx).await?;
+        let issues: Vec<Value> = sqlx::query_scalar(
+            "SELECT response_json FROM mini_raw_material_split_issues
+            WHERE owner_ref=$1 ORDER BY created_at DESC,id DESC LIMIT 100",
+        )
+        .bind(owner)
+        .fetch_all(&mut *tx)
+        .await?;
         tx.commit().await?;
-        Ok(json!({"warehouses":warehouses,"history":history}))
+        Ok(json!({"warehouses":warehouses,"history":history,"issues":issues}))
     }
     pub async fn source(&self, owner: &str, barcode: &str) -> Result<Value, SplitError> {
         sqlx::query_scalar(&format!(
@@ -243,6 +250,81 @@ impl PostgresRawMaterialSplitStore {
                     "width_mm":entry["width_mm"],"micron":entry["micron"]}))
                 .execute(&mut *tx).await?;
         }
+        tx.commit().await?;
+        Ok(result)
+    }
+
+    pub async fn report_issue(
+        &self,
+        actor: &Principal,
+        input: SplitIssueCreate,
+    ) -> Result<Value, SplitError> {
+        if actor.role != crate::core::auth::models::PrincipalRole::HomashyoRezkachi {
+            return Err(SplitError::Forbidden);
+        }
+        let balance = input.validate()?;
+        let command = &input.command;
+        let request = json!(&input);
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SET LOCAL lock_timeout='5s'")
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
+            .bind(format!(
+                "raw-split-issue:{}:{}",
+                actor.ref_, command.request_id
+            ))
+            .execute(&mut *tx)
+            .await?;
+        if let Some(row) = sqlx::query("SELECT request_json,response_json FROM mini_raw_material_split_issues WHERE owner_ref=$1 AND request_id=$2")
+            .bind(&actor.ref_).bind(&command.request_id).fetch_optional(&mut *tx).await? {
+            if row.try_get::<Value,_>("request_json")? != request {
+                return Err(SplitError::Conflict("So‘rov raqami boshqa muammoga ishlatilgan"));
+            }
+            return Ok(row.try_get("response_json")?);
+        }
+        let source: Value = sqlx::query_scalar(&format!(
+            "SELECT {SOURCE_JSON} FROM mini_raw_material_stock s
+            WHERE lower(s.barcode)=lower($2) AND {SCOPE} AND {AVAILABLE} FOR SHARE OF s"
+        ))
+        .bind(&actor.ref_)
+        .bind(command.source_barcode.trim())
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(SplitError::Forbidden)?;
+        if source["revision"].as_str() != Some(command.expected_revision.as_str()) {
+            return Err(SplitError::Conflict(
+                "Rulon ma’lumotlari o‘zgargan. Qayta skanerlang",
+            ));
+        }
+        for (field, expected) in [
+            ("kg", &command.expected_kg),
+            ("width_mm", &command.expected_width_mm),
+            ("micron", &command.expected_micron),
+        ] {
+            if quantity(source[field].as_str().unwrap_or(""), false)? != quantity(expected, false)?
+            {
+                return Err(SplitError::Conflict(
+                    "Asl rulon ma’lumotlari mos kelmadi. Qayta skanerlang",
+                ));
+            }
+        }
+        let id = format!("raw-issue:{:032x}", rand::random::<u128>());
+        let created_at: String = sqlx::query_scalar("SELECT to_jsonb(now()) #>> '{}'")
+            .fetch_one(&mut *tx)
+            .await?;
+        let result = json!({"id":id,"request_id":command.request_id,"source":source,"outputs":command.outputs,
+            "source_kg":decimal_text(balance.source),"output_kg":split_issue_decimal(balance.output),
+            "entered_waste_kg":command.waste_kg,"waste_kg":balance.waste.map(decimal_text),
+            "difference_kg":balance.difference.map(split_issue_decimal),"kind":balance.kind,
+            "note":input.note.trim(),"actor_ref":actor.ref_,"actor_name":actor.display_name,"created_at":created_at});
+        sqlx::query("INSERT INTO mini_raw_material_split_issues
+            (id,owner_ref,request_id,parent_stock_id,source_kg,output_kg,waste_kg,difference_kg,note,request_json,response_json)
+            VALUES($1,$2,$3,$4,$5::text::numeric,$6::text::numeric,$7::text::numeric,$8::text::numeric,$9,$10,$11)")
+            .bind(&id).bind(&actor.ref_).bind(&command.request_id).bind(source["stock_id"].as_str().ok_or(SplitError::StoreFailed)?)
+            .bind(decimal_text(balance.source)).bind(split_issue_decimal(balance.output))
+            .bind(balance.waste.map(decimal_text)).bind(balance.difference.map(split_issue_decimal))
+            .bind(input.note.trim()).bind(request).bind(&result).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(result)
     }

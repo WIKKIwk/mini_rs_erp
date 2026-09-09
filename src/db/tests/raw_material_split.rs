@@ -144,6 +144,93 @@ async fn raw_material_split_postgres_atomic_exact_retry_concurrency_scope_and_li
         store.snapshot("split-2").await.unwrap()["warehouses"],
         json!([])
     );
+    // Audit reports are exact, scoped, immutable and never act as stock saves.
+    let mut issue = SplitIssueCreate {
+        command: input("parent", "split-issue-001"),
+        note: " Tarozi qayta tekshirilsin ".into(),
+    };
+    issue.command.waste_kg = "1".into();
+    for forbidden in [&other, &legacy] {
+        assert!(matches!(
+            store.report_issue(forbidden, issue.clone()).await,
+            Err(SplitError::Forbidden)
+        ));
+    }
+    let mut stale_issue = issue.clone();
+    stale_issue.command.expected_revision = "0".into();
+    assert!(matches!(
+        store.report_issue(&actor, stale_issue).await,
+        Err(SplitError::Conflict(_))
+    ));
+    let (a, b) = tokio::join!(
+        store.report_issue(&actor, issue.clone()),
+        store.report_issue(&actor, issue.clone())
+    );
+    let report = a.unwrap();
+    assert_eq!(report, b.unwrap());
+    assert_eq!(report["request_id"], "split-issue-001");
+    assert_eq!(report["difference_kg"], "1.000000");
+    assert_eq!(report["output_kg"], "98.000000");
+    assert_eq!(report["actor_ref"], "split-1");
+    assert_eq!(report["actor_name"], "Cutter");
+    assert_eq!(report["note"], "Tarozi qayta tekshirilsin");
+    let timestamp_matches: bool = sqlx::query_scalar("SELECT created_at=($1::jsonb->>'created_at')::timestamptz FROM mini_raw_material_split_issues WHERE id=$1::jsonb->>'id'")
+        .bind(&report).fetch_one(&pool).await.unwrap();
+    assert!(timestamp_matches);
+    let unchanged: (i64, i64, i64, i64, String) = sqlx::query_as(
+        "SELECT (SELECT count(*) FROM mini_raw_material_split_issues),
+        (SELECT count(*) FROM mini_raw_material_splits),
+        (SELECT count(*) FROM mini_raw_material_events),
+        (SELECT count(*) FROM mini_raw_material_stock),
+        (SELECT trim_scale(qty)::text FROM mini_raw_material_stock WHERE id='parent')",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(unchanged, (1, 0, 0, 1, "100".into()));
+    assert_eq!(
+        store.snapshot("split-1").await.unwrap()["issues"],
+        json!([report.clone()])
+    );
+    assert_eq!(
+        store.snapshot("split-2").await.unwrap()["issues"],
+        json!([])
+    );
+    assert!(
+        store
+            .saved("split-1", report["id"].as_str().unwrap())
+            .await
+            .is_err()
+    ); // Cannot print an issue.
+    let mut changed_issue = issue.clone();
+    changed_issue.note = "Different".into();
+    assert!(matches!(
+        store.report_issue(&actor, changed_issue).await,
+        Err(SplitError::Conflict(_))
+    ));
+    for sql in [
+        "UPDATE mini_raw_material_split_issues SET note='Changed'",
+        "DELETE FROM mini_raw_material_split_issues",
+    ] {
+        assert!(sqlx::query(sql).execute(&pool).await.is_err());
+    }
+    for (waste, kind, difference) in [
+        ("0", "zero_waste", json!("2.000000")),
+        ("bad", "invalid_waste", Value::Null),
+        ("2.000001", "excess_weight", json!("-0.000001")),
+    ] {
+        let mut variant = issue.clone();
+        variant.command.request_id = format!("split-issue-{kind}");
+        variant.command.waste_kg = waste.into();
+        let saved = store.report_issue(&actor, variant).await.unwrap();
+        assert_eq!(saved["kind"], kind);
+        assert_eq!(saved["difference_kg"], difference);
+        assert_eq!(saved["entered_waste_kg"], waste);
+        assert_eq!(
+            store.source("split-1", "parent").await.unwrap()["kg"],
+            "100"
+        );
+    }
     let request = input("parent", "split-001");
     let (a, b) = tokio::join!(
         store.split(&actor, request.clone()),
@@ -151,6 +238,8 @@ async fn raw_material_split_postgres_atomic_exact_retry_concurrency_scope_and_li
     );
     let result = a.unwrap();
     assert_eq!(result, b.unwrap());
+    // A corrected, valid stock operation remains independent of the audit.
+    assert_eq!(store.report_issue(&actor, issue).await.unwrap(), report);
     assert_eq!(result["output_kg"], "98.000000");
     assert_eq!(result["waste_kg"], "2.000000");
     assert_eq!(result["outputs"][0]["kg"], "39.000000");

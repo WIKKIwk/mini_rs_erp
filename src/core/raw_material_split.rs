@@ -86,6 +86,24 @@ pub struct SplitCreate {
 }
 impl SplitCreate {
     pub fn validate(&self) -> Result<(i64, i64, Vec<WeighedOutput>), SplitError> {
+        let (source, outputs) = self.validate_outputs()?;
+        if self.waste_kg.trim().is_empty() {
+            return Err(SplitError::Invalid("Atxot kg ni kiriting (0 dan katta)"));
+        }
+        let waste = quantity(&self.waste_kg, true)?;
+        if waste == 0 {
+            return Err(SplitError::Invalid("Atxot 0 dan katta bo‘lishi kerak"));
+        }
+        let total = outputs.iter().map(|o| o.kg as i128).sum::<i128>() + waste as i128;
+        if total != source as i128 {
+            return Err(SplitError::Invalid(
+                "Chiqish rulonlari + chiqindi asl rulon kg iga aniq teng bo‘lishi kerak",
+            ));
+        }
+        Ok((source, waste, outputs))
+    }
+
+    fn validate_outputs(&self) -> Result<(i64, Vec<WeighedOutput>), SplitError> {
         if !(8..=128).contains(&self.request_id.len())
             || !self
                 .request_id
@@ -103,17 +121,9 @@ impl SplitCreate {
         let source = quantity(&self.expected_kg, false)?;
         let width = quantity(&self.expected_width_mm, false)?;
         quantity(&self.expected_micron, false)?;
-        if self.waste_kg.trim().is_empty() {
-            return Err(SplitError::Invalid("Atxot kg ni kiriting (0 dan katta)"));
-        }
-        let waste = quantity(&self.waste_kg, true)?;
-        if waste == 0 {
-            return Err(SplitError::Invalid("Atxot 0 dan katta bo‘lishi kerak"));
-        }
         if self.outputs.is_empty() || self.outputs.len() > 100 {
             return Err(SplitError::Invalid("1–100 ta chiqish ruloni kiriting"));
         }
-        let mut total = waste as i128;
         let mut used_width = 0_i128;
         let mut outputs = Vec::new();
         for line in &self.outputs {
@@ -152,7 +162,6 @@ impl SplitCreate {
                     "Enlar yig‘indisi asl rulon enidan oshmasin",
                 ));
             }
-            total += kg as i128;
             outputs.push(WeighedOutput {
                 kg,
                 width_mm: mm,
@@ -165,17 +174,133 @@ impl SplitCreate {
                 "Qolgan yaroqli en uchun ham rulon kiriting",
             ));
         }
-        if total != source as i128 {
+        Ok((source, outputs))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SplitIssueCreate {
+    pub command: SplitCreate,
+    pub note: String,
+}
+
+pub struct SplitIssueBalance {
+    pub source: i64,
+    pub output: i128,
+    pub waste: Option<i64>,
+    pub difference: Option<i128>,
+    pub kind: &'static str,
+}
+
+/// Signed, exact six-place quantities, including totals of up to 100 rolls.
+pub fn split_issue_decimal(value: i128) -> String {
+    let abs = value.abs();
+    format!(
+        "{}{}.{:06}",
+        if value < 0 { "-" } else { "" },
+        abs / 1_000_000,
+        abs % 1_000_000
+    )
+}
+
+fn issue_waste(raw: &str) -> Option<i64> {
+    let normalized = raw.trim().replace(',', ".");
+    let (whole, fraction) = match normalized.split_once('.') {
+        Some((_, "")) => return None,
+        Some(parts) => parts,
+        None => (normalized.as_str(), ""),
+    };
+    if whole.is_empty()
+        || !whole.bytes().all(|c| c.is_ascii_digit())
+        || fraction.len() > 6
+        || !fraction.bytes().all(|c| c.is_ascii_digit())
+    {
+        return None;
+    }
+    let whole = whole.trim_start_matches('0');
+    quantity(
+        &format!(
+            "{}.{fraction:0<6}",
+            if whole.is_empty() { "0" } else { whole }
+        ),
+        true,
+    )
+    .ok()
+}
+
+impl SplitIssueCreate {
+    pub fn validate(&self) -> Result<SplitIssueBalance, SplitError> {
+        if self.note.trim().is_empty() || self.note.chars().count() > 1000 {
             return Err(SplitError::Invalid(
-                "Chiqish rulonlari + chiqindi asl rulon kg iga aniq teng bo‘lishi kerak",
+                "Farq sababini yozing (ko‘pi bilan 1000 belgi)",
             ));
         }
-        Ok((source, waste, outputs))
+        if self.command.waste_kg.len() > 64 {
+            return Err(SplitError::Invalid("Atxot maydoni juda uzun"));
+        }
+        let (source, outputs) = self.command.validate_outputs()?;
+        let output = outputs.iter().map(|o| o.kg as i128).sum::<i128>();
+        let waste = issue_waste(&self.command.waste_kg);
+        let difference = waste.map(|w| source as i128 - output - w as i128);
+        let kind = match (waste, difference) {
+            (None, _) => "invalid_waste",
+            (Some(0), _) => "zero_waste",
+            (_, Some(d)) if d > 0 => "missing_weight",
+            (_, Some(d)) if d < 0 => "excess_weight",
+            _ => {
+                return Err(SplitError::Invalid(
+                    "Hisob teng, qayd etiladigan vazn xatosi yo‘q",
+                ));
+            }
+        };
+        Ok(SplitIssueBalance {
+            source,
+            output,
+            waste,
+            difference,
+            kind,
+        })
     }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn raw_material_split_issues_record_exact_discrepancy_without_accepting_split() {
+        let mut issue = SplitIssueCreate {
+            command: sample(),
+            note: "Tarozi qayta tekshirilsin".into(),
+        };
+        for (waste, kind, difference) in [
+            ("1", "missing_weight", Some(1_000_000)),
+            ("0", "zero_waste", Some(2_000_000)),
+            ("00,000000", "zero_waste", Some(2_000_000)),
+            ("2.000001", "excess_weight", Some(-1)),
+            ("1,999999", "missing_weight", Some(1)),
+            ("", "invalid_waste", None),
+            ("bad", "invalid_waste", None),
+            ("-1", "invalid_waste", None),
+            ("1.", "invalid_waste", None),
+        ] {
+            issue.command.waste_kg = waste.into();
+            let balance = issue.validate().unwrap();
+            assert_eq!(balance.kind, kind, "{waste}");
+            assert_eq!(balance.difference, difference, "{waste}");
+            assert_eq!(balance.output, 98_000_000);
+            assert!(issue.command.validate().is_err());
+        }
+        assert_eq!(split_issue_decimal(-1), "-0.000001");
+        issue.command.waste_kg = "2".into();
+        assert!(issue.validate().is_err()); // No discrepancy to report.
+        assert!(issue.command.validate().is_ok());
+        issue.command.waste_kg = "0".into();
+        issue.note.clear();
+        assert!(issue.validate().is_err());
+        issue.note = "Reason".into();
+        issue.command.outputs[0].kg = "40".into();
+        assert!(issue.validate().is_err()); // Caller cannot invent net weight.
+    }
     pub fn sample() -> SplitCreate {
         SplitCreate {
             request_id: "split-test-01".into(),
