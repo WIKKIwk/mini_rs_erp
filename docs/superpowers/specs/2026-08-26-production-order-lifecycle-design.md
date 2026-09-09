@@ -41,7 +41,11 @@ Lifecycle changes are written in the same database transaction as the queue acti
 
 ## Completion rule
 
-The completion predicate reuses the existing production-map rule for required physical apparatus, including selected alternatives and excluding virtual tasks. For an order to become `production_completed`, every required apparatus must have a `completed` queue state for that order. Missing states are not complete.
+The completion predicate checks required physical **operations**, excluding virtual tasks. A concrete node identifies an operation; candidate nodes sharing an `alternative_group_id` contribute to the same operation, regardless of current apparatus assignment. Work may be split across those candidates. Repeated apparatus occurrences outside that group remain separate operations.
+
+Alternative and repeated-operation state comes from the latest persisted queue transition for that operation, in event insertion order. Only `complete -> completed` is the operation's end; `complete -> pending` is an individual roll completion with work remaining. Completion requests are not transitions. The existing queue projection remains authoritative for an unambiguous, non-alternative, single apparatus occurrence. No candidate is picked and unused candidates are not rewritten as completed.
+
+Before serving requests, active alternative-order projections with completion history are reconciled through the same transaction/locking and lifecycle rule. This repairs stale headers, is idempotent, and preserves queue events, apparatus states, and terminal lifecycle states. Normal list reads do not replay history.
 
 Any non-pending queue state means `in_progress` unless the full completion predicate is true. A map with only pending or missing queue states remains `released`.
 
@@ -68,4 +72,3 @@ Tests must prove:
 3. A repeated/idempotent write does not create a second transition.
 4. The Postgres migration backfills released, in-progress, and fully completed maps correctly.
 5. Existing completed-order audit and WIP flow tests remain green.
-

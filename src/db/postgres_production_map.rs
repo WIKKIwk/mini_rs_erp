@@ -144,6 +144,10 @@ impl PostgresProductionMapStore {
         Self { pool, #[cfg(test)] legacy_queue_reads: false }
     }
 
+    pub async fn reconcile_alternative_order_lifecycles(&self) -> Result<usize, ProductionMapError> {
+        lifecycle::reconcile_alternative_order_lifecycles(&self.pool).await
+    }
+
     #[cfg(test)]
     pub(crate) fn with_legacy_queue_reads(mut self) -> Self {
         self.legacy_queue_reads = true;

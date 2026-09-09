@@ -1,13 +1,68 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::core::production_map::{
     ProductionMapDefinition, ProductionMapError, ProductionOrderLifecycleRecord,
-    ProductionOrderLifecycleStatus, ProductionOrderOperationalStatus, QueueActionActor,
-    derive_production_order_lifecycle_with_completed_stage_nodes,
+    ProductionOrderLifecycleStatus, ProductionOrderOperationalStatus,
+    ProductionStageLifecycleEvent, QueueActionActor,
+    derive_production_order_lifecycle_with_stage_events,
     derive_production_order_operational_status,
+    queue_state::{ApparatusQueueAction, ApparatusQueueOrderState},
 };
+
+#[cfg(test)]
+#[path = "lifecycle_tests.rs"]
+mod tests;
+
+/// Repair stale active alternative-order projections with the same write-side
+/// rule used by queue actions. Run before serving requests, never on list reads.
+pub(super) async fn reconcile_alternative_order_lifecycles(
+    pool: &PgPool,
+) -> Result<usize, ProductionMapError> {
+    let order_ids = sqlx::query_scalar::<_, String>(
+        "SELECT maps.id FROM mini_production_maps maps
+         WHERE maps.lifecycle_status IN ('released', 'in_progress')
+           AND EXISTS (
+               SELECT 1 FROM jsonb_array_elements(maps.map_json->'nodes') node
+               WHERE node->>'kind' = 'apparatus'
+                 AND btrim(COALESCE(node->>'alternative_group_id', '')) <> ''
+           )
+           AND EXISTS (
+               SELECT 1 FROM mini_queue_action_events events
+               WHERE events.order_id = maps.id AND events.action = 'complete'
+                 AND events.to_state = 'completed' AND events.stage_node_id <> ''
+           )
+         ORDER BY maps.id",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    let actor = QueueActionActor {
+        role: "system".into(),
+        ref_: "stage-lifecycle-reconciliation".into(),
+        display_name: "Stage lifecycle reconciliation".into(),
+    };
+    for order_id in &order_ids {
+        let mut tx = pool
+            .begin()
+            .await
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        super::transaction_locks::lock_order_and_apparatuses_tx(&mut tx, order_id, &[]).await?;
+        refresh_production_order_lifecycle_tx(
+            &mut tx,
+            order_id,
+            &actor,
+            "",
+            "stage_completion_reconciliation",
+        )
+        .await?;
+        tx.commit()
+            .await
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+    }
+    Ok(order_ids.len())
+}
 
 pub(crate) async fn load_production_order_lifecycles(
     pool: &PgPool,
@@ -180,27 +235,31 @@ pub(crate) async fn refresh_production_order_lifecycle_tx(
             .or_default()
             .insert(order_id.to_string(), state);
     }
-    let completed_stage_node_ids = sqlx::query_scalar::<_, String>(
-        "SELECT stage_node_id
+    let stage_events = sqlx::query_as::<_, (String, String, String)>(
+        "SELECT stage_node_id, action, to_state
          FROM mini_queue_action_events
          WHERE order_id = $1
-           AND action = 'complete'
-           AND stage_node_id <> ''",
+           AND stage_node_id <> ''
+           AND COALESCE(payload_json->>'completion_request', 'false') <> 'true'
+         ORDER BY id",
     )
     .bind(order_id)
     .fetch_all(&mut **tx)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?
     .into_iter()
-    .map(|value| value.trim().to_string())
-    .filter(|value| !value.is_empty())
-    .collect::<BTreeSet<_>>();
-    let derived_status = derive_production_order_lifecycle_with_completed_stage_nodes(
-        &map,
-        &queue_states,
-        &completed_stage_node_ids,
-    )
-    .ok_or(ProductionMapError::StoreFailed)?;
+    .map(|(stage_node_id, action, to_state)| {
+        Ok(ProductionStageLifecycleEvent {
+            stage_node_id,
+            action: ApparatusQueueAction::parse(&action).ok_or(ProductionMapError::StoreFailed)?,
+            to_state: ApparatusQueueOrderState::parse(&to_state)
+                .ok_or(ProductionMapError::StoreFailed)?,
+        })
+    })
+    .collect::<Result<Vec<_>, ProductionMapError>>()?;
+    let derived_status =
+        derive_production_order_lifecycle_with_stage_events(&map, &queue_states, &stage_events)
+            .ok_or(ProductionMapError::StoreFailed)?;
     let lifecycle_changed = derived_status != current_status
         && current_status.can_automatically_transition_to(derived_status);
     let next_status = if lifecycle_changed {

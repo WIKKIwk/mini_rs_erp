@@ -831,11 +831,11 @@ fn has_unprocessed_previous_wips_from_batches<'a>(
     ignored_batch_id: &str,
     stage_node_id: &str,
 ) -> bool {
+    let previous_stage = chain::previous_work_stage_for_node(order_map, stage_node_id);
     let previous_apparatus = if stage_node_id.trim().is_empty() {
         chain::previous_work_stage_station(order_map, apparatus)
     } else {
-        chain::previous_work_stage_for_node(order_map, stage_node_id)
-            .and_then(|stage| stage.apparatus_id)
+        previous_stage.as_ref().and_then(|stage| stage.apparatus_id.clone())
     };
     let Some(previous_apparatus) = previous_apparatus else {
         return false;
@@ -855,18 +855,26 @@ fn has_unprocessed_previous_wips_from_batches<'a>(
     batches
         .into_iter()
         .filter(|batch| {
+            let source_node = batch.payload_json.get("stage_node_id")
+                .and_then(serde_json::Value::as_str).unwrap_or_default().trim();
+            let target_node = progress_batch_next_stage_node_id(batch);
             batch.order_id.trim() == order_id.trim()
-                && super::super::types::apparatus_ids_match(
-                    &batch.apparatus,
-                    &previous_apparatus,
-                )
+                // A preceding operation may have produced its output on more
+                // than one alternative. Concrete stage history outranks the
+                // currently assigned apparatus, without merging later reentry.
+                && if let Some(previous) = previous_stage.as_ref().filter(|_| !source_node.is_empty()) {
+                    chain::stage_node_ids_match_for_map(order_map, source_node, &previous.node_id)
+                } else {
+                    super::super::types::apparatus_ids_match(&batch.apparatus, &previous_apparatus)
+                }
                 // Output made before a downstream map extension has no stored
                 // destination. It is still outstanding input from this stage.
-                && (batch.next_apparatus.trim().is_empty()
-                    || chain::stage_ids_match_for_map(order_map, &batch.next_apparatus, apparatus))
-                && (stage_node_id.trim().is_empty()
-                    || progress_batch_next_stage_node_id(batch).is_empty()
-                    || progress_batch_next_stage_node_id(batch) == stage_node_id.trim())
+                && if !stage_node_id.trim().is_empty() && !target_node.is_empty() {
+                    chain::stage_node_ids_match_for_map(order_map, target_node, stage_node_id)
+                } else {
+                    batch.next_apparatus.trim().is_empty()
+                        || chain::stage_ids_match_for_map(order_map, &batch.next_apparatus, apparatus)
+                }
         })
         .any(|batch| {
             if !ignored_batch_id.trim().is_empty()
@@ -875,15 +883,16 @@ fn has_unprocessed_previous_wips_from_batches<'a>(
                 return false;
             }
             batch.wip_status == OrderProgressBatchWipStatus::Waiting
-                || (batch.wip_status == OrderProgressBatchWipStatus::InUse
-                    && super::super::types::apparatus_ids_match(
-                        &batch.used_by_apparatus,
-                        apparatus,
-                    ))
+                // Required input still being worked on at a peer alternative
+                // is not a finished operation either.
+                || batch.wip_status == OrderProgressBatchWipStatus::InUse
                 || wip_batch_was_consumed_by_producer(batch)
         })
 }
 
+#[cfg(test)]
+#[path = "execution_completion_tests.rs"]
+mod execution_completion_tests;
 
 fn schedule_reservation_status_for_action(
     action: queue_state::ApparatusQueueAction,

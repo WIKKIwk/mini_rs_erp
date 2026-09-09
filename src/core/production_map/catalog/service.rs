@@ -139,7 +139,7 @@ impl ProductionMapService {
         for (map, required_apparatus) in candidates {
             let order_id = map.id.trim().to_string();
             let mut logs = logs_by_order.remove(&order_id).unwrap_or_default();
-            let Some(closed_event) = latest_required_complete_event(&logs, &required_apparatus)
+            let Some(closed_event) = latest_required_complete_event(&map, &logs, &required_apparatus)
             else {
                 continue;
             };

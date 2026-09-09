@@ -8,7 +8,7 @@ mod policy;
 pub(crate) use super::{QolipLineage, qolip_lineage_from_batch};
 pub(crate) use closed_orders::{
     derive_production_order_lifecycle,
-    derive_production_order_lifecycle_with_completed_stage_nodes,
+    derive_production_order_lifecycle_with_stage_events, ProductionStageLifecycleEvent,
     derive_production_order_operational_status,
 };
 pub(super) use closed_orders::{

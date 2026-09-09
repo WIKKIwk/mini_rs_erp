@@ -30,6 +30,13 @@ async fn main() -> Result<(), error::AppError> {
     let postgres_pool = connect_and_migrate_required()
         .await
         .map_err(|error| error::AppError::Storage(error.to_string()))?;
+    let reconciled = mini_rs_erp::db::postgres_production_map::PostgresProductionMapStore::new(
+        postgres_pool.clone(),
+    ).reconcile_alternative_order_lifecycles().await
+        .map_err(|error| error::AppError::Storage(error.to_string()))?;
+    if reconciled > 0 {
+        tracing::info!(reconciled, "reconciled active alternative order lifecycle projections");
+    }
     let state = AppState::from_postgres(config, postgres_pool.clone());
     PostgresQolipItemCodeDoctor::from_env(postgres_pool).start_scheduler();
     let bootstrapped_apparatus = state

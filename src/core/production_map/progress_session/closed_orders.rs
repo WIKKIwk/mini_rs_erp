@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use super::super::chain;
 use super::super::queue_state;
@@ -6,6 +6,10 @@ use super::super::types::{
     ProductionMapDefinition, ProductionOrderLifecycleStatus, ProductionOrderLogEntry,
     ProductionOrderOperationalStatus,
 };
+
+#[cfg(test)]
+#[path = "stage_lifecycle_tests.rs"]
+mod stage_lifecycle_tests;
 
 pub(in crate::core::production_map) fn required_apparatus_for_closed_order(
     map: &ProductionMapDefinition,
@@ -33,51 +37,92 @@ pub(crate) fn derive_production_order_lifecycle(
     map: &ProductionMapDefinition,
     queue_states: &BTreeMap<String, BTreeMap<String, String>>,
 ) -> Option<ProductionOrderLifecycleStatus> {
-    derive_production_order_lifecycle_with_completed_stage_nodes(
-        map,
-        queue_states,
-        &BTreeSet::new(),
-    )
+    derive_production_order_lifecycle_with_stage_events(map, queue_states, &[])
 }
 
-pub(crate) fn derive_production_order_lifecycle_with_completed_stage_nodes(
+/// Queue transitions in persistence order, not just individual roll completions.
+/// `complete -> pending` means that the operation still has work remaining.
+#[derive(Debug, Clone)]
+pub(crate) struct ProductionStageLifecycleEvent {
+    pub stage_node_id: String,
+    pub action: queue_state::ApparatusQueueAction,
+    pub to_state: queue_state::ApparatusQueueOrderState,
+}
+
+pub(crate) fn derive_production_order_lifecycle_with_stage_events(
     map: &ProductionMapDefinition,
     queue_states: &BTreeMap<String, BTreeMap<String, String>>,
-    completed_stage_node_ids: &BTreeSet<String>,
+    stage_events: &[ProductionStageLifecycleEvent],
 ) -> Option<ProductionOrderLifecycleStatus> {
+    // Do not silently omit an invalid physical stage from the completion check.
+    required_apparatus_for_closed_order(map)?;
     let physical_stages = chain::linear_work_stages(map)
         .into_iter()
         .filter(|stage| stage.apparatus_id.is_some())
         .collect::<Vec<_>>();
-    let mut occurrence_counts = BTreeMap::<String, usize>::new();
+    // A group identifies one operation, irrespective of which candidates did
+    // its work. Never collapse repeated uses of an apparatus in other stages.
+    let mut stages_by_operation = BTreeMap::new();
+    let mut operation_by_node = BTreeMap::new();
+    let mut occurrence_counts = BTreeMap::<&str, usize>::new();
     for stage in &physical_stages {
+        let node = map
+            .nodes
+            .iter()
+            .find(|node| node.id.trim() == stage.node_id.trim())?;
+        let group = node.alternative_group_id.trim();
+        let operation = if group.is_empty() {
+            (false, node.id.trim())
+        } else {
+            (true, group)
+        };
+        operation_by_node.insert(node.id.trim(), operation);
+        stages_by_operation
+            .entry(operation)
+            .or_insert_with(Vec::new)
+            .push(stage);
         *occurrence_counts
-            .entry(stage.apparatus_id.clone().unwrap_or_default())
+            .entry(stage.apparatus_id.as_deref().unwrap_or_default())
             .or_default() += 1;
     }
-    let all_occurrences_completed = !physical_stages.is_empty()
-        && physical_stages.iter().all(|stage| {
-            let apparatus = stage.apparatus_id.as_deref().unwrap_or_default();
-            if occurrence_counts
-                .get(apparatus)
-                .copied()
-                .unwrap_or_default()
-                > 1
+    let mut latest_operation_events = BTreeMap::new();
+    for event in stage_events {
+        if let Some(operation) = operation_by_node.get(event.stage_node_id.trim()) {
+            latest_operation_events.insert(*operation, event);
+        }
+    }
+    let all_occurrences_completed = !stages_by_operation.is_empty()
+        && stages_by_operation.iter().all(|(operation, stages)| {
+            let apparatus = stages[0].apparatus_id.as_deref().unwrap_or_default();
+            // Preserve the authoritative queue projection for a single plain
+            // occurrence, including legacy state-only writes. It is ambiguous
+            // for alternatives and repeated apparatus, which require history.
+            if !operation.0
+                && occurrence_counts.get(apparatus) == Some(&1)
+                && queue_states
+                    .get(apparatus)
+                    .is_some_and(|orders| orders.contains_key(map.id.trim()))
             {
-                completed_stage_node_ids.contains(stage.node_id.trim())
-            } else {
-                order_completed_on_apparatus(queue_states, &map.id, apparatus)
+                return order_completed_on_apparatus(queue_states, &map.id, apparatus);
             }
+            if let Some(event) = latest_operation_events.get(operation) {
+                return event.action == queue_state::ApparatusQueueAction::Complete
+                    && event.to_state == queue_state::ApparatusQueueOrderState::Completed;
+            }
+            // Never choose a candidate or use OR over apparatus states to
+            // infer an alternative operation's end.
+            false
         });
     if all_occurrences_completed {
         return Some(ProductionOrderLifecycleStatus::ProductionCompleted);
     }
 
-    let has_started_operation = queue_states.values().any(|states| {
-        states.get(map.id.trim()).is_some_and(|state| {
-            !state.trim().is_empty() && !state.trim().eq_ignore_ascii_case("pending")
-        })
-    });
+    let has_started_operation = !latest_operation_events.is_empty()
+        || queue_states.values().any(|states| {
+            states.get(map.id.trim()).is_some_and(|state| {
+                !state.trim().is_empty() && !state.trim().eq_ignore_ascii_case("pending")
+            })
+        });
     Some(if has_started_operation {
         ProductionOrderLifecycleStatus::InProgress
     } else {
@@ -128,32 +173,53 @@ pub(crate) fn derive_production_order_operational_status(
 }
 
 pub(in crate::core::production_map) fn latest_required_complete_event<'a>(
+    map: &ProductionMapDefinition,
     logs: &'a [ProductionOrderLogEntry],
     required_apparatus: &[String],
 ) -> Option<&'a ProductionOrderLogEntry> {
+    let stage_nodes = chain::linear_work_stages(map)
+        .into_iter()
+        .filter(|stage| stage.apparatus_id.is_some())
+        .map(|stage| stage.node_id)
+        .collect::<std::collections::BTreeSet<_>>();
     logs.iter()
         .filter(|entry| {
             entry.action == queue_state::ApparatusQueueAction::Complete
                 && entry.to_state == queue_state::ApparatusQueueOrderState::Completed
-                && required_apparatus.iter().any(|apparatus| {
-                    super::super::types::apparatus_ids_match(&entry.apparatus, apparatus)
-                })
+                && if entry.stage_node_id.trim().is_empty() {
+                    required_apparatus.iter().any(|apparatus| {
+                        super::super::types::apparatus_ids_match(&entry.apparatus, apparatus)
+                    })
+                } else {
+                    stage_nodes.contains(entry.stage_node_id.trim())
+                }
         })
         .max_by_key(|entry| entry.created_at_unix)
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, BTreeSet};
+    use std::collections::BTreeMap;
 
     use super::{
-        derive_production_order_lifecycle,
-        derive_production_order_lifecycle_with_completed_stage_nodes,
+        ProductionStageLifecycleEvent, derive_production_order_lifecycle,
+        derive_production_order_lifecycle_with_stage_events,
         derive_production_order_operational_status, required_apparatus_for_closed_order,
     };
     use crate::core::production_map::{
         ProductionMapDefinition, ProductionOrderLifecycleStatus, ProductionOrderOperationalStatus,
     };
+
+    fn completed_events(nodes: &[&str]) -> Vec<ProductionStageLifecycleEvent> {
+        nodes
+            .iter()
+            .map(|node| ProductionStageLifecycleEvent {
+                stage_node_id: (*node).to_string(),
+                action: super::queue_state::ApparatusQueueAction::Complete,
+                to_state: super::queue_state::ApparatusQueueOrderState::Completed,
+            })
+            .collect()
+    }
 
     #[test]
     fn mixed_canonical_and_invalid_stage_fails_closed() {
@@ -361,21 +427,18 @@ mod tests {
         ]);
 
         assert_eq!(
-            derive_production_order_lifecycle_with_completed_stage_nodes(
+            derive_production_order_lifecycle_with_stage_events(
                 &map,
                 &queue_states,
-                &BTreeSet::from(["rezka_before_lamination".to_string()]),
+                &completed_events(&["rezka_before_lamination"]),
             ),
             Some(ProductionOrderLifecycleStatus::InProgress)
         );
         assert_eq!(
-            derive_production_order_lifecycle_with_completed_stage_nodes(
+            derive_production_order_lifecycle_with_stage_events(
                 &map,
                 &queue_states,
-                &BTreeSet::from([
-                    "rezka_before_lamination".to_string(),
-                    "rezka_final".to_string(),
-                ]),
+                &completed_events(&["rezka_before_lamination", "rezka_final"]),
             ),
             Some(ProductionOrderLifecycleStatus::ProductionCompleted)
         );

@@ -66,21 +66,26 @@ pub(crate) async fn refresh_production_order_lifecycles(
             *counts.entry(event.order_id.trim().to_string()).or_default() += 1;
             counts
         });
-    let completed_stage_nodes_by_order = store
+    let stage_events_by_order = store
         .queue_events
         .read()
         .await
         .iter()
-        .filter(|event| event.action == queue_state::ApparatusQueueAction::Complete)
+        .filter(|event| event.payload_json.get("completion_request")
+            .and_then(serde_json::Value::as_bool) != Some(true))
         .fold(
-            BTreeMap::<String, BTreeSet<String>>::new(),
+            BTreeMap::<String, Vec<super::super::ProductionStageLifecycleEvent>>::new(),
             |mut nodes, event| {
                 let stage_node_id = event.stage_node_id.trim();
                 if !stage_node_id.is_empty() {
                     nodes
                         .entry(event.order_id.trim().to_string())
                         .or_default()
-                        .insert(stage_node_id.to_string());
+                        .push(super::super::ProductionStageLifecycleEvent {
+                            stage_node_id: stage_node_id.to_string(),
+                            action: event.action,
+                            to_state: event.to_state,
+                        });
                 }
                 nodes
             },
@@ -101,15 +106,15 @@ pub(crate) async fn refresh_production_order_lifecycles(
         let Some(map) = maps.get(order_id) else {
             continue;
         };
-        let completed_stage_nodes = completed_stage_nodes_by_order
+        let stage_events = stage_events_by_order
             .get(order_id)
             .cloned()
             .unwrap_or_default();
         let Some(status) =
-            super::super::progress::derive_production_order_lifecycle_with_completed_stage_nodes(
+            super::super::progress::derive_production_order_lifecycle_with_stage_events(
                 map,
                 &queue_states,
-                &completed_stage_nodes,
+                &stage_events,
             )
         else {
             return Err(ProductionMapError::StoreFailed);
