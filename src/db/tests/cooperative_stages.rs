@@ -184,6 +184,11 @@ async fn postgres_cooperative_claim_race_late_closure_reports_and_restart() {
     .await
     .unwrap();
     let before = store.progress_batches_for_order(ORDER).await.unwrap();
+    let reported = s.live_snapshot_shared().await.unwrap();
+    assert!(!reported.visible_order_ids[Y].contains(&ORDER.into()), "local report need not wait for the open producer");
+    assert!(reported.visible_order_ids[X].contains(&ORDER.into()));
+    assert!(reported.queue_action_controls[Y][ORDER].stage_work.as_ref().unwrap().local_completed);
+    assert!(!reported.queue_action_controls[Y][ORDER].stage_work.as_ref().unwrap().completed);
     act(
         &s,
         P,
@@ -216,6 +221,13 @@ async fn postgres_cooperative_claim_race_late_closure_reports_and_restart() {
             .unwrap()
             .astatka_required
     );
+    // Read through a new service so visibility must come from persisted local
+    // report/session facts, not an in-process success flag or cached UI state.
+    let reloaded = ProductionMapService::new_for_test(Arc::new(PostgresProductionMapStore::new(pool.clone())));
+    let snapshot = reloaded.live_snapshot_shared().await.unwrap();
+    assert!(!snapshot.visible_order_ids[Y].contains(&ORDER.into()));
+    assert!(snapshot.visible_order_ids[X].contains(&ORDER.into()));
+    assert_eq!(snapshot.order_statuses[ORDER].lifecycle_status, ProductionOrderLifecycleStatus::InProgress);
     // A form prepared against an older execution snapshot must roll back its
     // report when the execution changes before the transaction acquires locks.
     let anchor = s.astatka_execution_anchor(ORDER, X).await.unwrap().unwrap();
@@ -286,6 +298,10 @@ async fn postgres_cooperative_claim_race_late_closure_reports_and_restart() {
     let restarted =
         ProductionMapService::new_for_test(Arc::new(PostgresProductionMapStore::new(pool.clone())));
     let controls = restarted.queue_action_controls().await.unwrap();
+    let snapshot = restarted.live_snapshot_shared().await.unwrap();
+    for machine in [X, Y] {
+        assert!(!snapshot.visible_order_ids[machine].contains(&ORDER.into()));
+    }
     assert_eq!(
         restarted.fully_completed_orders(10).await.unwrap()[0].closed_by_ref,
         X

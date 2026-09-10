@@ -235,12 +235,14 @@ pub(super) async fn completed_queue_orders_for_actor(
             continue;
         }
         let order_id = event.order_id.trim();
-        if order_id.is_empty() || !seen.insert(order_id.to_string()) {
+        if order_id.is_empty()
+            || !seen.insert((order_id.to_string(), event.apparatus.trim().to_string()))
+        {
             continue;
         }
         let status = match event.action {
             // A freeze is not a successful worker completion. It still
-            // suppresses older history for the same order until the order is
+            // suppresses older history for the same order and apparatus until it is
             // explicitly resumed/unfrozen.
             queue_state::ApparatusQueueAction::Freeze => continue,
             queue_state::ApparatusQueueAction::Complete

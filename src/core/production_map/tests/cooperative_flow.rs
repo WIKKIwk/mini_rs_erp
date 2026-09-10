@@ -278,3 +278,33 @@ async fn cooperative_late_source_close_prompts_only_missing_machine_report() {
         ProductionOrderLifecycleStatus::ProductionCompleted
     );
 }
+
+#[tokio::test]
+async fn cooperative_each_manual_report_hides_only_its_machine_before_shared_closure() {
+    let (service, store, last) = parallel_fixture().await;
+    action(&service, LAMINATION_1_ID, A::Complete, output(false)).await;
+    action(&service, LAMINATION_2_ID, A::Complete, output(false)).await;
+    action(&service, FLOW_PECHAT_ID, A::Complete, bosma_closing_input(&last)).await;
+    let before = service.live_snapshot_shared().await.unwrap();
+    for machine in [LAMINATION_1_ID, LAMINATION_2_ID] {
+        assert!(before.visible_order_ids[machine].contains(&"zakaz-cooperative".into()));
+    }
+    let states = store.apparatus_queue_states().await.unwrap();
+    let batches = store.progress_batches_for_order("zakaz-cooperative").await.unwrap();
+    report(&service, LAMINATION_1_ID).await;
+    let first = service.live_snapshot_shared().await.unwrap();
+    assert!(!first.visible_order_ids[LAMINATION_1_ID].contains(&"zakaz-cooperative".into()),
+        "the accepted local report must not wait for the peer's report");
+    assert!(first.visible_order_ids[LAMINATION_2_ID].contains(&"zakaz-cooperative".into()));
+    assert_eq!(first.order_statuses["zakaz-cooperative"].lifecycle_status, ProductionOrderLifecycleStatus::InProgress);
+    assert!(!first.queue_action_controls[LAMINATION_1_ID]["zakaz-cooperative"].stage_work.as_ref().unwrap().completed);
+    report(&service, LAMINATION_2_ID).await;
+    let both = service.live_snapshot_shared().await.unwrap();
+    for machine in [LAMINATION_1_ID, LAMINATION_2_ID] {
+        assert!(!both.visible_order_ids[machine].contains(&"zakaz-cooperative".into()));
+    }
+    assert_eq!(both.order_statuses["zakaz-cooperative"].lifecycle_status, ProductionOrderLifecycleStatus::ProductionCompleted);
+    assert_eq!(both.queue_action_controls[LAMINATION_1_ID]["zakaz-cooperative"].stage_work.as_ref().unwrap().last_apparatus, LAMINATION_2_ID);
+    assert_eq!(store.apparatus_queue_states().await.unwrap(), states, "visibility must not manufacture queue completions");
+    assert_eq!(store.progress_batches_for_order("zakaz-cooperative").await.unwrap(), batches, "reports must not create WIP");
+}

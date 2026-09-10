@@ -26,7 +26,7 @@ pub(super) async fn load_completed_queue_orders_for_actor(
     let limit = i64::try_from(limit.min(500)).unwrap_or(500);
     let rows = sqlx::query_as::<_, (String, String, String, i64)>(
         "WITH latest_actor_history AS (
-            SELECT DISTINCT ON (order_id)
+            SELECT DISTINCT ON (order_id, canonical_apparatus_id)
                 id,
                 order_id,
                 canonical_apparatus_id AS apparatus_id,
@@ -41,7 +41,7 @@ pub(super) async fn load_completed_queue_orders_for_actor(
             WHERE actor_ref = $1
               AND action IN ('pause', 'freeze', 'detach_roll', 'roll_complete', 'complete')
               AND COALESCE(payload_json->>'completion_request', 'false') <> 'true'
-            ORDER BY order_id, created_at DESC, id DESC
+            ORDER BY order_id, canonical_apparatus_id, created_at DESC, id DESC
          )
          SELECT order_id, apparatus_id, history_status,
                 EXTRACT(EPOCH FROM created_at)::bigint AS completed_at_unix

@@ -372,6 +372,24 @@ async fn postgres_completed_queue_history_returns_actor_stage_completion() {
     assert_eq!(history[0].status, CompletedQueueOrderStatus::Completed);
     assert_eq!(history[0].completed_at_unix, 1_787_402_980);
 
+    // A role/machine switch must retain both actual executions of one order,
+    // not replace one machine's history with the other alternative's event.
+    sqlx::query(
+        "INSERT INTO mini_queue_action_events
+            (event_id, apparatus, canonical_apparatus_id, order_id, action,
+             from_state, to_state, policy, actor_role, actor_ref,
+             actor_display_name, assigned_apparatus, payload_json, created_at)
+         VALUES ('queue-history-complete-2', $1, $1, 'zakaz-history-1',
+             'complete', 'in_progress', 'completed', 'strict_sequence',
+             'aparatchi', 'worker-history-1', 'History Worker',
+             jsonb_build_array($1::text), '{}'::jsonb, to_timestamp(1787402981))",
+    ).bind("apparatus:default:bosma_8").execute(&pool).await.unwrap();
+    let history = store.completed_queue_orders_for_actor("worker-history-1", 10).await.unwrap();
+    assert_eq!(history.len(), 2);
+    assert_eq!(history[0].apparatus, "apparatus:default:bosma_8");
+    assert_eq!(history[1].apparatus, "apparatus:default:bosma_7");
+    assert!(store.completed_queue_orders_for_actor("worker-other", 10).await.unwrap().is_empty());
+
     pool.close().await;
     let admin_pool = sqlx::PgPool::connect(&admin_url)
         .await

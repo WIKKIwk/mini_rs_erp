@@ -70,6 +70,8 @@ pub struct StageWorkStatus {
     pub stage_node_id: String,
     pub upstream_closed: bool,
     pub completed: bool,
+    #[serde(default)]
+    pub has_available_input: bool,
     pub last_apparatus: String,
     pub last_worker_ref: String,
     pub last_report_at_unix: i64,
@@ -79,6 +81,10 @@ pub struct StageWorkStatus {
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct StageWorkControl {
     pub completed: bool,
+    /// This machine has finished and reported its current occurrence, with no
+    /// unclaimed input available. Other participants need not have finished.
+    #[serde(default)]
+    pub local_completed: bool,
     pub upstream_closed: bool,
     pub astatka_available: bool,
     pub astatka_required: bool,
@@ -95,24 +101,30 @@ pub(crate) fn work_control(
     statuses: &[StageWorkStatus],
     sessions: &[OrderRunSession],
 ) -> Option<StageWorkControl> {
-    if !sessions
-        .iter()
-        .any(|s| s.payload_json.get(WORK_PROTOCOL).is_some())
-    {
-        return None;
-    }
     let status = statuses
         .iter()
         .find(|s| chain::stage_node_ids_match_for_map(map, &s.stage_node_id, node))?;
+    // Historical executions also prove shared closure. Keep their accounting
+    // flow unchanged while exposing a closed operation to unused candidates.
+    if !sessions
+        .iter()
+        .any(|s| s.payload_json.get(WORK_PROTOCOL).is_some())
+        && !status.completed
+    {
+        return None;
+    }
     let latest = sessions
         .iter()
         .filter(|s| {
-            s.apparatus == apparatus
+            s.order_id == map.id && s.apparatus == apparatus
                 && chain::stage_node_ids_match_for_map(map, &s.stage_node_id, node)
         })
         .max_by(|a, b| (a.started_at_unix, &a.session_id).cmp(&(b.started_at_unix, &b.session_id)));
     Some(StageWorkControl {
         completed: status.completed,
+        local_completed: !status.has_available_input && latest.is_some_and(|s| {
+            s.status == OrderRunStatus::Completed && work_report(s).is_some()
+        }),
         upstream_closed: status.upstream_closed,
         astatka_available: latest.is_some_and(|s| s.status == OrderRunStatus::Completed),
         astatka_required: status
@@ -352,6 +364,7 @@ pub(crate) fn stage_work_statuses(
             key.clone(),
             StageWorkStatus {
                 stage_node_id: candidates[0].node_id.clone(),
+                has_available_input: inputs_here.iter().any(|i| i.available),
                 last_apparatus: last
                     .as_ref()
                     .map(|(s, _)| s.apparatus.clone())

@@ -352,7 +352,7 @@ impl ProductionMapService {
         )?;
         let canonical_apparatuses = self.snapshot_canonical_apparatuses().await;
 
-        let visible_order_ids = visible_order_ids_by_apparatus(&raw_maps);
+        let mut visible_order_ids = visible_order_ids_by_apparatus(&raw_maps);
         let frozen_order_ids = order_controls
             .iter()
             .filter_map(|(id, control)| {
@@ -395,6 +395,34 @@ impl ProductionMapService {
             stage_states_for_snapshot(&raw_maps, &queue_action_controls, &queue_logs_by_order);
         let order_statuses =
             Self::order_status_details_from_lifecycles(&order_ids, &lifecycles, &order_controls)?;
+        for (apparatus, orders) in &mut visible_order_ids {
+            orders.retain(|order_id| {
+                if order_statuses.get(order_id).is_some_and(|detail| matches!(
+                    detail.lifecycle_status,
+                    ProductionOrderLifecycleStatus::ProductionCompleted
+                        | ProductionOrderLifecycleStatus::Closed
+                        | ProductionOrderLifecycleStatus::Cancelled
+                )) {
+                    return false;
+                }
+                let Some(map) = raw_maps.iter().find(|map| map.id == *order_id) else {
+                    return false;
+                };
+                let occurrences = chain::linear_work_stages(map).into_iter()
+                    .filter(|stage| stage.apparatus_id.as_deref() == Some(apparatus.as_str()))
+                    .collect::<Vec<_>>();
+                let own_control = queue_action_controls.get(apparatus)
+                    .and_then(|controls| controls.get(order_id));
+                occurrences.is_empty() || !occurrences.iter().all(|stage| {
+                    stage_states.get(order_id).and_then(|states| states.get(&stage.node_id))
+                        .is_some_and(|state| state == "completed")
+                        || own_control.is_some_and(|control| {
+                            chain::stage_node_ids_match_for_map(map, &stage.node_id, &control.stage_node_id)
+                                && control.stage_work.as_ref().is_some_and(|work| work.local_completed)
+                        })
+                })
+            });
+        }
         let frozen_orders_by_apparatus =
             Self::frozen_orders_by_apparatus(&order_controls, &queue_logs_by_order);
         let maps = compile_saved_maps(raw_maps);

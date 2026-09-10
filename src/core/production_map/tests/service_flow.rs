@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 #[path = "cooperative_flow.rs"]
 mod cooperative_flow;
+#[path = "cooperative_visibility.rs"]
+mod cooperative_visibility;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -4875,7 +4877,8 @@ async fn downstream_complete_keeps_order_open_until_all_input_wips_processed() {
         .completed_queue_orders_for_actor(&actor.ref_, 10)
         .await
         .expect("partial completed orders");
-    assert_eq!(partial_history.len(), 1);
+    assert_eq!(partial_history.len(), 2, "retain this actor's source and downstream histories separately");
+    assert_eq!(partial_history[1].apparatus, first);
     assert_eq!(partial_history[0].order_id, order_id);
     assert_eq!(partial_history[0].apparatus, second);
     assert_eq!(

@@ -605,6 +605,15 @@ impl ProductionMapService {
                     input
                         .opening_wip_stage_node_id
                         .clone()
+                        .or_else(|| {
+                            // Once local execution is closed there is no active
+                            // session. Keep its occurrence for report/visibility
+                            // instead of falling back to this machine's first use.
+                            active_sessions_by_order.get(order_id)?.iter()
+                                .filter(|s| s.apparatus == storage_key && !s.stage_node_id.trim().is_empty())
+                                .max_by(|a, b| (a.started_at_unix, &a.session_id).cmp(&(b.started_at_unix, &b.session_id)))
+                                .map(|s| s.stage_node_id.clone())
+                        })
                         .unwrap_or_default()
                 };
                 // A map edited after its sequence was saved may no longer resolve

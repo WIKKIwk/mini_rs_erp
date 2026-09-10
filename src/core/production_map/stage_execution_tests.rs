@@ -179,6 +179,42 @@ fn new_work_invalidates_older_report_but_does_not_erase_it() {
         vec!["apparatus:test:a"]
     );
     assert!(work_report(&s[1]).is_some());
+    assert!(!work_control(&map(), "apparatus:test:a", "a", &result, &s).unwrap().local_completed);
+}
+
+#[test]
+fn local_completion_ignores_active_peer_and_open_upstream_but_not_available_input() {
+    for source in [OrderRunStatus::RollDetached, OrderRunStatus::Completed] {
+        for peer in [OrderRunStatus::Active, OrderRunStatus::Completed] {
+            for available in [false, true] {
+                let s = vec![session("source", source, Some(1)),
+                    session("a", OrderRunStatus::Completed, Some(2)), session("b", peer, None)];
+                let result = statuses(&s, &[StageWorkInput {
+                    target_node: "b".into(), outstanding: true, available,
+                    ..Default::default()
+                }]);
+                let own = work_control(&map(), "apparatus:test:a", "a", &result, &s).unwrap();
+                assert_eq!(own.local_completed, !available);
+                assert!(!own.completed, "shared completion still waits for the peer and all input");
+                assert!(!work_control(&map(), "apparatus:test:b", "b", &result, &s).unwrap().local_completed);
+            }
+        }
+    }
+}
+
+#[test]
+fn local_completion_requires_own_finished_execution_and_its_accepted_report() {
+    let mut s = vec![session("source", OrderRunStatus::Completed, Some(1)),
+        session("a", OrderRunStatus::Active, None), session("b", OrderRunStatus::Completed, Some(2))];
+    for state in [OrderRunStatus::Active, OrderRunStatus::Paused, OrderRunStatus::RollDetached, OrderRunStatus::Completed] {
+        s[1].status = state;
+        let result = statuses(&s, &[]);
+        assert!(!work_control(&map(), "apparatus:test:a", "a", &result, &s).unwrap().local_completed);
+    }
+    s.remove(1);
+    let result = statuses(&s, &[]);
+    assert!(!work_control(&map(), "apparatus:test:a", "a", &result, &s).unwrap().local_completed,
+        "an unused candidate must not inherit a peer's report");
 }
 
 #[test]
