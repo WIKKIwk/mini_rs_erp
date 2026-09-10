@@ -26,7 +26,11 @@
   fictitious success is shown. Server 401/403/409/500 are not transport retries.
 - Failures suspend the native route for 15 seconds; subsequent operations
   use HTTPS. New probes can restore it. Uploads above 1 MiB and Flutter Web
-  retain HTTP. Manual server overrides retain their existing transport.
+  retain HTTP. Saved/manual HTTPS endpoints are eligible, but only using
+  their own origin's authenticated discovery. Plain HTTP overrides retain HTTP.
+- Background app health checks use the same native route and HTTPS fallback.
+  Live subscriptions give discovery up to 3 seconds before choosing WSS;
+  worker mutations do not wait for this cold-start discovery.
 - The sidecar keeps a stable 32-byte private key (0600 on Unix), publishes
   updated tickets atomically and starts without waiting for a relay. A
   previously paired phone can therefore reconnect locally without WAN.
@@ -45,6 +49,11 @@ The existing domain launcher supports opt-in:
 ```sh
 IROH_ENABLED=1 bash tools/runtime/up_domain.sh <existing-hostname>
 ```
+
+Successful explicit activation creates `iroh.enabled` in the domain state
+directory. Normal subsequent launcher runs retain that opt-in. An explicit
+`IROH_ENABLED=0` skips sidecar activation for that invocation; it does not stop
+an already-running sidecar or erase the persisted opt-in.
 
 It starts the separate sidecar and supplies the following settings to a newly
 started ERP process:
@@ -80,6 +89,9 @@ is the definitive rollback for those clients.
 - Focused Flutter transport tests cover pre-send vs unknown-outcome failures,
   timeouts, concurrent warm-up, stale probes, origin isolation, false LAN
   adverts, cached offline LAN recovery, HTTP framing and server capability gates.
+  The activation follow-up passed 73 transport/auth/endpoint tests and 8 worker
+  start/resume tests; focused Dart analysis reported no issues. Saved HTTPS
+  overrides are explicitly covered by a regression test.
 - Rust tests exercise a real relay-disabled QUIC connection across multiple
   requests to an isolated mock HTTP server, preserving Authorization and 401.
   Key persistence, corrupt-key refusal and request-smuggling rejection are covered.
@@ -87,11 +99,21 @@ is the definitive rollback for those clients.
   times with HTTP 200; Bonjour advertised the expected service. This is
   same-machine smoke evidence, not a physical-phone/Wi-Fi latency benchmark.
 - Swift 5 type-check of the Iroh bridge passed against resolved IrohLib 1.0.0.
-- Full app builds currently stop at unrelated worktree issues:
-  iOS `Module 'audio_session' not found`; Android unresolved `packQrCellWidth`
-  in `BluetoothPrinterChannel.kt`. Those files were not repaired by this change.
-- Before device rollout, require clean full native builds and physical iOS
+- A fresh signed iOS release (1.0.17, build 47) built successfully using the
+  supported install script and was installed on the paired iPhone 11 Pro.
+  Device inventory confirmed build 47 for
+  `com.example.accordMobileV2.mirsaid.uzkingshark`; the other installed Accord
+  bundles were preserved. The earlier generated `audio_session` package issue
+  no longer blocked this build. Physical-phone direct-path/latency evidence
+  is still pending; installation alone does not prove LAN use.
+- Android's unrelated unresolved `packQrCellWidth` in
+  `BluetoothPrinterChannel.kt` was not changed or rebuilt in this activation.
+- Before broader rollout, require full native builds and physical iOS
   and Android checks: LAN, WAN-only, LAN with WAN disconnected, permission
   denial, guest network, ERP restart and reply loss during a worker action.
   Do not report an action as completed until the ERP confirms it.
-- The running ERP/tunnel and installed phones were not replaced or restarted.
+- Activated the sidecar for `mini-rs-erp-test.wspace.sbs`, then restarted only
+  the existing ERP release process with its discovery environment. The HTTPS
+  tunnel process was preserved. Local and public `/healthz` returned 200;
+  both ticket endpoints returned `auto_connect: true` and
+  `supports_connection_reuse: true`. No database migrations were added/run.

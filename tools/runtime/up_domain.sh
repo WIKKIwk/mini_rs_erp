@@ -240,7 +240,9 @@ ensure_backend() {
 # Additive accelerator only. Never stop/rebind a healthy ERP or its HTTPS
 # tunnel to enable Iroh. The server gates discovery on its next normal start.
 ensure_iroh() {
-	[ "${IROH_ENABLED:-0}" = "1" ] || return 0
+	local enabled="${IROH_ENABLED:-}"
+	if [ -z "$enabled" ] && [ -f "$STATE_DIR/iroh.enabled" ]; then enabled=1; fi
+	[ "$enabled" = "1" ] || return 0
 	local binary="$REPO_ROOT/tools/iroh_erp_agent/target/release/iroh_erp_agent"
 	local pid_file="$STATE_DIR/iroh.pid"
 	local log_file="$STATE_DIR/iroh.log"
@@ -265,6 +267,8 @@ ensure_iroh() {
 	for _ in $(seq 1 25); do
 		kill -0 "$pid" 2>/dev/null || return 1
 		if [ -s "$IROH_TICKET_FILE" ]; then
+			# Remember this domain's explicit opt-in across normal restarts.
+			printf '1\n' >"$STATE_DIR/iroh.enabled"
 			echo "Iroh sidecar running; HTTPS unchanged. A running ERP needs its next normal restart to inherit discovery settings."
 			return 0
 		fi
