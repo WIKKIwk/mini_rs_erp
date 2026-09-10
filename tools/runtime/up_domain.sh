@@ -237,6 +237,42 @@ ensure_backend() {
 	fi
 }
 
+# Additive accelerator only. Never stop/rebind a healthy ERP or its HTTPS
+# tunnel to enable Iroh. The server gates discovery on its next normal start.
+ensure_iroh() {
+	[ "${IROH_ENABLED:-0}" = "1" ] || return 0
+	local binary="$REPO_ROOT/tools/iroh_erp_agent/target/release/iroh_erp_agent"
+	local pid_file="$STATE_DIR/iroh.pid"
+	local log_file="$STATE_DIR/iroh.log"
+	export IROH_TICKET_FILE="$STATE_DIR/iroh.ticket"
+	export IROH_SECRET_KEY_FILE="$STATE_DIR/iroh.key"
+	export IROH_SUPPORTS_CONNECTION_REUSE=1
+	export IROH_AUTO_CONNECT=1
+	if [ ! -x "$binary" ]; then
+		(cd "$REPO_ROOT" && cargo build --release --locked --manifest-path tools/iroh_erp_agent/Cargo.toml) || return 1
+	fi
+	local pid=""
+	if [ -f "$pid_file" ]; then pid="$(cat "$pid_file")"; fi
+	if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+		if ! ps -p "$pid" -o command= | grep -Fq "$binary agent"; then
+			echo "Iroh pid belongs to another process; refusing to touch it" >&2
+			return 1
+		fi
+	else
+		spawn_detached "$pid_file" "$log_file" "$REPO_ROOT" "$binary" agent "$MOBILE_API_ADDR" || return 1
+		pid="$(cat "$pid_file")"
+	fi
+	for _ in $(seq 1 25); do
+		kill -0 "$pid" 2>/dev/null || return 1
+		if [ -s "$IROH_TICKET_FILE" ]; then
+			echo "Iroh sidecar running; HTTPS unchanged. A running ERP needs its next normal restart to inherit discovery settings."
+			return 0
+		fi
+		sleep 0.2
+	done
+	return 1
+}
+
 find_tunnel_id() {
 	cloudflared tunnel list 2>/dev/null | awk -v name="$TUNNEL_NAME" '$2 == name {print $1; exit}'
 }
@@ -296,6 +332,10 @@ EOF
 
 require_cmd curl
 configure_chat_media_processor
+if ! ensure_iroh; then
+	echo "Iroh unavailable; continuing with existing HTTPS transport (see $STATE_DIR/iroh.log)" >&2
+	unset IROH_TICKET_FILE IROH_AUTO_CONNECT IROH_SUPPORTS_CONNECTION_REUSE
+fi
 ensure_backend
 ensure_tunnel
 

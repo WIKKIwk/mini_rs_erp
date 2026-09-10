@@ -13,6 +13,7 @@ pub struct IrohTicketResponse {
     pub ticket: String,
     pub source: &'static str,
     pub supports_connection_reuse: bool,
+    pub auto_connect: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -27,6 +28,11 @@ pub async fn ticket()
             ticket,
             source,
             supports_connection_reuse: supports_connection_reuse(),
+            // Explicit server rollout gate; old installations remain HTTPS.
+            auto_connect: std::env::var("IROH_AUTO_CONNECT")
+                .ok()
+                .map(|value| is_truthy(&value))
+                .unwrap_or(false),
         })),
         None => Err((
             StatusCode::SERVICE_UNAVAILABLE,
