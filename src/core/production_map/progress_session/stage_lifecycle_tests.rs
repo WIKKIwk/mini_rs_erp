@@ -214,7 +214,7 @@ fn closed_history_uses_executed_stage_even_when_assignment_has_changed() {
     }))
     .unwrap();
     let required = required_apparatus_for_closed_order(&map).unwrap();
-    assert!(!required.contains(&log.apparatus));
+    assert!(required.contains(&log.apparatus), "historical assignment no longer hides candidates");
     let logs = vec![log];
     assert_eq!(
         latest_required_complete_event(&map, &logs, &required).map(|entry| entry.event_id.as_str()),

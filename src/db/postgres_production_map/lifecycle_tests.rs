@@ -26,10 +26,17 @@ async fn isolated_pool() -> PgPool {
             id BIGSERIAL PRIMARY KEY, order_id TEXT, stage_node_id TEXT, action TEXT, to_state TEXT,
             payload_json JSONB DEFAULT '{}'::jsonb
         );
-        CREATE TEMP TABLE mini_order_run_sessions (order_id TEXT, status TEXT);
+        CREATE TEMP TABLE mini_order_run_sessions (order_id TEXT, status TEXT,
+            session_id TEXT, canonical_apparatus_id TEXT, stage_node_id TEXT,
+            worker_role TEXT, worker_ref TEXT, worker_display_name TEXT,
+            started_at TIMESTAMPTZ, updated_at TIMESTAMPTZ, payload_json JSONB);
         CREATE TEMP TABLE mini_progress_batches (
-            order_id TEXT, wip_status TEXT, canonical_next_apparatus_id TEXT, processed_by_apparatus TEXT
+            order_id TEXT, wip_status TEXT, canonical_next_apparatus_id TEXT, processed_by_apparatus TEXT,
+            canonical_apparatus_id TEXT, payload_json JSONB
         );
+        CREATE TEMP TABLE mini_opening_wip_intakes (intake_id TEXT, order_id TEXT, status TEXT,
+            source_apparatus TEXT, resume_apparatus TEXT, resume_stage_node_id TEXT);
+        CREATE TEMP TABLE mini_opening_wip_batches (intake_id TEXT, wip_status TEXT);
         CREATE TEMP TABLE mini_production_order_lifecycle_events (
             event_id TEXT UNIQUE, order_id TEXT, from_status TEXT, to_status TEXT,
             completion_outcome TEXT, actor_role TEXT, actor_ref TEXT, actor_display_name TEXT,

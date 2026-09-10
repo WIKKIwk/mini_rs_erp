@@ -63,6 +63,8 @@ mod service_transfer;
 #[path = "wip/service.rs"]
 mod service_wip;
 mod store_port;
+pub(crate) mod stage_execution;
+pub use stage_execution::{StageAstatkaReport, StageWorkControl, StageWorkReport, StageWorkStatus};
 mod types;
 
 #[cfg(test)]

@@ -1,4 +1,6 @@
 use std::collections::BTreeMap;
+#[path = "cooperative_flow.rs"]
+mod cooperative_flow;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -150,6 +152,11 @@ impl ProductionMapStorePort for SnapshotSessionReadProbeStore {
         self.inner
             .active_order_run_sessions_for_orders(order_ids)
             .await
+    }
+
+    async fn order_run_sessions_for_orders(&self, order_ids: &[String]) -> Result<BTreeMap<String, Vec<OrderRunSession>>, ProductionMapError> {
+        self.batch_session_reads.fetch_add(1, Ordering::Relaxed);
+        self.inner.order_run_sessions_for_orders(order_ids).await
     }
 
     async fn progress_batches_for_orders(
@@ -4542,7 +4549,7 @@ async fn wip_listing_backfills_missing_current_and_next_apparatus_from_map() {
 }
 
 #[tokio::test]
-async fn unassigned_alternative_stage_is_claimed_by_first_started_candidate() {
+async fn alternative_start_claims_only_the_scanned_wip_and_preserves_peer_visibility() {
     let service = default_service_with_store(Arc::new(MemoryProductionMapStore::new())).await;
     let actor = QueueActionActor {
         role: "aparatchi".to_string(),
@@ -4648,17 +4655,17 @@ async fn unassigned_alternative_stage_is_claimed_by_first_started_candidate() {
         .filter(|node| node.alternative_group_id == "alt_laminatsiya")
         .map(|node| node.alternative_assigned_title.as_str())
         .collect::<Vec<_>>();
-    assert_eq!(assigned, vec!["Laminatsiya 2", "Laminatsiya 2"]);
+    assert_eq!(assigned, vec!["", ""]);
     let visible = service
         .visible_order_ids_by_apparatus()
         .await
         .expect("visible after claim");
-    assert_ne!(visible.get(second), Some(&vec![order_id.to_string()]));
+    assert_eq!(visible.get(second), Some(&vec![order_id.to_string()]));
     assert_eq!(visible.get(third), Some(&vec![order_id.to_string()]));
 }
 
 #[tokio::test]
-async fn assigned_alternative_stage_rejects_unselected_candidate_even_with_stale_sequence() {
+async fn historical_alternative_assignment_does_not_block_another_candidate() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
     let service = default_service_with_store(store.clone()).await;
     let actor = QueueActionActor {
@@ -4700,7 +4707,8 @@ async fn assigned_alternative_stage_rejects_unselected_candidate_even_with_stale
         )
         .await;
 
-    assert_eq!(result, Err(ProductionMapError::QueueActionNotAllowed));
+    let result = result.expect("another candidate may claim an available roll");
+    assert_eq!(result.session.unwrap().apparatus, unselected);
 }
 
 #[tokio::test]
@@ -4815,6 +4823,13 @@ async fn downstream_complete_keeps_order_open_until_all_input_wips_processed() {
         )
         .await
         .expect("first stage completed after producing all wips");
+    // The fixture must close the execution as well as the queue projection.
+    // A stale completed queue must never hide a genuinely running producer.
+    let mut source_session = store.order_run_sessions_for_order(order_id).await.unwrap().into_iter()
+        .find(|s| s.apparatus == first).unwrap();
+    source_session.status = OrderRunStatus::Completed;
+    crate::core::production_map::stage_execution::stamp_work_report(&mut source_session, "fixture-source-close", 1, &actor, 1);
+    store.put_order_run_session(source_session).await.unwrap();
 
     service
         .apply_apparatus_queue_action_with_progress(

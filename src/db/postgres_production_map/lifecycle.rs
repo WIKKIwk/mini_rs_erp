@@ -260,6 +260,11 @@ pub(crate) async fn refresh_production_order_lifecycle_tx(
     let derived_status =
         derive_production_order_lifecycle_with_stage_events(&map, &queue_states, &stage_events)
             .ok_or(ProductionMapError::StoreFailed)?;
+    let sessions = super::stage_execution::sessions_tx(tx, order_id).await?;
+    let inputs = super::stage_execution::inputs_tx(tx, order_id).await?;
+    let work_stages = crate::core::production_map::stage_execution::stage_work_statuses(
+        &map, &sessions, &inputs, &queue_states, &stage_events);
+    let derived_status = crate::core::production_map::stage_execution::work_lifecycle(derived_status, &work_stages, &sessions);
     let lifecycle_changed = derived_status != current_status
         && current_status.can_automatically_transition_to(derived_status);
     let next_status = if lifecycle_changed {

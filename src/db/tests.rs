@@ -9,6 +9,7 @@ mod opening_wip;
 mod production_map;
 mod rezka_output_paddon;
 mod bosma_astatka;
+mod cooperative_stages;
 mod qolip_checkout;
 mod rezka_lineage_cutover;
 mod training_workspace;

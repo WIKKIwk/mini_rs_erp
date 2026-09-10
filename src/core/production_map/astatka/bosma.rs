@@ -23,7 +23,7 @@ pub struct BosmaAstatkaReport {
 }
 
 impl ProductionMapService {
-    /// Audit only: never creates production output or changes queue/session/WIP state.
+    /// No output or WIP mutation; reports for finished executions may close their stage.
     pub async fn record_bosma_astatka(
         &self,
         mut report: BosmaAstatkaReport,
@@ -52,6 +52,7 @@ impl ProductionMapService {
             .await?
             .ok_or(ProductionMapError::MapNotFound)?;
         let _guard = self.queue_action_guard().await;
+        let anchor = self.astatka_execution_anchor(&report.order_id, &report.apparatus).await?;
         if self
             .store
             .order_control_states()
@@ -62,7 +63,7 @@ impl ProductionMapService {
             return Err(ProductionMapError::OrderFrozen);
         }
         let states = self.store.apparatus_queue_states().await?;
-        if !states
+        if anchor.as_ref().is_none_or(|s| s.status != OrderRunStatus::Completed) && !states
             .get(&report.apparatus)
             .and_then(|orders| orders.get(&report.order_id))
             .is_some_and(|state| matches!(state.as_str(), "in_progress" | "paused" | "completed"))
@@ -99,7 +100,11 @@ impl ProductionMapService {
         report.report_id = format!("bosma-astatka:{entropy}:{}", report.order_id);
         report.returned_paint.id = report.report_id.clone();
         report.description = report.description.trim().to_string();
-        self.store.put_bosma_astatka_report(report.clone()).await?;
+        let actor = QueueActionActor {
+            role: serde_json::to_value(report.returned_paint.sender_role).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default(), ref_: report.returned_paint.sender_ref.clone(),
+            display_name: report.returned_paint.sender_display_name.clone(),
+        };
+        self.store.commit_stage_astatka_report(StageAstatkaReport::Bosma(report.clone()), anchor, actor).await?;
         self.notify_live();
         Ok(report)
     }

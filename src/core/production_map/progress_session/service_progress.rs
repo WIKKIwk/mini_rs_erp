@@ -314,12 +314,12 @@ impl ProductionMapService {
             .apparatus_id
             .ok_or(ProductionMapError::ProgressBatchNotAccepted)?;
         if batch.order_id.trim() != order_id
-            || !super::types::apparatus_ids_match(&batch.apparatus, &previous_apparatus)
+            || !chain::stage_ids_match_for_map(order_map, &batch.apparatus, &previous_apparatus)
             || !batch.action.records_progress_output()
             || (!batch.next_apparatus.trim().is_empty()
                 && !chain::stage_ids_match_for_map(order_map, &batch.next_apparatus, apparatus))
             || (!preferred_stage_node_id.is_empty()
-                && preferred_stage_node_id.trim() != stage.node_id.trim())
+                && !chain::stage_node_ids_match_for_map(order_map, &preferred_stage_node_id, &stage.node_id))
             || batch.wip_status != OrderProgressBatchWipStatus::Waiting
         {
             return Err(ProductionMapError::ProgressBatchNotAccepted);
@@ -428,14 +428,14 @@ impl ProductionMapService {
                 && (batch.used_by_session_id.trim().is_empty()
                     || batch.used_by_session_id.trim() == session_id.trim()));
         if batch.order_id.trim() != order_id
-            || !super::types::apparatus_ids_match(&batch.apparatus, &previous_apparatus)
+            || !chain::stage_ids_match_for_map(order_map, &batch.apparatus, &previous_apparatus)
             || !batch.action.records_progress_output()
             || !source_wip_is_usable
             || (!batch.next_apparatus.trim().is_empty()
                 && !chain::stage_ids_match_for_map(order_map, &batch.next_apparatus, apparatus))
             || (!json_string_field(&batch.payload_json, "next_stage_node_id").is_empty()
-                && json_string_field(&batch.payload_json, "next_stage_node_id")
-                    != stage.node_id.trim())
+                && !chain::stage_node_ids_match_for_map(order_map,
+                    &json_string_field(&batch.payload_json, "next_stage_node_id"), &stage.node_id))
         {
             return Err(ProductionMapError::ProgressBatchNotAccepted);
         }
@@ -520,7 +520,7 @@ impl ProductionMapService {
         let Some(parent_batch) = batches.into_iter().find(|batch| {
             batch.batch_id.trim() == output_batch.parent_batch_id.trim()
                 && batch.order_id.trim() == order_id.trim()
-                && super::types::apparatus_ids_match(&batch.apparatus, &previous_apparatus)
+                && chain::stage_ids_match_for_map(order_map, &batch.apparatus, &previous_apparatus)
                 && (batch.next_apparatus.trim().is_empty()
                     || chain::stage_ids_match_for_map(order_map, &batch.next_apparatus, apparatus))
         }) else {
@@ -878,7 +878,7 @@ impl ProductionMapService {
                 };
                 previous_apparatus.as_ref().is_some_and(|previous| {
                     batch.order_id.trim() == order_id.trim()
-                        && super::types::apparatus_ids_match(&batch.apparatus, previous)
+                        && chain::stage_ids_match_for_map(order_map, &batch.apparatus, previous)
                         && (batch.next_apparatus.trim().is_empty()
                             || chain::stage_ids_match_for_map(
                                 order_map,
@@ -886,8 +886,8 @@ impl ProductionMapService {
                                 apparatus,
                             ))
                         && (json_string_field(&batch.payload_json, "next_stage_node_id").is_empty()
-                            || json_string_field(&batch.payload_json, "next_stage_node_id")
-                                == stage.node_id.trim())
+                            || chain::stage_node_ids_match_for_map(order_map,
+                                &json_string_field(&batch.payload_json, "next_stage_node_id"), &stage.node_id))
                         && batch.wip_status == OrderProgressBatchWipStatus::InUse
                         && super::types::apparatus_ids_match(used_by_apparatus, apparatus)
                         && (batch.used_by_session_id.trim().is_empty()
@@ -2222,13 +2222,13 @@ impl ProductionMapService {
             .and_then(|stage| stage.apparatus_id)
             .ok_or(ProductionMapError::MergeInputNotAccepted)?;
         if batch.order_id.trim() != order_id.trim()
-            || !super::types::apparatus_ids_match(&batch.apparatus, &previous_apparatus)
+            || !chain::stage_ids_match_for_map(order_map, &batch.apparatus, &previous_apparatus)
             || !batch.action.records_progress_output()
             || (!batch.next_apparatus.trim().is_empty()
                 && !chain::stage_ids_match_for_map(order_map, &batch.next_apparatus, apparatus))
             || (!json_string_field(&batch.payload_json, "next_stage_node_id").is_empty()
-                && json_string_field(&batch.payload_json, "next_stage_node_id")
-                    != stage.node_id.trim())
+                && !chain::stage_node_ids_match_for_map(order_map,
+                    &json_string_field(&batch.payload_json, "next_stage_node_id"), &stage.node_id))
         {
             return Err(ProductionMapError::MergeInputNotAccepted);
         }

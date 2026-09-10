@@ -4,7 +4,7 @@ use super::super::*;
 use super::{QueueActionPolicyInput, QueueActionPolicyProfile, allowed_actions_for_control};
 
 use super::super::apparatus::{
-    claim_unassigned_alternative_apparatus_assignment, queue_order_ids_by_apparatus,
+    queue_order_ids_by_apparatus,
     visible_order_ids_by_apparatus, visible_order_ids_for_apparatus,
 };
 use super::super::chain;
@@ -424,7 +424,7 @@ impl ProductionMapService {
             opening_wip_records,
         ) = tokio::join!(
             self.store.raw_material_assignments(),
-            self.store.active_order_run_sessions_for_orders(&order_ids),
+            self.store.order_run_sessions_for_orders(&order_ids),
             self.store.progress_batches_for_orders(&order_ids),
             self.store.opening_wip_records(opening_wip_query),
         );
@@ -432,10 +432,18 @@ impl ProductionMapService {
         let active_sessions_by_order = active_sessions_by_order?;
         let progress_batches_by_order = progress_batches_by_order?;
         let opening_wip_records = opening_wip_records?;
+        let stage_work_by_order = maps.iter().map(|map| {
+            let sessions = active_sessions_by_order.get(&map.id).map(Vec::as_slice).unwrap_or_default();
+            let batches = progress_batches_by_order.get(&map.id).map(Vec::as_slice).unwrap_or_default();
+            let opening = opening_wip_records.iter().filter(|r| r.intake.order_id == map.id).cloned().collect::<Vec<_>>();
+            (map.id.clone(), super::super::stage_execution::stage_work_statuses(map, sessions,
+                &super::super::stage_execution::work_inputs(batches, &opening), all_states, &[]))
+        }).collect::<BTreeMap<_, _>>();
         let mut active_sessions_by_order_apparatus =
             HashMap::<(&str, &str), &OrderRunSession>::new();
         for sessions in active_sessions_by_order.values() {
             for session in sessions {
+                if !session.status.is_open() { continue; }
                 if !queue_state::is_canonical_apparatus_id(&session.apparatus) {
                     continue;
                 }
@@ -615,6 +623,9 @@ impl ProductionMapService {
                     continue;
                 };
                 let stage_node_id = stage.node_id.clone();
+                let stage_work = super::super::stage_execution::work_control(order_map, &storage_key, &stage_node_id,
+                    stage_work_by_order.get(order_id).map(Vec::as_slice).unwrap_or_default(),
+                    active_sessions_by_order.get(order_id).map(Vec::as_slice).unwrap_or_default());
                 let state = effective_states
                     .get(order_id.trim())
                     .copied()
@@ -798,7 +809,7 @@ impl ProductionMapService {
                                 .map(|links| links.batch_id)
                                 .unwrap_or_default();
                             let has_unprocessed_previous_wips =
-                                has_unprocessed_previous_wips_from_sources(
+                                has_available_previous_wips_for_local_report(
                                     order_id.trim(),
                                     order_map,
                                     &storage_key,
@@ -810,6 +821,7 @@ impl ProductionMapService {
                                     &[],
                                     &current_input_batch_id,
                                     &stage_node_id,
+                                    stage_work.as_ref().map(|s| s.upstream_closed),
                                 );
                             if is_rezka || is_laminatsiya {
                                 merge_ready = active_session.is_some_and(|session| {
@@ -929,6 +941,7 @@ impl ProductionMapService {
                 apparatus_controls.insert(
                     order_id.trim().to_string(),
                     ApparatusQueueOrderActionControl {
+                        stage_work,
                         work_activity: ApparatusQueueWorkActivity::from_session(
                             active_session, state, &stage_node_id,
                         ),

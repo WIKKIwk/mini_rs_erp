@@ -133,17 +133,9 @@ impl ProductionMapService {
             .iter()
             .find(|map| map.id.trim() == order_id)
             .ok_or(ProductionMapError::MapNotFound)?;
-        let mut effective_order_map = order_map.clone();
-        let claimed_alternative_map = if queue_action == queue_state::ApparatusQueueAction::Start
-            && claim_unassigned_alternative_apparatus_assignment(
-                &mut effective_order_map,
-                apparatus,
-            ) {
-            Some(effective_order_map.clone())
-        } else {
-            None
-        };
-        let order_map = &effective_order_map;
+        // Alternative candidates share the operation, not its input rolls.
+        // The transaction claims the scanned WIP; never claim the whole map.
+        let claimed_alternative_map = None;
         ensure_previous_stage_is_configured(queue_action, order_map, apparatus, canonical.as_ref())?;
         let previous_progress_ready = self
             .previous_progress_ready_for_action(queue_action, order_id, order_map, apparatus, &progress)
@@ -355,7 +347,7 @@ impl ProductionMapService {
                 &progress,
                 read_snapshot,
             );
-            progress.allow_partial_station_completion = has_unprocessed_previous_wips_from_sources(
+            progress.allow_partial_station_completion = has_available_previous_wips_for_local_report(
                 order_id,
                 order_map,
                 &storage_key,
@@ -367,8 +359,17 @@ impl ProductionMapService {
                 &[],
                 &input_batch_id,
                 &active_stage_node_id,
+                {
+                    let sessions = self.store.order_run_sessions_for_order(order_id).await?;
+                    let statuses = super::super::stage_execution::stage_work_statuses(order_map, &sessions,
+                        &super::super::stage_execution::work_inputs(&read_snapshot.progress_batches, &read_snapshot.opening_wip_records), &all_states, &[]);
+                    super::super::stage_execution::work_control(order_map, &storage_key, &active_stage_node_id, &statuses, &sessions)
+                        .map(|s| s.upstream_closed)
+                },
             );
         }
+        let local_report_submitted = queue_action == queue_state::ApparatusQueueAction::Complete
+            && !progress.allow_partial_station_completion;
         let mut progress = self
             .build_progress_records_with_snapshot(
                 &storage_key,
@@ -381,6 +382,14 @@ impl ProductionMapService {
                 completion_read_snapshot.as_ref(),
             )
             .await?;
+        if let Some(session) = &mut progress.session {
+            session.payload_json[super::super::stage_execution::WORK_PROTOCOL] = serde_json::json!(1);
+            // This intent is assigned a durable, order-scoped sequence in the
+            // same transaction as output and WIP ownership changes.
+            if local_report_submitted {
+                event.payload_json["stage_work_report_submitted"] = serde_json::json!(true);
+            }
+        }
         if let Some(batch_id) = &closing_output_batch_id {
             if let Some(session) = &mut progress.session {
                 session.payload_json["complete_without_output"] = serde_json::json!(true);
@@ -818,6 +827,33 @@ fn has_unprocessed_previous_wips_from_sources(
         ignored_batch_id,
         stage_node_id,
     )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn has_available_previous_wips_for_local_report(
+    order_id: &str, order_map: &ProductionMapDefinition, apparatus: &str,
+    canonical: &crate::core::apparatus_standard::RuntimeApparatusConfiguration,
+    all_states: &ApparatusQueueStateMap, progress_batches: &[OrderProgressBatch],
+    progress_batch_updates: &[OrderProgressBatch], opening_wip_records: &[OpeningWipRecord],
+    opening_wip_batch_updates: &[OpeningWipBatch], ignored_batch_id: &str, stage_node_id: &str,
+    upstream_closed: Option<bool>,
+) -> bool {
+    // A peer's claimed roll keeps the operation open, but is not work this
+    // machine can scan next and must not suppress its own final accounting.
+    let batches = progress_batches.iter().filter(|b| b.wip_status != OrderProgressBatchWipStatus::InUse
+        || b.used_by_apparatus == apparatus).cloned().collect::<Vec<_>>();
+    let opening = opening_wip_records.iter().cloned().map(|mut r| {
+        r.batches.retain(|b| b.wip_status != OpeningWipBatchStatus::InUse || b.used_by_apparatus == apparatus); r
+    }).collect::<Vec<_>>();
+    let mut states = all_states.clone();
+    if let Some(closed) = upstream_closed {
+        for p in chain::previous_work_stages_for_node(order_map, stage_node_id) {
+            if let Some(id) = p.apparatus_id { states.entry(id).or_default().insert(order_id.into(), if closed { "completed" } else { "pending" }.into()); }
+        }
+    }
+    has_unprocessed_previous_wips_from_sources(order_id, order_map, apparatus, canonical,
+        &states, &batches, progress_batch_updates, &opening, opening_wip_batch_updates,
+        ignored_batch_id, stage_node_id)
 }
 
 #[allow(clippy::too_many_arguments)]

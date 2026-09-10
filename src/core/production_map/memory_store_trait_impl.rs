@@ -1,6 +1,28 @@
 #[async_trait]
 #[cfg(any(test, feature = "verification"))]
 impl ProductionMapStorePort for MemoryProductionMapStore {
+    async fn commit_stage_astatka_report(&self, report: StageAstatkaReport,
+        expected: Option<OrderRunSession>, actor: QueueActionActor) -> Result<(), ProductionMapError> {
+        let (order_id, apparatus, report_id) = report.identity();
+        let (order_id, apparatus, report_id) = (order_id.to_string(), apparatus.to_string(), report_id.to_string());
+        let mut sessions = self.order_run_sessions.write().await;
+        let current = sessions.values().filter(|s| s.order_id == order_id && s.apparatus == apparatus)
+            .max_by(|a, b| (a.started_at_unix, &a.session_id).cmp(&(b.started_at_unix, &b.session_id)));
+        if current != expected.as_ref() { return Err(ProductionMapError::QueueActionNotAllowed); }
+        match report {
+            StageAstatkaReport::Bosma(r) => { self.bosma_astatka_reports.write().await.push(r); }
+            StageAstatkaReport::Laminate(r) => self.put_laminatsiya_astatka_report(r).await?,
+            StageAstatkaReport::Cut(r) => self.put_rezka_astatka_report(r).await?,
+        }
+        if let Some(mut session) = expected.filter(|s| s.status == OrderRunStatus::Completed) {
+            let sequence = sessions.values().filter(|s| s.order_id == order_id)
+                .filter_map(super::stage_execution::work_report).map(|r| r.sequence).max().unwrap_or(0) + 1;
+            super::stage_execution::stamp_work_report(&mut session, &report_id, sequence, &actor, super::stage_execution::report_now());
+            sessions.insert(session.session_id.clone(), session);
+        }
+        drop(sessions);
+        queue::refresh_production_order_lifecycles(self, &[order_id]).await
+    }
     async fn maps(&self) -> Result<Vec<ProductionMapDefinition>, ProductionMapError> {
         MemoryProductionMapStore::maps(self).await
     }

@@ -714,7 +714,28 @@ impl MemoryProductionMapStore {
                 return Err(ProductionMapError::RezkaOutputCycleConflict);
             }
         }
-        let write = write.clone();
+        let mut write = write.clone();
+        {
+            let batches = self.order_progress_batches.read().await;
+            for update in &write.progress_batch_updates {
+                if update.wip_status == OrderProgressBatchWipStatus::InUse
+                    && batches.get(&update.batch_id).is_none_or(|b| b.wip_status != OrderProgressBatchWipStatus::Waiting
+                        && !(b.wip_status == OrderProgressBatchWipStatus::InUse
+                            && b.used_by_apparatus == update.used_by_apparatus
+                            && b.used_by_session_id == update.used_by_session_id)
+                        && !super::service_progress_support::wip_batch_was_consumed_by_producer(b)) {
+                    return Err(ProductionMapError::ProgressBatchNotAccepted);
+                }
+            }
+        }
+        if write.event.payload_json.get("stage_work_report_submitted").and_then(serde_json::Value::as_bool) == Some(true)
+            && let Some(session) = &mut write.session {
+            let sequence = self.order_run_sessions.read().await.values()
+                .filter(|s| s.order_id == session.order_id).filter_map(super::stage_execution::work_report)
+                .map(|r| r.sequence).max().unwrap_or(0) + 1;
+            super::stage_execution::stamp_work_report(session, &write.event.event_id, sequence,
+                &write.event.actor, super::stage_execution::report_now());
+        }
         if self
             .fail_next_queue_progress_commit
             .swap(false, Ordering::SeqCst)

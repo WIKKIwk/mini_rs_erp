@@ -133,6 +133,13 @@ fn stage_states_for_snapshot(
             }
         }
         for stage in stages {
+            if let Some(work) = controls.get(stage.apparatus_id.as_deref().unwrap_or_default())
+                .and_then(|orders| orders.get(order_id))
+                .filter(|c| chain::stage_node_ids_match_for_map(map, &stage.node_id, &c.stage_node_id))
+                .and_then(|c| c.stage_work.as_ref())
+                && work.completed {
+                states.insert(stage.node_id.trim().to_string(), "completed".into());
+            }
             states
                 .entry(stage.node_id.trim().to_string())
                 .or_insert_with(|| "pending".to_string());

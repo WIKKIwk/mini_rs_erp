@@ -162,7 +162,7 @@ pub fn work_stage_for_station(
     let preferred_node_id = preferred_node_id.trim();
     if !preferred_node_id.is_empty() {
         return stages.into_iter().find(|stage| {
-            stage.node_id.trim() == preferred_node_id
+            stage_node_ids_match_for_map(map, &stage.node_id, preferred_node_id)
                 && chain_stage_matches_station(stage, station_id)
         });
     }
@@ -179,6 +179,10 @@ pub fn previous_work_stage_for_node(
     adjacent_physical_stages_for_node(map, stage_node_id, true)
         .into_iter()
         .next()
+}
+
+pub fn previous_work_stages_for_node(map: &ProductionMapDefinition, stage_node_id: &str) -> Vec<ChainStage> {
+    adjacent_physical_stages_for_node(map, stage_node_id, true)
 }
 
 /// Next physical stage for one concrete graph occurrence.
@@ -275,30 +279,7 @@ pub fn stage_ids_match_for_map(map: &ProductionMapDefinition, left: &str, right:
     if group_id.is_empty() || group_id != right_node.alternative_group_id.trim() {
         return false;
     }
-    let assigned_ids = map
-        .nodes
-        .iter()
-        .filter(|node| {
-            node.kind == ProductionMapNodeKind::Apparatus
-                && node.alternative_group_id.trim() == group_id
-                && !node.alternative_assigned_apparatus_id.trim().is_empty()
-        })
-        .map(|node| node.alternative_assigned_apparatus_id.trim().to_string())
-        .collect::<BTreeSet<_>>();
-    if assigned_ids.is_empty() {
-        return left_node
-            .alternative_assigned_apparatus_id
-            .trim()
-            .is_empty()
-            && right_node
-                .alternative_assigned_apparatus_id
-                .trim()
-                .is_empty();
-    }
-    assigned_ids.len() == 1
-        && assigned_ids.contains(right_id.as_str())
-        && left_node.alternative_assigned_apparatus_id.trim() == right_id.as_str()
-        && right_node.alternative_assigned_apparatus_id.trim() == right_id.as_str()
+    true
 }
 
 /// Match two concrete topology occurrences without collapsing repeated uses of
@@ -332,13 +313,8 @@ pub fn stage_node_ids_match_for_map(
     if group_id.is_empty() || group_id != right_node.alternative_group_id.trim() {
         return false;
     }
-    let Some(left_apparatus) = canonical_apparatus_identity(left_node) else {
-        return false;
-    };
-    let Some(right_apparatus) = canonical_apparatus_identity(right_node) else {
-        return false;
-    };
-    stage_ids_match_for_map(map, &left_apparatus, &right_apparatus)
+    canonical_apparatus_identity(left_node).is_some()
+        && canonical_apparatus_identity(right_node).is_some()
 }
 
 pub fn order_ready_for_station(
@@ -418,7 +394,7 @@ fn is_station_node(node: &ProductionMapNode) -> bool {
 fn station_identity(node: &ProductionMapNode) -> String {
     if node.kind == ProductionMapNodeKind::Apparatus {
         let assigned = node.alternative_assigned_apparatus_id.trim();
-        if !assigned.is_empty() {
+        if node.alternative_group_id.trim().is_empty() && !assigned.is_empty() {
             return assigned.to_string();
         }
         return node.apparatus_id.trim().to_string();
@@ -457,7 +433,6 @@ fn canonical_apparatus_identity(node: &ProductionMapNode) -> Option<String> {
 fn is_unassigned_alternative_apparatus(node: &ProductionMapNode) -> bool {
     node.kind == ProductionMapNodeKind::Apparatus
         && !node.alternative_group_id.trim().is_empty()
-        && node.alternative_assigned_apparatus_id.trim().is_empty()
 }
 
 fn stages_for_node(map: &ProductionMapDefinition, node: &ProductionMapNode) -> Vec<ChainStage> {
@@ -482,10 +457,6 @@ fn stages_for_node(map: &ProductionMapDefinition, node: &ProductionMapNode) -> V
         .filter(|candidate| {
             candidate.kind == ProductionMapNodeKind::Apparatus
                 && candidate.alternative_group_id.trim() == group_id
-                && candidate
-                    .alternative_assigned_apparatus_id
-                    .trim()
-                    .is_empty()
                 && ApparatusId::new(candidate.apparatus_id.trim().to_string()).is_ok()
         })
         .map(|candidate| ChainStage {
@@ -498,7 +469,8 @@ fn stages_for_node(map: &ProductionMapDefinition, node: &ProductionMapNode) -> V
 
 fn display_title(node: &ProductionMapNode) -> String {
     let assigned = node.alternative_assigned_title.trim();
-    if node.kind == ProductionMapNodeKind::Apparatus && !assigned.is_empty() {
+    if node.kind == ProductionMapNodeKind::Apparatus
+        && node.alternative_group_id.trim().is_empty() && !assigned.is_empty() {
         assigned.to_string()
     } else {
         node.title.trim().to_string()
@@ -677,7 +649,11 @@ fn route_successors<'a>(map: &'a ProductionMapDefinition, node_id: &str) -> Vec<
     };
     map.edges
         .iter()
-        .filter(|edge| edge.from == node_id && route_edge_allowed(node, edge))
+        .filter(|edge| {
+            (edge.from == node_id || stage_node_ids_match_for_map(map, &edge.from, node_id))
+                && !stage_node_ids_match_for_map(map, &edge.to, node_id)
+                && route_edge_allowed(node, edge)
+        })
         .map(|edge| edge.to.as_str())
         .collect()
 }
@@ -686,7 +662,8 @@ fn route_predecessors<'a>(map: &'a ProductionMapDefinition, node_id: &str) -> Ve
     map.edges
         .iter()
         .filter(|edge| {
-            edge.to == node_id
+            (edge.to == node_id || stage_node_ids_match_for_map(map, &edge.to, node_id))
+                && !stage_node_ids_match_for_map(map, &edge.from, node_id)
                 && map
                     .nodes
                     .iter()

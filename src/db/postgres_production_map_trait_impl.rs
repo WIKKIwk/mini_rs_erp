@@ -1,5 +1,9 @@
 #[async_trait]
 impl ProductionMapStorePort for PostgresProductionMapStore {
+    async fn commit_stage_astatka_report(&self, report: crate::core::production_map::StageAstatkaReport,
+        expected: Option<OrderRunSession>, actor: QueueActionActor) -> Result<(), ProductionMapError> {
+        stage_execution::commit_report(&self.pool, report, expected, actor).await
+    }
     async fn paddon_receipt(&self, code: &str) -> Result<Option<crate::core::production_map::PaddonReceipt>, ProductionMapError> {
         paddon_receipts::load(&self.pool, code).await
     }

@@ -105,16 +105,19 @@ impl ProductionMapService {
         let (
             logs_by_order,
             progress_batches_by_order,
+            sessions_by_order,
             transfers,
             freeze_requests,
         ) = tokio::join!(
             self.store.queue_action_logs_for_orders(&order_ids),
             self.store.progress_batches_for_orders(&order_ids),
+            self.store.order_run_sessions_for_orders(&order_ids),
             self.store.apparatus_transfers_for_audit(),
             self.store.order_freeze_requests_for_audit(),
         );
         let mut logs_by_order = logs_by_order?;
         let mut progress_batches_by_order = progress_batches_by_order?;
+        let mut sessions_by_order = sessions_by_order?;
         let transfers = match transfers {
             Ok(transfers) => transfers,
             Err(error) => {
@@ -139,14 +142,22 @@ impl ProductionMapService {
         for (map, required_apparatus) in candidates {
             let order_id = map.id.trim().to_string();
             let mut logs = logs_by_order.remove(&order_id).unwrap_or_default();
-            let Some(closed_event) = latest_required_complete_event(&map, &logs, &required_apparatus)
-            else {
-                continue;
-            };
-            let completed_at_unix = closed_event.created_at_unix;
-            let closed_by_role = closed_event.actor_role.clone();
-            let closed_by_ref = closed_event.actor_ref.clone();
-            let closed_by_display_name = closed_event.actor_display_name.clone();
+            let closed_event = latest_required_complete_event(&map, &logs, &required_apparatus);
+            let sessions = sessions_by_order.remove(&order_id).unwrap_or_default();
+            // A late upstream close may make the order terminal, but must not
+            // replace the final operation's last reported execution in history.
+            let last_report = sessions.iter()
+                .filter(|s| s.status == OrderRunStatus::Completed && !s.stage_node_id.is_empty())
+                .filter(|s| chain::next_work_stages_for_node(&map, &s.stage_node_id).is_empty())
+                .filter_map(|s| crate::core::production_map::stage_execution::work_report(s).map(|r| (s, r)))
+                .max_by_key(|(_, r)| r.sequence);
+            let (completed_at_unix, closed_by_role, closed_by_ref, closed_by_display_name) =
+                if let Some((session, report)) = last_report {
+                    (report.submitted_at_unix.max(closed_event.map(|e| e.created_at_unix).unwrap_or(0)),
+                        if report.worker_role.is_empty() { session.worker_role.clone() } else { report.worker_role }, report.worker_ref, report.worker_display_name)
+                } else if let Some(event) = closed_event {
+                    (event.created_at_unix, event.actor_role.clone(), event.actor_ref.clone(), event.actor_display_name.clone())
+                } else { continue; };
             for transfer in transfers
                 .iter()
                 .filter(|transfer| transfer.order_id.trim().eq_ignore_ascii_case(&order_id))

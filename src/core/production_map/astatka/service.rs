@@ -54,18 +54,20 @@ impl ProductionMapService {
         // Astatka is order-level audit data. Serialize the anchor lookup and
         // insert so two quick reports cannot receive the same interval.
         let _guard = self.queue_action_guard().await;
+        let anchor = self.astatka_execution_anchor(&order_id, apparatus).await?;
         let previous_reports = self
             .store
             .laminatsiya_astatka_reports_for_order(&order_id)
             .await?;
         let previous_to = previous_reports
             .iter()
+            .filter(|report| report.apparatus == apparatus)
             .map(|report| report.to_at_unix)
             .max();
         let from_at_unix = if let Some(previous_to) = previous_to {
             Some(previous_to)
         } else {
-            self.astatka_initial_from_at(&order_id).await?
+            self.astatka_initial_from_at(&order_id, apparatus).await?
         }
         .ok_or(ProductionMapError::OrderNotStarted)?;
 
@@ -99,9 +101,7 @@ impl ProductionMapService {
             description: description.trim().to_string(),
             created_at_unix,
         };
-        self.store
-            .put_laminatsiya_astatka_report(report.clone())
-            .await?;
+        self.store.commit_stage_astatka_report(StageAstatkaReport::Laminate(report.clone()), anchor, actor).await?;
         self.notify_live();
         Ok(report)
     }
@@ -152,18 +152,20 @@ impl ProductionMapService {
 
         let order_id = self.astatka_order_id(order_id).await?;
         let _guard = self.queue_action_guard().await;
+        let anchor = self.astatka_execution_anchor(&order_id, apparatus).await?;
         let previous_reports = self
             .store
             .rezka_astatka_reports_for_order(&order_id)
             .await?;
         let previous_to = previous_reports
             .iter()
+            .filter(|report| report.apparatus == apparatus)
             .map(|report| report.to_at_unix)
             .max();
         let from_at_unix = if let Some(previous_to) = previous_to {
             Some(previous_to)
         } else {
-            self.astatka_initial_from_at(&order_id).await?
+            self.astatka_initial_from_at(&order_id, apparatus).await?
         }
         .ok_or(ProductionMapError::OrderNotStarted)?;
 
@@ -195,7 +197,7 @@ impl ProductionMapService {
             description: description.trim().to_string(),
             created_at_unix,
         };
-        self.store.put_rezka_astatka_report(report.clone()).await?;
+        self.store.commit_stage_astatka_report(StageAstatkaReport::Cut(report.clone()), anchor, actor).await?;
         self.notify_live();
         Ok(report)
     }
@@ -213,12 +215,14 @@ impl ProductionMapService {
     async fn astatka_initial_from_at(
         &self,
         order_id: &str,
+        apparatus: &str,
     ) -> Result<Option<i64>, ProductionMapError> {
         let session_start = self
             .store
             .order_run_sessions_for_order(order_id)
             .await?
             .into_iter()
+            .filter(|session| session.apparatus == apparatus)
             .map(|session| session.started_at_unix)
             .filter(|value| *value > 0)
             .min();
@@ -230,7 +234,7 @@ impl ProductionMapService {
             .get(order_id)
             .into_iter()
             .flatten()
-            .filter(|log| log.action == queue_state::ApparatusQueueAction::Start)
+            .filter(|log| log.apparatus == apparatus && log.action == queue_state::ApparatusQueueAction::Start)
             .map(|log| log.created_at_unix)
             .filter(|value| *value > 0)
             .min();

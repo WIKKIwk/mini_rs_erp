@@ -121,7 +121,7 @@ pub(super) fn queue_control_stage_projection(
             continue;
         };
         if batch.order_id.trim() == order_id.trim()
-            && super::types::apparatus_ids_match(&batch.apparatus, previous_stage)
+            && chain::stage_ids_match_for_map(map, &batch.apparatus, previous_stage)
             && batch.action.records_progress_output()
             && (batch.next_apparatus.trim().is_empty()
                 || chain::stage_ids_match_for_map(map, &batch.next_apparatus, apparatus))

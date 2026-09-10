@@ -182,6 +182,10 @@ fn is_warehouse_processing_marker(value: &str) -> bool {
 
 #[async_trait]
 pub trait ProductionMapStorePort: Send + Sync {
+    async fn commit_stage_astatka_report(
+        &self, _report: super::StageAstatkaReport,
+        _expected_session: Option<OrderRunSession>, _actor: QueueActionActor,
+    ) -> StoreResult<()> { Err(ProductionMapError::StoreFailed) }
     // Maps and apparatus sequence persistence.
     async fn maps(&self) -> StoreResult<Vec<ProductionMapDefinition>>;
     /// Fresh point read; persistent stores override the compatibility fallback.

@@ -120,6 +120,8 @@ pub struct ApparatusQueueWorkerInteraction {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ApparatusQueueOrderActionControl {
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub stage_work: Option<crate::core::production_map::StageWorkControl>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub work_activity: Option<super::ApparatusQueueWorkActivity>,
     pub state: queue_state::ApparatusQueueOrderState,
     #[serde(default)]

@@ -1,4 +1,4 @@
-use sqlx::{FromRow, PgPool};
+use sqlx::{FromRow, PgPool, Postgres, Transaction};
 
 use crate::core::apparatus_standard::ApparatusId;
 use crate::core::production_map::{
@@ -104,6 +104,14 @@ pub(super) async fn put_laminatsiya_astatka_report(
     pool: &PgPool,
     report: &LaminatsiyaAstatkaReport,
 ) -> Result<(), ProductionMapError> {
+    let mut tx = pool.begin().await.map_err(|_| ProductionMapError::StoreFailed)?;
+    put_laminatsiya_astatka_report_tx(&mut tx, report).await?;
+    tx.commit().await.map_err(|_| ProductionMapError::StoreFailed)
+}
+
+pub(super) async fn put_laminatsiya_astatka_report_tx(
+    tx: &mut Transaction<'_, Postgres>, report: &LaminatsiyaAstatkaReport,
+) -> Result<(), ProductionMapError> {
     let apparatus_id = ApparatusId::new(report.apparatus.trim().to_string())
         .map_err(|_| ProductionMapError::ProgressInputInvalid)?;
     sqlx::query(
@@ -162,7 +170,7 @@ pub(super) async fn put_laminatsiya_astatka_report(
     .bind(report.worker_display_name.trim())
     .bind(report.description.trim())
     .bind(report.created_at_unix as f64)
-    .execute(pool)
+    .execute(&mut **tx)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
     Ok(())
@@ -228,6 +236,14 @@ pub(super) async fn put_rezka_astatka_report(
     pool: &PgPool,
     report: &RezkaAstatkaReport,
 ) -> Result<(), ProductionMapError> {
+    let mut tx = pool.begin().await.map_err(|_| ProductionMapError::StoreFailed)?;
+    put_rezka_astatka_report_tx(&mut tx, report).await?;
+    tx.commit().await.map_err(|_| ProductionMapError::StoreFailed)
+}
+
+pub(super) async fn put_rezka_astatka_report_tx(
+    tx: &mut Transaction<'_, Postgres>, report: &RezkaAstatkaReport,
+) -> Result<(), ProductionMapError> {
     let apparatus_id = ApparatusId::new(report.apparatus.trim().to_string())
         .map_err(|_| ProductionMapError::ProgressInputInvalid)?;
     sqlx::query(
@@ -289,7 +305,7 @@ pub(super) async fn put_rezka_astatka_report(
     .bind(report.worker_display_name.trim())
     .bind(report.description.trim())
     .bind(report.created_at_unix as f64)
-    .execute(pool)
+    .execute(&mut **tx)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
     Ok(())

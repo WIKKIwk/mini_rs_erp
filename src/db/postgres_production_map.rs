@@ -31,6 +31,7 @@ mod catalog_helpers;
 #[path = "postgres_production_map/completion/requests.rs"]
 mod completion_helpers;
 mod lifecycle;
+mod stage_execution;
 #[path = "postgres_production_map/catalog/maps.rs"]
 mod map_helpers;
 #[path = "postgres_production_map/materials/rules.rs"]
@@ -898,6 +899,7 @@ impl PostgresProductionMapStore {
             });
         }
         validate_queue_action_event_transition_tx(&mut tx, &write.event).await?;
+        stage_execution::validate_input_claims_tx(&mut tx, write).await?;
         let output_paddon = output_paddon_assignment::lock_for_output(&mut tx, write).await?;
         if let Some(expected) = write.event.payload_json.get("bosma_closing_expected_payload") {
             let session_id = write.event.payload_json.get("bosma_closing_session_id")
@@ -1009,7 +1011,11 @@ impl PostgresProductionMapStore {
             .await?;
         }
         if let Some(session) = &write.session {
-            put_order_run_session_tx(&mut tx, session).await?;
+            let mut stored_session = session.clone();
+            if event.payload_json.get("stage_work_report_submitted").and_then(serde_json::Value::as_bool) == Some(true) {
+                stage_execution::stamp_report_tx(&mut tx, &mut stored_session, &event.event_id, &event.actor).await?;
+            }
+            put_order_run_session_tx(&mut tx, &stored_session).await?;
             super::postgres_qolip::return_completed_session_checkouts_tx(&mut tx, session)
                 .await
                 .map_err(production_map_qolip_checkout_error)?;

@@ -119,6 +119,12 @@ pub(crate) async fn refresh_production_order_lifecycles(
         else {
             return Err(ProductionMapError::StoreFailed);
         };
+        let sessions = store.order_run_sessions.read().await.values().filter(|s| s.order_id == order_id).cloned().collect::<Vec<_>>();
+        let batches = store.order_progress_batches.read().await.values().filter(|b| b.order_id == order_id).cloned().collect::<Vec<_>>();
+        let opening = store.opening_wip_records.read().await.values().filter(|r| r.intake.order_id == order_id).cloned().collect::<Vec<_>>();
+        let inputs = super::super::stage_execution::work_inputs(&batches, &opening);
+        let stages = super::super::stage_execution::stage_work_statuses(map, &sessions, &inputs, &queue_states, &stage_events);
+        let status = super::super::stage_execution::work_lifecycle(status, &stages, &sessions);
         let record = lifecycles
             .entry(order_id.to_string())
             .or_insert_with(|| ProductionOrderLifecycleRecord::released(order_id));

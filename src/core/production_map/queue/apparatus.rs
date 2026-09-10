@@ -190,59 +190,6 @@ pub(super) fn reassign_alternative_apparatus_assignment(
     changed
 }
 
-pub(super) fn claim_unassigned_alternative_apparatus_assignment(
-    map: &mut ProductionMapDefinition,
-    apparatus: &str,
-) -> bool {
-    let apparatus = apparatus.trim();
-    if apparatus.is_empty() {
-        return false;
-    }
-    let candidate_groups: BTreeSet<String> = map
-        .nodes
-        .iter()
-        .filter(|node| {
-            node.kind == ProductionMapNodeKind::Apparatus
-                && !node.alternative_group_id.trim().is_empty()
-                && node.alternative_assigned_apparatus_id.trim().is_empty()
-                && queue_state::apparatus_ids_match(&node.apparatus_id, apparatus)
-        })
-        .map(|node| node.alternative_group_id.trim().to_string())
-        .filter(|group_id| {
-            map.nodes.iter().all(|node| {
-                node.kind != ProductionMapNodeKind::Apparatus
-                    || node.alternative_group_id.trim() != group_id
-                    || node.alternative_assigned_apparatus_id.trim().is_empty()
-            })
-        })
-        .collect();
-    if candidate_groups.is_empty() {
-        return false;
-    }
-    let target_title = map
-        .nodes
-        .iter()
-        .find(|node| {
-            node.kind == ProductionMapNodeKind::Apparatus
-                && candidate_groups.contains(node.alternative_group_id.trim())
-                && queue_state::apparatus_ids_match(&node.apparatus_id, apparatus)
-        })
-        .map(|node| node.title.trim().to_string());
-    let mut changed = false;
-    for node in &mut map.nodes {
-        if node.kind == ProductionMapNodeKind::Apparatus
-            && candidate_groups.contains(node.alternative_group_id.trim())
-        {
-            node.alternative_assigned_apparatus_id = apparatus.to_string();
-            if let Some(title) = &target_title {
-                node.alternative_assigned_title = title.clone();
-            }
-            changed = true;
-        }
-    }
-    changed
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
