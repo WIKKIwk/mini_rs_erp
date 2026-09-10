@@ -23,7 +23,8 @@ const AVAILABLE: &str = "s.status='available' AND s.reserved_order_id='' AND s.u
 const SOURCE_JSON: &str = "jsonb_build_object('stock_id',s.id,'barcode',s.barcode,
  'revision',extract(epoch FROM s.updated_at)::text,
  'warehouse',s.warehouse,'item_code',s.item_code,'item_name',s.item_name,
- 'kg',trim_scale(s.qty)::text,'width_mm',trim_scale(s.width_mm)::text,'micron',trim_scale(s.micron)::text)";
+ 'kg',trim_scale(s.qty)::text,'width_mm',trim_scale(s.width_mm)::text,'micron',trim_scale(s.micron)::text,
+ 'length_m',trim_scale(s.length_m)::text)";
 const SCOPE: &str = "EXISTS(SELECT 1 FROM mini_warehouse_assignments a JOIN mini_warehouses w
  ON lower(w.name)=lower(a.warehouse_name) WHERE a.assignment_kind='warehouse'
  AND a.principal_role='homashyo_rezkachi' AND a.principal_ref=$1
@@ -110,7 +111,24 @@ impl PostgresRawMaterialSplitStore {
         }
         // Legacy saved commands remain replayable, but every new operation must
         // carry measured gross/core weights and an explicitly entered waste.
-        let (source_kg, waste, quantities) = input.validate()?;
+        let issue: Option<(SplitIssueCreate, Value)> = if let Some(issue_id) = &input.issue_id {
+            let row = sqlx::query("SELECT request_json,response_json FROM mini_raw_material_split_issues WHERE id=$1 AND owner_ref=$2")
+                .bind(issue_id).bind(&actor.ref_).fetch_optional(&mut *tx).await?
+                .ok_or(SplitError::Forbidden)?;
+            Some((
+                serde_json::from_value(row.try_get("request_json")?)
+                    .map_err(|_| SplitError::StoreFailed)?,
+                row.try_get("response_json")?,
+            ))
+        } else {
+            None
+        };
+        let (source_kg, waste, quantities) = match &issue {
+            Some((report, _)) => input.validate_recorded_issue(report)?,
+            None => input.validate()?,
+        };
+        let output_kg = quantities.iter().map(|o| o.kg).sum::<i64>();
+        let difference = source_kg as i128 - output_kg as i128 - waste as i128;
         // Lock before testing availability so concurrent consumers see the latest committed state.
         let row = sqlx::query(&format!(
             "SELECT {SOURCE_JSON} AS source,s.source_receipt_id,s.payload_json
@@ -189,30 +207,46 @@ impl PostgresRawMaterialSplitStore {
             let output_name = split_item_name(name, &width, micron);
             let barcode = epcs.next_epc();
             let stock_id = format!("raw:{}", barcode.to_lowercase());
-            let output = json!({"stock_id":stock_id,"barcode":barcode,"warehouse":warehouse,"item_code":code,
-                "item_name":output_name,"kg":decimal_text(kg),"width_mm":width,"micron":micron,
-                "gross_kg":decimal_text(line.gross_kg),"bobina_kg":decimal_text(line.bobina_kg)});
+            let length_m = line.length_m.map(decimal_text);
+            let mut output_map = serde_json::Map::new();
+            output_map.insert("stock_id".into(), json!(stock_id));
+            output_map.insert("barcode".into(), json!(barcode));
+            output_map.insert("warehouse".into(), json!(warehouse));
+            output_map.insert("item_code".into(), json!(code));
+            output_map.insert("item_name".into(), json!(output_name));
+            output_map.insert("kg".into(), json!(decimal_text(kg)));
+            output_map.insert("width_mm".into(), json!(width));
+            output_map.insert("micron".into(), json!(micron));
+            output_map.insert("gross_kg".into(), json!(decimal_text(line.gross_kg)));
+            output_map.insert("bobina_kg".into(), json!(decimal_text(line.bobina_kg)));
+            if let Some(ref lm) = length_m {
+                output_map.insert("length_m".into(), json!(lm));
+            }
+            let output = Value::Object(output_map);
             sqlx::query("INSERT INTO mini_raw_material_stock
-                (id,warehouse,item_code,item_name,barcode,qty,width_mm,micron,uom,status,source_receipt_id,payload_json)
-                VALUES ($1,$2,$3,$4,$5,$6::text::numeric,$7::text::numeric,$8::text::numeric,'kg','available',$9,$10)")
+                (id,warehouse,item_code,item_name,barcode,qty,width_mm,micron,length_m,uom,status,source_receipt_id,payload_json)
+                VALUES ($1,$2,$3,$4,$5,$6::text::numeric,$7::text::numeric,$8::text::numeric,$9::text::numeric,'kg','available',$10,$11)")
                 .bind(&stock_id).bind(warehouse).bind(code).bind(&output_name).bind(&barcode)
-                .bind(decimal_text(kg)).bind(&width).bind(micron).bind(&receipt)
+                .bind(decimal_text(kg)).bind(&width).bind(micron).bind(length_m.as_deref()).bind(&receipt)
                 .bind(json!({"source":"raw_material_split","parent_stock_id":parent,"split_id":id,"initial_kg":decimal_text(kg),
-                    "gross_qty":decimal_text(line.gross_kg),"net_qty":decimal_text(kg),"tare_kg":decimal_text(line.bobina_kg),"tare_enabled":true}))
+                    "gross_qty":decimal_text(line.gross_kg),"net_qty":decimal_text(kg),"tare_kg":decimal_text(line.bobina_kg),"tare_enabled":true,"length_m":length_m}))
                 .execute(&mut *tx).await?;
             outputs.push(output);
         }
         let result = json!({"id":id,"warehouse":warehouse,"source":source,"source_kg":decimal_text(source_kg),
-            "output_kg":decimal_text(source_kg-waste),"waste_kg":decimal_text(waste),"outputs":outputs});
+            "output_kg":decimal_text(output_kg),"waste_kg":decimal_text(waste),"outputs":outputs,
+            "issue_id":input.issue_id,"issue_note":issue.as_ref().map(|(_, saved)| &saved["note"]),
+            "difference_kg":split_issue_decimal(difference)});
         sqlx::query("INSERT INTO mini_raw_material_splits
-            (id,owner_ref,request_id,parent_stock_id,source_kg,output_kg,waste_kg,request_json,response_json)
-            VALUES($1,$2,$3,$4,$5::text::numeric,$6::text::numeric,$7::text::numeric,$8,$9)")
+            (id,owner_ref,request_id,parent_stock_id,source_kg,output_kg,waste_kg,request_json,response_json,issue_id,difference_kg)
+            VALUES($1,$2,$3,$4,$5::text::numeric,$6::text::numeric,$7::text::numeric,$8,$9,$10,$11::text::numeric)")
             .bind(&id).bind(&actor.ref_).bind(&input.request_id).bind(parent).bind(decimal_text(source_kg))
-            .bind(decimal_text(source_kg-waste)).bind(decimal_text(waste)).bind(request).bind(&result).execute(&mut *tx).await?;
-        for output in &outputs {
+            .bind(decimal_text(output_kg)).bind(decimal_text(waste)).bind(request).bind(&result)
+            .bind(&input.issue_id).bind(split_issue_decimal(difference)).execute(&mut *tx).await?;
+        for (line, output) in quantities.iter().zip(outputs.iter()) {
             sqlx::query(
-                "INSERT INTO mini_raw_material_split_outputs(split_id,stock_id,kg,width_mm,gross_kg,bobina_kg)
-                VALUES($1,$2,$3::text::numeric,$4::text::numeric,$5::text::numeric,$6::text::numeric)",
+                "INSERT INTO mini_raw_material_split_outputs(split_id,stock_id,kg,width_mm,gross_kg,bobina_kg,length_m)
+                VALUES($1,$2,$3::text::numeric,$4::text::numeric,$5::text::numeric,$6::text::numeric,$7::text::numeric)",
             )
             .bind(&id)
             .bind(output["stock_id"].as_str())
@@ -220,6 +254,7 @@ impl PostgresRawMaterialSplitStore {
             .bind(output["width_mm"].as_str())
             .bind(output["gross_kg"].as_str())
             .bind(output["bobina_kg"].as_str())
+            .bind(line.length_m.map(decimal_text))
             .execute(&mut *tx)
             .await?;
         }
@@ -246,6 +281,7 @@ impl PostgresRawMaterialSplitStore {
                 .bind(owner["role"].as_str().unwrap_or("")).bind(owner["ref"].as_str().unwrap_or(""))
                 .bind(owner["name"].as_str().unwrap_or("")).bind(&id)
                 .bind(json!({"split_id":id,"parent_stock_id":parent,"waste_kg":decimal_text(waste),
+                    "issue_id":input.issue_id,"difference_kg":split_issue_decimal(difference),
                     "gross_qty":entry["gross_kg"],"net_qty":entry["kg"],"tare_kg":entry["bobina_kg"],
                     "width_mm":entry["width_mm"],"micron":entry["micron"]}))
                 .execute(&mut *tx).await?;

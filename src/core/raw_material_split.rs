@@ -37,6 +37,8 @@ pub struct SplitOutput {
     pub gross_kg: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bobina_kg: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub length_m: Option<String>,
 }
 #[derive(Debug, PartialEq, Eq)]
 pub struct WeighedOutput {
@@ -44,6 +46,7 @@ pub struct WeighedOutput {
     pub width_mm: i64,
     pub gross_kg: i64,
     pub bobina_kg: i64,
+    pub length_m: Option<i64>,
 }
 
 pub fn split_item_name(name: &str, width: &str, micron: &str) -> String {
@@ -76,6 +79,8 @@ pub fn split_item_name(name: &str, width: &str, micron: &str) -> String {
 #[serde(deny_unknown_fields)]
 pub struct SplitCreate {
     pub request_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issue_id: Option<String>,
     pub source_barcode: String,
     pub expected_revision: String,
     pub expected_kg: String,
@@ -85,6 +90,42 @@ pub struct SplitCreate {
     pub outputs: Vec<SplitOutput>,
 }
 impl SplitCreate {
+    /// Only the store may supply a previously persisted, owner-scoped report.
+    pub fn validate_recorded_issue(
+        &self,
+        report: &SplitIssueCreate,
+    ) -> Result<(i64, i64, Vec<WeighedOutput>), SplitError> {
+        let balance = report.validate()?;
+        let waste = issue_waste(&self.waste_kg)
+            .ok_or(SplitError::Invalid("Atxot kg ni son bilan kiriting"))?;
+        let (source, outputs) = self.validate_outputs()?;
+        let (_, reported_outputs) = report.command.validate_outputs()?;
+        if self
+            .issue_id
+            .as_deref()
+            .is_none_or(|id| id.is_empty() || id.len() > 128)
+            || source != balance.source
+            || Some(waste) != balance.waste
+            || outputs != reported_outputs
+            || !self
+                .source_barcode
+                .trim()
+                .eq_ignore_ascii_case(report.command.source_barcode.trim())
+            || self.expected_revision != report.command.expected_revision
+            || quantity(&self.expected_width_mm, false)?
+                != quantity(&report.command.expected_width_mm, false)?
+            || quantity(&self.expected_micron, false)?
+                != quantity(&report.command.expected_micron, false)?
+        {
+            return Err(SplitError::Conflict(
+                "Rulon yoki vaznlar muammo qaydiga mos emas. Muammoni qayta saqlang",
+            ));
+        }
+        // Keep the stock total within the existing NUMERIC(18,6) contract.
+        quantity(&split_issue_decimal(balance.output), false)?;
+        Ok((source, waste, outputs))
+    }
+
     pub fn validate(&self) -> Result<(i64, i64, Vec<WeighedOutput>), SplitError> {
         let (source, outputs) = self.validate_outputs()?;
         if self.waste_kg.trim().is_empty() {
@@ -162,11 +203,16 @@ impl SplitCreate {
                     "Enlar yig‘indisi asl rulon enidan oshmasin",
                 ));
             }
+            let length_m = match line.length_m.as_deref() {
+                Some(raw) if !raw.trim().is_empty() => Some(quantity(raw, false)?),
+                _ => None,
+            };
             outputs.push(WeighedOutput {
                 kg,
                 width_mm: mm,
                 gross_kg,
                 bobina_kg,
+                length_m,
             });
         }
         if width as i128 - used_width >= MIN_OUTPUT_WIDTH as i128 {
@@ -231,6 +277,11 @@ fn issue_waste(raw: &str) -> Option<i64> {
 
 impl SplitIssueCreate {
     pub fn validate(&self) -> Result<SplitIssueBalance, SplitError> {
+        if self.command.issue_id.is_some() {
+            return Err(SplitError::Invalid(
+                "Muammo qaydi boshqa muammoga bog‘lanmasin",
+            ));
+        }
         if self.note.trim().is_empty() || self.note.chars().count() > 1000 {
             return Err(SplitError::Invalid(
                 "Farq sababini yozing (ko‘pi bilan 1000 belgi)",
@@ -266,6 +317,37 @@ impl SplitIssueCreate {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn raw_material_split_recorded_issue_requires_unchanged_measurements() {
+        let mut report = SplitIssueCreate {
+            command: sample(),
+            note: "Tarozi xatosi".into(),
+        };
+        report.command.waste_kg = "1".into();
+        let mut command = report.command.clone();
+        command.issue_id = Some("raw-issue:test".into());
+        command.request_id = "split-complete-01".into();
+        command.waste_kg = "1.000000".into();
+        assert!(command.validate().is_err());
+        assert!(command.validate_recorded_issue(&report).is_ok());
+        command.outputs[0].gross_kg = Some("41".into());
+        command.outputs[0].kg = "40".into();
+        assert!(command.validate_recorded_issue(&report).is_err());
+        command = report.command.clone();
+        assert!(command.validate_recorded_issue(&report).is_err()); // No saved issue ID.
+        command.issue_id = Some("raw-issue:test".into());
+        command.expected_revision = "2".into();
+        assert!(command.validate_recorded_issue(&report).is_err());
+        for waste in ["0", "2.000001", "bad"] {
+            report.command.waste_kg = waste.into();
+            command = report.command.clone();
+            command.issue_id = Some("raw-issue:test".into());
+            assert_eq!(
+                command.validate_recorded_issue(&report).is_ok(),
+                waste != "bad"
+            );
+        }
+    }
     #[test]
     fn raw_material_split_issues_record_exact_discrepancy_without_accepting_split() {
         let mut issue = SplitIssueCreate {
@@ -304,6 +386,7 @@ mod tests {
     pub fn sample() -> SplitCreate {
         SplitCreate {
             request_id: "split-test-01".into(),
+            issue_id: None,
             source_barcode: "parent".into(),
             expected_revision: "1.000000".into(),
             expected_kg: "100".into(),
@@ -316,12 +399,14 @@ mod tests {
                     width_mm: "400".into(),
                     gross_kg: Some("40".into()),
                     bobina_kg: Some("1".into()),
+                    length_m: None,
                 },
                 SplitOutput {
                     kg: "59".into(),
                     width_mm: "600".into(),
                     gross_kg: Some("60".into()),
                     bobina_kg: Some("1".into()),
+                    length_m: None,
                 },
             ],
         }
@@ -366,13 +451,15 @@ mod tests {
                         kg: 39_000_000,
                         width_mm: 400_000_000,
                         gross_kg: 40_000_000,
-                        bobina_kg: 1_000_000
+                        bobina_kg: 1_000_000,
+                        length_m: None,
                     },
                     WeighedOutput {
                         kg: 59_000_000,
                         width_mm: 600_000_000,
                         gross_kg: 60_000_000,
-                        bobina_kg: 1_000_000
+                        bobina_kg: 1_000_000,
+                        length_m: None,
                     },
                 ]
             )
@@ -458,5 +545,19 @@ mod tests {
             split_item_name("Plyonka 3 qatlam 700/12", "349.5", "12.500000"),
             "Plyonka 3 qatlam 349.5/12.5"
         );
+    }
+    #[test]
+    fn raw_material_split_length_m_validation() {
+        let mut input = sample();
+        input.outputs[0].length_m = Some("1000".into());
+        input.outputs[1].length_m = Some("2500.5".into());
+        let (_, _, outputs) = input.validate().unwrap();
+        assert_eq!(outputs[0].length_m, Some(1_000_000_000));
+        assert_eq!(outputs[1].length_m, Some(2_500_500_000));
+
+        input.outputs[0].length_m = Some("0".into());
+        assert!(input.validate().is_err());
+        input.outputs[0].length_m = Some("-10".into());
+        assert!(input.validate().is_err());
     }
 }

@@ -192,7 +192,11 @@ fn saved_print_request(
         gross_qty: as_print_qty(gross),
         qty: Some(as_print_qty(kg)),
         unit: "kg".into(),
-        progress_unit: String::new(),
+        progress_unit: output["length_m"]
+            .as_str()
+            .filter(|m| !m.trim().is_empty())
+            .map(|m| format!("{m} m"))
+            .unwrap_or_default(),
         tare_enabled: measured,
         tare_kg: as_print_qty(bobina),
         print_count: 1,

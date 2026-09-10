@@ -13,6 +13,7 @@ use sqlx::{PgPool, postgres::PgConnectOptions};
 fn input(barcode: &str, key: &str) -> SplitCreate {
     SplitCreate {
         request_id: key.into(),
+        issue_id: None,
         source_barcode: barcode.into(),
         expected_kg: "100".into(),
         expected_revision: "1.000000".into(),
@@ -25,12 +26,14 @@ fn input(barcode: &str, key: &str) -> SplitCreate {
                 width_mm: "400".into(),
                 gross_kg: Some("40".into()),
                 bobina_kg: Some("1".into()),
+                length_m: Some("1000".into()),
             },
             SplitOutput {
                 kg: "59".into(),
                 width_mm: "600".into(),
                 gross_kg: Some("60".into()),
                 bobina_kg: Some("1".into()),
+                length_m: Some("1500".into()),
             },
         ],
     }
@@ -332,6 +335,7 @@ async fn raw_material_split_postgres_atomic_exact_retry_concurrency_scope_and_li
         width_mm: "355".into(),
         gross_kg: Some("39".into()),
         bobina_kg: Some("1".into()),
+        length_m: Some("950".into()),
     }];
     store.split(&actor, next).await.unwrap();
     assert_eq!(store.saved("split-1", id).await.unwrap(), result); // historical 39, not current zero
@@ -400,6 +404,110 @@ async fn raw_material_split_postgres_atomic_exact_retry_concurrency_scope_and_li
     .await
     .unwrap();
     assert_eq!(failed_count, 0);
+    // Completing a saved issue creates only measured stock and keeps the
+    // discrepancy separate from measured waste (including zero/excess cases).
+    for (barcode, waste, expected_difference) in [
+        ("issue-shortage", "2", "3.250000"),
+        ("issue-zero", "0", "5.250000"),
+        ("issue-excess", "6", "-0.750000"),
+    ] {
+        seed(&pool, barcode, "Raw W", "FILM").await;
+        sqlx::query("UPDATE mini_raw_material_stock SET qty=68.25 WHERE id=$1")
+            .bind(barcode)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let mut reported_command = input(barcode, &format!("report-{barcode}"));
+        reported_command.expected_kg = "68.25".into();
+        reported_command.waste_kg = waste.into();
+        reported_command.outputs[0].kg = "59".into();
+        reported_command.outputs[0].gross_kg = Some("60".into());
+        reported_command.outputs[1].kg = "4".into();
+        reported_command.outputs[1].gross_kg = Some("5".into());
+        assert!(store.split(&actor, reported_command.clone()).await.is_err());
+        let report = store
+            .report_issue(
+                &actor,
+                SplitIssueCreate {
+                    command: reported_command.clone(),
+                    note: "Sababi qayd etildi".into(),
+                },
+            )
+            .await
+            .unwrap();
+        let mut completion = reported_command;
+        completion.request_id = format!("complete-{barcode}");
+        completion.issue_id = Some(report["id"].as_str().unwrap().into());
+        assert!(matches!(
+            store.split(&other, completion.clone()).await,
+            Err(SplitError::Forbidden)
+        ));
+        let mut forged = completion.clone();
+        forged.issue_id = Some("raw-issue:missing".into());
+        assert!(matches!(
+            store.split(&actor, forged).await,
+            Err(SplitError::Forbidden)
+        ));
+        let mut changed = completion.clone();
+        changed.outputs[0].kg = "58".into();
+        changed.outputs[0].gross_kg = Some("59".into());
+        assert!(matches!(
+            store.split(&actor, changed).await,
+            Err(SplitError::Conflict(_))
+        ));
+        let (a, b) = tokio::join!(
+            store.split(&actor, completion.clone()),
+            store.split(&actor, completion.clone())
+        );
+        let saved = a.unwrap();
+        assert_eq!(saved, b.unwrap());
+        assert_eq!(saved["source_kg"], "68.250000");
+        assert_eq!(saved["output_kg"], "63.000000");
+        assert_eq!(saved["difference_kg"], expected_difference);
+        assert_eq!(
+            saved["waste_kg"],
+            decimal_text(quantity(waste, true).unwrap())
+        );
+        assert_eq!(saved["issue_note"], "Sababi qayd etildi");
+        assert_eq!(saved["issue_id"], report["id"]);
+        assert_eq!(
+            store
+                .saved("split-1", saved["id"].as_str().unwrap())
+                .await
+                .unwrap(),
+            saved
+        );
+        assert_eq!(saved["outputs"][0]["kg"], "59.000000");
+        assert_eq!(saved["outputs"][1]["kg"], "4.000000");
+        let stock: (String, String) = sqlx::query_as(
+            "SELECT trim_scale(qty)::text,status FROM mini_raw_material_stock WHERE id=$1",
+        )
+        .bind(barcode)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(stock, ("0".into(), "consumed".into()));
+        let persisted: (String, String, String, i64) = sqlx::query_as(
+            "SELECT output_kg::text,waste_kg::text,difference_kg::text,
+            (SELECT count(*) FROM mini_raw_material_events WHERE source_id=s.id)
+            FROM mini_raw_material_splits s WHERE issue_id=$1",
+        )
+        .bind(report["id"].as_str().unwrap())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            persisted,
+            (
+                "63.000000".into(),
+                decimal_text(quantity(waste, true).unwrap()),
+                expected_difference.into(),
+                3
+            )
+        );
+        completion.request_id.push_str("-again");
+        assert!(store.split(&actor, completion).await.is_err());
+    }
     pool.close().await;
     sqlx::query(&format!("DROP DATABASE {db} WITH (FORCE)"))
         .execute(&admin)

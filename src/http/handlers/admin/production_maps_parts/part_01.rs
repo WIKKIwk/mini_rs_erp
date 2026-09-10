@@ -198,6 +198,7 @@ pub async fn production_maps(
             Capability::ApparatusQueueRead,
             Capability::RawMaterialAssign,
             Capability::QolipManage,
+            Capability::PreparationAccess,
         ],
     )
     .await?;

@@ -195,6 +195,7 @@ pub(super) async fn authorize_apparatus(
             Capability::ApparatusQueueRead,
             Capability::RawMaterialAssign,
             Capability::QolipManage,
+            Capability::PreparationAccess,
         ],
     )
     .await

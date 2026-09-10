@@ -24,6 +24,7 @@ pub async fn production_map_sequence(
             Capability::ApparatusQueueRead,
             Capability::RawMaterialAssign,
             Capability::QolipManage,
+            Capability::PreparationAccess,
         ],
     )
     .await?;

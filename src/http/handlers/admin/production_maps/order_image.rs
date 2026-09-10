@@ -25,6 +25,7 @@ pub async fn production_map_order_image_view(
             Capability::ApparatusQueueRead,
             Capability::RawMaterialAssign,
             Capability::QolipManage,
+            Capability::PreparationAccess,
         ],
     )
     .await?;
