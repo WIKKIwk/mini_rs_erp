@@ -345,6 +345,7 @@ impl PostgresPreparationStore {
         input: FormulaUpsert,
     ) -> Result<Value, PreparationError> {
         let product_code = input.product_key()?;
+        let name = input.formula_name()?;
         let normalized = input.normalized_lines()?;
         let mut tx = self.pool.begin().await?;
         sqlx::query("SET LOCAL lock_timeout = '5s'")
@@ -358,8 +359,8 @@ impl PostgresPreparationStore {
         // alphabetically by material name for stable display.
         let mut lines: Vec<(String, String, i64)> = Vec::new();
         for (code, percent) in normalized {
-            let name = material_name(&mut tx, &actor.ref_, &code).await?;
-            lines.push((code, name, percent));
+            let material = material_name(&mut tx, &actor.ref_, &code).await?;
+            lines.push((code, material, percent));
         }
         lines.sort_by(|a, b| {
             a.1.to_lowercase()
@@ -368,26 +369,27 @@ impl PostgresPreparationStore {
         });
         let payload: Vec<Value> = lines
             .iter()
-            .map(|(code, name, percent)| {
-                json!({"item_code": code, "name": name, "percent": decimal_text(*percent)})
+            .map(|(code, material, percent)| {
+                json!({"item_code": code, "name": material, "percent": decimal_text(*percent)})
             })
             .collect();
         sqlx::query(
-            "INSERT INTO mini_preparation_formulas(owner_ref, product_code, lines, updated_at)
-             VALUES ($1,$2,$3,now())
-             ON CONFLICT (owner_ref, product_code)
+            "INSERT INTO mini_preparation_formulas(owner_ref, product_code, name, lines, updated_at)
+             VALUES ($1,$2,$3,$4,now())
+             ON CONFLICT (owner_ref, product_code, name)
              DO UPDATE SET lines = EXCLUDED.lines, updated_at = now()",
         )
         .bind(&actor.ref_)
         .bind(&product_code)
+        .bind(&name)
         .bind(json!(payload))
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
-        Ok(json!({"product_code": product_code, "lines": payload}))
+        Ok(json!({"product_code": product_code, "name": name, "lines": payload}))
     }
 
-    pub async fn get_formula(
+    pub async fn list_formulas(
         &self,
         owner: &str,
         product_code: &str,
@@ -396,14 +398,50 @@ impl PostgresPreparationStore {
         if code.is_empty() || code.chars().count() > 160 {
             return Err(PreparationError::Invalid("Mahsulot kodi noto‘g‘ri"));
         }
-        let lines: Option<Value> = sqlx::query_scalar(
-            "SELECT lines FROM mini_preparation_formulas WHERE owner_ref=$1 AND product_code=$2",
+        let formulas: Vec<Value> = sqlx::query_scalar(
+            "SELECT jsonb_build_object('name', name, 'lines', lines)
+             FROM mini_preparation_formulas
+             WHERE owner_ref=$1 AND product_code=$2
+             ORDER BY lower(name), name",
         )
         .bind(owner)
         .bind(code)
-        .fetch_optional(&self.pool)
+        .fetch_all(&self.pool)
         .await?;
-        Ok(json!({"product_code": code, "lines": lines.unwrap_or(json!([]))}))
+        Ok(json!({"product_code": code, "formulas": formulas}))
+    }
+
+    pub async fn delete_formula(
+        &self,
+        owner: &str,
+        product_code: &str,
+        name: &str,
+    ) -> Result<Value, PreparationError> {
+        let code = product_code.trim();
+        let formula = name.trim();
+        if code.is_empty() || code.chars().count() > 160 {
+            return Err(PreparationError::Invalid("Mahsulot kodi noto‘g‘ri"));
+        }
+        if formula.is_empty() || formula.chars().count() > 80 {
+            return Err(PreparationError::Invalid(
+                "Formula nomi 1–80 ta belgidan iborat bo‘lishi kerak",
+            ));
+        }
+        let deleted: bool = sqlx::query_scalar(
+            "DELETE FROM mini_preparation_formulas
+             WHERE owner_ref=$1 AND product_code=$2 AND name=$3
+             RETURNING TRUE",
+        )
+        .bind(owner)
+        .bind(code)
+        .bind(formula)
+        .fetch_optional(&self.pool)
+        .await?
+        .unwrap_or(false);
+        if !deleted {
+            return Err(PreparationError::Invalid("Formula topilmadi"));
+        }
+        Ok(json!({"product_code": code, "name": formula, "deleted": true}))
     }
 
     async fn begin(

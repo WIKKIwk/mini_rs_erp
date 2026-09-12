@@ -131,7 +131,13 @@ pub struct FormulaLine {
 #[serde(deny_unknown_fields)]
 pub struct FormulaUpsert {
     pub product_code: String,
+    #[serde(default = "default_formula_name")]
+    pub name: String,
     pub lines: Vec<FormulaLine>,
+}
+
+fn default_formula_name() -> String {
+    "Asosiy".to_string()
 }
 
 impl FormulaUpsert {
@@ -141,6 +147,16 @@ impl FormulaUpsert {
             return Err(PreparationError::Invalid("Mahsulot kodi noto‘g‘ri"));
         }
         Ok(code)
+    }
+
+    pub fn formula_name(&self) -> Result<String, PreparationError> {
+        let name = self.name.trim().to_string();
+        if name.is_empty() || name.chars().count() > 80 {
+            return Err(PreparationError::Invalid(
+                "Formula nomi 1–80 ta belgidan iborat bo‘lishi kerak",
+            ));
+        }
+        Ok(name)
     }
 
     /// Validated (item_code, percent) pairs sorted alphabetically by code.
@@ -231,6 +247,7 @@ mod tests {
     fn preparation_formula_sorts_alphabetically_and_validates() {
         let input = FormulaUpsert {
             product_code: "  PC-1 ".into(),
+            name: "Asosiy".into(),
             lines: vec![
                 FormulaLine {
                     item_code: "B".into(),
@@ -250,6 +267,7 @@ mod tests {
         for percents in [["10", "80"], ["60", "50"], ["100", "1"]] {
             let bad_total = FormulaUpsert {
                 product_code: "PC-1".into(),
+                name: "Asosiy".into(),
                 lines: vec![
                     FormulaLine {
                         item_code: "A".into(),
@@ -268,6 +286,7 @@ mod tests {
         }
         let dup = FormulaUpsert {
             product_code: "PC-1".into(),
+            name: "Asosiy".into(),
             lines: vec![
                 FormulaLine {
                     item_code: "A".into(),
@@ -282,11 +301,35 @@ mod tests {
         assert!(dup.normalized_lines().is_err());
         let bad = FormulaUpsert {
             product_code: "".into(),
+            name: "Asosiy".into(),
             lines: vec![FormulaLine {
                 item_code: "A".into(),
                 percent: "10".into(),
             }],
         };
         assert!(bad.product_key().is_err());
+        // Formula nomi: bo'sh yoki 80 dan uzun — rad etiladi.
+        let unnamed = FormulaUpsert {
+            product_code: "PC-1".into(),
+            name: "   ".into(),
+            lines: vec![FormulaLine {
+                item_code: "A".into(),
+                percent: "100".into(),
+            }],
+        };
+        assert!(unnamed.formula_name().is_err());
+        let long = FormulaUpsert {
+            product_code: "PC-1".into(),
+            name: "x".repeat(81),
+            lines: vec![FormulaLine {
+                item_code: "A".into(),
+                percent: "100".into(),
+            }],
+        };
+        assert!(long.formula_name().is_err());
+        // name tushirib qoldirilsa — 'Asosiy' default.
+        let defaulted: FormulaUpsert =
+            serde_json::from_str(r#"{"product_code":"PC-1","lines":[]}"#).unwrap();
+        assert_eq!(defaulted.formula_name().unwrap(), "Asosiy");
     }
 }

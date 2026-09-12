@@ -119,6 +119,12 @@ pub struct FormulaQuery {
     pub product_code: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct FormulaDeleteQuery {
+    pub product_code: String,
+    pub name: String,
+}
+
 pub async fn formula_upsert(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -139,7 +145,20 @@ pub async fn formula_show(
 ) -> Result<Json<Value>, ApiError> {
     let actor = authorize(&state, &headers).await?;
     store(&state)?
-        .get_formula(&actor.ref_, &query.product_code)
+        .list_formulas(&actor.ref_, &query.product_code)
+        .await
+        .map(Json)
+        .map_err(error)
+}
+
+pub async fn formula_delete(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<FormulaDeleteQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let actor = authorize(&state, &headers).await?;
+    store(&state)?
+        .delete_formula(&actor.ref_, &query.product_code, &query.name)
         .await
         .map(Json)
         .map_err(error)

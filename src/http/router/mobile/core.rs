@@ -25,7 +25,8 @@ pub(super) fn routes() -> Router<AppState> {
         .route(
             "/v1/mobile/preparation/formulas",
             axum::routing::get(crate::http::handlers::preparation::formula_show)
-                .post(crate::http::handlers::preparation::formula_upsert),
+                .post(crate::http::handlers::preparation::formula_upsert)
+                .delete(crate::http::handlers::preparation::formula_delete),
         )
         .route(
             "/v1/mobile/app-update/android",
