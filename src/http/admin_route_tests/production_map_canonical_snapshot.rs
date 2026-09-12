@@ -1,6 +1,73 @@
 use super::*;
 
 #[tokio::test]
+async fn live_sockets_answer_client_ping_while_queue_is_quiet() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server =
+        tokio::spawn(async move { axum::serve(listener, build_router(state)).await.unwrap() });
+    for path in [
+        "/v1/mobile/admin/production-maps/live",
+        "/v1/mobile/admin/warehouses/live",
+    ] {
+        let response = reqwest::Client::new()
+            .get(format!("http://{address}{path}"))
+            .bearer_auth(&token)
+            .header("Connection", "Upgrade")
+            .header("Upgrade", "websocket")
+            .header("Sec-WebSocket-Version", "13")
+            .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+        let mut socket = response.upgrade().await.unwrap();
+        // A masked client Ping with payload 'test'. No application-level event
+        // is emitted: the server must continuously drive its WebSocket reader.
+        socket
+            .write_all(&[0x89, 0x84, 0, 0, 0, 0, b't', b'e', b's', b't'])
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let opcode = socket.read_u8().await.unwrap() & 0x0f;
+                let length_byte = socket.read_u8().await.unwrap();
+                assert_eq!(length_byte & 0x80, 0, "server frames are unmasked");
+                let length = match length_byte & 0x7f {
+                    126 => socket.read_u16().await.unwrap() as usize,
+                    127 => socket.read_u64().await.unwrap() as usize,
+                    n => n as usize,
+                };
+                assert!(length < 4 * 1024 * 1024, "bounded test snapshot");
+                let mut payload = vec![0; length];
+                socket.read_exact(&mut payload).await.unwrap();
+                if opcode == 0x0a && payload == b"test" {
+                    break;
+                }
+                if opcode == 0x09 {
+                    assert!(length <= 125);
+                    let mut pong = vec![0x8a, 0x80 | length as u8, 0, 0, 0, 0];
+                    pong.extend_from_slice(&payload);
+                    socket.write_all(&pong).await.unwrap();
+                }
+            }
+        })
+        .await
+        .expect("quiet live socket must answer client ping");
+        socket.write_all(&[0x88, 0x80, 0, 0, 0, 0]).await.unwrap();
+        let mut remaining = Vec::new();
+        tokio::time::timeout(Duration::from_secs(2), socket.read_to_end(&mut remaining))
+            .await
+            .expect("server must release closed stream")
+            .unwrap();
+    }
+    server.abort();
+}
+
+#[tokio::test]
 async fn sequence_returns_canonical_rev_and_maps() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;

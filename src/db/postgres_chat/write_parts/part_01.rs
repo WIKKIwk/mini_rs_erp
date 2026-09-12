@@ -241,15 +241,10 @@ pub(super) async fn send_message(
         .filter(|(principal_id, _, _)| principal_id != &sender.principal_id)
         .map(|(_, role, ref_)| format!("{role}:{ref_}"))
         .collect::<Vec<_>>();
-    let cursor = sqlx::query_scalar::<_, i64>(
-        r#"UPDATE mini_chat_event_clock
-           SET cursor = cursor + 1
-           WHERE singleton = TRUE
-           RETURNING cursor"#,
-    )
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(|_| ChatError::StoreFailed)?;
+    let cursor = sqlx::query_scalar::<_, i64>(NEXT_CHAT_EVENT_CURSOR_SQL)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|_| ChatError::StoreFailed)?;
     let event = ChatRealtimeEvent {
         event_id: new_id("event"),
         cursor,

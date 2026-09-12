@@ -277,6 +277,8 @@ async fn postgres_production_map_store_persists_maps_sequences_and_queue_states(
         audit.violations
     );
 
+    assert_freeze_chat_outbox_recovery(&pool).await;
+
     service
         .restore_map(None, "zakaz-1001")
         .await
@@ -308,6 +310,124 @@ async fn postgres_production_map_store_persists_maps_sequences_and_queue_states(
     .await
     .expect("cleanup test db");
     admin_pool.close().await;
+}
+
+async fn assert_freeze_chat_outbox_recovery(pool: &sqlx::PgPool) {
+    use crate::core::chat::ChatStorePort;
+    use crate::db::postgres_chat::PostgresChatStore;
+
+    let runtime = sqlx::PgPool::connect_with(
+        pool.connect_options()
+            .as_ref()
+            .clone()
+            .username("mini_rs_erp"),
+    )
+    .await
+    .expect("chat runtime login");
+    for (id, role, actor) in [
+        ("self-freeze", "aparatchi", "worker-1"),
+        ("admin-freeze", "admin", "admin-1"),
+    ] {
+        sqlx::query(
+            "INSERT INTO mini_order_freeze_requests
+            (request_id, order_id, status, requester_role, requester_ref, requester_display_name,
+             target_session_id, target_apparatus, canonical_target_apparatus_id,
+             target_worker_role, target_worker_ref, target_worker_display_name,
+             requested_at_unix, transitioned_at_unix)
+            VALUES ($1, 'zakaz-1001', 'frozen', $2, $3, 'Fixture requester',
+                    'fixture-session', 'apparatus:default:bosma_7', 'apparatus:default:bosma_7',
+                    'aparatchi', 'worker-1', 'Fixture worker', 1700000000, 1700000001)",
+        )
+        .bind(id)
+        .bind(role)
+        .bind(actor)
+        .execute(pool)
+        .await
+        .expect("freeze request fixture");
+        sqlx::query(
+            "INSERT INTO mini_order_freeze_chat_outbox (event_id, request_id, status)
+                    VALUES ($1, $1, 'frozen')",
+        )
+        .bind(id)
+        .execute(pool)
+        .await
+        .expect("freeze outbox fixture");
+    }
+    let store = PostgresChatStore::new(runtime.clone());
+    let (first, second) = tokio::join!(
+        store.claim_order_freeze_chat_events(32),
+        store.claim_order_freeze_chat_events(32)
+    );
+    let events: Vec<_> = first.unwrap().into_iter().chain(second.unwrap()).collect();
+    assert_eq!(
+        events.len(),
+        1,
+        "concurrent claims must not duplicate delivery or return self-DMs"
+    );
+    assert_eq!(events[0].event_id, "admin-freeze");
+    let skipped: (bool, bool, i32, String) = sqlx::query_as(
+        "SELECT skipped_at IS NOT NULL, delivered_at IS NOT NULL, attempts, last_error
+         FROM mini_order_freeze_chat_outbox WHERE event_id='self-freeze'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        skipped,
+        (true, false, 0, "self_notification_not_required".into())
+    );
+    assert!(
+        store
+            .claim_order_freeze_chat_events(32)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    for (attempts, delay) in [(1, 2.0), (3, 8.0), (570_000, 900.0)] {
+        sqlx::query(
+            "UPDATE mini_order_freeze_chat_outbox SET attempts=$1 WHERE event_id='admin-freeze'",
+        )
+        .bind(attempts)
+        .execute(pool)
+        .await
+        .unwrap();
+        store
+            .reschedule_order_freeze_chat_event("admin-freeze", "fixture database failure")
+            .await
+            .unwrap();
+        let seconds: f64 = sqlx::query_scalar(
+            "SELECT EXTRACT(EPOCH FROM locked_until-now())::float8
+            FROM mini_order_freeze_chat_outbox WHERE event_id='admin-freeze'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert!(
+            seconds > delay - 1.0 && seconds <= delay,
+            "retry delay {seconds}, expected {delay}"
+        );
+        assert!(
+            store
+                .claim_order_freeze_chat_events(32)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+    store
+        .mark_order_freeze_chat_event_delivered("admin-freeze")
+        .await
+        .unwrap();
+    let retained: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM mini_order_freeze_chat_outbox
+         WHERE delivered_at IS NOT NULL OR skipped_at IS NOT NULL",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(retained, 2, "both original audit events must remain");
+    runtime.close().await;
 }
 
 #[tokio::test]

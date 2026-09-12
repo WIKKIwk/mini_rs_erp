@@ -12,5 +12,19 @@ use crate::core::chat::{
 
 include!("write_sql.rs");
 
+async fn lock_conversation_sequence(
+    tx: &mut Transaction<'_, Postgres>,
+    conversation_id: &str,
+) -> Result<i64, ChatError> {
+    sqlx::query_scalar(
+        "SELECT last_message_sequence FROM mini_chat_conversations WHERE conversation_id = $1 FOR UPDATE",
+    )
+    .bind(conversation_id)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(|_| ChatError::StoreFailed)?
+    .ok_or(ChatError::NotFound)
+}
+
 include!("write_parts/part_01.rs");
 include!("write_parts/part_02.rs");

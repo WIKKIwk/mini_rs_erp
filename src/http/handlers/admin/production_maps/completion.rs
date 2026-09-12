@@ -111,6 +111,14 @@ async fn production_map_live_socket(
 
     loop {
         tokio::select! {
+            // Reading drives tungstenite's automatic Pong/Close handling.
+            // Without it, a healthy client heartbeat appears to time out.
+            inbound = socket.recv() => {
+                match inbound {
+                    Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                    _ => {}
+                }
+            }
             received = rx.recv() => {
                 match received {
                     Ok(()) => {

@@ -7,6 +7,9 @@ pub(super) async fn upsert_order_freeze_card(
 ) -> Result<ChatSendResult, ChatError> {
     let mut tx = pool.begin().await.map_err(|_| ChatError::StoreFailed)?;
     let sender = sender_for_conversation(&mut tx, principal, conversation_id).await?;
+    // Serialize creation AND status updates before inspecting the existing card.
+    // Concurrent retries must not insert twice or overwrite a newer transition.
+    let last_sequence = lock_conversation_sequence(&mut tx, conversation_id).await?;
     let client_message_id = format!("order-freeze-request:{}", card_event.request_id.trim());
     let body = card_event.message_body();
     let metadata = card_event.metadata();
@@ -46,17 +49,6 @@ pub(super) async fn upsert_order_freeze_card(
         debug_assert_eq!(row.message_id, existing.message_id);
         (row.into_model()?, false)
     } else {
-        let last_sequence = sqlx::query_scalar::<_, i64>(
-            r#"SELECT last_message_sequence
-               FROM mini_chat_conversations
-               WHERE conversation_id = $1
-               FOR UPDATE"#,
-        )
-        .bind(conversation_id)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(|_| ChatError::StoreFailed)?
-        .ok_or(ChatError::NotFound)?;
         let sequence = last_sequence.saturating_add(1);
         let row = sqlx::query_as::<_, MessageRow>(ORDER_FREEZE_INSERT_MESSAGE_SQL)
             .bind(new_id("message"))
@@ -124,15 +116,10 @@ pub(super) async fn upsert_order_freeze_card(
     } else {
         Vec::new()
     };
-    let cursor = sqlx::query_scalar::<_, i64>(
-        r#"UPDATE mini_chat_event_clock
-           SET cursor = cursor + 1
-           WHERE singleton = TRUE
-           RETURNING cursor"#,
-    )
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(|_| ChatError::StoreFailed)?;
+    let cursor = sqlx::query_scalar::<_, i64>(NEXT_CHAT_EVENT_CURSOR_SQL)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|_| ChatError::StoreFailed)?;
     let event = ChatRealtimeEvent {
         event_id: new_id("event"),
         cursor,
@@ -191,6 +178,9 @@ pub(super) async fn upsert_inventory_transfer_card(
 ) -> Result<ChatSendResult, ChatError> {
     let mut tx = pool.begin().await.map_err(|_| ChatError::StoreFailed)?;
     let sender = sender_for_conversation(&mut tx, principal, conversation_id).await?;
+    // Serialize creation AND status updates before inspecting the existing card.
+    // Concurrent retries must not insert twice or overwrite a newer transition.
+    let last_sequence = lock_conversation_sequence(&mut tx, conversation_id).await?;
     let client_message_id = format!(
         "inventory-transfer-request:{}",
         card_event.transfer_id.trim()
@@ -254,17 +244,6 @@ pub(super) async fn upsert_inventory_transfer_card(
         debug_assert_eq!(row.message_id, existing.message_id);
         (row.into_model()?, false)
     } else {
-        let last_sequence = sqlx::query_scalar::<_, i64>(
-            r#"SELECT last_message_sequence
-               FROM mini_chat_conversations
-               WHERE conversation_id = $1
-               FOR UPDATE"#,
-        )
-        .bind(conversation_id)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(|_| ChatError::StoreFailed)?
-        .ok_or(ChatError::NotFound)?;
         let sequence = last_sequence.saturating_add(1);
         let row = sqlx::query_as::<_, MessageRow>(
             r#"INSERT INTO mini_chat_messages
@@ -340,15 +319,10 @@ pub(super) async fn upsert_inventory_transfer_card(
     } else {
         Vec::new()
     };
-    let cursor = sqlx::query_scalar::<_, i64>(
-        r#"UPDATE mini_chat_event_clock
-           SET cursor = cursor + 1
-           WHERE singleton = TRUE
-           RETURNING cursor"#,
-    )
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(|_| ChatError::StoreFailed)?;
+    let cursor = sqlx::query_scalar::<_, i64>(NEXT_CHAT_EVENT_CURSOR_SQL)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|_| ChatError::StoreFailed)?;
     let event = ChatRealtimeEvent {
         event_id: new_id("event"),
         cursor,

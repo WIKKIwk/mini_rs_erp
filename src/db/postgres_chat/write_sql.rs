@@ -118,11 +118,15 @@ const EXISTING_MESSAGE_SQL: &str = r#"SELECT
      AND m.client_message_id = $3"#;
 
 const CLAIM_ORDER_FREEZE_CHAT_EVENTS_SQL: &str = r#"WITH candidates AS (
-   SELECT event_sequence
+   SELECT event_sequence,
+          (btrim(request.requester_role) = btrim(request.target_worker_role)
+           AND btrim(request.requester_ref) = btrim(request.target_worker_ref)
+           AND btrim(request.requester_ref) <> '') AS self_notification
      FROM mini_order_freeze_chat_outbox event
      JOIN mini_order_freeze_requests request
        ON request.request_id = event.request_id
      WHERE event.delivered_at IS NULL
+       AND event.skipped_at IS NULL
        AND request.canonical_target_apparatus_id IS NOT NULL
        AND EXISTS (
          SELECT 1
@@ -131,17 +135,21 @@ const CLAIM_ORDER_FREEZE_CHAT_EVENTS_SQL: &str = r#"WITH candidates AS (
        )
        AND (event.locked_until IS NULL OR event.locked_until < now())
      ORDER BY event.event_sequence ASC
-     FOR UPDATE SKIP LOCKED
+     FOR UPDATE OF event SKIP LOCKED
      LIMIT $1
    ),
    claimed AS (
      UPDATE mini_order_freeze_chat_outbox event
-     SET attempts = event.attempts + 1,
-         locked_until = now() + interval '30 seconds'
+     SET attempts = event.attempts + CASE WHEN candidates.self_notification THEN 0 ELSE 1 END,
+         locked_until = CASE WHEN candidates.self_notification THEN NULL
+                             ELSE now() + interval '30 seconds' END,
+         skipped_at = CASE WHEN candidates.self_notification THEN now() ELSE NULL END,
+         last_error = CASE WHEN candidates.self_notification THEN 'self_notification_not_required'
+                           ELSE event.last_error END
      FROM candidates
      WHERE event.event_sequence = candidates.event_sequence
      RETURNING event.event_sequence, event.event_id, event.request_id,
-               event.status, event.attempts
+               event.status, event.attempts, event.skipped_at
    )
    SELECT
      claimed.event_sequence,
@@ -169,6 +177,7 @@ const CLAIM_ORDER_FREEZE_CHAT_EVENTS_SQL: &str = r#"WITH candidates AS (
    JOIN mini_order_freeze_requests request
      ON request.request_id = claimed.request_id
    JOIN mini_production_maps map ON map.id = request.order_id
+   WHERE claimed.skipped_at IS NULL
    ORDER BY claimed.event_sequence ASC"#;
 
 const CLAIM_INVENTORY_TRANSFER_CHAT_EVENTS_SQL: &str = r#"WITH candidates AS (
@@ -231,3 +240,12 @@ const CLAIM_INVENTORY_TRANSFER_CHAT_EVENTS_SQL: &str = r#"WITH candidates AS (
      WHERE line.transfer_id = transfer.id
    ) lines ON TRUE
    ORDER BY claimed.event_sequence ASC"#;
+
+// A row lock on the singleton serializes cursors through commit. Recover only
+// from persisted events; a sequence alone could expose out-of-order commits.
+const NEXT_CHAT_EVENT_CURSOR_SQL: &str = r#"
+    INSERT INTO mini_chat_event_clock (singleton, cursor)
+    SELECT TRUE, COALESCE(MAX(event_cursor), 0) + 1 FROM mini_chat_outbox_events
+    ON CONFLICT (singleton) DO UPDATE
+    SET cursor = GREATEST(mini_chat_event_clock.cursor + 1, EXCLUDED.cursor)
+    RETURNING cursor"#;

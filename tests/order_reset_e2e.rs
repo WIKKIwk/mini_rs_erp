@@ -65,6 +65,42 @@ async fn order_reset_restores_a_real_database_to_the_pre_order_snapshot() {
     apply_foundation_migration(&pool)
         .await
         .expect("apply full migration set");
+    // Test the actual HTTP login's privileges, not a superuser bypass.
+    let runtime_options = PgConnectOptions::from_str(&admin_url)
+        .expect("parse test runtime connection")
+        .database(&database_name)
+        .username("mini_rs_erp");
+    let runtime_pool = PgPool::connect_with(runtime_options)
+        .await
+        .expect("runtime database (local test authentication must permit mini_rs_erp)");
+    apply_foundation_migration(&runtime_pool)
+        .await
+        .expect("runtime startup validates applied migrations without DDL rights");
+    sqlx::query("ALTER SEQUENCE public.mini_production_order_number_seq RESTART WITH 41")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let mut sequence_tx = runtime_pool.begin().await.unwrap();
+    sqlx::query("SELECT public.mini_reset_order_number_sequence()")
+        .execute(&mut *sequence_tx)
+        .await
+        .expect("guarded sequence restart on empty order state");
+    let reset_value: i64 =
+        sqlx::query_scalar("SELECT last_value FROM public.mini_production_order_number_seq")
+            .fetch_one(&mut *sequence_tx)
+            .await
+            .unwrap();
+    assert_eq!(reset_value, 1);
+    sequence_tx.rollback().await.unwrap();
+    let restored_value: i64 =
+        sqlx::query_scalar("SELECT last_value FROM public.mini_production_order_number_seq")
+            .fetch_one(&runtime_pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        restored_value, 41,
+        "sequence restart must roll back with the caller transaction"
+    );
 
     seed_pre_order_state(&pool).await;
     let mut state = test_state(pool.clone());
@@ -91,12 +127,47 @@ async fn order_reset_restores_a_real_database_to_the_pre_order_snapshot() {
         during_order, before,
         "lifecycle must change the baseline state"
     );
+    verify_runtime_security(&pool, &runtime_pool).await;
+    // Failure after history deletion must roll the entire real store flow back.
+    sqlx::raw_sql(
+        "CREATE FUNCTION public.test_reset_failure() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN RAISE EXCEPTION 'injected reset failure'; END $$;
+        CREATE TRIGGER test_reset_failure BEFORE DELETE ON public.mini_orders
+        FOR EACH ROW EXECUTE FUNCTION public.test_reset_failure();",
+    )
+    .execute(&pool)
+    .await
+    .expect("install isolated reset failure");
+    let reset_error = PostgresOrderResetStore::new(runtime_pool.clone())
+        .reset_all_orders()
+        .await
+        .expect_err("injected late failure must abort reset");
+    let mini_rs_erp::db::postgres_order_reset::OrderResetError::StoreFailed(error) = reset_error
+    else {
+        panic!("expected the injected database failure");
+    };
+    assert_eq!(
+        error.as_database_error().unwrap().message(),
+        "injected reset failure"
+    );
+    assert_eq!(
+        snapshot(&pool).await,
+        during_order,
+        "failed reset must restore all state"
+    );
+    sqlx::raw_sql(
+        "DROP TRIGGER test_reset_failure ON public.mini_orders;
+        DROP FUNCTION public.test_reset_failure();",
+    )
+    .execute(&pool)
+    .await
+    .expect("remove isolated failure");
 
     let backup_dir = tempfile::tempdir().expect("backup directory");
     let backup_doctor = real_backup_doctor(&test_url, &admin_url, &backup_dir);
     state.sessions = SessionManager::memory(Some(3600));
     state.backup_doctor = backup_doctor;
-    state.order_reset = Some(PostgresOrderResetStore::new(pool.clone()));
+    state.order_reset = Some(PostgresOrderResetStore::new(runtime_pool.clone()));
     let token = state
         .sessions
         .create(Principal {
@@ -131,6 +202,7 @@ async fn order_reset_restores_a_real_database_to_the_pre_order_snapshot() {
     let after = snapshot(&pool).await;
     assert_eq!(after, before);
 
+    runtime_pool.close().await;
     pool.close().await;
     let admin_pool = PgPool::connect(&admin_url)
         .await
@@ -142,6 +214,104 @@ async fn order_reset_restores_a_real_database_to_the_pre_order_snapshot() {
     .await
     .expect("drop e2e database");
     admin_pool.close().await;
+}
+
+async fn verify_runtime_security(admin: &PgPool, runtime: &PgPool) {
+    let mut tx = runtime.begin().await.expect("privilege probe transaction");
+    // This connection has never initialized the custom reset flag. The
+    // protected function must work without a preceding caller set_config.
+    let removed: i64 =
+        sqlx::query_scalar("SELECT public.mini_reset_order_events(ARRAY['not-an-order'])")
+            .fetch_one(&mut *tx)
+            .await
+            .expect("definer works without a caller-initialized GUC");
+    assert_eq!(removed, 0);
+    let flag: String =
+        sqlx::query_scalar("SELECT COALESCE(current_setting('mini_rs_erp.order_reset', true), '')")
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+    assert_ne!(flag, "on", "definer must restore caller settings");
+    sqlx::query("SELECT set_config('mini_rs_erp.order_reset', 'on', true)")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    for (statement, expected) in [
+        (
+            "DELETE FROM public.mini_raw_material_events WHERE false",
+            "42501",
+        ),
+        (
+            "UPDATE public.mini_raw_material_events SET id = id",
+            "55000",
+        ),
+        (
+            "ALTER TABLE public.mini_raw_material_events DISABLE TRIGGER mini_rme_no_update_delete_trg",
+            "42501",
+        ),
+        ("SET LOCAL ROLE mini_rs_erp_owner", "42501"),
+        (
+            "SELECT public.mini_reset_order_events(ARRAY['']::text[])",
+            "22023",
+        ),
+        ("SELECT public.mini_reset_order_number_sequence()", "55000"),
+    ] {
+        sqlx::query("SAVEPOINT privilege_probe")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        let error = sqlx::query(statement)
+            .execute(&mut *tx)
+            .await
+            .expect_err(statement);
+        assert_eq!(
+            error.as_database_error().and_then(|e| e.code()).as_deref(),
+            Some(expected),
+            "{statement}: {error}"
+        );
+        sqlx::query("ROLLBACK TO SAVEPOINT privilege_probe")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+    }
+    for table in [
+        "mini_preparation_allocations",
+        "mini_raw_material_events",
+        "mini_raw_material_split_outputs",
+    ] {
+        sqlx::query(&format!(
+            "SELECT 1 FROM public.{table} WHERE false FOR KEY SHARE"
+        ))
+        .execute(&mut *tx)
+        .await
+        .expect("child-table row locks are permitted");
+    }
+    // Caller-created temporary tables must not redirect the privileged DELETE.
+    sqlx::query("CREATE TEMP TABLE mini_raw_material_events (order_id text) ON COMMIT DROP")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let deleted: i64 = sqlx::query_scalar("SELECT public.mini_reset_order_events(ARRAY[$1])")
+        .bind(ORDER_ID)
+        .fetch_one(&mut *tx)
+        .await
+        .expect("definer deletes only real scoped history");
+    assert!(deleted > 0);
+    tx.rollback().await.unwrap();
+    let gaps: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM pg_constraint k
+        JOIN pg_class p ON p.oid=k.confrelid JOIN pg_class c ON c.oid=k.conrelid
+        WHERE k.contype='f' AND k.connamespace='public'::regnamespace
+          AND (NOT has_any_column_privilege(p.relowner,p.oid,'UPDATE')
+               OR NOT has_any_column_privilege(c.relowner,c.oid,'UPDATE'))",
+    )
+    .fetch_one(admin)
+    .await
+    .unwrap();
+    assert_eq!(
+        gaps, 0,
+        "both directions of every FK must be lockable by their owner"
+    );
 }
 
 fn test_state(pool: PgPool) -> AppState {
@@ -319,8 +489,9 @@ async fn seed_pre_order_state(pool: &PgPool) {
     sqlx::query(
         "INSERT INTO mini_qolip_product_specs
             (item_code, item_name, item_group, qolip_code, size,
-             created_by_role, created_by_ref, created_by_name)
-         VALUES ($1, 'E2E product', 'E2E Materials', $2, 10, 'system', 'e2e', 'E2E')
+             created_by_role, created_by_ref, created_by_name, payload_json)
+         VALUES ($1, 'E2E product', 'E2E Materials', $2, 10, 'system', 'e2e', 'E2E',
+                 jsonb_build_object('warehouse', 'E2E Qolip'))
          ON CONFLICT DO NOTHING",
     )
     .bind(ITEM_CODE)

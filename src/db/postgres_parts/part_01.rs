@@ -3,7 +3,7 @@ const DEFAULT_MAX_CONNECTIONS: u32 = 16;
 const DEFAULT_ACQUIRE_TIMEOUT_MS: u64 = 500;
 const MIGRATION_LOCK_KEY: i64 = 6_514_811_918_052_026_001;
 
-const POSTGRES_MIGRATIONS: [(&str, &str); 102] = [
+const POSTGRES_MIGRATIONS: [(&str, &str); 105] = [
     (
         "0001_mini_erp_foundation",
         include_str!("../../../migrations/postgres/0001_mini_erp_foundation.sql"),
@@ -414,6 +414,18 @@ const POSTGRES_MIGRATIONS: [(&str, &str); 102] = [
         "0102_runtime_privileges",
         include_str!("../../../migrations/postgres/0102_runtime_privileges.sql"),
     ),
+    (
+        "0103_runtime_foreign_key_locks",
+        include_str!("../../../migrations/postgres/0103_runtime_foreign_key_locks.sql"),
+    ),
+    (
+        "0104_runtime_security_boundaries",
+        include_str!("../../../migrations/postgres/0104_runtime_security_boundaries.sql"),
+    ),
+    (
+        "0105_chat_delivery_recovery",
+        include_str!("../../../migrations/postgres/0105_chat_delivery_recovery.sql"),
+    ),
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -508,7 +520,17 @@ pub async fn connect_and_migrate_required() -> Result<PgPool, PostgresBootstrapE
     apply_foundation_migration(&pool)
         .await
         .map_err(PostgresBootstrapError::Migrate)?;
-    Ok(pool)
+    // Never leak migration/owner credentials into HTTP stores or workers.
+    if config.migration_database_url == config.database_url {
+        Ok(pool)
+    } else {
+        pool.close().await;
+        config
+            .pool_options()
+            .connect(&config.database_url)
+            .await
+            .map_err(PostgresBootstrapError::Connect)
+    }
 }
 
 /// Connect with the migration credential and stop at an explicit migration

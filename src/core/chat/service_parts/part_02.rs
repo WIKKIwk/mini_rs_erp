@@ -350,10 +350,13 @@ impl ChatService {
             }
             Err(error) => {
                 tracing::warn!(%error, event_id = %event.event_id, "freeze card delivery failed");
-                let _ = self
+                if let Err(retry_error) = self
                     .store
                     .reschedule_order_freeze_chat_event(&event.event_id, &error.to_string())
-                    .await;
+                    .await
+                {
+                    tracing::warn!(%retry_error, event_id = %event.event_id, "freeze card retry marker failed");
+                }
             }
         }
     }
@@ -403,10 +406,13 @@ impl ChatService {
             }
             Err(error) => {
                 tracing::warn!(%error, event_id = %event.event_id, "inventory transfer card delivery failed");
-                let _ = self
+                if let Err(retry_error) = self
                     .store
                     .reschedule_inventory_transfer_chat_event(&event.event_id, &error.to_string())
-                    .await;
+                    .await
+                {
+                    tracing::warn!(%retry_error, event_id = %event.event_id, "inventory card retry marker failed");
+                }
             }
         }
     }

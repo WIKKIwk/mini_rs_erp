@@ -61,11 +61,6 @@ impl PostgresOrderResetStore {
         .execute(&mut *tx)
         .await
         .map_err(OrderResetError::StoreFailed)?;
-        sqlx::query("SELECT set_config('mini_rs_erp.order_reset', 'on', true)")
-            .execute(&mut *tx)
-            .await
-            .map_err(OrderResetError::StoreFailed)?;
-
         create_reset_targets(&mut tx).await?;
 
         let report = OrderResetReport {
@@ -208,12 +203,12 @@ impl PostgresOrderResetStore {
              WHERE lower(order_id) IN (SELECT lower(id) FROM reset_order_ids)",
         )
         .await?;
-        report.raw_material_events_deleted = delete_rows(
-            &mut tx,
-            "DELETE FROM mini_raw_material_events
-             WHERE lower(order_id) IN (SELECT lower(id) FROM reset_order_ids)",
+        report.raw_material_events_deleted = sqlx::query_scalar::<_, i64>(
+            "SELECT public.mini_reset_order_events(ARRAY(SELECT id FROM reset_order_ids))",
         )
-        .await?;
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(OrderResetError::StoreFailed)? as u64;
         report.queue_events_deleted = delete_rows(
             &mut tx,
             "DELETE FROM mini_queue_action_events
@@ -302,7 +297,7 @@ impl PostgresOrderResetStore {
         )
         .await?;
 
-        sqlx::query("ALTER SEQUENCE IF EXISTS mini_production_order_number_seq RESTART WITH 1")
+        sqlx::query("SELECT public.mini_reset_order_number_sequence()")
             .execute(&mut *tx)
             .await
             .map_err(OrderResetError::StoreFailed)?;

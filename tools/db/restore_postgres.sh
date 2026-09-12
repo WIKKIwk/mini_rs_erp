@@ -37,6 +37,22 @@ find_pg_tool() {
 PG_RESTORE="$(find_pg_tool pg_restore)"
 PSQL="$(find_pg_tool psql)"
 
+# Fail before DROP SCHEMA if the caller supplied the ordinary HTTP credential.
+# A maintenance connection must own the target database (or be superuser).
+"$PSQL" --no-password --set=ON_ERROR_STOP=1 --dbname="$RESTORE_DATABASE_URL" \
+	--command="DO \$\$ BEGIN
+	IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname=current_user AND rolsuper)
+	AND NOT pg_has_role(current_user,
+	    (SELECT datdba FROM pg_database WHERE datname=current_database()), 'USAGE') THEN
+	    RAISE EXCEPTION 'restore requires the maintenance/database-owner credential';
+	END IF; END \$\$;" >/dev/null
+
+SECURITY_MIGRATION="$REPO_ROOT/migrations/postgres/0104_runtime_security_boundaries.sql"
+if [ ! -f "$SECURITY_MIGRATION" ]; then
+	echo "runtime security migration must be packaged with the restore tool" >&2
+	exit 2
+fi
+
 LOCK_TIMEOUT_MS="${MINI_ERP_RESTORE_LOCK_TIMEOUT_MS:-30000}"
 if ! [[ "$LOCK_TIMEOUT_MS" =~ ^[1-9][0-9]*$ ]]; then
 	echo "MINI_ERP_RESTORE_LOCK_TIMEOUT_MS must be a positive integer" >&2
@@ -70,6 +86,14 @@ RESTORE_ARGS=(
 	"$PG_RESTORE" \
 		"${RESTORE_ARGS[@]}" \
 		"$MINI_ERP_RESTORE_DUMP"
+	# --no-owner/--no-privileges discards the security boundary even when the
+	# restored migration history says 0104 already ran. Restore it atomically,
+	# before runtime connections can observe owner/ACL drift.
+	printf '%s\n' \
+		"SELECT EXISTS (SELECT 1 FROM public.mini_schema_migrations WHERE version='0104_runtime_security_boundaries') AS restore_hardened \\gset" \
+		'\if :restore_hardened'
+	sed -n '1,$p' "$SECURITY_MIGRATION"
+	printf '\n%s\n' '\endif'
 } | "$PSQL" \
 	--no-password \
 	--set=ON_ERROR_STOP=1 \

@@ -22,9 +22,9 @@ pub(super) async fn reschedule_order_freeze_chat_event(
 ) -> Result<(), ChatError> {
     sqlx::query(
         r#"UPDATE mini_order_freeze_chat_outbox
-           SET locked_until = now() + interval '2 seconds',
+           SET locked_until = now() + LEAST(900, power(2, LEAST(GREATEST(attempts, 1), 10))) * interval '1 second',
                last_error = left($2, 1000)
-           WHERE event_id = $1 AND delivered_at IS NULL"#,
+           WHERE event_id = $1 AND delivered_at IS NULL AND skipped_at IS NULL"#,
     )
     .bind(event_id.trim())
     .bind(error.trim())
@@ -74,7 +74,7 @@ pub(super) async fn reschedule_inventory_transfer_chat_event(
 ) -> Result<(), ChatError> {
     sqlx::query(
         r#"UPDATE mini_inventory_transfer_chat_outbox
-           SET locked_until = now() + interval '2 seconds',
+           SET locked_until = now() + LEAST(900, power(2, LEAST(GREATEST(attempts, 1), 10))) * interval '1 second',
                last_error = left($2, 1000)
            WHERE event_id = $1 AND delivered_at IS NULL"#,
     )

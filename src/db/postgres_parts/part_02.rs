@@ -73,6 +73,14 @@ pub(crate) fn postgres_test_database_options(
 }
 
 async fn ensure_migration_history(tx: &mut Transaction<'_, Postgres>) -> Result<(), sqlx::Error> {
+    let exists: bool = sqlx::query_scalar(
+        "SELECT to_regclass('public.mini_schema_migrations') IS NOT NULL",
+    )
+    .fetch_one(&mut **tx)
+    .await?;
+    if exists {
+        return Ok(());
+    }
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS mini_schema_migrations (
              version TEXT PRIMARY KEY,

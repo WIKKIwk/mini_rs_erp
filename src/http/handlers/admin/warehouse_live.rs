@@ -36,20 +36,43 @@ async fn authenticated_principal_for_live(
 
 async fn warehouse_live_socket(state: AppState, mut socket: WebSocket) {
     let mut rx = state.warehouse_events.subscribe();
+    let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(25));
     loop {
-        match rx.recv().await {
-            Ok(event) => match serde_json::to_string(&event) {
-                Ok(payload) => {
-                    if socket.send(Message::Text(payload.into())).await.is_err() {
-                        break;
-                    }
+        tokio::select! {
+            inbound = socket.recv() => {
+                match inbound {
+                    Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                    _ => {}
                 }
-                Err(error) => {
-                    tracing::warn!(%error, "warehouse live event serialization failed");
+            }
+            _ = heartbeat.tick() => {
+                if !send_warehouse_live_message(&mut socket, Message::Ping(Vec::new().into())).await {
+                    break;
                 }
-            },
-            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
-            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+            received = rx.recv() => {
+                match received {
+                    Ok(event) => match serde_json::to_string(&event) {
+                        Ok(payload) => {
+                            if !send_warehouse_live_message(&mut socket, Message::Text(payload.into())).await {
+                                break;
+                            }
+                        }
+                        Err(error) => {
+                            tracing::warn!(%error, "warehouse live event serialization failed");
+                        }
+                    },
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
         }
     }
+}
+
+async fn send_warehouse_live_message(socket: &mut WebSocket, message: Message) -> bool {
+    matches!(
+        tokio::time::timeout(std::time::Duration::from_secs(15), socket.send(message)).await,
+        Ok(Ok(()))
+    )
 }

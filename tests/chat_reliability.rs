@@ -3,7 +3,9 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use mini_rs_erp::core::auth::models::{Principal, PrincipalRole};
-use mini_rs_erp::core::chat::{ChatPrincipalInput, ChatService, ChatStorePort};
+use mini_rs_erp::core::chat::{
+    ChatPrincipalInput, ChatService, ChatStorePort, OrderFreezeChatEvent,
+};
 use mini_rs_erp::core::chat_media::{
     ChatMediaAccessVariant, ChatMediaByteStream, ChatMediaError, ChatMediaRangeRequest,
     ChatMediaService, ChatMediaStorage, ChatMediaStorageError, ChatMediaStreamAccess,
@@ -390,6 +392,8 @@ async fn chat_delivery_is_idempotent_resumable_and_cross_process() {
     .expect("legacy writer cursor trigger");
     assert!(compatibility_cursor > owner_event.cursor);
 
+    freeze_cards_are_persisted(&pool).await;
+
     pool.close().await;
     let admin_pool = sqlx::PgPool::connect(&admin_url)
         .await
@@ -412,6 +416,139 @@ fn principal(reference: &str) -> Principal {
         phone: String::new(),
         avatar_url: String::new(),
     }
+}
+
+async fn freeze_cards_are_persisted(pool: &sqlx::PgPool) {
+    let runtime_pool = sqlx::PgPool::connect_with(
+        pool.connect_options()
+            .as_ref()
+            .clone()
+            .username("mini_rs_erp"),
+    )
+    .await
+    .expect("runtime-role pool");
+    let store = Arc::new(PostgresChatStore::new(runtime_pool.clone()));
+    let service = ChatService::new(store.clone());
+    let mut worker = principal_input("freeze-worker");
+    worker.role = PrincipalRole::Aparatchi;
+    let conversation = service
+        .create_or_get_dm(principal_input("freeze-admin"), worker)
+        .await
+        .expect("freeze conversation");
+    let event = OrderFreezeChatEvent {
+        event_sequence: 1,
+        event_id: "freeze-test-event-1".into(),
+        request_id: "freeze-test-request".into(),
+        status: "pending".into(),
+        order_id: "freeze-test-order".into(),
+        order_number: "TEST-FREEZE".into(),
+        order_title: "Freeze regression fixture".into(),
+        requester_role: "admin".into(),
+        requester_ref: "freeze-admin".into(),
+        requester_display_name: "Freeze admin".into(),
+        target_session_id: "freeze-test-session".into(),
+        target_apparatus: "Laminatsiya 1".into(),
+        target_worker_role: "aparatchi".into(),
+        target_worker_ref: "freeze-worker".into(),
+        target_worker_display_name: "Freeze worker".into(),
+        requested_at_unix: 1_700_000_000,
+        transitioned_at_unix: 1_700_000_000,
+        attempts: 1,
+    };
+    let previous_cursor: i64 =
+        sqlx::query_scalar("SELECT MAX(event_cursor) FROM mini_chat_outbox_events")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    sqlx::query("DELETE FROM mini_chat_event_clock")
+        .execute(pool)
+        .await
+        .expect("simulate missing clock row");
+    let result = store
+        .upsert_order_freeze_card(
+            &principal("freeze-admin"),
+            &conversation.conversation_id,
+            &event,
+        )
+        .await
+        .expect("persist freeze card as runtime role");
+    assert!(result.created);
+    assert_eq!(result.message.metadata["status"], "pending");
+    let recovered: i64 = sqlx::query_scalar("SELECT cursor FROM mini_chat_event_clock")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(recovered, previous_cursor + 1);
+
+    let mut tasks = tokio::task::JoinSet::new();
+    for sequence in 2..=9 {
+        let store = store.clone();
+        let conversation_id = conversation.conversation_id.clone();
+        let mut event = event.clone();
+        event.request_id = "concurrent-freeze-request".into();
+        event.event_sequence = sequence;
+        event.status = if sequence == 9 { "unfrozen" } else { "frozen" }.into();
+        tasks.spawn(async move {
+            store
+                .upsert_order_freeze_card(&principal("freeze-admin"), &conversation_id, &event)
+                .await
+        });
+    }
+    let mut created = 0;
+    while let Some(result) = tasks.join_next().await {
+        if result.unwrap().expect("concurrent freeze upsert").created {
+            created += 1;
+        }
+    }
+    assert_eq!(created, 1, "concurrent retries must create only one card");
+    let metadata: serde_json::Value = sqlx::query_scalar("SELECT metadata_json FROM mini_chat_messages
+        WHERE conversation_id=$1 AND client_message_id='order-freeze-request:concurrent-freeze-request'")
+        .bind(&conversation.conversation_id).fetch_one(pool).await.unwrap();
+    assert_eq!(metadata["event_sequence"], 9);
+    assert_eq!(
+        metadata["status"], "unfrozen",
+        "late retries must not rewind card state"
+    );
+
+    // Normal chat and old writers must recover too; no migration rerun/restart.
+    sqlx::query("DELETE FROM mini_chat_event_clock")
+        .execute(pool)
+        .await
+        .unwrap();
+    service
+        .send_message(
+            &principal("freeze-admin"),
+            &conversation.conversation_id,
+            "after-clock-loss",
+            "Clock recovery fixture",
+        )
+        .await
+        .expect("normal message recovery");
+    sqlx::query("DELETE FROM mini_chat_event_clock")
+        .execute(pool)
+        .await
+        .unwrap();
+    let before_legacy: i64 =
+        sqlx::query_scalar("SELECT MAX(event_cursor) FROM mini_chat_outbox_events")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    let mut tx = runtime_pool.begin().await.unwrap();
+    let legacy_cursor: i64 = sqlx::query_scalar("INSERT INTO mini_chat_outbox_events
+        (event_id, topic, conversation_id, message_sequence, recipient_keys, payload_json)
+        VALUES ('legacy-clock-recovery', 'chat.message.created', $1, 1, '[]', '{}') RETURNING event_cursor")
+        .bind(&conversation.conversation_id).fetch_one(&mut *tx).await.expect("legacy trigger recovery");
+    assert_eq!(legacy_cursor, before_legacy + 1);
+    tx.rollback().await.unwrap();
+    let clock_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mini_chat_event_clock")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        clock_rows, 0,
+        "clock recovery must roll back with its message"
+    );
+    runtime_pool.close().await;
 }
 
 fn principal_input(reference: &str) -> ChatPrincipalInput {
