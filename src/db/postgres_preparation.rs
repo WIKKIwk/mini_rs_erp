@@ -411,8 +411,7 @@ impl PostgresPreparationStore {
         Ok(json!({"product_code": code, "formulas": formulas}))
     }
 
-    pub async fn delete_formula(
-        &self,
+    pub async fn delete_formula(        &self,
         owner: &str,
         product_code: &str,
         name: &str,
@@ -442,6 +441,27 @@ impl PostgresPreparationStore {
             return Err(PreparationError::Invalid("Formula topilmadi"));
         }
         Ok(json!({"product_code": code, "name": formula, "deleted": true}))
+    }
+
+    /// Ownerga biriktirilgan omborning kanonik nomi (bola ombor ochishda
+    /// ota-ombor tekshiruvi uchun). Biriktirilmagan bo'lsa Forbidden.
+    pub async fn owned_warehouse_name(
+        &self,
+        owner: &str,
+        name: &str,
+    ) -> Result<String, PreparationError> {
+        let mut tx = self.pool.begin().await?;
+        let canonical = warehouse(&mut tx, owner, name).await?;
+        tx.rollback().await?;
+        Ok(canonical)
+    }
+
+    pub async fn warehouse_name_exists(&self, name: &str) -> Result<bool, PreparationError> {
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM mini_warehouses WHERE lower(name) = lower($1))")
+            .bind(name.trim())
+            .fetch_one(&self.pool)
+            .await
+            .map_err(PreparationError::from)
     }
 
     async fn begin(

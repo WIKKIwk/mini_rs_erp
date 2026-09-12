@@ -4,6 +4,7 @@ use crate::{
         auth::models::{Principal, PrincipalRole},
         authz::Capability,
         preparation::*,
+        warehouses::{WarehouseAssignmentUpsert, WarehouseError, WarehouseUpsert},
     },
 };
 use axum::{
@@ -59,6 +60,29 @@ fn error(error: PreparationError) -> ApiError {
         PreparationError::StoreFailed => StatusCode::INTERNAL_SERVER_ERROR,
     };
     (status, Json(json!({"code":code,"error":error.to_string()})))
+}
+
+fn warehouse_api_error(error: WarehouseError) -> ApiError {
+    match error {
+        WarehouseError::MissingWarehouse
+        | WarehouseError::MissingPrincipalRef
+        | WarehouseError::InvalidApparatus
+        | WarehouseError::NotFound
+        | WarehouseError::AssignmentNotFound => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"code":"preparation_invalid","error":error.to_string()})),
+        ),
+        WarehouseError::NotEmpty(_)
+        | WarehouseError::HasActiveReservations(_)
+        | WarehouseError::HasChildren => (
+            StatusCode::CONFLICT,
+            Json(json!({"code":"preparation_conflict","error":error.to_string()})),
+        ),
+        WarehouseError::StoreFailed => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"code":"preparation_store","error":error.to_string()})),
+        ),
+    }
 }
 
 pub async fn snapshot(
@@ -162,4 +186,61 @@ pub async fn formula_delete(
         .await
         .map(Json)
         .map_err(error)
+}
+
+/// Bola ombor ochish: faqat o'ziga biriktirilgan ota ombor ostiga.
+/// Yaratilgan bola avtomatik shu masterga biriktiriladi — snapshot,
+/// kirim/sarf uni darhol ko'radi.
+pub async fn create_warehouse(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<PreparationWarehouseCreate>,
+) -> Result<Json<Value>, ApiError> {
+    let actor = authorize(&state, &headers).await?;
+    let preparation = store(&state)?;
+    let parent = preparation
+        .owned_warehouse_name(&actor.ref_, &input.parent_warehouse)
+        .await
+        .map_err(error)?;
+    let name = input.warehouse_name().map_err(error)?;
+    if preparation
+        .warehouse_name_exists(&name)
+        .await
+        .map_err(error)?
+    {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(json!({"code":"preparation_conflict","error":"Bunday ombor nomi mavjud"})),
+        ));
+    }
+    let created = state
+        .warehouses
+        .upsert_warehouse(WarehouseUpsert {
+            warehouse: name.clone(),
+            company: String::new(),
+            is_group: false,
+            parent_warehouse: parent.clone(),
+        })
+        .await
+        .map_err(warehouse_api_error)?;
+    state
+        .warehouses
+        .assign_warehouse(WarehouseAssignmentUpsert {
+            assignment_kind: "warehouse".to_string(),
+            warehouse: created.warehouse.clone(),
+            warehouse_name: None,
+            apparatus_id: None,
+            principal_role: PrincipalRole::TayyorlovMasteri,
+            principal_ref: actor.ref_.clone(),
+            display_name: actor.display_name.clone(),
+        })
+        .await
+        .map_err(warehouse_api_error)?;
+    state.warehouse_events.notify_updated(
+        &created.warehouse,
+        "warehouse_assignment",
+    );
+    Ok(Json(
+        json!({"warehouse": created.warehouse, "parent_warehouse": parent}),
+    ))
 }

@@ -122,11 +122,43 @@ impl ConsumptionCreate {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct PreparationWarehouseCreate {
+    pub parent_warehouse: String,
+    pub name: String,
+}
+
+impl PreparationWarehouseCreate {
+    fn clean(value: &str) -> Result<String, PreparationError> {
+        let name = value.split_whitespace().collect::<Vec<_>>().join(" ");
+        if name.is_empty() || name.chars().count() > 160 {
+            return Err(PreparationError::Invalid(
+                "Ombor nomi 1–160 ta belgidan iborat bo‘lishi kerak",
+            ));
+        }
+        Ok(name)
+    }
+
+    pub fn parent_key(&self) -> Result<String, PreparationError> {
+        Self::clean(&self.parent_warehouse)
+    }
+
+    pub fn warehouse_name(&self) -> Result<String, PreparationError> {
+        let name = Self::clean(&self.name)?;
+        if name.to_lowercase() == self.parent_warehouse.trim().to_lowercase() {
+            return Err(PreparationError::Invalid(
+                "Bola ombor nomi ota ombordan farqli bo‘lishi kerak",
+            ));
+        }
+        Ok(name)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FormulaLine {
     pub item_code: String,
     pub percent: String,
 }
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FormulaUpsert {
@@ -225,8 +257,26 @@ mod tests {
         }
     }
     #[test]
-    fn preparation_recipe_rejects_duplicate_and_invalid_percent() {
-        let mut input = ConsumptionCreate {
+    fn preparation_child_warehouse_names_are_validated() {
+        let ok = PreparationWarehouseCreate {
+            parent_warehouse: "Asosiy".into(),
+            name: "  Asosiy-1 ".into(),
+        };
+        assert_eq!(ok.parent_key().unwrap(), "Asosiy");
+        assert_eq!(ok.warehouse_name().unwrap(), "Asosiy-1");
+        let same = PreparationWarehouseCreate {
+            parent_warehouse: "Asosiy".into(),
+            name: "asosiy".into(),
+        };
+        assert!(same.warehouse_name().is_err());
+        let blank = PreparationWarehouseCreate {
+            parent_warehouse: "Asosiy".into(),
+            name: "   ".into(),
+        };
+        assert!(blank.warehouse_name().is_err());
+    }
+    #[test]
+    fn preparation_recipe_rejects_duplicate_and_invalid_percent() {        let mut input = ConsumptionCreate {
             request_id: "test".into(),
             warehouse: "W".into(),
             order_id: "O".into(),
