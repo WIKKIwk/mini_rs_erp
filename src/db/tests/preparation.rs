@@ -289,3 +289,99 @@ async fn preparation_postgres_partial_fifo_atomic_retry_concurrency_and_scope() 
         .unwrap();
     admin.close().await;
 }
+
+#[tokio::test]
+async fn preparation_child_warehouse_receipt_lands_in_child() {
+    let url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
+        .unwrap_or_else(|_| "postgres:///postgres".into());
+    let admin = sqlx::PgPool::connect(&url).await.unwrap();
+    let db = format!("mini_rs_erp_test_prepchild_{:016x}", rand::random::<u64>());
+    sqlx::query(&format!("CREATE DATABASE {db}"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    let options = url.parse::<PgConnectOptions>().unwrap().database(&db);
+    let pool = sqlx::PgPool::connect_with(options).await.unwrap();
+    apply_foundation_migration(&pool).await.unwrap();
+    sqlx::raw_sql("INSERT INTO mini_system_users(id,role,name,phone) VALUES
+            ('prep-1','tayyorlov_masteri','Master','901234567');
+        INSERT INTO mini_warehouses(id,name) VALUES ('prep-w','Preparation W');
+        INSERT INTO mini_warehouse_assignments(assignment_kind,warehouse,warehouse_name,principal_role,principal_ref)
+            VALUES ('warehouse','Preparation W','Preparation W','tayyorlov_masteri','prep-1');")
+        .execute(&pool).await.unwrap();
+    let actor = Principal {
+        role: PrincipalRole::TayyorlovMasteri,
+        display_name: "Master".into(),
+        legal_name: String::new(),
+        ref_: "prep-1".into(),
+        phone: String::new(),
+        avatar_url: String::new(),
+    };
+    let store = PostgresPreparationStore::new(pool.clone());
+    // Ota ombor o'zimizniki — tasdiqlanadi; begona ombor — Forbidden.
+    assert_eq!(
+        store.owned_warehouse_name("prep-1", "Preparation W").await.unwrap(),
+        "Preparation W"
+    );
+    assert!(matches!(
+        store.owned_warehouse_name("prep-1", "Other W").await,
+        Err(PreparationError::Forbidden)
+    ));
+    assert!(!store.warehouse_name_exists("Preparation W-1").await.unwrap());
+    // Handler shared service lar orqali yaratadigan qatorlar.
+    sqlx::raw_sql("INSERT INTO mini_warehouses(id,name,parent_warehouse) VALUES
+            ('warehouse:preparation w-1','Preparation W-1','Preparation W');
+        INSERT INTO mini_warehouse_assignments(assignment_kind,warehouse,warehouse_name,principal_role,principal_ref)
+            VALUES ('warehouse','Preparation W-1','Preparation W-1','tayyorlov_masteri','prep-1');")
+        .execute(&pool).await.unwrap();
+    assert!(store.warehouse_name_exists("preparation w-1").await.unwrap());
+    let material = store
+        .create_material(
+            &actor,
+            MaterialCreate {
+                request_id: "material-child".into(),
+                name: "Kley".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let code = material["item_code"].as_str().unwrap().to_string();
+    // Kirim bola omborga yoziladi va snapshot da shu omborda ko'rinadi.
+    let receipt = store
+        .receive(
+            &actor,
+            ReceiptCreate {
+                request_id: "receipt-child".into(),
+                item_code: code.clone(),
+                warehouse: "Preparation W-1".into(),
+                kg: "25".into(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(receipt["warehouse"], "Preparation W-1");
+    let snapshot: Value = store.snapshot("prep-1").await.unwrap();
+    assert!(
+        snapshot["warehouses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w == "Preparation W-1")
+    );
+    let material_snapshot = snapshot["materials"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["item_code"] == code)
+        .unwrap();
+    assert_eq!(
+        material_snapshot["balances"],
+        json!([{"warehouse": "Preparation W-1", "kg": "25.000000"}])
+    );
+    pool.close().await;
+    sqlx::query(&format!("DROP DATABASE {db}"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    admin.close().await;
+}
