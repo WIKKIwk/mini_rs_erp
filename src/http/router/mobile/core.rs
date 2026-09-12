@@ -23,6 +23,11 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/v1/mobile/preparation/receipts", axum::routing::post(crate::http::handlers::preparation::receipt))
         .route("/v1/mobile/preparation/consumptions", axum::routing::post(crate::http::handlers::preparation::consumption))
         .route(
+            "/v1/mobile/preparation/formulas",
+            axum::routing::get(crate::http::handlers::preparation::formula_show)
+                .post(crate::http::handlers::preparation::formula_upsert),
+        )
+        .route(
             "/v1/mobile/app-update/android",
             get(app_update::android_metadata),
         )

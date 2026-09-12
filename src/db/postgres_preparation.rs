@@ -339,6 +339,73 @@ impl PostgresPreparationStore {
         Ok(result)
     }
 
+    pub async fn upsert_formula(
+        &self,
+        actor: &Principal,
+        input: FormulaUpsert,
+    ) -> Result<Value, PreparationError> {
+        let product_code = input.product_key()?;
+        let normalized = input.normalized_lines()?;
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SET LOCAL lock_timeout = '5s'")
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(format!("preparation:formula:{}", actor.ref_))
+            .execute(&mut *tx)
+            .await?;
+        // Resolve names in code order (deadlock-safe), then sort lines
+        // alphabetically by material name for stable display.
+        let mut lines: Vec<(String, String, i64)> = Vec::new();
+        for (code, percent) in normalized {
+            let name = material_name(&mut tx, &actor.ref_, &code).await?;
+            lines.push((code, name, percent));
+        }
+        lines.sort_by(|a, b| {
+            a.1.to_lowercase()
+                .cmp(&b.1.to_lowercase())
+                .then_with(|| a.0.cmp(&b.0))
+        });
+        let payload: Vec<Value> = lines
+            .iter()
+            .map(|(code, name, percent)| {
+                json!({"item_code": code, "name": name, "percent": decimal_text(*percent)})
+            })
+            .collect();
+        sqlx::query(
+            "INSERT INTO mini_preparation_formulas(owner_ref, product_code, lines, updated_at)
+             VALUES ($1,$2,$3,now())
+             ON CONFLICT (owner_ref, product_code)
+             DO UPDATE SET lines = EXCLUDED.lines, updated_at = now()",
+        )
+        .bind(&actor.ref_)
+        .bind(&product_code)
+        .bind(json!(payload))
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(json!({"product_code": product_code, "lines": payload}))
+    }
+
+    pub async fn get_formula(
+        &self,
+        owner: &str,
+        product_code: &str,
+    ) -> Result<Value, PreparationError> {
+        let code = product_code.trim();
+        if code.is_empty() || code.chars().count() > 160 {
+            return Err(PreparationError::Invalid("Mahsulot kodi noto‘g‘ri"));
+        }
+        let lines: Option<Value> = sqlx::query_scalar(
+            "SELECT lines FROM mini_preparation_formulas WHERE owner_ref=$1 AND product_code=$2",
+        )
+        .bind(owner)
+        .bind(code)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(json!({"product_code": code, "lines": lines.unwrap_or(json!([]))}))
+    }
+
     async fn begin(
         &self,
         owner: &str,

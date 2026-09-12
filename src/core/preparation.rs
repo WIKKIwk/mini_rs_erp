@@ -120,6 +120,57 @@ impl ConsumptionCreate {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FormulaLine {
+    pub item_code: String,
+    pub percent: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FormulaUpsert {
+    pub product_code: String,
+    pub lines: Vec<FormulaLine>,
+}
+
+impl FormulaUpsert {
+    pub fn product_key(&self) -> Result<String, PreparationError> {
+        let code = self.product_code.trim().to_string();
+        if code.is_empty() || code.chars().count() > 160 {
+            return Err(PreparationError::Invalid("Mahsulot kodi noto‘g‘ri"));
+        }
+        Ok(code)
+    }
+
+    /// Validated (item_code, percent) pairs sorted alphabetically by code.
+    /// Display order by name is applied by the caller once names resolve.
+    pub fn normalized_lines(&self) -> Result<Vec<(String, i64)>, PreparationError> {
+        if self.lines.is_empty() || self.lines.len() > 100 {
+            return Err(PreparationError::Invalid("1–100 ta seriya tanlang"));
+        }
+        let mut seen = BTreeSet::new();
+        let mut result = Vec::new();
+        for line in &self.lines {
+            let code = line.item_code.trim();
+            if code.is_empty() || !seen.insert(code.to_string()) {
+                return Err(PreparationError::Invalid(
+                    "Seriya bo‘sh yoki takrorlangan",
+                ));
+            }
+            let percent = decimal(&line.percent)?;
+            if percent > 100 * SCALE {
+                return Err(PreparationError::Invalid(
+                    "Foiz 100 dan oshmasligi kerak",
+                ));
+            }
+            result.push((code.to_string(), percent));
+        }
+        result.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok(result)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,5 +216,47 @@ mod tests {
         input.lines.pop();
         input.lines[0].percent = "100.000001".into();
         assert!(input.quantities(100 * SCALE).is_err());
+    }
+    #[test]
+    fn preparation_formula_sorts_alphabetically_and_validates() {
+        let input = FormulaUpsert {
+            product_code: "  PC-1 ".into(),
+            lines: vec![
+                FormulaLine {
+                    item_code: "B".into(),
+                    percent: "30".into(),
+                },
+                FormulaLine {
+                    item_code: "A".into(),
+                    percent: "70".into(),
+                },
+            ],
+        };
+        assert_eq!(input.product_key().unwrap(), "PC-1");
+        let lines = input.normalized_lines().unwrap();
+        assert_eq!(lines[0].0, "A");
+        assert_eq!(lines[1].0, "B");
+        let dup = FormulaUpsert {
+            product_code: "PC-1".into(),
+            lines: vec![
+                FormulaLine {
+                    item_code: "A".into(),
+                    percent: "50".into(),
+                },
+                FormulaLine {
+                    item_code: "A".into(),
+                    percent: "50".into(),
+                },
+            ],
+        };
+        assert!(dup.normalized_lines().is_err());
+        let bad = FormulaUpsert {
+            product_code: "".into(),
+            lines: vec![FormulaLine {
+                item_code: "A".into(),
+                percent: "10".into(),
+            }],
+        };
+        assert!(bad.product_key().is_err());
     }
 }

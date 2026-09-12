@@ -8,9 +8,10 @@ use crate::{
 };
 use axum::{
     Json,
-    extract::State,
+    extract::{Query, State},
     http::{HeaderMap, StatusCode},
 };
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 type ApiError = (StatusCode, Json<Value>);
@@ -111,4 +112,35 @@ pub async fn consumption(
         "raw_material_stock",
     );
     Ok(Json(result))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FormulaQuery {
+    pub product_code: String,
+}
+
+pub async fn formula_upsert(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<FormulaUpsert>,
+) -> Result<Json<Value>, ApiError> {
+    let actor = authorize(&state, &headers).await?;
+    store(&state)?
+        .upsert_formula(&actor, input)
+        .await
+        .map(Json)
+        .map_err(error)
+}
+
+pub async fn formula_show(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<FormulaQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let actor = authorize(&state, &headers).await?;
+    store(&state)?
+        .get_formula(&actor.ref_, &query.product_code)
+        .await
+        .map(Json)
+        .map_err(error)
 }
