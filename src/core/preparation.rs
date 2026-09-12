@@ -145,12 +145,14 @@ impl FormulaUpsert {
 
     /// Validated (item_code, percent) pairs sorted alphabetically by code.
     /// Display order by name is applied by the caller once names resolve.
+    /// Safety rule: percentages must total exactly 100%.
     pub fn normalized_lines(&self) -> Result<Vec<(String, i64)>, PreparationError> {
         if self.lines.is_empty() || self.lines.len() > 100 {
             return Err(PreparationError::Invalid("1–100 ta seriya tanlang"));
         }
         let mut seen = BTreeSet::new();
         let mut result = Vec::new();
+        let mut total: i64 = 0;
         for line in &self.lines {
             let code = line.item_code.trim();
             if code.is_empty() || !seen.insert(code.to_string()) {
@@ -164,7 +166,15 @@ impl FormulaUpsert {
                     "Foiz 100 dan oshmasligi kerak",
                 ));
             }
+            total = total.checked_add(percent).ok_or(PreparationError::Invalid(
+                "Jami foiz hisoblanmadi",
+            ))?;
             result.push((code.to_string(), percent));
+        }
+        if total != 100 * SCALE {
+            return Err(PreparationError::Invalid(
+                "Jami foiz 100% bo‘lishi kerak",
+            ));
         }
         result.sort_by(|a, b| a.0.cmp(&b.0));
         Ok(result)
@@ -236,6 +246,26 @@ mod tests {
         let lines = input.normalized_lines().unwrap();
         assert_eq!(lines[0].0, "A");
         assert_eq!(lines[1].0, "B");
+        // Jami 100% bo'lmasa (kam yoki ortiqcha) — rad etiladi.
+        for percents in [["10", "80"], ["60", "50"], ["100", "1"]] {
+            let bad_total = FormulaUpsert {
+                product_code: "PC-1".into(),
+                lines: vec![
+                    FormulaLine {
+                        item_code: "A".into(),
+                        percent: percents[0].into(),
+                    },
+                    FormulaLine {
+                        item_code: "B".into(),
+                        percent: percents[1].into(),
+                    },
+                ],
+            };
+            assert!(
+                bad_total.normalized_lines().is_err(),
+                "{percents:?} jami 100 emas"
+            );
+        }
         let dup = FormulaUpsert {
             product_code: "PC-1".into(),
             lines: vec![
