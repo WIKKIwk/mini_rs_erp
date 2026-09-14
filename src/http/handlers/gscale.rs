@@ -118,7 +118,7 @@ async fn gscale_items_for_principal(
 }
 
 /// Tayyorlov masteri katalogi: faqat o'ziga biriktirilgan homashyo
-/// oilalariga mos itemlar (kod/nom exact yoki "nomi + bo'sh joy" prefiksi,
+/// oilalariga mos itemlar (kod/nom exact yoki o'lchamli variant,
 /// masalan PET -> "PET 615/12"). Biriktirilmagan bo'lsa bo'sh (fail-closed).
 async fn gscale_items_for_tayyorlov(
     state: &AppState,
@@ -145,15 +145,8 @@ async fn gscale_items_for_tayyorlov(
     let mut out: Vec<SupplierItem> = items
         .into_iter()
         .filter(|item| {
-            let code = item.code.trim().to_lowercase();
-            let name = item.name.trim().to_lowercase();
             materials.iter().any(|(id, material_name)| {
-                code == *id
-                    || name == *id
-                    || code == *material_name
-                    || name == *material_name
-                    || code.starts_with(&format!("{material_name} "))
-                    || name.starts_with(&format!("{material_name} "))
+                material_item_matches_family(&item.code, &item.name, id, material_name)
             })
         })
         .collect();
@@ -164,6 +157,37 @@ async fn gscale_items_for_tayyorlov(
             .then_with(|| a.code.to_lowercase().cmp(&b.code.to_lowercase()))
     });
     Ok(out.into_iter().skip(offset).take(limit).collect())
+}
+
+fn material_item_matches_family(
+    code: &str,
+    name: &str,
+    material_id: &str,
+    material_name: &str,
+) -> bool {
+    let code = code.trim().to_lowercase();
+    let name = name.trim().to_lowercase();
+    let material_id = material_id.trim().to_lowercase();
+    let material_name = material_name.trim().to_lowercase();
+    if material_id.is_empty() && material_name.is_empty() {
+        return false;
+    }
+
+    let values = [code.as_str(), name.as_str()];
+    if values
+        .iter()
+        .any(|value| *value == material_id || *value == material_name)
+    {
+        return true;
+    }
+
+    let variant_prefix = format!("{material_name} ");
+    values.iter().any(|value| {
+        value
+            .strip_prefix(&variant_prefix)
+            .and_then(|suffix| suffix.chars().next())
+            .is_some_and(|first| first.is_ascii_digit())
+    })
 }
 
 pub async fn material_receipt_print(
@@ -399,3 +423,52 @@ pub struct GscaleItemsQuery {
 
 #[allow(dead_code)]
 fn _keeps_error_response_compatible(_response: ErrorResponse) {}
+
+#[cfg(test)]
+mod tests {
+    use super::material_item_matches_family;
+
+    #[test]
+    fn tayyorlov_material_scope_keeps_exact_and_dimension_variants() {
+        assert!(material_item_matches_family(
+            "builtin-bopp",
+            "BOPP",
+            "builtin-bopp",
+            "BOPP",
+        ));
+        assert!(material_item_matches_family(
+            "bopp 700/12",
+            "BOPP 700/12",
+            "builtin-bopp",
+            "BOPP",
+        ));
+        assert!(material_item_matches_family(
+            "pe 1700/80",
+            "PE 1700/80",
+            "builtin-pe",
+            "PE",
+        ));
+    }
+
+    #[test]
+    fn tayyorlov_material_scope_does_not_leak_similar_material_names() {
+        assert!(!material_item_matches_family(
+            "bopp metal",
+            "BOPP metal",
+            "builtin-bopp",
+            "BOPP",
+        ));
+        assert!(!material_item_matches_family(
+            "pe oq",
+            "PE oq",
+            "builtin-pe",
+            "PE",
+        ));
+        assert!(!material_item_matches_family(
+            "pe pr",
+            "PE PR",
+            "builtin-pe",
+            "PE",
+        ));
+    }
+}
