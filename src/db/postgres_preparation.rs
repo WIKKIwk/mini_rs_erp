@@ -96,6 +96,8 @@ impl PostgresPreparationStore {
             sqlx::query_scalar(
                 "SELECT jsonb_build_object('id', m.id, 'code', m.code, 'title', m.title,
                      'order_kg', round((m.map_json->>'order_kg')::numeric, 6)::text,
+                     'width_mm', CASE WHEN jsonb_typeof(m.map_json->'width_mm') = 'number'
+                        THEN round((m.map_json->>'width_mm')::numeric, 3)::text ELSE NULL END,
                      'saved', EXISTS(SELECT 1 FROM mini_preparation_operations p
                          WHERE p.owner_ref = $1 AND p.order_id = m.id AND p.kind = 'consumption'))
                  FROM mini_production_maps m
