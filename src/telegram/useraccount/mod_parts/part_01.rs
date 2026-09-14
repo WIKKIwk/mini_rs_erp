@@ -9,6 +9,12 @@ pub(crate) enum UserAccountError {
     LoginNotPending,
     #[error("telegram login code is invalid or expired")]
     InvalidCode,
+    #[error("telegram is rate limiting login codes: retry after {seconds} seconds")]
+    FloodWait { seconds: u64 },
+    #[error("telegram has no available delivery channel for login codes right now")]
+    SendCodeUnavailable,
+    #[error("login code resend is too frequent: retry after {wait_seconds} seconds")]
+    ResendTooSoon { wait_seconds: u64 },
     #[error("telegram account registration is required")]
     SignUpRequired,
     #[error("telegram account does not match the bot user")]
@@ -28,6 +34,12 @@ pub(crate) enum LoginOutcome {
 }
 
 #[derive(Debug)]
+pub(crate) enum ResendOutcome {
+    Resent,
+    Authorized,
+}
+
+#[derive(Debug)]
 pub(crate) enum CodeOutcome {
     PasswordRequired { hint: Option<String> },
     Authorized,
@@ -39,7 +51,10 @@ struct PendingLogin {
     login_token: LoginToken,
     password_token: Option<PasswordToken>,
     phone_number: String,
+    last_code_sent_at: std::time::Instant,
 }
+
+const RESEND_COOLDOWN_SECONDS: u64 = 60;
 
 #[derive(Clone)]
 pub(crate) struct TelegramUserAccountService {
@@ -100,29 +115,46 @@ impl TelegramUserAccountService {
                 .map(|_| LoginOutcome::Authorized);
         }
 
-        match client
-            .request_login_code(&phone_number)
-            .await
-            .map_err(map_transport)?
-        {
-            SendCodeOutcome::CodeRequired(login_token) => {
+        // auth.sendCode uchun Telegram/MTProto'ning standart code_settings'ini
+        // ishlatamiz. Telegram kodni contact'dagi raqamga bog'langan akkauntga
+        // o'zi tanlagan xavfsiz kanal orqali yetkazadi (Telegram servis xabari,
+        // SMS yoki qo'ng'iroq). Server userbot current_number/flash-call kabi
+        // qurilmaga bog'liq hintlarni bera olmaydi va ular SMS'ni majburlamaydi.
+        let code_request = client.request_login_code(&phone_number).await;
+        match code_request {
+            Ok(SendCodeOutcome::CodeRequired(login_token)) => {
                 let pending = PendingLogin {
                     client,
                     shutdown,
                     login_token,
                     password_token: None,
                     phone_number,
+                    last_code_sent_at: std::time::Instant::now(),
                 };
                 let mut logins = self.pending_logins.lock().await;
                 if let Some(previous) = logins.insert(telegram_user_id.to_string(), pending) {
                     previous.shutdown.cancel();
                 }
+                tracing::info!(
+                    telegram_user_id = %telegram_user_id,
+                    "telegram login code requested"
+                );
                 Ok(LoginOutcome::CodeSent)
             }
-            SendCodeOutcome::AlreadyAuthorized(_) => self
+            Ok(SendCodeOutcome::AlreadyAuthorized(_)) => self
                 .finish_login(telegram_user_id, phone_number, client, shutdown)
                 .await
                 .map(|_| LoginOutcome::Authorized),
+            Err(error) => {
+                // FLOOD_WAIT alohida: user qayta-qayta bossa blok uzayadi,
+                // shuning uchun kutish vaqtini aniq ko'rsatish shart.
+                if let ferogram::ErrorKind::FloodWait(seconds) = error.kind() {
+                    shutdown.cancel();
+                    return Err(UserAccountError::FloodWait { seconds });
+                }
+                shutdown.cancel();
+                Err(map_send_code_error(error))
+            }
         }
     }
 
@@ -193,6 +225,55 @@ impl TelegramUserAccountService {
             Err(error) => {
                 self.put_pending(telegram_user_id, pending).await;
                 Err(map_transport(error))
+            }
+        }
+    }
+
+    pub(crate) async fn resend_code(
+        &self,
+        telegram_user_id: &str,
+    ) -> Result<ResendOutcome, UserAccountError> {
+        // Kod "yuborildi" lekin yetib kelmasa: Telegram keyingi yetkazish
+        // usuliga o'tadi (ilovadagi xabar -> SMS -> qo'ng'iroq).
+        let mut pending = self.take_pending(telegram_user_id).await?;
+        // Har bosish eski kodni o'ldiradi + Telegram bloklaydi. Shuning uchun
+        // ketma-ket bosishni server o'zi to'xtatadi (60 soniya cooldown).
+        let elapsed = pending.last_code_sent_at.elapsed().as_secs();
+        if elapsed < RESEND_COOLDOWN_SECONDS {
+            let wait_seconds = RESEND_COOLDOWN_SECONDS - elapsed;
+            self.put_pending(telegram_user_id, pending).await;
+            return Err(UserAccountError::ResendTooSoon { wait_seconds });
+        }
+        // reason=None: bu maydon faqat rasmiy ilovalar uchun, begona qiymat
+        // yuborish Telegram'da rad etilishi mumkin.
+        match pending.client.resend_code(&pending.login_token, None).await {
+            Ok(SendCodeOutcome::CodeRequired(login_token)) => {
+                pending.login_token = login_token;
+                pending.password_token = None;
+                pending.last_code_sent_at = std::time::Instant::now();
+                self.put_pending(telegram_user_id, pending).await;
+                Ok(ResendOutcome::Resent)
+            }
+            Ok(SendCodeOutcome::AlreadyAuthorized(_)) => {
+                self.finish_login(
+                    telegram_user_id,
+                    pending.phone_number,
+                    pending.client,
+                    pending.shutdown,
+                )
+                .await
+                .map(|_| ResendOutcome::Authorized)
+            }
+            Err(error) => {
+                // Flood bo'lsa ham pending saqlanadi: eski kod hali kelishi
+                // mumkin, user uni kiritib ko'ra oladi.
+                if let ferogram::ErrorKind::FloodWait(seconds) = error.kind() {
+                    self.put_pending(telegram_user_id, pending).await;
+                    return Err(UserAccountError::FloodWait { seconds });
+                }
+                let mapped = map_send_code_error(error);
+                self.put_pending(telegram_user_id, pending).await;
+                Err(mapped)
             }
         }
     }
@@ -375,8 +456,18 @@ async fn connect_client(
         .api_id(api_id)
         .api_hash(api_hash)
         .session_string(session.unwrap_or_default())
+        // Pyrofork's working userbot uses a single Abridged connection.  Do
+        // not enable ferogram's fresh-connection transport race here: it
+        // deliberately replaces the requested transport with Full or
+        // Obfuscated on a new login and can produce a different Telegram
+        // authentication path from the one that was tested successfully.
         .transport(TransportKind::Abridged)
-        .probe_transport(true)
+        .probe_transport(false)
+        .device_model("Mini RS ERP")
+        .system_version("Rust")
+        .app_version("Mini RS ERP 1.0")
+        .system_lang_code("en-US")
+        .lang_code("en")
         .resilient_connect(true)
         .connect()
         .await

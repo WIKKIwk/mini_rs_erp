@@ -93,13 +93,11 @@ async fn handle_contact(
         .await
     {
         Ok(LoginOutcome::CodeSent) => {
-            send_inline_login_prompt(
+            send_code_sent_prompt(
                 service,
                 token,
                 &chat_id,
-                "📩 Telegram login kodi yuborildi. Kodni chatga oddiy xabar qilib yubormang. Pastdagi tugmani bosing va kodni inline maydoniga joylab yuboring.",
-                INLINE_CODE_PREFIX,
-                "🔐 Kodni inline yuborish",
+                "📩 Kod contact’da yuborilgan raqamga bog‘langan Telegram akkauntiga yuborildi. Avval Telegram ilovasidagi rasmiy «Telegram» chatini va boshqa ulangan qurilmalarni tekshiring. Telegram yetkazish usulini o‘zi tanlaydi; kod bu bot chatiga kelmaydi. Pastdagi tugma orqali kodni xavfsiz yuboring.",
             )
             .await?;
         }
@@ -140,6 +138,30 @@ async fn handle_callback_query(
         return Ok(());
     }
     match data {
+        "login:resend" => match service.resend_user_profile_code(&telegram_user_id).await {
+            Ok(ResendOutcome::Resent) => {
+                send_code_sent_prompt(
+                    service,
+                    token,
+                    &chat_id,
+                    "📨 Kod contact’da yuborilgan raqamga bog‘langan Telegram akkauntiga qayta so‘raldi. Rasmiy «Telegram» chatini, boshqa ulangan qurilmalarni va telefoningizni tekshiring. Kelgan kodni pastdagi tugma orqali yuboring.",
+                )
+                .await?;
+            }
+            Ok(ResendOutcome::Authorized) => {
+                send_user_group_picker(service, token, &chat_id, &telegram_user_id).await?;
+            }
+            Err(error) => {
+                send_message(
+                    service,
+                    token,
+                    &chat_id,
+                    &user_account_error_message(&error),
+                    None,
+                )
+                .await?;
+            }
+        },
         "delivery:bot" => {
             service
                 .set_delivery_mode(&telegram_user_id, TelegramDeliveryMode::Bot)

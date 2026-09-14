@@ -95,6 +95,31 @@ async fn send_message_with_markup(
         .map(|_: serde_json::Value| ())
 }
 
+async fn delete_message(
+    service: &TelegramService,
+    token: &str,
+    chat_id: &str,
+    message_id: i64,
+) -> Result<(), TelegramError> {
+    // Login kodi oddiy xabar bo'lib tarixda qolmasligi uchun. Best-effort:
+    // botda huquq bo'lmasa xatolik chaqiruvchida e'tiborsiz qoldiriladi.
+    if message_id <= 0 {
+        return Ok(());
+    }
+    let body = serde_json::json!({
+        "chat_id": chat_id,
+        "message_id": message_id,
+    });
+    let response = service
+        .http_client()
+        .post(bot_url(token, "deleteMessage"))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|error| TelegramError::Transport(error.to_string()))?;
+    parse_api_response(response).await.map(|_: bool| ())
+}
+
 async fn answer_callback_query(
     service: &TelegramService,
     token: &str,
@@ -183,6 +208,30 @@ fn login_inline_keyboard(query_prefix: &str, button_text: &str) -> serde_json::V
             "switch_inline_query_current_chat": query_prefix
         }]]
     })
+}
+
+fn code_sent_keyboard() -> serde_json::Value {
+    serde_json::json!({
+        "inline_keyboard": [
+            [{
+                "text": "🔐 Kodni inline yuborish",
+                "switch_inline_query_current_chat": INLINE_CODE_PREFIX
+            }],
+            [{
+                "text": "📨 Kod kelmadi — qayta yuborish",
+                "callback_data": "login:resend"
+            }]
+        ]
+    })
+}
+
+async fn send_code_sent_prompt(
+    service: &TelegramService,
+    token: &str,
+    chat_id: &str,
+    text: &str,
+) -> Result<(), TelegramError> {
+    send_message_with_markup(service, token, chat_id, text, None, Some(code_sent_keyboard())).await
 }
 
 fn contact_request_markup() -> serde_json::Value {

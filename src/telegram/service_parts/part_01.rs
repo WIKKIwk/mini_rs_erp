@@ -23,6 +23,12 @@ pub enum TelegramError {
     UserAccountNotAuthorized,
     #[error("telegram login code is invalid or expired")]
     UserAccountInvalidCode,
+    #[error("telegram is rate limiting login codes: retry after {seconds} seconds")]
+    UserAccountFloodWait { seconds: u64 },
+    #[error("telegram has no available delivery channel for login codes right now")]
+    UserAccountSendCodeUnavailable,
+    #[error("login code resend is too frequent: retry after {wait_seconds} seconds")]
+    UserAccountResendTooSoon { wait_seconds: u64 },
     #[error("telegram account registration is required")]
     UserAccountSignUpRequired,
     #[error("telegram account does not match the bot user")]

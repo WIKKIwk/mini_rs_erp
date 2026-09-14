@@ -9,8 +9,8 @@ use std::io::Cursor;
 use std::sync::Arc;
 
 use ferogram::{
-    Client, InputMessage, LoginToken, PasswordToken, SendCodeOutcome, ShutdownToken, SignInError,
-    TransportKind,
+    Client, InputMessage, InvocationErrorExt, LoginToken, PasswordToken, SendCodeOutcome,
+    ShutdownToken, SignInError, TransportKind,
 };
 use tokio::sync::Mutex;
 

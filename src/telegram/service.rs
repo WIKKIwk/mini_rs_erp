@@ -19,7 +19,9 @@ use super::models::{
 use super::order::TelegramOrderDraft;
 use super::order_catalog::TelegramOrderCatalog;
 use super::store::{TelegramStore, TelegramStoreError};
-use super::useraccount::{CodeOutcome, LoginOutcome, TelegramUserAccountService, UserAccountError};
+use super::useraccount::{
+    CodeOutcome, LoginOutcome, ResendOutcome, TelegramUserAccountService, UserAccountError,
+};
 
 include!("service_parts/part_01.rs");
 include!("service_parts/part_02.rs");

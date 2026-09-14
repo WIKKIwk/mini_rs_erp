@@ -77,6 +77,15 @@ fn telegram_error(error: TelegramError) -> AdminError {
             bad_request("telegram user account is not connected")
         }
         TelegramError::UserAccountInvalidCode => bad_request("telegram login code is invalid"),
+        TelegramError::UserAccountFloodWait { .. } => {
+            bad_request("telegram is rate limiting login codes")
+        }
+        TelegramError::UserAccountSendCodeUnavailable => {
+            bad_request("telegram has no delivery channel for login codes")
+        }
+        TelegramError::UserAccountResendTooSoon { .. } => {
+            bad_request("login code resend too frequent")
+        }
         TelegramError::UserAccountSignUpRequired => {
             bad_request("telegram account registration is required")
         }

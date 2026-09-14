@@ -212,6 +212,16 @@ impl TelegramService {
             .map_err(map_user_account)
     }
 
+    pub(crate) async fn resend_user_profile_code(
+        &self,
+        telegram_user_id: &str,
+    ) -> Result<ResendOutcome, TelegramError> {
+        self.useraccount
+            .resend_code(telegram_user_id)
+            .await
+            .map_err(map_user_account)
+    }
+
     pub(crate) async fn has_pending_user_profile_login(&self, telegram_user_id: &str) -> bool {
         self.useraccount.has_pending_login(telegram_user_id).await
     }

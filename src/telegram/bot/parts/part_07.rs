@@ -42,6 +42,21 @@ fn user_account_error_message(error: &TelegramError) -> String {
         TelegramError::UserAccountInvalidCode => {
             "Login kodi noto‘g‘ri yoki muddati tugagan. Qayta yuboring.".to_string()
         }
+        TelegramError::UserAccountFloodWait { seconds } => {
+            let wait = format_wait_duration(*seconds);
+            format!(
+                "⏳ Telegram kod yuborishni {wait} blokladi (juda ko‘p urinish). Iltimos, qayta-qayta bossangiz blok uzayadi: /cancel qilib {wait} kuting, keyin bir marta urinib ko‘ring."
+            )
+        }
+        TelegramError::UserAccountSendCodeUnavailable => {
+            "📵 Telegram bu raqam uchun hozir boshqa yetkazish kanaliga ega emas. Rasmiy Telegram ilovasidagi «Telegram» chatini va Sozlamalar → Qurilmalar (Devices) bo‘limini tekshiring, eski sessiyalarni yoping. Keyin /cancel qilib biroz kutib, qayta urinib ko‘ring. SMS majburan tanlanmaydi."
+                .to_string()
+        }
+        TelegramError::UserAccountResendTooSoon { wait_seconds } => {
+            format!(
+                "✋ Shoshilmang! Har bosish eski kodni o‘ldiradi. {wait_seconds} soniya kutib, keyin bir marta bosing."
+            )
+        }
         TelegramError::UserAccountSignUpRequired => {
             "Bu raqam Telegram’da ro‘yxatdan o‘tmagan. Avval Telegram ilovasida account oching."
                 .to_string()
@@ -54,6 +69,16 @@ fn user_account_error_message(error: &TelegramError) -> String {
         }
         TelegramError::UserAccount(error) => format!("User profile ulanmadi: {error}"),
         _ => format!("Telegram user profile xatosi: {error}"),
+    }
+}
+
+fn format_wait_duration(seconds: u64) -> String {
+    if seconds < 90 {
+        format!("{seconds} soniyaga")
+    } else if seconds < 5400 {
+        format!("{} daqiqaga", seconds.div_ceil(60))
+    } else {
+        format!("{} soatga", seconds.div_ceil(3600))
     }
 }
 

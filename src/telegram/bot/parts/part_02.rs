@@ -250,6 +250,11 @@ async fn handle_private_text(
         .await
         && is_login_code(text)
     {
+        // Kod oddiy xabar bo'lib tarixda qolmasligi uchun avval o'chiramiz
+        // (huquq bo'lmasa e'tiborsiz), keyin inline yo'lni ko'rsatamiz.
+        delete_message(service, token, &chat_id, message.message_id)
+            .await
+            .ok();
         send_inline_login_prompt(
             service,
             token,
@@ -280,7 +285,7 @@ async fn handle_private_media(
         return Ok(());
     }
     let chat_id = message.chat.id.to_string();
-    let Some(draft) = service.order_draft(&telegram_user_id).await? else {
+    let Some(mut draft) = service.order_draft(&telegram_user_id).await? else {
         return Ok(());
     };
     if draft.step != TelegramOrderStep::Attachment {
@@ -337,6 +342,94 @@ async fn handle_private_media(
         )
         .await?;
         return Ok(());
+    }
+    // Yangi mijoz/mahsulot faqat shu yerda (zakaz rostdan yuborilayotganda)
+    // bazaga yaratiladi. Bekor qilingan draftlar hech qanday axlat qoldirmaydi.
+    // Avvalgi qadamda topilgan mavjud yozuvlar qayta ishlatiladi (dublikat yo'q).
+    let catalog = service.order_catalog().await?;
+    if draft.customer_ref.trim().is_empty() {
+        if draft.customer_name.trim().is_empty() {
+            send_order_text(
+                service,
+                token,
+                &chat_id,
+                "Mijoz nomi topilmadi. /cancel qilib /new_order dan qayta boshlang.",
+            )
+            .await?;
+            return Ok(());
+        }
+        match catalog.find_customer_by_name(&draft.customer_name).await {
+            Ok(Some(customer)) => {
+                draft.customer_ref = customer.ref_.clone();
+                draft.customer_name = customer.name.clone();
+            }
+            Ok(None) => match catalog.create_customer(&draft.customer_name).await {
+                Ok(customer) => {
+                    draft.customer_ref = customer.ref_.clone();
+                    draft.customer_name = customer.name.clone();
+                }
+                Err(error) => {
+                    send_order_text(
+                        service,
+                        token,
+                        &chat_id,
+                        &format!("Mijoz yaratilmadi: {error}. Rasmni qayta yuboring."),
+                    )
+                    .await?;
+                    return Ok(());
+                }
+            },
+            Err(error) => return Err(TelegramError::OrderCatalog(error)),
+        }
+        service
+            .save_order_draft(&telegram_user_id, draft.clone())
+            .await?;
+    }
+    if draft.product_code.trim().is_empty() {
+        if draft.product_name.trim().is_empty() {
+            send_order_text(
+                service,
+                token,
+                &chat_id,
+                "Mahsulot nomi topilmadi. /cancel qilib /new_order dan qayta boshlang.",
+            )
+            .await?;
+            return Ok(());
+        }
+        match catalog
+            .find_customer_item_by_name(&draft.customer_ref, &draft.product_name)
+            .await
+        {
+            Ok(Some(item)) => {
+                draft.product_code = item.code;
+                draft.product_name = item.name;
+            }
+            Ok(None) => {
+                match catalog
+                    .create_product(&draft.customer_ref, &draft.product_name)
+                    .await
+                {
+                    Ok(item) => {
+                        draft.product_code = item.code;
+                        draft.product_name = item.name;
+                    }
+                    Err(error) => {
+                        send_order_text(
+                            service,
+                            token,
+                            &chat_id,
+                            &format!("Mahsulot yaratilmadi: {error}. Rasmni qayta yuboring."),
+                        )
+                        .await?;
+                        return Ok(());
+                    }
+                }
+            }
+            Err(error) => return Err(TelegramError::OrderCatalog(error)),
+        }
+        service
+            .save_order_draft(&telegram_user_id, draft.clone())
+            .await?;
     }
     let caption = order_caption(&draft.order_number, &draft, &account.display_name);
     let image = CalculateOrderImage {

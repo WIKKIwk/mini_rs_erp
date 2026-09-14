@@ -6,6 +6,15 @@ fn map_user_account(error: UserAccountError) -> TelegramError {
             TelegramError::UserAccountNotAuthorized
         }
         UserAccountError::InvalidCode => TelegramError::UserAccountInvalidCode,
+        UserAccountError::FloodWait { seconds } => {
+            TelegramError::UserAccountFloodWait { seconds }
+        }
+        UserAccountError::SendCodeUnavailable => {
+            TelegramError::UserAccountSendCodeUnavailable
+        }
+        UserAccountError::ResendTooSoon { wait_seconds } => {
+            TelegramError::UserAccountResendTooSoon { wait_seconds }
+        }
         UserAccountError::SignUpRequired => TelegramError::UserAccountSignUpRequired,
         UserAccountError::AccountMismatch => TelegramError::UserAccountAccountMismatch,
         UserAccountError::GroupNotWritable => TelegramError::UserAccountGroupNotWritable,

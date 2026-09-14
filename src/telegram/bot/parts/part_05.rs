@@ -16,29 +16,29 @@ async fn handle_order_text(
                 send_order_text(service, token, chat_id, "Mijoz ismini kiriting.").await?;
                 return Ok(true);
             }
-            let (customer, created) = match catalog.find_customer_by_name(value).await {
-                Ok(Some(customer)) => (customer, false),
-                Ok(None) => (
-                    catalog
-                        .create_customer(value)
-                        .await
-                        .map_err(TelegramError::OrderCatalog)?,
-                    true,
-                ),
+            // Bu yerda mijoz BAZAGA YARATILMAYDI: nom draftda saqlanadi,
+            // yaratish rasm kelganda (zakaz yuborilayotganda) bo'ladi.
+            // Bekor qilinsa hech qanday axlat qolmaydi.
+            let existing = match catalog.find_customer_by_name(value).await {
+                Ok(existing) => existing,
                 Err(error) => return Err(TelegramError::OrderCatalog(error)),
             };
-            draft.customer_ref = customer.ref_.clone();
-            draft.customer_name = customer.name.clone();
-            draft.step = TelegramOrderStep::Product;
-            service.save_order_draft(telegram_user_id, draft).await?;
-            let prefix = if created {
-                format!("✅ Mijoz tizimga qo‘shildi: {}", customer.name)
-            } else {
+            let prefix = if let Some(customer) = existing {
+                draft.customer_ref = customer.ref_.clone();
+                draft.customer_name = customer.name.clone();
                 format!(
                     "ℹ️ Bunday mijoz allaqachon bor: {}. Shu mijoz tanlandi.",
                     customer.name
                 )
+            } else {
+                draft.customer_ref.clear();
+                draft.customer_name = value.to_string();
+                format!(
+                    "✅ Yangi mijoz: {value}. U bazaga zakaz yuborilganda qo'shiladi. Mahsulotni «➕ Mahsulot qo'shish» orqali yozing."
+                )
             };
+            draft.step = TelegramOrderStep::Product;
+            service.save_order_draft(telegram_user_id, draft).await?;
             send_message_with_markup(
                 service,
                 token,
@@ -54,35 +54,38 @@ async fn handle_order_text(
                 send_order_text(service, token, chat_id, "Mahsulot nomini kiriting.").await?;
                 return Ok(true);
             }
-            let item = match catalog
-                .find_customer_item_by_name(&draft.customer_ref, value)
-                .await
-            {
-                Ok(Some(item)) => (item, false),
-                Ok(None) => (
-                    catalog
-                        .create_product(&draft.customer_ref, value)
-                        .await
-                        .map_err(TelegramError::OrderCatalog)?,
-                    true,
-                ),
-                Err(error) => return Err(TelegramError::OrderCatalog(error)),
+            // Mijoz singari mahsulot ham bu yerda yaratilmaydi: nom draftda
+            // saqlanadi, yaratish zakaz yuborilayotganda bo'ladi.
+            // Mijoz hali bazada bo'lmasa (yangi mijoz) qidiruv ishlamaydi.
+            let prefix = if draft.customer_ref.trim().is_empty() {
+                draft.product_code.clear();
+                draft.product_name = value.to_string();
+                format!("✅ Yangi mahsulot: {value}. U bazaga zakaz yuborilganda qo'shiladi.")
+            } else {
+                let item = match catalog
+                    .find_customer_item_by_name(&draft.customer_ref, value)
+                    .await
+                {
+                    Ok(item) => item,
+                    Err(error) => return Err(TelegramError::OrderCatalog(error)),
+                };
+                if let Some(item) = item {
+                    draft.product_code = item.code.clone();
+                    draft.product_name = item.name.clone();
+                    format!(
+                        "ℹ️ Bu mahsulot allaqachon mavjud: {}. Shu mahsulot tanlandi.",
+                        item.name
+                    )
+                } else {
+                    draft.product_code.clear();
+                    draft.product_name = value.to_string();
+                    format!(
+                        "✅ Yangi mahsulot: {value}. U bazaga zakaz yuborilganda qo'shiladi."
+                    )
+                }
             };
-            draft.product_code = item.0.code.clone();
-            draft.product_name = item.0.name.clone();
             draft.step = TelegramOrderStep::Status;
             service.save_order_draft(telegram_user_id, draft).await?;
-            let prefix = if item.1 {
-                format!(
-                    "✅ Mahsulot tayyor mahsulot kategoriyasiga qo‘shildi: {}",
-                    item.0.name
-                )
-            } else {
-                format!(
-                    "ℹ️ Bu mahsulot allaqachon mavjud: {}. Shu mahsulot tanlandi.",
-                    item.0.name
-                )
-            };
             send_message_with_markup(
                 service,
                 token,

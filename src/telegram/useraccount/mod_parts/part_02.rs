@@ -112,6 +112,19 @@ fn map_transport<E: std::fmt::Display>(error: E) -> UserAccountError {
     UserAccountError::Transport(error.to_string())
 }
 
+pub(super) fn map_send_code_error(error: ferogram::InvocationError) -> UserAccountError {
+    // Rasmiy hujjat (core.telegram.org/method/auth.resendCode):
+    // SEND_CODE_UNAVAILABLE = bu raqam uchun hamma usullar ishlatib bo'lindi,
+    // keyingi resend boshqa usulni ishga tushirishi mumkin.
+    use ferogram::InvocationErrorExt;
+    match error.kind() {
+        ferogram::ErrorKind::Rpc { name, .. } if name == "SEND_CODE_UNAVAILABLE" => {
+            UserAccountError::SendCodeUnavailable
+        }
+        _ => map_transport(error),
+    }
+}
+
 fn map_store(error: TelegramStoreError) -> UserAccountError {
     match error {
         TelegramStoreError::UserNotFound => UserAccountError::NotAuthorized,

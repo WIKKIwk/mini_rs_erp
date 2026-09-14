@@ -16,7 +16,7 @@ use super::models::{
 };
 use super::order::{TelegramOrderDraft, TelegramOrderLayer, TelegramOrderStep, order_caption};
 use super::service::{TelegramError, TelegramService};
-use super::useraccount::{CodeOutcome, LoginOutcome};
+use super::useraccount::{CodeOutcome, LoginOutcome, ResendOutcome};
 
 const TELEGRAM_API_BASE: &str = "https://api.telegram.org/bot";
 const POLL_TIMEOUT_SECONDS: u64 = 25;
@@ -138,6 +138,8 @@ struct TelegramUpdate {
 
 #[derive(Debug, Deserialize)]
 struct TelegramMessage {
+    #[serde(default)]
+    message_id: i64,
     chat: TelegramMessageChat,
     #[serde(default)]
     from: Option<TelegramUser>,
