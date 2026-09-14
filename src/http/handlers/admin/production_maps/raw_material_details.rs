@@ -114,8 +114,20 @@ pub(super) async fn fill_raw_material_assignment_input(
             .cloned()
             .ok_or_else(|| production_map_error(ProductionMapError::RawMaterialGroupNotAllowed))?
     };
-    validate_rulon_size_for_apparatus_map(state, &map, &apparatus, &stock, &item, &item_group_path)
+    // Tayyorlovda ishlab chiqarilgan rulon order enidan katta bo'lishi mumkin:
+    // keyingi bosqichda u Rezka'da kesiladi. Order scope, ombor, mavjudlik,
+    // guruh/apparat va duplicate barcode tekshiruvlari baribir saqlanadi.
+    if rulon_width_restriction_applies(principal.role) {
+        validate_rulon_size_for_apparatus_map(
+            state,
+            &map,
+            &apparatus,
+            &stock,
+            &item,
+            &item_group_path,
+        )
         .await?;
+    }
     input.item_code = item_code;
     input.item_name = item.name.trim().to_string();
     input.item_group = item.item_group.trim().to_string();
@@ -218,6 +230,10 @@ pub(super) async fn validate_rulon_size_for_apparatus_map(
         ));
     }
     Ok(())
+}
+
+fn rulon_width_restriction_applies(role: PrincipalRole) -> bool {
+    role != PrincipalRole::TayyorlovMasteri
 }
 
 pub(super) fn raw_material_rulon_match_metrics(
@@ -385,6 +401,17 @@ mod dimension_tests {
         };
 
         assert_eq!(roll_width_mm(&stock, &SupplierItem::default()), Some(615.0));
+    }
+
+    #[test]
+    fn tayyorlov_masteri_bypasses_only_the_rulon_width_restriction() {
+        assert!(!rulon_width_restriction_applies(
+            PrincipalRole::TayyorlovMasteri
+        ));
+        assert!(rulon_width_restriction_applies(
+            PrincipalRole::MaterialTaminotchi
+        ));
+        assert!(rulon_width_restriction_applies(PrincipalRole::Admin));
     }
 }
 
