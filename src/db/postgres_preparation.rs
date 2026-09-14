@@ -63,20 +63,81 @@ impl PostgresPreparationStore {
         .bind(&warehouses)
         .fetch_all(&mut *tx)
         .await?;
-        let orders: Vec<Value> = sqlx::query_scalar(
-            "SELECT jsonb_build_object('id', m.id, 'code', m.code, 'title', m.title,
-                 'order_kg', round((m.map_json->>'order_kg')::numeric, 6)::text,
-                 'saved', EXISTS(SELECT 1 FROM mini_preparation_operations p
-                     WHERE p.owner_ref = $1 AND p.order_id = m.id AND p.kind = 'consumption'))
-             FROM mini_production_maps m
-             WHERE m.lifecycle_status IN ('released', 'in_progress')
-               AND jsonb_typeof(m.map_json->'order_kg') = 'number'
-               AND (m.map_json->>'order_kg')::numeric > 0
-             ORDER BY m.created_at DESC, m.id",
+        // Javobgar homashyolar (calculate-material id, micron'siz).
+        // Biriktirilmagan master fail-closed: order list bo'sh.
+        let responsibilities: Vec<Value> = sqlx::query_scalar(
+            "SELECT jsonb_build_object('material_id', material_id, 'material_name', material_name)
+             FROM mini_preparation_material_responsibilities
+             WHERE principal_role = 'tayyorlov_masteri' AND principal_ref = $1
+             ORDER BY lower(material_name), lower(material_id)",
         )
         .bind(owner)
         .fetch_all(&mut *tx)
         .await?;
+        let assigned_ids: Vec<String> = responsibilities
+            .iter()
+            .filter_map(|v| {
+                v.get("material_id")
+                    .and_then(|s| s.as_str())
+                    .map(|s| s.to_lowercase())
+            })
+            .collect();
+        let assigned_names: Vec<String> = responsibilities
+            .iter()
+            .filter_map(|v| {
+                v.get("material_name")
+                    .and_then(|s| s.as_str())
+                    .map(|s| s.to_lowercase())
+            })
+            .collect();
+        let orders: Vec<Value> = if assigned_ids.is_empty() {
+            Vec::new()
+        } else {
+            sqlx::query_scalar(
+                "SELECT jsonb_build_object('id', m.id, 'code', m.code, 'title', m.title,
+                     'order_kg', round((m.map_json->>'order_kg')::numeric, 6)::text,
+                     'saved', EXISTS(SELECT 1 FROM mini_preparation_operations p
+                         WHERE p.owner_ref = $1 AND p.order_id = m.id AND p.kind = 'consumption'))
+                 FROM mini_production_maps m
+                 WHERE m.lifecycle_status IN ('released', 'in_progress')
+                   AND jsonb_typeof(m.map_json->'order_kg') = 'number'
+                   AND (m.map_json->>'order_kg')::numeric > 0
+                   AND (
+                     EXISTS (
+                       SELECT 1 FROM mini_order_products p
+                       LEFT JOIN LATERAL jsonb_array_elements(COALESCE(p.layers_json, '[]'::jsonb)) l ON true
+                       WHERE p.order_id = m.id AND (
+                         lower(COALESCE(l->>'material_id','')) = ANY($2)
+                         OR lower(COALESCE(l->>'material','')) = ANY($3)
+                         OR lower(COALESCE(p.first_layer_material,'')) = ANY($3)
+                         OR lower(COALESCE(p.second_layer_material,'')) = ANY($3)
+                         OR lower(COALESCE(p.third_layer_material,'')) = ANY($3)
+                       )
+                     )
+                     OR EXISTS (
+                       SELECT 1 FROM mini_quick_order_templates t
+                       LEFT JOIN LATERAL jsonb_array_elements(COALESCE(t.payload_json->'layers', '[]'::jsonb)) l ON true
+                       WHERE (btrim(COALESCE(t.payload_json->>'source_map_id','')) = m.id
+                              OR (btrim(COALESCE(t.payload_json->>'order_number','')) <> ''
+                                  AND btrim(COALESCE(t.payload_json->>'order_number','')) = m.order_number)
+                              OR (btrim(COALESCE(t.code,'')) <> '' AND btrim(COALESCE(t.code,'')) = m.code))
+                         AND (
+                           lower(COALESCE(l->>'material_id','')) = ANY($2)
+                           OR lower(COALESCE(l->>'material','')) = ANY($3)
+                           OR lower(COALESCE(t.payload_json->>'first_layer_material','')) = ANY($3)
+                           OR lower(COALESCE(t.payload_json->>'second_layer_material','')) = ANY($3)
+                           OR lower(COALESCE(t.payload_json->>'third_layer_material','')) = ANY($3)
+                         )
+                     )
+                   )
+                 ORDER BY m.created_at DESC, m.id",
+            )
+            .bind(owner)
+            .bind(&assigned_ids)
+            .bind(&assigned_names)
+            .fetch_all(&mut *tx)
+            .await?
+        };
         let history: Vec<Value> = sqlx::query_scalar(
             "SELECT response_json || jsonb_build_object('created_at', created_at)
              FROM mini_preparation_operations WHERE owner_ref = $1 AND kind <> 'material'
@@ -87,7 +148,7 @@ impl PostgresPreparationStore {
         .await?;
         tx.commit().await?;
         Ok(
-            json!({"warehouses": warehouses, "materials": materials, "orders": orders, "history": history}),
+            json!({"warehouses": warehouses, "materials": materials, "orders": orders, "history": history, "responsibilities": responsibilities}),
         )
     }
 
@@ -249,6 +310,11 @@ impl PostgresPreparationStore {
                 "Bu order uchun tayyorlov sarfi avval saqlangan",
             ));
         }
+        // Scope: order'dagi calculate-qatlamlardan kamida bittasi shu master'ga
+        // biriktirilgan bo'lishi shart. UI filtrni chetlab o'tishdan himoya.
+        if !order_matches_responsibility(&mut tx, &actor.ref_, &input.order_id).await? {
+            return Err(PreparationError::Forbidden);
+        }
         let id = new_id();
         let mut lines = Vec::new();
         let mut allocations = Vec::new();
@@ -346,6 +412,7 @@ impl PostgresPreparationStore {
     ) -> Result<Value, PreparationError> {
         let product_code = input.product_key()?;
         let name = input.formula_name()?;
+        let material_id = input.material_key()?;
         let normalized = input.normalized_lines()?;
         let mut tx = self.pool.begin().await?;
         sqlx::query("SET LOCAL lock_timeout = '5s'")
@@ -355,6 +422,9 @@ impl PostgresPreparationStore {
             .bind(format!("preparation:formula:{}", actor.ref_))
             .execute(&mut *tx)
             .await?;
+        // Scope: formula faqat o'ziga biriktirilgan homashyoga yoziladi.
+        let scope_material_name =
+            responsibility_material_name(&mut tx, &actor.ref_, &material_id).await?;
         // Resolve names in code order (deadlock-safe), then sort lines
         // alphabetically by material name for stable display.
         let mut lines: Vec<(String, String, i64)> = Vec::new();
@@ -374,50 +444,81 @@ impl PostgresPreparationStore {
             })
             .collect();
         sqlx::query(
-            "INSERT INTO mini_preparation_formulas(owner_ref, product_code, name, lines, updated_at)
-             VALUES ($1,$2,$3,$4,now())
-             ON CONFLICT (owner_ref, product_code, name)
-             DO UPDATE SET lines = EXCLUDED.lines, updated_at = now()",
+            "INSERT INTO mini_preparation_formulas(owner_ref, product_code, material_id, material_name, name, lines, updated_at)
+             VALUES ($1,$2,$3,$4,$5,$6,now())
+             ON CONFLICT (owner_ref, product_code, material_id, name)
+             DO UPDATE SET material_name = EXCLUDED.material_name, lines = EXCLUDED.lines, updated_at = now()",
         )
         .bind(&actor.ref_)
         .bind(&product_code)
+        .bind(&material_id)
+        .bind(&scope_material_name)
         .bind(&name)
         .bind(json!(payload))
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
-        Ok(json!({"product_code": product_code, "name": name, "lines": payload}))
+        Ok(
+            json!({"product_code": product_code, "material_id": material_id,
+            "material_name": scope_material_name, "name": name, "lines": payload}),
+        )
     }
 
     pub async fn list_formulas(
         &self,
         owner: &str,
         product_code: &str,
+        material_id: &str,
     ) -> Result<Value, PreparationError> {
         let code = product_code.trim();
         if code.is_empty() || code.chars().count() > 160 {
             return Err(PreparationError::Invalid("Mahsulot kodi noto‘g‘ri"));
         }
-        let formulas: Vec<Value> = sqlx::query_scalar(
-            "SELECT jsonb_build_object('name', name, 'lines', lines)
-             FROM mini_preparation_formulas
-             WHERE owner_ref=$1 AND product_code=$2
-             ORDER BY lower(name), name",
+        let material = material_id.trim();
+        if material.is_empty() || material.chars().count() > 128 {
+            return Err(PreparationError::Invalid("Homashyo tanlanmadi"));
+        }
+        let formulas_value: Value = sqlx::query_scalar(
+            "SELECT COALESCE(jsonb_agg(f ORDER BY lower(f->>'name'), f->>'name') FILTER (WHERE f IS NOT NULL), '[]'::jsonb)
+             FROM (SELECT jsonb_build_object('name', name, 'lines', lines) AS f
+                   FROM mini_preparation_formulas
+                   WHERE owner_ref=$1 AND product_code=$2 AND lower(material_id)=lower($3)) s",
         )
         .bind(owner)
         .bind(code)
-        .fetch_all(&self.pool)
+        .bind(material)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(PreparationError::from)?;
+        let formulas = formulas_value.as_array().cloned().unwrap_or_default();
+        // Biriktirilmagan homashyo so'rovi bo'sh qaytadi (fail-closed).
+        let assigned_name: Option<String> = sqlx::query_scalar(
+            "SELECT material_name FROM mini_preparation_material_responsibilities
+             WHERE principal_role='tayyorlov_masteri' AND principal_ref=$1
+               AND lower(material_id)=lower($2)",
+        )
+        .bind(owner)
+        .bind(material)
+        .fetch_optional(&self.pool)
         .await?;
-        Ok(json!({"product_code": code, "formulas": formulas}))
+        let Some(assigned_name) = assigned_name else {
+            return Ok(json!({"product_code": code, "material_id": material,
+                "material_name": "", "formulas": []}));
+        };
+        Ok(json!({"product_code": code, "material_id": material,
+            "material_name": assigned_name, "formulas": formulas}))
     }
 
-    pub async fn delete_formula(        &self,
+    pub async fn delete_formula(
+        &self,
         owner: &str,
         product_code: &str,
         name: &str,
+        material_id: &str,
     ) -> Result<Value, PreparationError> {
         let code = product_code.trim();
         let formula = name.trim();
+        let material = material_id.trim();
         if code.is_empty() || code.chars().count() > 160 {
             return Err(PreparationError::Invalid("Mahsulot kodi noto‘g‘ri"));
         }
@@ -426,21 +527,118 @@ impl PostgresPreparationStore {
                 "Formula nomi 1–80 ta belgidan iborat bo‘lishi kerak",
             ));
         }
+        if material.is_empty() || material.chars().count() > 128 {
+            return Err(PreparationError::Invalid("Homashyo tanlanmadi"));
+        }
+        // Scope: faqat o'ziga biriktirilgan homashyo formulasi o'chadi.
+        responsibility_material_name_tx(&self.pool, owner, material)
+            .await?
+            .ok_or(PreparationError::Forbidden)?;
         let deleted: bool = sqlx::query_scalar(
             "DELETE FROM mini_preparation_formulas
              WHERE owner_ref=$1 AND product_code=$2 AND name=$3
+               AND lower(material_id)=lower($4)
              RETURNING TRUE",
         )
         .bind(owner)
         .bind(code)
         .bind(formula)
+        .bind(material)
         .fetch_optional(&self.pool)
         .await?
         .unwrap_or(false);
         if !deleted {
             return Err(PreparationError::Invalid("Formula topilmadi"));
         }
-        Ok(json!({"product_code": code, "name": formula, "deleted": true}))
+        Ok(json!({"product_code": code, "material_id": material,
+            "name": formula, "deleted": true}))
+    }
+
+    /// Order qatlamlaridagi homashyolar (calculate-material oilalari).
+    /// Formula tanlash picker'i uchun: master o'z biriktirilganlari bilan
+    /// kesishmasini ko'rsatadi.
+    pub async fn order_materials(&self, order_id: &str) -> Result<Value, PreparationError> {
+        let id = order_id.trim();
+        if id.is_empty() {
+            return Err(PreparationError::Invalid("Order topilmadi"));
+        }
+        let pairs: Vec<(String, String)> = sqlx::query_as(
+            "SELECT lower(COALESCE(l->>'material_id','')) AS mid,
+                    COALESCE(l->>'material','') AS mname
+             FROM mini_order_products p,
+                  jsonb_array_elements(COALESCE(p.layers_json, '[]'::jsonb)) l
+             WHERE p.order_id = $1
+             UNION
+             SELECT lower(COALESCE(l->>'material_id','')),
+                    COALESCE(l->>'material','')
+             FROM mini_quick_order_templates t,
+                  jsonb_array_elements(COALESCE(t.payload_json->'layers', '[]'::jsonb)) l
+             WHERE btrim(COALESCE(t.payload_json->>'source_map_id','')) = $1
+             UNION
+             SELECT '', COALESCE(p.first_layer_material,'') FROM mini_order_products p
+             WHERE p.order_id = $1 AND btrim(COALESCE(p.first_layer_material,'')) <> ''
+             UNION
+             SELECT '', COALESCE(p.second_layer_material,'') FROM mini_order_products p
+             WHERE p.order_id = $1 AND btrim(COALESCE(p.second_layer_material,'')) <> ''
+             UNION
+             SELECT '', COALESCE(p.third_layer_material,'') FROM mini_order_products p
+             WHERE p.order_id = $1 AND btrim(COALESCE(p.third_layer_material,'')) <> ''
+             UNION
+             SELECT '', COALESCE(t.payload_json->>'first_layer_material','')
+             FROM mini_quick_order_templates t
+             WHERE btrim(COALESCE(t.payload_json->>'source_map_id','')) = $1
+               AND btrim(COALESCE(t.payload_json->>'first_layer_material','')) <> ''
+             UNION
+             SELECT '', COALESCE(t.payload_json->>'second_layer_material','')
+             FROM mini_quick_order_templates t
+             WHERE btrim(COALESCE(t.payload_json->>'source_map_id','')) = $1
+               AND btrim(COALESCE(t.payload_json->>'second_layer_material','')) <> ''
+             UNION
+             SELECT '', COALESCE(t.payload_json->>'third_layer_material','')
+             FROM mini_quick_order_templates t
+             WHERE btrim(COALESCE(t.payload_json->>'source_map_id','')) = $1
+               AND btrim(COALESCE(t.payload_json->>'third_layer_material','')) <> ''",
+        )
+        .bind(id)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut out: Vec<Value> = Vec::new();
+        let mut seen = std::collections::BTreeSet::new();
+        for (mid, mname) in pairs {
+            let resolved = if mid.trim().is_empty() {
+                if mname.trim().is_empty() {
+                    continue;
+                }
+                calculate_material_id_by_name(&self.pool, &mname).await?
+            } else {
+                let name = calculate_material_name_by_id(&self.pool, &mid)
+                    .await?
+                    .unwrap_or_else(|| mname.trim().to_string());
+                if name.is_empty() {
+                    continue;
+                }
+                Some((mid.trim().to_string(), name))
+            };
+            if let Some((resolved_id, resolved_name)) = resolved
+                && seen.insert(resolved_id.to_lowercase())
+            {
+                out.push(json!({"material_id": resolved_id,
+                    "material_name": resolved_name}));
+            }
+        }
+        out.sort_by(|a, b| {
+            a["material_name"]
+                .as_str()
+                .unwrap_or_default()
+                .to_lowercase()
+                .cmp(
+                    &b["material_name"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_lowercase(),
+                )
+        });
+        Ok(json!({"order_id": id, "materials": out}))
     }
 
     /// Ownerga biriktirilgan omborning kanonik nomi (bola ombor ochishda
@@ -462,6 +660,79 @@ impl PostgresPreparationStore {
             .fetch_one(&self.pool)
             .await
             .map_err(PreparationError::from)
+    }
+
+    pub async fn list_responsibilities(&self, owner: &str) -> Result<Value, PreparationError> {
+        let rows: Vec<Value> = sqlx::query_scalar(
+            "SELECT jsonb_build_object('material_id', material_id, 'material_name', material_name)
+             FROM mini_preparation_material_responsibilities
+             WHERE principal_role = 'tayyorlov_masteri' AND principal_ref = $1
+             ORDER BY lower(material_name), lower(material_id)",
+        )
+        .bind(owner.trim())
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(json!({"principal_ref": owner.trim(), "materials": rows}))
+    }
+
+    pub async fn assign_responsibility(
+        &self,
+        input: MaterialResponsibilityAssign,
+    ) -> Result<Value, PreparationError> {
+        let principal_ref = input.principal_key()?;
+        let material_id = input.material_key()?;
+        // Faqat mavjud tayyorlov_masteri system user'ga biriktirish.
+        let is_master: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM mini_system_users WHERE id = $1 AND role = 'tayyorlov_masteri')",
+        )
+        .bind(&principal_ref)
+        .fetch_one(&self.pool)
+        .await?;
+        if !is_master {
+            return Err(PreparationError::Invalid("Tayyorlov masteri topilmadi"));
+        }
+        // material_id calculate katalogidan bo'lishi shart (micron'siz, oila).
+        // Katalog list() dagi kabi: avval DB override, keyin builtin defaultlar.
+        let material_name = calculate_material_name_by_id(&self.pool, &material_id)
+            .await?
+            .ok_or(PreparationError::Invalid("Homashyo katalogda topilmadi"))?;
+        sqlx::query(
+            "INSERT INTO mini_preparation_material_responsibilities
+                 (principal_role, principal_ref, material_id, material_name)
+             VALUES ('tayyorlov_masteri', $1, $2, $3)
+             ON CONFLICT (principal_role, principal_ref, material_id)
+             DO UPDATE SET material_name = EXCLUDED.material_name",
+        )
+        .bind(&principal_ref)
+        .bind(material_id.trim())
+        .bind(&material_name)
+        .execute(&self.pool)
+        .await?;
+        Ok(
+            json!({"principal_ref": principal_ref, "material_id": material_id.trim(), "material_name": material_name}),
+        )
+    }
+
+    pub async fn unassign_responsibility(
+        &self,
+        input: MaterialResponsibilityDelete,
+    ) -> Result<Value, PreparationError> {
+        let principal_ref = input.principal_key()?;
+        let material_id = input.material_key()?;
+        let deleted: bool = sqlx::query_scalar(
+            "DELETE FROM mini_preparation_material_responsibilities
+             WHERE principal_role = 'tayyorlov_masteri' AND principal_ref = $1
+               AND lower(material_id) = lower($2) RETURNING TRUE",
+        )
+        .bind(&principal_ref)
+        .bind(&material_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .unwrap_or(false);
+        if !deleted {
+            return Err(PreparationError::Invalid("Biriktirish topilmadi"));
+        }
+        Ok(json!({"principal_ref": principal_ref, "material_id": material_id, "deleted": true}))
     }
 
     async fn begin(
@@ -541,6 +812,140 @@ async fn material_name(
     .fetch_optional(&mut **tx)
     .await?
     .ok_or(PreparationError::Forbidden)
+}
+
+/// Calculate katalogdagi kanonik nom: avval DB override, keyin builtin defaultlar.
+/// Katalog list() bilan bir xil mantiq — picker'dagi har qanday id topiladi.
+async fn calculate_material_name_by_id(
+    pool: &PgPool,
+    material_id: &str,
+) -> Result<Option<String>, PreparationError> {
+    let name: Option<String> = sqlx::query_scalar(
+        "SELECT COALESCE(payload_json->>'name', id) FROM mini_calculate_materials WHERE lower(id) = lower($1)",
+    )
+    .bind(material_id.trim())
+    .fetch_optional(pool)
+    .await?;
+    if let Some(name) = name.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) {
+        return Ok(Some(name));
+    }
+    Ok(
+        crate::core::calculate_materials::default_calculate_materials()
+            .into_iter()
+            .find(|m| m.id.trim().eq_ignore_ascii_case(material_id.trim()))
+            .map(|m| m.name.trim().to_string())
+            .filter(|s| !s.is_empty()),
+    )
+}
+
+/// Nom bo'yicha katalog id topish (legacy matnli qatlamlarni id'ga ko'tarish uchun).
+async fn calculate_material_id_by_name(
+    pool: &PgPool,
+    name: &str,
+) -> Result<Option<(String, String)>, PreparationError> {
+    let row: Option<(String, String)> = sqlx::query_as(
+        "SELECT id, COALESCE(payload_json->>'name', id) FROM mini_calculate_materials
+         WHERE lower(COALESCE(payload_json->>'name', id)) = lower($1) LIMIT 1",
+    )
+    .bind(name.trim())
+    .fetch_optional(pool)
+    .await?;
+    if let Some((id, resolved)) = row {
+        let resolved = resolved.trim().to_string();
+        if !resolved.is_empty() {
+            return Ok(Some((id, resolved)));
+        }
+    }
+    Ok(
+        crate::core::calculate_materials::default_calculate_materials()
+            .into_iter()
+            .find(|m| m.name.trim().eq_ignore_ascii_case(name.trim()))
+            .map(|m| (m.id.clone(), m.name.clone())),
+    )
+}
+
+/// Biriktirilgan homashyoning kanonik nomi; biriktirilmagan bo'lsa Forbidden.
+/// Tx ichida (upsert) ishlatiladi.
+async fn responsibility_material_name(
+    tx: &mut Transaction<'_, Postgres>,
+    owner: &str,
+    material_id: &str,
+) -> Result<String, PreparationError> {
+    sqlx::query_scalar(
+        "SELECT material_name FROM mini_preparation_material_responsibilities
+         WHERE principal_role='tayyorlov_masteri' AND principal_ref=$1
+           AND lower(material_id)=lower($2)",
+    )
+    .bind(owner)
+    .bind(material_id.trim())
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or(PreparationError::Forbidden)
+}
+
+/// Tx'siz variant (delete uchun).
+async fn responsibility_material_name_tx(
+    pool: &PgPool,
+    owner: &str,
+    material_id: &str,
+) -> Result<Option<String>, PreparationError> {
+    sqlx::query_scalar(
+        "SELECT material_name FROM mini_preparation_material_responsibilities
+         WHERE principal_role='tayyorlov_masteri' AND principal_ref=$1
+           AND lower(material_id)=lower($2)",
+    )
+    .bind(owner)
+    .bind(material_id.trim())
+    .fetch_optional(pool)
+    .await
+    .map_err(PreparationError::from)
+}
+
+async fn order_matches_responsibility(
+    tx: &mut Transaction<'_, Postgres>,
+    owner: &str,
+    order_id: &str,
+) -> Result<bool, PreparationError> {
+    let matched: bool = sqlx::query_scalar(
+        "SELECT EXISTS (
+           SELECT 1 FROM mini_preparation_material_responsibilities r
+           WHERE r.principal_role = 'tayyorlov_masteri' AND r.principal_ref = $1
+             AND (
+               EXISTS (
+                 SELECT 1 FROM mini_order_products p
+                 LEFT JOIN LATERAL jsonb_array_elements(COALESCE(p.layers_json, '[]'::jsonb)) l ON true
+                 WHERE p.order_id = $2 AND (
+                   lower(COALESCE(l->>'material_id','')) = lower(r.material_id)
+                   OR lower(COALESCE(l->>'material','')) = lower(r.material_name)
+                   OR lower(COALESCE(p.first_layer_material,'')) = lower(r.material_name)
+                   OR lower(COALESCE(p.second_layer_material,'')) = lower(r.material_name)
+                   OR lower(COALESCE(p.third_layer_material,'')) = lower(r.material_name)
+                 )
+               )
+               OR EXISTS (
+                 SELECT 1 FROM mini_quick_order_templates t
+                 LEFT JOIN LATERAL jsonb_array_elements(COALESCE(t.payload_json->'layers', '[]'::jsonb)) l ON true
+                 WHERE (btrim(COALESCE(t.payload_json->>'source_map_id','')) = $2
+                        OR EXISTS (SELECT 1 FROM mini_production_maps m WHERE m.id = $2
+                                    AND ((btrim(COALESCE(t.payload_json->>'order_number','')) <> ''
+                                          AND btrim(COALESCE(t.payload_json->>'order_number','')) = m.order_number)
+                                         OR (btrim(COALESCE(t.code,'')) <> '' AND btrim(COALESCE(t.code,'')) = m.code))))
+                   AND (
+                     lower(COALESCE(l->>'material_id','')) = lower(r.material_id)
+                     OR lower(COALESCE(l->>'material','')) = lower(r.material_name)
+                     OR lower(COALESCE(t.payload_json->>'first_layer_material','')) = lower(r.material_name)
+                     OR lower(COALESCE(t.payload_json->>'second_layer_material','')) = lower(r.material_name)
+                     OR lower(COALESCE(t.payload_json->>'third_layer_material','')) = lower(r.material_name)
+                   )
+               )
+             )
+         )",
+    )
+    .bind(owner)
+    .bind(order_id)
+    .fetch_one(&mut **tx)
+    .await?;
+    Ok(matched)
 }
 
 #[allow(clippy::too_many_arguments)]

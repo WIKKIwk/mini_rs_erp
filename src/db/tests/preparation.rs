@@ -38,13 +38,26 @@ async fn preparation_postgres_partial_fifo_atomic_retry_concurrency_and_scope() 
             ('prep-1','tayyorlov_masteri','Master','901234567'),('prep-2','tayyorlov_masteri','Other','901234568');
         INSERT INTO mini_warehouses(id,name) VALUES ('prep-w','Preparation W'),('other-w','Other W');
         INSERT INTO mini_warehouse_assignments(assignment_kind,warehouse,warehouse_name,principal_role,principal_ref)
-            VALUES ('warehouse','Preparation W','Preparation W','tayyorlov_masteri','prep-1');")
+            VALUES ('warehouse','Preparation W','Preparation W','tayyorlov_masteri','prep-1');
+        INSERT INTO mini_calculate_materials(id,lower_name,payload_json) VALUES
+            ('test-mat','testmat','{\"id\":\"test-mat\",\"name\":\"TestMat\",\"active\":true}');")
         .execute(&pool).await.unwrap();
     for id in [
         "order1", "order2", "rollback", "race1", "race2", "stale", "closed", "reserved",
     ] {
         sqlx::query("INSERT INTO mini_production_maps(id,product_code,title,code,map_json) VALUES ($1,'P','Test order',$1,$2)")
             .bind(id).bind(json!({"id":id,"order_kg":1000})).execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO mini_orders(id,code,order_number,product_name) VALUES ($1,$1,$1,'P')",
+        )
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO mini_order_products(id,order_id,product_name,layers_json) VALUES ($1,$2,'P',$3)")
+            .bind(format!("{id}:product")).bind(id)
+            .bind(json!([{"material_id":"test-mat","material":"TestMat","micron":"12"}]))
+            .execute(&pool).await.unwrap();
     }
     let actor = Principal {
         role: PrincipalRole::TayyorlovMasteri,
@@ -55,6 +68,51 @@ async fn preparation_postgres_partial_fifo_atomic_retry_concurrency_and_scope() 
         avatar_url: String::new(),
     };
     let store = PostgresPreparationStore::new(pool.clone());
+    // Javobgarlik biriktirilmaguncha fail-closed: snapshot bo'sh, consume Forbidden.
+    assert!(
+        store.snapshot("prep-1").await.unwrap()["orders"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let assigned = store
+        .assign_responsibility(MaterialResponsibilityAssign {
+            principal_ref: "prep-1".into(),
+            material_id: "test-mat".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(assigned["material_name"], "TestMat");
+    // Builtin default katalog DB'da bo'lmasa ham biriktiriladi (API list'dagi kabi).
+    let builtin = store
+        .assign_responsibility(MaterialResponsibilityAssign {
+            principal_ref: "prep-1".into(),
+            material_id: "builtin-pet".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(builtin["material_name"], "PET");
+    store
+        .unassign_responsibility(MaterialResponsibilityDelete {
+            principal_ref: "prep-1".into(),
+            material_id: "builtin-pet".into(),
+        })
+        .await
+        .unwrap();
+    assert!(
+        store.snapshot("prep-1").await.unwrap()["orders"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|o| o["id"] == "order1")
+    );
+    // Boshqa master'da biriktirish yo'q — baribir bo'sh.
+    assert!(
+        store.snapshot("prep-2").await.unwrap()["orders"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
     let material_input = MaterialCreate {
         request_id: "material-001".into(),
         name: "Kley".into(),
@@ -254,6 +312,27 @@ async fn preparation_postgres_partial_fifo_atomic_retry_concurrency_and_scope() 
         Err(PreparationError::Insufficient)
     ));
     sqlx::query("UPDATE mini_raw_material_stock SET payload_json=payload_json-'inventory_transfer_id' WHERE status='available'").execute(&pool).await.unwrap();
+    // Begona homashyoli order: ombor to'g'ri bo'lsa ham scope Forbidden.
+    sqlx::query("INSERT INTO mini_production_maps(id,product_code,title,code,map_json) VALUES ('foreign','P','Foreign','foreign',$1)")
+        .bind(json!({"id":"foreign","order_kg":1000})).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO mini_orders(id,code,product_name) VALUES ('foreign','foreign','P')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO mini_order_products(id,order_id,product_name,layers_json) VALUES ('foreign:product','foreign','P',$1)")
+        .bind(json!([{"material_id":"other-mat","material":"OtherMat","micron":"20"}]))
+        .execute(&pool).await.unwrap();
+    assert!(matches!(
+        store.consume(&actor, consume("foreign", code, "1")).await,
+        Err(PreparationError::Forbidden)
+    ));
+    assert!(
+        store.snapshot("prep-1").await.unwrap()["orders"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|o| o["id"] != "foreign")
+    );
     let (a, b) = tokio::join!(
         store.consume(&actor, consume("race1", code, "3")),
         store.consume(&actor, consume("race2", code, "3"))
@@ -282,6 +361,120 @@ async fn preparation_postgres_partial_fifo_atomic_retry_concurrency_and_scope() 
             .await
             .is_err()
     );
+    pool.close().await;
+    sqlx::query(&format!("DROP DATABASE {db}"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    admin.close().await;
+}
+
+#[tokio::test]
+async fn preparation_formula_material_scope_and_order_materials() {
+    let url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
+        .unwrap_or_else(|_| "postgres:///postgres".into());
+    let admin = sqlx::PgPool::connect(&url).await.unwrap();
+    let db = format!(
+        "mini_rs_erp_test_prepformula_{:016x}",
+        rand::random::<u64>()
+    );
+    sqlx::query(&format!("CREATE DATABASE {db}"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    let options = url.parse::<PgConnectOptions>().unwrap().database(&db);
+    let pool = sqlx::PgPool::connect_with(options).await.unwrap();
+    apply_foundation_migration(&pool).await.unwrap();
+    sqlx::raw_sql("INSERT INTO mini_system_users(id,role,name,phone) VALUES
+            ('prep-1','tayyorlov_masteri','Master','901234567');
+        INSERT INTO mini_calculate_materials(id,lower_name,payload_json) VALUES
+            ('test-mat','testmat','{\"id\":\"test-mat\",\"name\":\"TestMat\",\"active\":true}'),
+            ('other-mat','othermat','{\"id\":\"other-mat\",\"name\":\"OtherMat\",\"active\":true}');
+        INSERT INTO mini_production_maps(id,product_code,title,code,map_json)
+            VALUES ('order1','P','Test order','order1','{\"id\":\"order1\",\"order_kg\":1000}');
+        INSERT INTO mini_orders(id,code,order_number,product_name)
+            VALUES ('order1','order1','order1','P');
+        INSERT INTO mini_order_products(id,order_id,product_name,layers_json)
+            VALUES ('order1:product','order1','P','[{\"material_id\":\"test-mat\",\"material\":\"TestMat\",\"micron\":\"12\"}]');")
+        .execute(&pool).await.unwrap();
+    let actor = Principal {
+        role: PrincipalRole::TayyorlovMasteri,
+        display_name: "Master".into(),
+        legal_name: String::new(),
+        ref_: "prep-1".into(),
+        phone: String::new(),
+        avatar_url: String::new(),
+    };
+    let store = PostgresPreparationStore::new(pool.clone());
+    store
+        .assign_responsibility(MaterialResponsibilityAssign {
+            principal_ref: "prep-1".into(),
+            material_id: "test-mat".into(),
+        })
+        .await
+        .unwrap();
+    // Order qatlamlari faqat biriktirilgan homashyoni ko'rsatadi.
+    let order_materials = store.order_materials("order1").await.unwrap();
+    assert_eq!(
+        order_materials["materials"],
+        json!([{"material_id": "test-mat", "material_name": "TestMat"}])
+    );
+    // Seriya uchun PREP material kerak.
+    let material = store
+        .create_material(
+            &actor,
+            MaterialCreate {
+                request_id: "material-f1".into(),
+                name: "Kley".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let code = material["item_code"].as_str().unwrap().to_string();
+    let formula_input = |material_id: &str| FormulaUpsert {
+        product_code: "PC-1".into(),
+        name: "Asosiy".into(),
+        material_id: material_id.into(),
+        lines: vec![FormulaLine {
+            item_code: code.clone(),
+            percent: "100".into(),
+        }],
+    };
+    // Biriktirilmagan homashyoga yozish taqiqlanadi.
+    assert!(matches!(
+        store
+            .upsert_formula(&actor, formula_input("other-mat"))
+            .await,
+        Err(PreparationError::Forbidden)
+    ));
+    let saved = store
+        .upsert_formula(&actor, formula_input("test-mat"))
+        .await
+        .unwrap();
+    assert_eq!(saved["material_id"], "test-mat");
+    assert_eq!(saved["material_name"], "TestMat");
+    let listed = store
+        .list_formulas("prep-1", "PC-1", "test-mat")
+        .await
+        .unwrap();
+    assert_eq!(listed["formulas"].as_array().unwrap().len(), 1);
+    // Biriktirilmagan homashyo ro'yxati bo'sh (fail-closed).
+    let foreign = store
+        .list_formulas("prep-1", "PC-1", "other-mat")
+        .await
+        .unwrap();
+    assert!(foreign["formulas"].as_array().unwrap().is_empty());
+    assert!(matches!(
+        store
+            .delete_formula("prep-1", "PC-1", "Asosiy", "other-mat")
+            .await,
+        Err(PreparationError::Forbidden)
+    ));
+    let deleted = store
+        .delete_formula("prep-1", "PC-1", "Asosiy", "test-mat")
+        .await
+        .unwrap();
+    assert_eq!(deleted["deleted"], true);
     pool.close().await;
     sqlx::query(&format!("DROP DATABASE {db}"))
         .execute(&admin)

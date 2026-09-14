@@ -165,6 +165,8 @@ pub struct FormulaUpsert {
     pub product_code: String,
     #[serde(default = "default_formula_name")]
     pub name: String,
+    #[serde(default)]
+    pub material_id: String,
     pub lines: Vec<FormulaLine>,
 }
 
@@ -189,6 +191,16 @@ impl FormulaUpsert {
             ));
         }
         Ok(name)
+    }
+
+    /// Formula qaysi homashyo (calculate-material oilasi) uchun.
+    /// Micron scope kalitiga kirmaydi.
+    pub fn material_key(&self) -> Result<String, PreparationError> {
+        let id = self.material_id.trim().to_string();
+        if id.is_empty() || id.chars().count() > 128 {
+            return Err(PreparationError::Invalid("Homashyo tanlanmadi"));
+        }
+        Ok(id)
     }
 
     /// Validated (item_code, percent) pairs sorted alphabetically by code.
@@ -229,9 +241,79 @@ impl FormulaUpsert {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MaterialResponsibilityAssign {
+    pub principal_ref: String,
+    pub material_id: String,
+}
+
+impl MaterialResponsibilityAssign {
+    pub fn principal_key(&self) -> Result<String, PreparationError> {
+        let ref_ = self.principal_ref.trim().to_string();
+        if ref_.is_empty() || ref_.chars().count() > 128 {
+            return Err(PreparationError::Invalid("Foydalanuvchi topilmadi"));
+        }
+        Ok(ref_)
+    }
+
+    pub fn material_key(&self) -> Result<String, PreparationError> {
+        let id = self.material_id.trim().to_string();
+        if id.is_empty() || id.chars().count() > 128 {
+            return Err(PreparationError::Invalid("Homashyo noto‘g‘ri"));
+        }
+        Ok(id)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MaterialResponsibilityDelete {
+    pub principal_ref: String,
+    pub material_id: String,
+}
+
+impl MaterialResponsibilityDelete {
+    pub fn principal_key(&self) -> Result<String, PreparationError> {
+        let ref_ = self.principal_ref.trim().to_string();
+        if ref_.is_empty() || ref_.chars().count() > 128 {
+            return Err(PreparationError::Invalid("Foydalanuvchi topilmadi"));
+        }
+        Ok(ref_)
+    }
+
+    pub fn material_key(&self) -> Result<String, PreparationError> {
+        let id = self.material_id.trim().to_string();
+        if id.is_empty() || id.chars().count() > 128 {
+            return Err(PreparationError::Invalid("Homashyo noto‘g‘ri"));
+        }
+        Ok(id)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn preparation_material_responsibility_keys_are_trimmed_and_bounded() {
+        let ok = MaterialResponsibilityAssign {
+            principal_ref: "  prep-1 ".into(),
+            material_id: " builtin-pet ".into(),
+        };
+        assert_eq!(ok.principal_key().unwrap(), "prep-1");
+        assert_eq!(ok.material_key().unwrap(), "builtin-pet");
+        let blank = MaterialResponsibilityAssign {
+            principal_ref: "   ".into(),
+            material_id: "builtin-pet".into(),
+        };
+        assert!(blank.principal_key().is_err());
+        let long = MaterialResponsibilityDelete {
+            principal_ref: "prep-1".into(),
+            material_id: "x".repeat(129),
+        };
+        assert!(long.material_key().is_err());
+    }
+
     #[test]
     fn preparation_decimal_and_rounding_are_exact() {
         assert_eq!(
@@ -298,6 +380,7 @@ mod tests {
         let input = FormulaUpsert {
             product_code: "  PC-1 ".into(),
             name: "Asosiy".into(),
+            material_id: "builtin-pe".into(),
             lines: vec![
                 FormulaLine {
                     item_code: "B".into(),
@@ -318,6 +401,7 @@ mod tests {
             let bad_total = FormulaUpsert {
                 product_code: "PC-1".into(),
                 name: "Asosiy".into(),
+                material_id: "builtin-pe".into(),
                 lines: vec![
                     FormulaLine {
                         item_code: "A".into(),
@@ -337,6 +421,7 @@ mod tests {
         let dup = FormulaUpsert {
             product_code: "PC-1".into(),
             name: "Asosiy".into(),
+            material_id: "builtin-pe".into(),
             lines: vec![
                 FormulaLine {
                     item_code: "A".into(),
@@ -352,6 +437,7 @@ mod tests {
         let bad = FormulaUpsert {
             product_code: "".into(),
             name: "Asosiy".into(),
+            material_id: "builtin-pe".into(),
             lines: vec![FormulaLine {
                 item_code: "A".into(),
                 percent: "10".into(),
@@ -362,6 +448,7 @@ mod tests {
         let unnamed = FormulaUpsert {
             product_code: "PC-1".into(),
             name: "   ".into(),
+            material_id: "builtin-pe".into(),
             lines: vec![FormulaLine {
                 item_code: "A".into(),
                 percent: "100".into(),
@@ -371,6 +458,7 @@ mod tests {
         let long = FormulaUpsert {
             product_code: "PC-1".into(),
             name: "x".repeat(81),
+            material_id: "builtin-pe".into(),
             lines: vec![FormulaLine {
                 item_code: "A".into(),
                 percent: "100".into(),
@@ -381,5 +469,8 @@ mod tests {
         let defaulted: FormulaUpsert =
             serde_json::from_str(r#"{"product_code":"PC-1","lines":[]}"#).unwrap();
         assert_eq!(defaulted.formula_name().unwrap(), "Asosiy");
+        // material_id bo'sh bo'lsa — rad etiladi.
+        assert!(defaulted.material_key().is_err());
+        assert_eq!(input.material_key().unwrap(), "builtin-pe");
     }
 }

@@ -413,6 +413,29 @@ Important modules:
 - `src/http/handlers/qolip.rs`;
 - `src/db/postgres_qolip.rs`.
 
+### Preparation (Tayyorlov Masteri)
+
+Preparation handles internal raw-material supply: the master creates materials,
+records receipts into assigned warehouses, and posts per-order consumption
+(order KG x percent) with FIFO lot allocation.
+
+Scope rule: a master only sees and consumes orders that contain at least one
+calculate-material family assigned to them. Admin assigns material
+responsibilities per master (like warehouse assignment); unassigned masters get
+an empty order list (fail-closed), and `consume` rejects out-of-scope orders
+even if the UI filter is bypassed. Micron is not part of the scope key.
+
+Formulas are also scoped per material: one product can hold separate named
+formula cards per homashyo family, and masters can only read/write formulas
+for their assigned materials. The order sheet asks which of the master's
+order materials to open before showing formulas.
+
+Important modules:
+
+- `src/core/preparation`;
+- `src/http/handlers/preparation.rs`;
+- `src/db/postgres_preparation.rs`.
+
 ### Warehouse Flow
 
 The legacy `werka` flow is the warehouse/operator workflow.
@@ -503,6 +526,13 @@ handlers.
 | `/v1/mobile/qolip/workers` | Search workers for Qolip checkout. |
 | `/v1/mobile/qolip/checkouts` | List/create Qolip checkouts. |
 | `/v1/mobile/qolip/checkouts/return` | Return checkout to a Qolip cell. |
+| `/v1/mobile/preparation/snapshot` | Tayyorlov snapshot: warehouses, materials, scoped orders, history, responsibilities. |
+| `/v1/mobile/preparation/materials` | Create preparation material. |
+| `/v1/mobile/preparation/warehouses` | Open child warehouse under an assigned parent. |
+| `/v1/mobile/preparation/receipts` | Record material receipt. |
+| `/v1/mobile/preparation/consumptions` | Post scoped per-order consumption. |
+| `/v1/mobile/preparation/formulas` | List/upsert/delete product formulas scoped by material. |
+| `/v1/mobile/preparation/order-materials` | Order layer materials filtered to the caller's responsibilities. |
 
 #### Customer, Supplier, and Warehouse Legacy Routes
 
@@ -560,6 +590,7 @@ handlers.
 | `/v1/mobile/admin/warehouses/live` | Warehouse live event stream. |
 | `/v1/mobile/admin/warehouses/summary` | Warehouse summaries. |
 | `/v1/mobile/admin/warehouses/assignments` | Principal to warehouse/block assignment. |
+| `/v1/mobile/admin/preparation/responsibilities` | List/assign/unassign tayyorlov master material responsibilities. |
 | `/v1/mobile/admin/items` | Item list/create. |
 | `/v1/mobile/admin/items/bulk-move-group` | Bulk move items to item group. |
 | `/v1/mobile/admin/item-groups` | Item group search/create/move. |

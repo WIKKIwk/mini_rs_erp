@@ -36,6 +36,24 @@ async fn authorize(state: &AppState, headers: &HeaderMap) -> Result<Principal, A
     Ok(principal)
 }
 
+async fn authorize_admin(state: &AppState, headers: &HeaderMap) -> Result<Principal, ApiError> {
+    let token = super::auth::bearer_token(headers).unwrap_or_default();
+    let principal = state.sessions.get(&token).await.map_err(|_| {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error":"unauthorized"})),
+        )
+    })?;
+    if !state
+        .admin
+        .principal_has_capability(&principal, Capability::AdminAccess)
+        .await
+    {
+        return Err((StatusCode::FORBIDDEN, Json(json!({"error":"forbidden"}))));
+    }
+    Ok(principal)
+}
+
 fn store(
     state: &AppState,
 ) -> Result<&crate::db::postgres_preparation::PostgresPreparationStore, ApiError> {
@@ -141,12 +159,19 @@ pub async fn consumption(
 #[derive(Debug, Deserialize)]
 pub struct FormulaQuery {
     pub product_code: String,
+    pub material_id: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct FormulaDeleteQuery {
     pub product_code: String,
     pub name: String,
+    pub material_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OrderMaterialsQuery {
+    pub order_id: String,
 }
 
 pub async fn formula_upsert(
@@ -169,7 +194,7 @@ pub async fn formula_show(
 ) -> Result<Json<Value>, ApiError> {
     let actor = authorize(&state, &headers).await?;
     store(&state)?
-        .list_formulas(&actor.ref_, &query.product_code)
+        .list_formulas(&actor.ref_, &query.product_code, &query.material_id)
         .await
         .map(Json)
         .map_err(error)
@@ -182,10 +207,113 @@ pub async fn formula_delete(
 ) -> Result<Json<Value>, ApiError> {
     let actor = authorize(&state, &headers).await?;
     store(&state)?
-        .delete_formula(&actor.ref_, &query.product_code, &query.name)
+        .delete_formula(
+            &actor.ref_,
+            &query.product_code,
+            &query.name,
+            &query.material_id,
+        )
         .await
         .map(Json)
         .map_err(error)
+}
+
+pub async fn order_materials(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<OrderMaterialsQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let actor = authorize(&state, &headers).await?;
+    let result = store(&state)?
+        .order_materials(&query.order_id)
+        .await
+        .map_err(error)?;
+    // Faqat o'ziga biriktirilgan homashyolar qaytadi (fail-closed).
+    let assigned: std::collections::BTreeSet<String> = store(&state)?
+        .list_responsibilities(&actor.ref_)
+        .await
+        .map_err(error)?
+        .get("materials")
+        .and_then(|v| v.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|m| m.get("material_id")?.as_str())
+                .map(|s| s.to_lowercase())
+                .collect()
+        })
+        .unwrap_or_default();
+    let filtered: Vec<Value> = result
+        .get("materials")
+        .and_then(|v| v.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter(|m| {
+                    m.get("material_id")
+                        .and_then(|s| s.as_str())
+                        .is_some_and(|s| assigned.contains(&s.to_lowercase()))
+                })
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(Json(
+        serde_json::json!({"order_id": result["order_id"], "materials": filtered}),
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ResponsibilityQuery {
+    pub principal_ref: String,
+}
+
+pub async fn responsibilities_list(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ResponsibilityQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let _admin = authorize_admin(&state, &headers).await?;
+    store(&state)?
+        .list_responsibilities(&query.principal_ref)
+        .await
+        .map(Json)
+        .map_err(error)
+}
+
+pub async fn responsibilities_assign(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<MaterialResponsibilityAssign>,
+) -> Result<Json<Value>, ApiError> {
+    let _admin = authorize_admin(&state, &headers).await?;
+    store(&state)?
+        .assign_responsibility(input)
+        .await
+        .map(Json)
+        .map_err(error)
+}
+
+pub async fn responsibilities_unassign(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ResponsibilityDeleteQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let _admin = authorize_admin(&state, &headers).await?;
+    store(&state)?
+        .unassign_responsibility(MaterialResponsibilityDelete {
+            principal_ref: query.principal_ref,
+            material_id: query.material_id,
+        })
+        .await
+        .map(Json)
+        .map_err(error)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ResponsibilityDeleteQuery {
+    pub principal_ref: String,
+    pub material_id: String,
 }
 
 /// Bola ombor ochish: faqat o'ziga biriktirilgan ota ombor ostiga.

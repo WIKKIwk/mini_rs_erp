@@ -1,8 +1,8 @@
 {
   "protocol": 1,
   "route_snapshot": {
-    "count": 261,
-    "sha256": "922703673e60b78385d1abda21aebc2d1bdc77fb569b812142dde17bde2c9b23"
+    "count": 266,
+    "sha256": "cbd85c2cc4c999e53c9feb1dbedcd693e8b7e5f50560cccf9915c19ae3f5336c"
   },
   "access_matrices": [
     {

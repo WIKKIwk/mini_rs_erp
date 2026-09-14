@@ -30,6 +30,16 @@ pub(super) fn routes() -> Router<AppState> {
                 .delete(crate::http::handlers::preparation::formula_delete),
         )
         .route(
+            "/v1/mobile/preparation/order-materials",
+            get(crate::http::handlers::preparation::order_materials),
+        )
+        .route(
+            "/v1/mobile/admin/preparation/responsibilities",
+            axum::routing::get(crate::http::handlers::preparation::responsibilities_list)
+                .post(crate::http::handlers::preparation::responsibilities_assign)
+                .delete(crate::http::handlers::preparation::responsibilities_unassign),
+        )
+        .route(
             "/v1/mobile/app-update/android",
             get(app_update::android_metadata),
         )
