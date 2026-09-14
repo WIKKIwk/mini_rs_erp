@@ -734,10 +734,26 @@ impl PostgresPreparationStore {
         Ok(json!({"principal_ref": principal_ref, "material_id": material_id, "deleted": true}))
     }
 
+    /// Master'ga biriktirilgan homashyo oilalari (kichik harfda id + nom).
+    /// GScale katalog filtri uchun.
+    pub async fn assigned_material_names(
+        &self,
+        owner: &str,
+    ) -> Result<Vec<(String, String)>, PreparationError> {
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT lower(material_id), lower(material_name)
+             FROM mini_preparation_material_responsibilities
+             WHERE principal_role = 'tayyorlov_masteri' AND principal_ref = $1",
+        )
+        .bind(owner.trim())
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
     /// Order shu master'ning biriktirilgan homashyolaridan birini
     /// o'z ichiga oladimi (raw-material ulash scope tekshiruvi uchun).
-    pub async fn order_in_scope(
-        &self,
+    pub async fn order_in_scope(        &self,
         owner: &str,
         order_id: &str,
     ) -> Result<bool, PreparationError> {

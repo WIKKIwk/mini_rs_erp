@@ -73,6 +73,10 @@ async fn gscale_items_for_principal(
     let search = query.q.as_deref().unwrap_or("");
     let limit = positive_int(query.limit.as_deref(), 50).min(200);
     let offset = optional_offset(query.offset.as_deref());
+    if principal.role == PrincipalRole::TayyorlovMasteri {
+        return gscale_items_for_tayyorlov(&state, &principal, group, search, limit, offset)
+            .await;
+    }
     if principal.role != PrincipalRole::MaterialTaminotchi {
         return state
             .admin
@@ -111,6 +115,55 @@ async fn gscale_items_for_principal(
         .admin
         .items_page_in_groups(&groups, search, limit, offset)
         .await
+}
+
+/// Tayyorlov masteri katalogi: faqat o'ziga biriktirilgan homashyo
+/// oilalariga mos itemlar (kod/nom exact yoki "nomi + bo'sh joy" prefiksi,
+/// masalan PET -> "PET 615/12"). Biriktirilmagan bo'lsa bo'sh (fail-closed).
+async fn gscale_items_for_tayyorlov(
+    state: &AppState,
+    principal: &Principal,
+    group: &str,
+    search: &str,
+    limit: usize,
+    offset: usize,
+) -> Result<Vec<SupplierItem>, AdminPortError> {
+    let materials = match state.preparation.as_ref() {
+        Some(store) => store
+            .assigned_material_names(&principal.ref_)
+            .await
+            .map_err(|_| AdminPortError::LookupFailed)?,
+        None => Vec::new(),
+    };
+    if materials.is_empty() {
+        return Ok(Vec::new());
+    }
+    let items = state
+        .admin
+        .items_page_by_group(group, search, 200, 0)
+        .await?;
+    let mut out: Vec<SupplierItem> = items
+        .into_iter()
+        .filter(|item| {
+            let code = item.code.trim().to_lowercase();
+            let name = item.name.trim().to_lowercase();
+            materials.iter().any(|(id, material_name)| {
+                code == *id
+                    || name == *id
+                    || code == *material_name
+                    || name == *material_name
+                    || code.starts_with(&format!("{material_name} "))
+                    || name.starts_with(&format!("{material_name} "))
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        a.name
+            .to_lowercase()
+            .cmp(&b.name.to_lowercase())
+            .then_with(|| a.code.to_lowercase().cmp(&b.code.to_lowercase()))
+    });
+    Ok(out.into_iter().skip(offset).take(limit).collect())
 }
 
 pub async fn material_receipt_print(
