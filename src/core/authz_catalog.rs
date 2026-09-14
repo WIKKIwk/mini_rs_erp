@@ -11,10 +11,14 @@ const ADMIN_APARATCHI: &[PrincipalRole] = &[PrincipalRole::Admin, PrincipalRole:
 const SUPPLIER_WERKA: &[PrincipalRole] = &[PrincipalRole::Supplier, PrincipalRole::Werka];
 const ADMIN_MATERIAL_TAMINOTCHI: &[PrincipalRole] =
     &[PrincipalRole::Admin, PrincipalRole::MaterialTaminotchi];
-const ADMIN_WERKA_MATERIAL_TAMINOTCHI: &[PrincipalRole] = &[
+/// Operatsion kirim/ulash to'plami: tarozi katalogi, kirim chop etish,
+/// RPS batch va homashyoni orderga ulash. Tayyorlov masteri ham o'z
+/// ombori + biriktirilgan homashyolari doirasida shu to'plamni ishlatadi.
+const ADMIN_WERKA_MATERIAL_TAYYORLOV_SCOPE: &[PrincipalRole] = &[
     PrincipalRole::Admin,
     PrincipalRole::Werka,
     PrincipalRole::MaterialTaminotchi,
+    PrincipalRole::TayyorlovMasteri,
 ];
 const INVENTORY_MOVEMENT_ROLES: &[PrincipalRole] = &[
     PrincipalRole::Admin,
@@ -239,19 +243,19 @@ pub(super) const CAPABILITY_CATALOG: &[CapabilityDefinition] = &[
         capability: Capability::GscaleCatalogRead,
         code: "gscale.catalog.read",
         label: "GScale catalog read",
-        default_roles: ADMIN_WERKA_MATERIAL_TAMINOTCHI,
+        default_roles: ADMIN_WERKA_MATERIAL_TAYYORLOV_SCOPE,
     },
     CapabilityDefinition {
         capability: Capability::GscalePrint,
         code: "gscale.print",
         label: "GScale print",
-        default_roles: ADMIN_WERKA_MATERIAL_TAMINOTCHI,
+        default_roles: ADMIN_WERKA_MATERIAL_TAYYORLOV_SCOPE,
     },
     CapabilityDefinition {
         capability: Capability::RpsBatchManage,
         code: "rps.batch.manage",
         label: "RPS batch manage",
-        default_roles: ADMIN_WERKA_MATERIAL_TAMINOTCHI,
+        default_roles: ADMIN_WERKA_MATERIAL_TAYYORLOV_SCOPE,
     },
     CapabilityDefinition {
         capability: Capability::RezkaSplitManage,
@@ -275,6 +279,6 @@ pub(super) const CAPABILITY_CATALOG: &[CapabilityDefinition] = &[
         capability: Capability::RawMaterialAssign,
         code: "raw_material.assign",
         label: "Raw material assign",
-        default_roles: ADMIN_WERKA_MATERIAL_TAMINOTCHI,
+        default_roles: ADMIN_WERKA_MATERIAL_TAYYORLOV_SCOPE,
     },
 ];

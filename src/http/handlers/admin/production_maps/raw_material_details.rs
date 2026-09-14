@@ -157,7 +157,10 @@ pub(super) async fn require_material_warehouse_scope(
     principal: &Principal,
     warehouse: &str,
 ) -> Result<(), AdminError> {
-    if principal.role != PrincipalRole::MaterialTaminotchi {
+    if !matches!(
+        principal.role,
+        PrincipalRole::MaterialTaminotchi | PrincipalRole::TayyorlovMasteri
+    ) {
         return Ok(());
     }
     let warehouse = warehouse.trim();
@@ -392,6 +395,11 @@ pub(super) async fn lookup_raw_material_detail(
 ) -> Result<RawMaterialLookupResponse, AdminError> {
     let (stock, item) = resolve_raw_material_stock_item(state, barcode).await?;
     require_material_item_group_scope(state, principal, &item.item_group).await?;
+    // Lookup ilgari ombor scope tekshirmagan — material oqimi o'zgarmasligi
+    // uchun faqat tayyorlov masteriga qo'llanadi.
+    if principal.role == PrincipalRole::TayyorlovMasteri {
+        require_material_warehouse_scope(state, principal, &stock.warehouse).await?;
+    }
     Ok(RawMaterialLookupResponse {
         barcode: stock.barcode.trim().to_string(),
         warehouse: stock.warehouse.trim().to_string(),

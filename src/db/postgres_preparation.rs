@@ -713,8 +713,7 @@ impl PostgresPreparationStore {
         )
     }
 
-    pub async fn unassign_responsibility(
-        &self,
+    pub async fn unassign_responsibility(        &self,
         input: MaterialResponsibilityDelete,
     ) -> Result<Value, PreparationError> {
         let principal_ref = input.principal_key()?;
@@ -733,6 +732,19 @@ impl PostgresPreparationStore {
             return Err(PreparationError::Invalid("Biriktirish topilmadi"));
         }
         Ok(json!({"principal_ref": principal_ref, "material_id": material_id, "deleted": true}))
+    }
+
+    /// Order shu master'ning biriktirilgan homashyolaridan birini
+    /// o'z ichiga oladimi (raw-material ulash scope tekshiruvi uchun).
+    pub async fn order_in_scope(
+        &self,
+        owner: &str,
+        order_id: &str,
+    ) -> Result<bool, PreparationError> {
+        let mut tx = self.pool.begin().await?;
+        let matched = order_matches_responsibility(&mut tx, owner, order_id).await?;
+        tx.rollback().await?;
+        Ok(matched)
     }
 
     async fn begin(

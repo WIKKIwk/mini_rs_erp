@@ -107,7 +107,13 @@ async fn preparation_system_role_create_login_list_scope_and_fail_closed() {
     assert_eq!(body["profile"]["role"], "tayyorlov_masteri");
     assert_eq!(
         body["capabilities"],
-        serde_json::json!(["preparation.access"])
+        serde_json::json!([
+            "preparation.access",
+            "gscale.catalog.read",
+            "gscale.print",
+            "rps.batch.manage",
+            "raw_material.assign",
+        ])
     );
     let token = body["token"].as_str().unwrap();
     let list = build_router(state.clone())

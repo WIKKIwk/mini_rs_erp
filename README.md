@@ -430,6 +430,12 @@ formula cards per homashyo family, and masters can only read/write formulas
 for their assigned materials. The order sheet asks which of the master's
 order materials to open before showing formulas.
 
+Kirim and order linking reuse the material-taminotchi operational set:
+tayyorlov masters hold `gscale.catalog.read`, `gscale.print`,
+`rps.batch.manage` and `raw_material.assign` by default, scoped to their
+assigned warehouses; raw-material assign/unlink additionally requires the
+target order to contain an assigned material (fail-closed).
+
 Important modules:
 
 - `src/core/preparation`;

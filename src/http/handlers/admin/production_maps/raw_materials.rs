@@ -361,7 +361,9 @@ pub async fn raw_material_assignments(
                 .raw_material_assignments()
                 .await
                 .map_err(production_map_error)?;
-            if principal.role == PrincipalRole::MaterialTaminotchi {
+            if principal.role == PrincipalRole::MaterialTaminotchi
+                || principal.role == PrincipalRole::TayyorlovMasteri
+            {
                 assignments =
                     material_scoped_raw_material_assignments(&state, &principal, assignments)
                         .await?;
@@ -383,6 +385,7 @@ pub async fn raw_material_assignments(
         Method::POST => {
             require_capability(&state, &principal, Capability::RawMaterialAssign).await?;
             let input: RawMaterialAssignmentInput = parse_json(&body)?;
+            require_tayyorlov_order_scope(&state, &principal, &input.order_id).await?;
             let (input, warehouse) =
                 fill_raw_material_assignment_input(&state, &principal, input).await?;
             let barcode = input.barcode.clone();
@@ -407,6 +410,7 @@ pub async fn raw_material_assignments(
         Method::DELETE => {
             require_capability(&state, &principal, Capability::RawMaterialAssign).await?;
             let input: RawMaterialAssignmentDeleteInput = parse_json(&body)?;
+            require_tayyorlov_order_scope(&state, &principal, &input.order_id).await?;
             let existing = find_raw_material_assignment(&state, &input.order_id, &input.barcode)
                 .await?
                 .ok_or_else(|| {
@@ -447,8 +451,31 @@ pub async fn raw_material_assignments(
     }
 }
 
-async fn raw_material_already_assigned_error(state: &AppState, barcode: &str) -> AdminError {
-    let normalized_barcode = barcode.trim().to_ascii_uppercase();
+/// Tayyorlov masteri faqat o'ziga biriktirilgan homashyosi bor
+/// orderlarga ulay oladi/yecha oladi. Boshqa rollarga tegmaydi.
+async fn require_tayyorlov_order_scope(
+    state: &AppState,
+    principal: &Principal,
+    order_id: &str,
+) -> Result<(), AdminError> {
+    if principal.role != PrincipalRole::TayyorlovMasteri {
+        return Ok(());
+    }
+    let Some(preparation) = state.preparation.as_ref() else {
+        return Err(forbidden());
+    };
+    let in_scope = preparation
+        .order_in_scope(&principal.ref_, order_id)
+        .await
+        .map_err(|_| forbidden())?;
+    if in_scope {
+        Ok(())
+    } else {
+        Err(forbidden())
+    }
+}
+
+async fn raw_material_already_assigned_error(state: &AppState, barcode: &str) -> AdminError {    let normalized_barcode = barcode.trim().to_ascii_uppercase();
     let assignment = state
         .production_maps
         .raw_material_assignments()
@@ -505,7 +532,7 @@ pub async fn raw_material_assignment_orders(
     method: Method,
     headers: HeaderMap,
 ) -> Result<Response, AdminError> {
-    authorize_any_capability(
+    let principal = authorize_any_capability(
         &state,
         &headers,
         &[
@@ -518,12 +545,28 @@ pub async fn raw_material_assignment_orders(
     if method != Method::GET {
         return Err(method_not_allowed());
     }
-    state
+    let orders = state
         .production_maps
         .raw_material_assignment_orders()
         .await
-        .map(json_response)
-        .map_err(production_map_error)
+        .map_err(production_map_error)?;
+    if principal.role != PrincipalRole::TayyorlovMasteri {
+        return Ok(json_response(orders));
+    }
+    let Some(preparation) = state.preparation.as_ref() else {
+        return Ok(json_response(Vec::<serde_json::Value>::new()));
+    };
+    let mut scoped = Vec::new();
+    for order in orders {
+        let in_scope = preparation
+            .order_in_scope(&principal.ref_, &order.map.id)
+            .await
+            .unwrap_or(false);
+        if in_scope {
+            scoped.push(order);
+        }
+    }
+    Ok(json_response(scoped))
 }
 
 
@@ -559,6 +602,7 @@ pub async fn raw_material_assignment_candidates(
         .into_iter()
         .find(|saved| saved.map.id.trim() == order_id)
         .ok_or_else(|| production_map_error(ProductionMapError::MapNotFound))?;
+    require_tayyorlov_order_scope(&state, &principal, &order.map.id).await?;
     let stock = if principal.role == PrincipalRole::MaterialTaminotchi {
         material_scoped_raw_material_stock(&state, &principal, "", 500).await?
     } else {

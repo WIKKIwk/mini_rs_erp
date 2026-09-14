@@ -154,7 +154,10 @@ async fn require_material_warehouse_access(
     principal: &Principal,
     warehouse: &str,
 ) -> Result<(), (StatusCode, Json<GscaleErrorResponse>)> {
-    if principal.role != PrincipalRole::MaterialTaminotchi {
+    if !matches!(
+        principal.role,
+        PrincipalRole::MaterialTaminotchi | PrincipalRole::TayyorlovMasteri
+    ) {
         return Ok(());
     }
     let assigned = state
@@ -176,12 +179,14 @@ async fn require_material_warehouse_access(
     {
         return Ok(());
     }
+    let detail = if principal.role == PrincipalRole::TayyorlovMasteri {
+        "warehouse is not assigned to tayyorlov masteri"
+    } else {
+        "warehouse is not assigned to material taminotchi"
+    };
     Err((
         StatusCode::FORBIDDEN,
-        Json(GscaleErrorResponse::new(
-            "warehouse_not_assigned",
-            "warehouse is not assigned to material taminotchi",
-        )),
+        Json(GscaleErrorResponse::new("warehouse_not_assigned", detail)),
     ))
 }
 
