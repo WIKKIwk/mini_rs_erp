@@ -284,7 +284,13 @@ impl AppState {
                 calculate_materials.clone(),
                 production_maps.clone(),
             )
-            .with_pending_orders(pending_orders.clone());
+            .with_pending_orders(pending_orders.clone())
+            .with_automatic_orders(
+                apparatus.clone(),
+                production_maps.clone(),
+                calculate_materials.clone(),
+                order_sheets.clone(),
+            );
 
         Self {
             config: Arc::new(config),

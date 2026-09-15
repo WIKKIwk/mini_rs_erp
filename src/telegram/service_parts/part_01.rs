@@ -54,5 +54,6 @@ pub struct TelegramService {
     worker_started: Arc<AtomicBool>,
     order_catalog: Option<Arc<TelegramOrderCatalog>>,
     pending_orders: Option<Arc<dyn crate::core::pending_orders::PendingOrderStore>>,
+    automatic_orders: Option<super::automatic_orders::AutomaticOrders>,
     order_choices: Arc<tokio::sync::Mutex<BTreeMap<String, String>>>,
 }

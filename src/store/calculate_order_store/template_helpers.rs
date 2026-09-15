@@ -151,6 +151,9 @@ fn quick_template_key(template: &CalculateOrderTemplate) -> String {
         parts.push(normalize_key(&layer.micron));
     }
     parts.push(normalize_key(&template.note));
+    if let Some(options) = &template.production_options {
+        parts.push(serde_json::to_string(options).expect("finite order production options"));
+    }
     parts.join("|")
 }
 

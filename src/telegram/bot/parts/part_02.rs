@@ -300,6 +300,17 @@ async fn handle_private_media(
         .await?;
         return Ok(());
     }
+    if draft.print_method.is_none() || draft.cold_glue.is_none() || draft.status == "flexo" {
+        draft.step = TelegramOrderStep::Status;
+        draft.layers.clear();
+        draft.print_method = None;
+        draft.cold_glue = None;
+        service.save_order_draft(&telegram_user_id, draft).await?;
+        send_message_with_markup(service, token, &chat_id,
+            "Avtomatik map uchun buyurtma turini qayta tanlang. Keyin bosma usuli va qavatlarni kiriting:",
+            None, Some(status_keyboard())).await?;
+        return Ok(());
+    }
     // Resume drafts created before the dimensional fields were added.
     if draft.frame_product_size_mm.is_none() || draft.frame_count.is_none() {
         draft.step = TelegramOrderStep::FrameSize;
@@ -508,19 +519,23 @@ async fn handle_private_media(
         image_size_bytes: optimized.body.len() as u64,
         body: optimized.body,
     };
-    if let Err(error) = service
+    let intake = match service
         .persist_pending_order(&account, &draft, storage_image)
         .await
     {
-        send_order_text(
-            service,
-            token,
-            &chat_id,
-            &format!("Order saqlanmadi: {error}. Ma’lumotlar saqlandi, qayta urinib ko‘ring."),
-        )
-        .await?;
-        return Ok(());
-    }
+        Ok(intake) => intake,
+        Err(error) => {
+            send_order_text(
+                service,
+                token,
+                &chat_id,
+                &format!("Order saqlanmadi: {error}. Ma’lumotlar saqlandi, qayta urinib ko‘ring."),
+            )
+            .await?;
+            return Ok(());
+        }
+    };
+    let saved_message = intake.message(&draft.order_number);
     match service
         .deliver_order(&telegram_user_id, &caption, Some(delivery_image))
         .await
@@ -530,7 +545,7 @@ async fn handle_private_media(
                 service,
                 token,
                 &chat_id,
-                "Chala buyurtma mobile’da saqlandi. Guruhga yuborish uchun guruhni ulang yoki tanlang.",
+                &format!("{saved_message}\nGuruhga yuborish uchun guruhni ulang yoki tanlang."),
             )
             .await?;
         }
@@ -541,8 +556,7 @@ async fn handle_private_media(
                 token,
                 &chat_id,
                 &format!(
-                    "✅ Chala order №T{} mobile’da saqlandi va rasm bilan {} ta guruhga yuborildi. Mobile’da tugallang.",
-                    draft.order_number, count
+                    "{saved_message}\nRasm bilan {count} ta guruhga yuborildi."
                 ),
             )
             .await?;
@@ -552,7 +566,7 @@ async fn handle_private_media(
                 service,
                 token,
                 &chat_id,
-                &format!("Chala order mobile’da saqlandi. Guruhga yuborilmadi: {error}. Rasmni qayta yuborishingiz mumkin."),
+                &format!("{saved_message}\nGuruhga yuborilmadi: {error}. Rasmni qayta yuborishingiz mumkin."),
             )
             .await?;
         }

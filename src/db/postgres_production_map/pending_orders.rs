@@ -35,8 +35,10 @@ impl PendingOrderStore for PostgresPendingOrderStore {
         if image.body.is_empty() || image.image_id != order.template.image_id {
             return Err(PendingOrderError::Invalid("rasm kerak".into()));
         }
+        // Concurrent retries may encounter either the id or order_number index first.
+        // The schema binds these identities together; validate the owner after loading.
         sqlx::query("INSERT INTO mini_pending_orders (id, order_number, telegram_user_id, payload_json, image_body)
-            VALUES ($1,$2,$3,$4,$5) ON CONFLICT (id) DO NOTHING")
+            VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING")
             .bind(&order.id).bind(&order.template.order_number).bind(&order.telegram_user_id)
             .bind(serde_json::to_value(&order).map_err(store_error)?).bind(image.body)
             .execute(&self.0).await.map_err(store_error)?;

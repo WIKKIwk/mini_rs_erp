@@ -403,25 +403,42 @@ impl ProductionMapService {
             .filter(|node| node.kind == ProductionMapNodeKind::Apparatus)
             .filter_map(ProductionMapNode::canonical_apparatus_id)
             .collect::<BTreeSet<_>>();
+        let mut configurations = std::collections::BTreeMap::new();
+        let mut cut_ids = BTreeSet::new();
         for apparatus_id in apparatus_ids {
             let canonical = self.resolve_canonical_apparatus(&apparatus_id).await?;
+            if canonical.runtime.execution_profile.operation
+                == crate::core::apparatus_standard::ExecutionOperation::Cut
+            {
+                cut_ids.insert(apparatus_id.clone());
+            }
+            configurations.insert(apparatus_id, canonical);
+        }
+        for node in map.nodes.iter().filter(|n| n.kind == ProductionMapNodeKind::Apparatus) {
+            let Some(canonical) = node
+                .canonical_apparatus_id()
+                .and_then(|id| configurations.get(&id))
+            else {
+                continue;
+            };
             let profile = &canonical.runtime.execution_profile;
             if profile.operation
                 == crate::core::apparatus_standard::ExecutionOperation::Print
             {
                 continue;
             }
-            if map.width_mm.is_some_and(|width_mm| {
+            let widths = super::automatic::stage_input_widths(map, &node.id, &cut_ids);
+            if widths.iter().any(|width_mm| {
                 profile
                     .min_web_width_mm
-                    .is_some_and(|minimum| width_mm < f64::from(minimum))
+                    .is_some_and(|minimum| *width_mm < f64::from(minimum))
             }) {
                 return Err(ProductionMapError::ApparatusWidthBelowCapability);
             }
-            if map.width_mm.is_some_and(|width_mm| {
+            if widths.iter().any(|width_mm| {
                 profile
                     .max_web_width_mm
-                    .is_some_and(|maximum| width_mm > f64::from(maximum))
+                    .is_some_and(|maximum| *width_mm > f64::from(maximum))
             }) {
                 return Err(ProductionMapError::ApparatusWidthExceedsCapability);
             }

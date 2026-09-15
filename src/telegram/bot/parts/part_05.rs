@@ -363,10 +363,25 @@ async fn handle_order_callback(
             draft.status = match value {
                 "roll" => "rulon".to_string(),
                 "package" => "paket".to_string(),
-                "flexo" => "flexo".to_string(),
                 _ => return Ok(()),
             };
-            let flexo = draft.status == "flexo";
+            draft.print_method = None;
+            draft.step = TelegramOrderStep::PrintMethod;
+            service.save_order_draft(telegram_user_id, draft).await?;
+            send_message_with_markup(
+                service, token, chat_id, "Bosma usulini tanlang:", None,
+                Some(print_method_keyboard()),
+            ).await?;
+        }
+        "print" if draft.step == TelegramOrderStep::PrintMethod => {
+            use crate::core::production_map::automatic::PrintMethod;
+            let method = match value {
+                "flexo" => PrintMethod::Flexo,
+                "metal" => PrintMethod::Metal,
+                _ => return Ok(()),
+            };
+            draft.print_method = Some(method);
+            let flexo = method == PrintMethod::Flexo;
             draft.edge_allowance_mm = None;
             draft.step = if flexo {
                 TelegramOrderStep::EdgeAllowance
@@ -421,6 +436,19 @@ async fn handle_order_callback(
             send_material_step(service, token, chat_id, layer_number).await?;
         }
         "next_layers" if draft.step == TelegramOrderStep::LayerOptions => {
+            draft.step = TelegramOrderStep::ColdGlue;
+            service.save_order_draft(telegram_user_id, draft).await?;
+            send_message_with_markup(
+                service, token, chat_id, "Holodniy kley bo‘ladimi?", None,
+                Some(cold_glue_keyboard()),
+            ).await?;
+        }
+        "cold" if draft.step == TelegramOrderStep::ColdGlue => {
+            draft.cold_glue = Some(match value {
+                "yes" => true,
+                "no" => false,
+                _ => return Ok(()),
+            });
             draft.step = TelegramOrderStep::Tiraj;
             service.save_order_draft(telegram_user_id, draft).await?;
             send_order_text(

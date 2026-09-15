@@ -10,6 +10,8 @@ pub use image_reference::OrderImageLookup;
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 pub struct CalculateOrderTemplate {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub production_options: Option<super::production_map::automatic::OrderProductionOptions>,
     #[serde(default)]
     pub id: String,
     #[serde(default)]
@@ -144,6 +146,14 @@ pub trait CalculateOrderStorePort: Send + Sync {
 }
 
 pub fn validate_template(template: &CalculateOrderTemplate) -> Result<(), CalculateOrderError> {
+    if template
+        .production_options
+        .as_ref()
+        .and_then(|o| o.diameter_mm)
+        .is_some_and(|diameter| !diameter.is_finite() || diameter <= 0.0)
+    {
+        return Err(CalculateOrderError::InvalidInput("diametr noto'g'ri".into()));
+    }
     if template
         .print_val_size_mm
         .is_some_and(|size| !size.is_finite() || size <= 0.0)

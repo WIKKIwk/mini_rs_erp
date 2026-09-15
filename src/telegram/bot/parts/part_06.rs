@@ -138,8 +138,7 @@ fn status_keyboard() -> serde_json::Value {
         "inline_keyboard": [
             [
                 {"text": "🧻 Rulon", "callback_data": "order:status:roll"},
-                {"text": "📦 Paket", "callback_data": "order:status:package"},
-                {"text": "🖨 Flexo", "callback_data": "order:status:flexo"}
+                {"text": "📦 Paket", "callback_data": "order:status:package"}
             ],
             [{"text": "❌ Bekor qilish", "callback_data": "order:cancel"}]
         ]
@@ -153,6 +152,22 @@ fn material_step_keyboard() -> serde_json::Value {
             [{"text": "❌ Bekor qilish", "callback_data": "order:cancel"}]
         ]
     })
+}
+
+fn print_method_keyboard() -> serde_json::Value {
+    serde_json::json!({"inline_keyboard": [
+        [{"text":"🖨 Flexo", "callback_data":"order:print:flexo"},
+         {"text":"⚙️ Temir", "callback_data":"order:print:metal"}],
+        [{"text":"❌ Bekor qilish", "callback_data":"order:cancel"}]
+    ]})
+}
+
+fn cold_glue_keyboard() -> serde_json::Value {
+    serde_json::json!({"inline_keyboard": [
+        [{"text":"Ha", "callback_data":"order:cold:yes"},
+         {"text":"Yo‘q", "callback_data":"order:cold:no"}],
+        [{"text":"❌ Bekor qilish", "callback_data":"order:cancel"}]
+    ]})
 }
 
 fn layer_options_keyboard() -> serde_json::Value {

@@ -1,6 +1,7 @@
 #[path = "queue/apparatus.rs"]
 mod apparatus;
 mod apparatus_resolver;
+pub mod automatic;
 mod capacity;
 pub mod chain;
 mod compiler;

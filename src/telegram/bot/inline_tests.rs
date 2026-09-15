@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     #[test]
-    fn order_types_include_mobile_flexo_and_allowance_uses_the_same_rules() {
+    fn order_form_is_separate_from_print_method_and_cold_glue() {
         let keyboard = super::status_keyboard();
         let choices = keyboard["inline_keyboard"][0].as_array().unwrap();
         let callbacks: Vec<_> = choices
@@ -10,8 +10,11 @@ mod tests {
             .collect();
         assert_eq!(
             callbacks,
-            ["order:status:roll", "order:status:package", "order:status:flexo"]
+            ["order:status:roll", "order:status:package"]
         );
+        assert_eq!(super::print_method_keyboard()["inline_keyboard"][0][0]["callback_data"], "order:print:flexo");
+        assert_eq!(super::print_method_keyboard()["inline_keyboard"][0][1]["callback_data"], "order:print:metal");
+        assert_eq!(super::cold_glue_keyboard()["inline_keyboard"][0][0]["callback_data"], "order:cold:yes");
         assert_eq!(super::parse_edge_allowance("0"), Some(0.0));
         assert_eq!(super::parse_edge_allowance(" 40,5 "), Some(40.5));
         for value in ["", "-1", "NaN", "inf", "abc"] {

@@ -16,6 +16,8 @@ pub(crate) enum TelegramOrderStep {
     Product,
     ProductName,
     Status,
+    PrintMethod,
+    ColdGlue,
     EdgeAllowance,
     Material,
     Micron,
@@ -37,6 +39,8 @@ pub(crate) struct TelegramOrderDraft {
     pub product_code: String,
     pub product_name: String,
     pub status: String,
+    pub print_method: Option<crate::core::production_map::automatic::PrintMethod>,
+    pub cold_glue: Option<bool>,
     pub edge_allowance_mm: Option<f64>,
     pub layers: Vec<TelegramOrderLayer>,
     pub pending_material_id: String,
@@ -47,6 +51,18 @@ pub(crate) struct TelegramOrderDraft {
     pub diameter_mm: Option<f64>,
     pub roll_count: Option<i64>,
     pub step: TelegramOrderStep,
+}
+
+impl TelegramOrderDraft {
+    pub(crate) fn production_options(
+        &self,
+    ) -> Option<crate::core::production_map::automatic::OrderProductionOptions> {
+        Some(crate::core::production_map::automatic::OrderProductionOptions {
+            print_method: self.print_method?,
+            cold_glue: self.cold_glue?,
+            diameter_mm: self.diameter_mm,
+        })
+    }
 }
 
 pub(crate) fn normalize_order_text(value: &str) -> String {
@@ -141,11 +157,23 @@ pub(crate) fn order_caption(
         .filter(|value| *value > 0)
         .map(|value| format!("{value} xil"))
         .unwrap_or_else(|| "—".to_string());
+    let method = match draft.print_method {
+        Some(crate::core::production_map::automatic::PrintMethod::Flexo) => "Flexo",
+        Some(crate::core::production_map::automatic::PrintMethod::Metal) => "Temir",
+        None => "—",
+    };
+    let cold = match draft.cold_glue {
+        Some(true) => "Ha",
+        Some(false) => "Yo‘q",
+        None => "—",
+    };
     format!(
         "Buyurtma raqami: №T{} {}\n\
 Mijoz: {}\n\
 Mahsulot: {}\n\
-Holat: {}\n\n\
+Holat: {}\n\
+Bosma: {method}\n\
+Holodniy kley: {cold}\n\n\
 1. Material: {}\n\
 2. Rang: {}\n\
 3. Tiraj: {} kg\n\

@@ -71,6 +71,9 @@ impl PendingOrder {
         t.id = source.id.clone();
         t.code = source.code.clone();
         t.order_number = source.order_number.clone();
+        if t.production_options.is_none() {
+            t.production_options = source.production_options.clone();
+        }
         t.name = t.product.clone();
         if t.image_id == source.image_id {
             t.image_name = source.image_name.clone();
@@ -148,8 +151,14 @@ mod tests {
 
     #[test]
     fn pending_completion_preserves_identity_and_accepts_normal_editor_values() {
-        let (order, _) = test_pending_order("9011");
+        let (mut order, _) = test_pending_order("9011");
+        order.template.production_options = Some(crate::core::production_map::automatic::OrderProductionOptions {
+            print_method: crate::core::production_map::automatic::PrintMethod::Flexo,
+            cold_glue: true,
+            diameter_mm: Some(45.5),
+        });
         let incoming = CalculateOrderTemplate {
+            production_options: None, // An older Mobile must not erase Telegram routing choices.
             order_number: "9999".into(),
             kg: 1.0,
             product: "Replaced".into(),
@@ -168,6 +177,7 @@ mod tests {
         assert_eq!(merged.id, order.template.id);
         assert_eq!(merged.code, order.template.code);
         assert_eq!(merged.order_number, "9011");
+        assert_eq!(merged.production_options, order.template.production_options);
         assert_eq!(merged.kg, 1.0);
         assert_eq!(merged.product, "Replaced");
         assert_eq!(merged.name, "Replaced");

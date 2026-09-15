@@ -9,6 +9,7 @@ impl TelegramService {
             worker_started: Arc::new(AtomicBool::new(false)),
             order_catalog: None,
             pending_orders: None,
+            automatic_orders: None,
             order_choices: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
         }
     }
@@ -40,7 +41,7 @@ impl TelegramService {
         account: &TelegramUserAccount,
         draft: &TelegramOrderDraft,
         image: CalculateOrderImage,
-    ) -> Result<(), TelegramError> {
+    ) -> Result<super::automatic_orders::IntakeResult, TelegramError> {
         let store = self
             .pending_orders
             .as_ref()
@@ -52,6 +53,7 @@ impl TelegramService {
             created_at: OffsetDateTime::now_utc().unix_timestamp(),
             completion: None,
             template: CalculateOrderTemplate {
+                production_options: draft.production_options(),
                 id: format!("telegram-template-{:032x}", rand::random::<u128>()),
                 code: format!("TG-{:032x}", rand::random::<u128>()),
                 name: draft.product_name.clone(),
@@ -96,11 +98,36 @@ impl TelegramService {
             .await
             .map_err(|e| TelegramError::OrderCatalog(e.to_string()))?;
         if saved.completion.is_some() {
-            return Err(TelegramError::OrderCatalog(
-                "Bu order mobile’da allaqachon tugallangan. /cancel bosing.".into(),
-            ));
+            return Ok(super::automatic_orders::IntakeResult::completed());
         }
-        Ok(())
+        let Some(automatic) = &self.automatic_orders else {
+            return Ok(super::automatic_orders::IntakeResult::pending(
+                "Avtomatik map xizmati ulanmagan".into(),
+            ));
+        };
+        match automatic.complete(&saved, store.as_ref()).await {
+            Ok(()) => Ok(super::automatic_orders::IntakeResult::completed()),
+            Err(reason) => {
+                tracing::warn!(order_id = %saved.id, %reason, "automatic Telegram order remains pending");
+                Ok(super::automatic_orders::IntakeResult::pending(reason))
+            }
+        }
+    }
+
+    pub fn with_automatic_orders(
+        mut self,
+        apparatus: crate::core::apparatus_standard::CanonicalApparatusService,
+        production_maps: crate::core::production_map::ProductionMapService,
+        materials: Arc<dyn crate::core::calculate_materials::CalculateMaterialStorePort>,
+        sheets: Arc<dyn crate::google_sheets::OrderSheetSink>,
+    ) -> Self {
+        self.automatic_orders = Some(super::automatic_orders::AutomaticOrders {
+            apparatus,
+            production_maps,
+            materials,
+            sheets,
+        });
+        self
     }
 
     pub async fn admin_overview(&self) -> Result<TelegramAdminOverview, TelegramError> {

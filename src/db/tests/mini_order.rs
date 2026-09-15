@@ -169,6 +169,7 @@ fn test_node(id: &str, kind: ProductionMapNodeKind, title: &str, y: f64) -> Prod
 
 fn test_template() -> CalculateOrderTemplate {
     CalculateOrderTemplate {
+        production_options: None,
         print_val_size_mm: None,
         id: String::new(),
         code: "9001".to_string(),
