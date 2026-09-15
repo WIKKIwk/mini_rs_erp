@@ -8,6 +8,7 @@ use std::env;
 use std::io::Cursor;
 use std::sync::Arc;
 
+use base64::Engine;
 use ferogram::{
     Client, InputMessage, InvocationErrorExt, LoginToken, PasswordToken, SendCodeOutcome,
     ShutdownToken, SignInError, TransportKind,
@@ -16,7 +17,7 @@ use tokio::sync::Mutex;
 
 use crate::core::calculate_orders::CalculateOrderImage;
 
-use super::models::{TelegramDeliveryMode, TelegramUserGroup};
+use super::models::{TelegramDeliveryMode, TelegramQrLoginResponse, TelegramUserGroup};
 use super::store::{TelegramStore, TelegramStoreError};
 
 include!("mod_parts/part_01.rs");

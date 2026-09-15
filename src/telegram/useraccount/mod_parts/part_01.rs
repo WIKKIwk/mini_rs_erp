@@ -54,12 +54,21 @@ struct PendingLogin {
     last_code_sent_at: std::time::Instant,
 }
 
+struct PendingQrLogin {
+    telegram_user_id: String,
+    client: Client,
+    shutdown: ShutdownToken,
+    token: Vec<u8>,
+    expires_at_unix: i64,
+}
+
 const RESEND_COOLDOWN_SECONDS: u64 = 60;
 
 #[derive(Clone)]
 pub(crate) struct TelegramUserAccountService {
     store: Arc<TelegramStore>,
     pending_logins: Arc<Mutex<BTreeMap<String, PendingLogin>>>,
+    pending_qr_logins: Arc<Mutex<BTreeMap<String, PendingQrLogin>>>,
 }
 
 impl TelegramUserAccountService {
@@ -67,6 +76,7 @@ impl TelegramUserAccountService {
         Self {
             store,
             pending_logins: Arc::new(Mutex::new(BTreeMap::new())),
+            pending_qr_logins: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
 
@@ -154,6 +164,162 @@ impl TelegramUserAccountService {
                 }
                 shutdown.cancel();
                 Err(map_send_code_error(error))
+            }
+        }
+    }
+
+    pub(crate) async fn begin_qr_login(
+        &self,
+        telegram_user_id: &str,
+    ) -> Result<TelegramQrLoginResponse, UserAccountError> {
+        let account = self.account(telegram_user_id).await?;
+        if account.role != TelegramAccountRole::SalesManager {
+            return Err(UserAccountError::Transport(
+                "faqat sotuv manageri user profile ulashi mumkin".to_string(),
+            ));
+        }
+        let (api_id, api_hash) = api_credentials()?;
+        let existing_session = self
+            .store
+            .user_session(telegram_user_id)
+            .await
+            .map_err(map_store)?;
+        let (client, shutdown) =
+            connect_client(api_id, &api_hash, existing_session.as_deref()).await?;
+
+        if existing_session.is_some() {
+            let authorized = match client.is_authorized().await {
+                Ok(authorized) => authorized,
+                Err(error) => {
+                    shutdown.cancel();
+                    return Err(map_transport(error));
+                }
+            };
+            if authorized {
+                shutdown.cancel();
+                return Ok(qr_login_authorized_response());
+            }
+        }
+
+        let (token, expires_at_unix) = match client.export_login_token().await {
+            Ok(result) => result,
+            Err(error) => {
+                shutdown.cancel();
+                return Err(map_transport(error));
+            }
+        };
+        let expires_at_unix = i64::from(expires_at_unix);
+        if token.is_empty() || expires_at_unix <= 0 {
+            shutdown.cancel();
+            return Err(UserAccountError::Transport(
+                "telegram QR login token yaratilmadi".to_string(),
+            ));
+        }
+
+        let challenge_id = create_qr_challenge_id();
+        let previous = {
+            let mut pending = self.pending_qr_logins.lock().await;
+            let previous_id = pending
+                .iter()
+                .find(|(_, item)| item.telegram_user_id == telegram_user_id)
+                .map(|(id, _)| id.clone());
+            let previous = previous_id.and_then(|id| pending.remove(&id));
+            pending.insert(
+                challenge_id.clone(),
+                PendingQrLogin {
+                    telegram_user_id: telegram_user_id.to_string(),
+                    client,
+                    shutdown,
+                    token: token.clone(),
+                    expires_at_unix,
+                },
+            );
+            previous
+        };
+        if let Some(previous) = previous {
+            previous.shutdown.cancel();
+        }
+
+        Ok(qr_login_response(
+            challenge_id,
+            token,
+            expires_at_unix,
+        ))
+    }
+
+    pub(crate) async fn qr_login_status(
+        &self,
+        challenge_id: &str,
+    ) -> Result<TelegramQrLoginResponse, UserAccountError> {
+        let mut pending = self.take_qr_login(challenge_id).await?;
+        if pending.expires_at_unix <= time::OffsetDateTime::now_utc().unix_timestamp() {
+            match refresh_qr_token(&mut pending).await {
+                Ok(true) => {
+                    return self
+                        .finish_qr_login(
+                            &pending.telegram_user_id,
+                            pending.client,
+                            pending.shutdown,
+                        )
+                        .await
+                        .map(|_| qr_login_authorized_response());
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    pending.shutdown.cancel();
+                    return Err(error);
+                }
+            }
+        }
+
+        match pending.client.check_qr_login(pending.token.clone()).await {
+            Ok(Some(_)) => {
+                self.finish_qr_login(
+                    &pending.telegram_user_id,
+                    pending.client,
+                    pending.shutdown,
+                )
+                .await
+                .map(|_| qr_login_authorized_response())
+            }
+            Ok(None) => {
+                let response = qr_login_response(
+                    challenge_id.to_string(),
+                    pending.token.clone(),
+                    pending.expires_at_unix,
+                );
+                self.put_qr_login(challenge_id, pending).await;
+                Ok(response)
+            }
+            Err(error) if qr_token_needs_refresh(&error) => {
+                match refresh_qr_token(&mut pending).await {
+                    Ok(true) => {
+                        return self
+                            .finish_qr_login(
+                                &pending.telegram_user_id,
+                                pending.client,
+                                pending.shutdown,
+                            )
+                            .await
+                            .map(|_| qr_login_authorized_response());
+                    }
+                    Ok(false) => {}
+                    Err(error) => {
+                        pending.shutdown.cancel();
+                        return Err(error);
+                    }
+                }
+                let response = qr_login_response(
+                    challenge_id.to_string(),
+                    pending.token.clone(),
+                    pending.expires_at_unix,
+                );
+                self.put_qr_login(challenge_id, pending).await;
+                Ok(response)
+            }
+            Err(error) => {
+                pending.shutdown.cancel();
+                Err(map_transport(error))
             }
         }
     }
@@ -406,11 +572,29 @@ impl TelegramUserAccountService {
             .ok_or(UserAccountError::LoginNotPending)
     }
 
+    async fn take_qr_login(
+        &self,
+        challenge_id: &str,
+    ) -> Result<PendingQrLogin, UserAccountError> {
+        self.pending_qr_logins
+            .lock()
+            .await
+            .remove(challenge_id)
+            .ok_or(UserAccountError::LoginNotPending)
+    }
+
     async fn put_pending(&self, telegram_user_id: &str, pending: PendingLogin) {
         self.pending_logins
             .lock()
             .await
             .insert(telegram_user_id.to_string(), pending);
+    }
+
+    async fn put_qr_login(&self, challenge_id: &str, pending: PendingQrLogin) {
+        self.pending_qr_logins
+            .lock()
+            .await
+            .insert(challenge_id.to_string(), pending);
     }
 
     async fn finish_login(
@@ -445,6 +629,97 @@ impl TelegramUserAccountService {
         shutdown.cancel();
         result
     }
+
+    async fn finish_qr_login(
+        &self,
+        telegram_user_id: &str,
+        client: Client,
+        shutdown: ShutdownToken,
+    ) -> Result<TelegramUserAccount, UserAccountError> {
+        let result = async {
+            let me = client.get_me().await.map_err(map_transport)?;
+            if me.id.to_string() != telegram_user_id {
+                return Err(UserAccountError::AccountMismatch);
+            }
+            let account = self.account(telegram_user_id).await?;
+            let phone_number = me
+                .phone
+                .as_deref()
+                .map(normalize_phone)
+                .filter(|phone| !phone.is_empty())
+                .unwrap_or_else(|| normalize_phone(&account.phone_number));
+            let session = client
+                .export_native_session_string()
+                .await
+                .map_err(map_transport)?;
+            self.store
+                .complete_user_profile_login(telegram_user_id, phone_number, session)
+                .await
+                .map_err(map_store)?;
+            self.store
+                .set_delivery_mode(telegram_user_id, TelegramDeliveryMode::UserProfile)
+                .await
+                .map_err(map_store)
+        }
+        .await;
+        shutdown.cancel();
+        result
+    }
+}
+
+fn create_qr_challenge_id() -> String {
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(rand::random::<[u8; 24]>())
+}
+
+fn qr_login_response(
+    challenge_id: String,
+    token: Vec<u8>,
+    expires_at_unix: i64,
+) -> TelegramQrLoginResponse {
+    TelegramQrLoginResponse {
+        challenge_id,
+        status: "pending".to_string(),
+        qr_url: Some(format!(
+            "tg://login?token={}",
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(token)
+        )),
+        expires_at_unix,
+    }
+}
+
+fn qr_login_authorized_response() -> TelegramQrLoginResponse {
+    TelegramQrLoginResponse {
+        challenge_id: String::new(),
+        status: "authorized".to_string(),
+        qr_url: None,
+        expires_at_unix: 0,
+    }
+}
+
+async fn refresh_qr_token(pending: &mut PendingQrLogin) -> Result<bool, UserAccountError> {
+    let (token, expires_at_unix) = pending
+        .client
+        .export_login_token()
+        .await
+        .map_err(map_transport)?;
+    let expires_at_unix = i64::from(expires_at_unix);
+    if token.is_empty() || expires_at_unix <= 0 {
+        return Ok(true);
+    }
+    pending.token = token;
+    pending.expires_at_unix = expires_at_unix;
+    Ok(false)
+}
+
+fn qr_token_needs_refresh(error: &ferogram::InvocationError) -> bool {
+    matches!(
+        error,
+        ferogram::InvocationError::Rpc(rpc)
+            if matches!(
+                rpc.name.as_str(),
+                "AUTH_TOKEN_EXPIRED" | "AUTH_TOKEN_INVALID" | "AUTH_TOKEN_ALREADY_ACCEPTED"
+            )
+    )
 }
 
 async fn connect_client(

@@ -66,7 +66,11 @@ pub use system::{
 };
 use system::{authorize_any_capability, authorize_capability, require_capability};
 pub use system_users::{system_user_code_regenerate, system_user_detail, system_users};
-pub use telegram::{invite as telegram_invite, settings as telegram_settings};
+pub use telegram::{
+    invite as telegram_invite, settings as telegram_settings,
+    user_profile_qr_start as telegram_user_profile_qr_start,
+    user_profile_qr_status as telegram_user_profile_qr_status,
+};
 pub use training::{
     training_apparatus_modes, training_completed_orders, training_input_batches,
     training_order_image_upload, training_order_image_view, training_order_statuses,

@@ -111,6 +111,20 @@ pub struct TelegramInviteResponse {
     pub invite_url: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TelegramQrLoginRequest {
+    pub telegram_user_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TelegramQrLoginResponse {
+    pub challenge_id: String,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub qr_url: Option<String>,
+    pub expires_at_unix: i64,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 pub struct TelegramStartRequest {
     pub invite_token: String,

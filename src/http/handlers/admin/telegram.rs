@@ -1,6 +1,8 @@
 use super::*;
 
-use crate::telegram::{TelegramBotSettingsUpdate, TelegramError, TelegramInviteRequest};
+use crate::telegram::{
+    TelegramBotSettingsUpdate, TelegramError, TelegramInviteRequest, TelegramQrLoginRequest,
+};
 
 pub async fn settings(
     State(state): State<AppState>,
@@ -55,6 +57,43 @@ pub async fn invite(
     state
         .telegram
         .create_invite(input)
+        .await
+        .map(json_response)
+        .map_err(telegram_error)
+}
+
+pub async fn user_profile_qr_start(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AdminError> {
+    authorize_capability(&state, &headers, Capability::AdminSettingsManage).await?;
+    if method != Method::POST {
+        return Err(method_not_allowed());
+    }
+    let input: TelegramQrLoginRequest = parse_json(&body)?;
+    state
+        .telegram
+        .begin_user_profile_qr_login(&input.telegram_user_id)
+        .await
+        .map(json_response)
+        .map_err(telegram_error)
+}
+
+pub async fn user_profile_qr_status(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    Path(challenge_id): Path<String>,
+) -> Result<Response, AdminError> {
+    authorize_capability(&state, &headers, Capability::AdminSettingsManage).await?;
+    if method != Method::GET {
+        return Err(method_not_allowed());
+    }
+    state
+        .telegram
+        .user_profile_qr_login_status(&challenge_id)
         .await
         .map(json_response)
         .map_err(telegram_error)

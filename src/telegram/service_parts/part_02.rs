@@ -190,6 +190,26 @@ impl TelegramService {
             .map_err(map_user_account)
     }
 
+    pub(crate) async fn begin_user_profile_qr_login(
+        &self,
+        telegram_user_id: &str,
+    ) -> Result<TelegramQrLoginResponse, TelegramError> {
+        self.useraccount
+            .begin_qr_login(telegram_user_id)
+            .await
+            .map_err(map_user_account)
+    }
+
+    pub(crate) async fn user_profile_qr_login_status(
+        &self,
+        challenge_id: &str,
+    ) -> Result<TelegramQrLoginResponse, TelegramError> {
+        self.useraccount
+            .qr_login_status(challenge_id)
+            .await
+            .map_err(map_user_account)
+    }
+
     pub(crate) async fn complete_user_profile_code(
         &self,
         telegram_user_id: &str,
