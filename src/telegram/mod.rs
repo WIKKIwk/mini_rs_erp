@@ -14,7 +14,7 @@ pub mod useraccount;
 
 pub use models::{
     TelegramAccountRole, TelegramAdminOverview, TelegramBotSettingsUpdate, TelegramChat,
-    TelegramDeliveryMode, TelegramInviteRequest, TelegramInviteResponse, TelegramQrLoginRequest,
-    TelegramQrLoginResponse, TelegramStartRequest, TelegramUserAccount, TelegramUserGroup,
+    TelegramDeliveryMode, TelegramInviteRequest, TelegramInviteResponse, TelegramStartRequest,
+    TelegramUserAccount, TelegramUserGroup,
 };
 pub use service::{TelegramError, TelegramService};
