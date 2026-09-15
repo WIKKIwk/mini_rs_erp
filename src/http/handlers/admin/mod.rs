@@ -1,6 +1,8 @@
 mod calculate_materials;
 mod customers;
 mod items;
+mod pending_orders;
+pub use pending_orders::{pending_orders, pending_order_image};
 mod production_maps;
 mod supplier_mutations;
 mod suppliers;

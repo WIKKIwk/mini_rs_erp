@@ -53,5 +53,6 @@ pub struct TelegramService {
     http: reqwest::Client,
     worker_started: Arc<AtomicBool>,
     order_catalog: Option<Arc<TelegramOrderCatalog>>,
+    pending_orders: Option<Arc<dyn crate::core::pending_orders::PendingOrderStore>>,
     order_choices: Arc<tokio::sync::Mutex<BTreeMap<String, String>>>,
 }

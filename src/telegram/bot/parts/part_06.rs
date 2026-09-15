@@ -210,6 +210,10 @@ fn parse_tiraj(value: &str) -> Option<f64> {
         .filter(|value| *value > 0.0)
 }
 
+fn parse_frame_count(value: &str) -> Option<f64> {
+    parse_tiraj(value).filter(|n| n.fract() == 0.0 && *n <= i32::MAX as f64)
+}
+
 async fn get_telegram_file(
     service: &TelegramService,
     token: &str,

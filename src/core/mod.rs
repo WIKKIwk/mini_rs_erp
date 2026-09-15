@@ -17,6 +17,7 @@ mod formula_tests;
 pub use mini_rs_gscale_domain as gscale;
 pub mod inventory_movements;
 pub mod mini_orders;
+pub mod pending_orders;
 pub mod mobile_release;
 pub mod production_map;
 pub mod profile;

@@ -88,6 +88,7 @@ pub struct AppState {
     pub chat_media: ChatMediaService,
     pub order_sheets: Arc<dyn OrderSheetSink>,
     pub production_orders: Arc<dyn MiniOrderSink>,
+    pub pending_orders: Option<Arc<dyn crate::core::pending_orders::PendingOrderStore>>,
     pub order_reset: Option<PostgresOrderResetStore>,
     pub mobile_releases: MobileReleaseStore,
     pub calculate_order_image_dir: Arc<std::path::PathBuf>,
@@ -240,6 +241,7 @@ impl AppState {
         let training_workspace = build_training_workspace_store();
         let order_sheets = discover_order_sheet_sink();
         let production_orders = build_mini_order_sink();
+        let pending_orders = build_pending_order_store();
         let order_reset = build_order_reset_store();
         let mobile_releases = MobileReleaseStore::from_env();
         spawn_mini_orders_sync_loop_if_enabled(
@@ -276,11 +278,13 @@ impl AppState {
         let werka = build_werka_service(&config);
         let worker_groups = build_worker_group_service();
         let sessions = build_session_manager(&config);
-        let telegram = build_telegram_service().with_order_catalog(
-            admin.clone(),
-            calculate_materials.clone(),
-            production_maps.clone(),
-        );
+        let telegram = build_telegram_service()
+            .with_order_catalog(
+                admin.clone(),
+                calculate_materials.clone(),
+                production_maps.clone(),
+            )
+            .with_pending_orders(pending_orders.clone());
 
         Self {
             config: Arc::new(config),
@@ -301,6 +305,7 @@ impl AppState {
             chat_media,
             order_sheets,
             production_orders,
+            pending_orders,
             order_reset,
             mobile_releases,
             calculate_order_image_dir,

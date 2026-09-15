@@ -108,6 +108,26 @@ async fn handle_order_text(
                 return Ok(true);
             };
             draft.tiraj_kg = Some(tiraj);
+            draft.step = TelegramOrderStep::FrameSize;
+            service.save_order_draft(telegram_user_id, draft).await?;
+            send_order_text(service, token, chat_id, "1 ta kadrdagi mahsulot o‘lchamini mm da kiriting:").await?;
+        }
+        TelegramOrderStep::FrameSize => {
+            let Some(size) = parse_tiraj(value) else {
+                send_order_text(service, token, chat_id, "O‘lcham musbat raqam bo‘lishi kerak (mm).").await?;
+                return Ok(true);
+            };
+            draft.frame_product_size_mm = Some(size);
+            draft.step = TelegramOrderStep::FrameCount;
+            service.save_order_draft(telegram_user_id, draft).await?;
+            send_order_text(service, token, chat_id, "Kadr sonini kiriting (butun son):").await?;
+        }
+        TelegramOrderStep::FrameCount => {
+            let Some(count) = parse_frame_count(value) else {
+                send_order_text(service, token, chat_id, "Kadr soni musbat butun son bo‘lishi kerak.").await?;
+                return Ok(true);
+            };
+            draft.frame_count = Some(count);
             let order_number = if draft.order_number.trim().is_empty() {
                 catalog
                     .next_order_number()
@@ -123,9 +143,7 @@ async fn handle_order_text(
                 service,
                 token,
                 chat_id,
-                &format!(
-                    "✅ Tiraj qabul qilindi: {tiraj} kg. Endi order rasmini photo yoki file ko‘rinishida yuboring. Rasm kelgach order guruhga yuboriladi."
-                ),
+                "Endi order rasmini photo yoki file ko‘rinishida yuboring. Chala buyurtma mobile’da saqlanadi va guruhga yuboriladi.",
             )
             .await?;
         }

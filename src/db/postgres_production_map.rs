@@ -32,6 +32,7 @@ mod catalog_helpers;
 mod completion_helpers;
 mod lifecycle;
 mod stage_execution;
+pub(crate) mod pending_orders;
 #[path = "postgres_production_map/catalog/maps.rs"]
 mod map_helpers;
 #[path = "postgres_production_map/materials/rules.rs"]

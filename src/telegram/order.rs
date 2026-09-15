@@ -20,6 +20,8 @@ pub(crate) enum TelegramOrderStep {
     Micron,
     LayerOptions,
     Tiraj,
+    FrameSize,
+    FrameCount,
     Attachment,
 }
 
@@ -36,6 +38,8 @@ pub(crate) struct TelegramOrderDraft {
     pub pending_material_id: String,
     pub pending_material_name: String,
     pub tiraj_kg: Option<f64>,
+    pub frame_product_size_mm: Option<f64>,
+    pub frame_count: Option<f64>,
     pub step: TelegramOrderStep,
 }
 
@@ -131,9 +135,9 @@ Holat: {}\n\n\
 2. Rang: —\n\
 3. Tiraj: {} kg\n\
 4. Menedjer: {}\n\
-5. Tarafi: —\n\
-6. Diametr: —\n\n\
-Eslatma:",
+5. Kadrdagi o‘lcham: {} mm\n\
+6. Kadr soni: {} ta\n\n\
+🟣 Chala buyurtma — mobile’da tugallang.\nEslatma:",
         order_number.trim(),
         date,
         dash(&draft.customer_name),
@@ -142,6 +146,8 @@ Eslatma:",
         material,
         tiraj,
         manager,
+        draft.frame_product_size_mm.map(format_number).unwrap_or_else(|| "—".into()),
+        draft.frame_count.map(format_number).unwrap_or_else(|| "—".into()),
     )
 }
 
@@ -189,6 +195,8 @@ mod tests {
                 micron: "12".to_string(),
             }],
             tiraj_kg: Some(1000.0),
+            frame_product_size_mm: Some(300.0),
+            frame_count: Some(2.0),
             ..TelegramOrderDraft::default()
         };
         let caption = order_caption("2730", &draft, "Valiyev Abdulloh");
@@ -196,5 +204,8 @@ mod tests {
         assert!(caption.contains("1. Material: PET 12"));
         assert!(caption.contains("3. Tiraj: 1000 kg"));
         assert!(caption.contains("4. Menedjer: Valiyev Abdulloh"));
+        assert!(caption.contains("Kadrdagi o‘lcham: 300 mm"));
+        assert!(caption.contains("Kadr soni: 2 ta"));
+        assert!(caption.contains("Chala buyurtma"));
     }
 }

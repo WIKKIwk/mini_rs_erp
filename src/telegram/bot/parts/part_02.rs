@@ -300,6 +300,13 @@ async fn handle_private_media(
         .await?;
         return Ok(());
     }
+    // Resume drafts created before the dimensional fields were added.
+    if draft.frame_product_size_mm.is_none() || draft.frame_count.is_none() {
+        draft.step = TelegramOrderStep::FrameSize;
+        service.save_order_draft(&telegram_user_id, draft).await?;
+        send_order_text(service, token, &chat_id, "1 ta kadrdagi mahsulot o‘lchamini mm da kiriting:").await?;
+        return Ok(());
+    }
     let Some(media) = order_media_from_message(message) else {
         send_order_text(
             service,
@@ -434,12 +441,30 @@ async fn handle_private_media(
             .await?;
     }
     let caption = order_caption(&draft.order_number, &draft, &account.display_name);
+    tracing::debug!(mime = %media.mime_type, "optimizing Telegram order image");
+    let optimized = match tokio::task::spawn_blocking(move || {
+        crate::http::handlers::calculate_image::optimize_order_image_for_store(&body, &media.file_name)
+    }).await {
+        Ok(Ok(image)) => image,
+        _ => {
+            send_order_text(service, token, &chat_id,
+                "Rasmni ochib bo‘lmadi. Boshqa JPG yoki PNG rasm yuboring.").await?;
+            return Ok(());
+        }
+    };
     let image = CalculateOrderImage {
-        image_id: media.file_id,
-        image_name: media.file_name,
-        image_mime: media.mime_type,
-        image_size_bytes: body.len() as u64,
-        body,
+        image_id: format!("telegram-order-{}-{:032x}", draft.order_number, rand::random::<u128>()),
+        image_name: optimized.file_name,
+        image_mime: "image/webp".into(),
+        image_size_bytes: optimized.body.len() as u64,
+        body: optimized.body,
+    };
+    let image = match service.persist_pending_order(&account, &draft, image).await {
+        Ok(image) => image,
+        Err(error) => {
+            send_order_text(service, token, &chat_id, &format!("Order saqlanmadi: {error}. Ma’lumotlar saqlandi, qayta urinib ko‘ring.")).await?;
+            return Ok(());
+        }
     };
     match service
         .deliver_order(&telegram_user_id, &caption, Some(image))
@@ -450,7 +475,7 @@ async fn handle_private_media(
                 service,
                 token,
                 &chat_id,
-                "Order tayyor, lekin yuborish uchun guruh topilmadi. Guruhni ulang yoki tanlang.",
+                "Chala buyurtma mobile’da saqlandi. Guruhga yuborish uchun guruhni ulang yoki tanlang.",
             )
             .await?;
         }
@@ -461,7 +486,7 @@ async fn handle_private_media(
                 token,
                 &chat_id,
                 &format!(
-                    "✅ Order №T{} rasm bilan {} ta guruhga yuborildi.",
+                    "✅ Chala order №T{} mobile’da saqlandi va rasm bilan {} ta guruhga yuborildi. Mobile’da tugallang.",
                     draft.order_number, count
                 ),
             )
@@ -472,7 +497,7 @@ async fn handle_private_media(
                 service,
                 token,
                 &chat_id,
-                &format!("Order yuborilmadi: {error}. Rasmni qayta yuborishingiz mumkin."),
+                &format!("Chala order mobile’da saqlandi. Guruhga yuborilmadi: {error}. Rasmni qayta yuborishingiz mumkin."),
             )
             .await?;
         }

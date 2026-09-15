@@ -349,14 +349,23 @@ impl ProductionMapService {
 
     async fn upsert_map_under_queue_guard(
         &self,
+        map: ProductionMapDefinition,
+    ) -> Result<ProductionMapSaved, ProductionMapError> {
+        let saved = self.prepare_map_for_save(map).await?;
+        self.store.put_map(saved.map.clone()).await?;
+        self.notify_live();
+        Ok(saved)
+    }
+
+    /// Validation shared by ordinary saves and atomic Telegram order completion.
+    pub(crate) async fn prepare_map_for_save(
+        &self,
         mut map: ProductionMapDefinition,
     ) -> Result<ProductionMapSaved, ProductionMapError> {
         normalize_map(&mut map);
         let program = compile_map(&map)?;
         self.validate_map_apparatus_constraints(&map).await?;
         self.reject_started_stage_changes(&map).await?;
-        self.store.put_map(map.clone()).await?;
-        self.notify_live();
         Ok(ProductionMapSaved { map, program })
     }
 

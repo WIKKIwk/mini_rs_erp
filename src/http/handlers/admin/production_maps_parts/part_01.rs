@@ -265,6 +265,8 @@ pub struct ProductionMapsQuery {
 
 #[derive(serde::Deserialize)]
 struct ProductionMapSaveWithOrderRequest {
+    #[serde(default)]
+    pending_order_id: String,
     map: ProductionMapDefinition,
     #[serde(default)]
     template: Option<CalculateOrderTemplate>,
@@ -288,6 +290,9 @@ pub async fn production_map_save_with_order(
         return Err(method_not_allowed());
     }
     let mut input: ProductionMapSaveWithOrderRequest = parse_json(&body)?;
+    if !input.pending_order_id.is_empty() {
+        return complete_pending_order(&state, &principal, input).await;
+    }
     if let Some(template) = &input.template {
         validate_template(template).map_err(calculate_order_error)?;
         input.map.print_val_size_mm = template.print_val_size_mm;
@@ -446,6 +451,7 @@ pub async fn production_map_save_with_order(
 }
 
 include!("../production_maps_save_helpers.rs");
+include!("../production_maps_pending_order.rs");
 
 #[derive(serde::Deserialize)]
 struct ApparatusSequencePutRequest {

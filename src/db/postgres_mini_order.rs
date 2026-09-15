@@ -28,30 +28,40 @@ impl MiniOrderSink for PostgresMiniOrderSink {
         map: &ProductionMapDefinition,
         template: &CalculateOrderTemplate,
     ) -> Result<(), MiniOrderError> {
-        let order_id = order_id(map);
-        let order_code = first_non_empty([&template.code, &map.code, &map.order_number, &map.id]);
-        let product_name = first_non_empty([&template.product, &template.name, &map.title]);
-        let kg = positive_erp_quantity(template.kg).unwrap_or(0.0);
-        let width_mm = positive_erp_quantity(template.width_mm)
-            .or_else(|| map.width_mm.and_then(positive_erp_quantity));
-        let roll_count = template
-            .roll_count
-            .or(map.roll_count)
-            .filter(|value| *value > 0);
-        let layers = template.effective_layers();
-        let layer = |index: usize| layers.get(index).cloned().unwrap_or_default();
-        let first_layer = layer(0);
-        let second_layer = layer(1);
-        let third_layer = layer(2);
-        let layers_json = serde_json::to_value(&layers).map_err(|_| MiniOrderError::StoreFailed)?;
-
         let mut tx = self
             .pool
             .begin()
             .await
             .map_err(|_| MiniOrderError::StoreFailed)?;
-        sqlx::query(
-            "INSERT INTO mini_orders
+        save_order_tx(&mut tx, map, template).await?;
+        tx.commit().await.map_err(|_| MiniOrderError::StoreFailed)
+    }
+}
+
+pub(crate) async fn save_order_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    map: &ProductionMapDefinition,
+    template: &CalculateOrderTemplate,
+) -> Result<(), MiniOrderError> {
+    let order_id = order_id(map);
+    let order_code = first_non_empty([&template.code, &map.code, &map.order_number, &map.id]);
+    let product_name = first_non_empty([&template.product, &template.name, &map.title]);
+    let kg = positive_erp_quantity(template.kg).unwrap_or(0.0);
+    let width_mm = positive_erp_quantity(template.width_mm)
+        .or_else(|| map.width_mm.and_then(positive_erp_quantity));
+    let roll_count = template
+        .roll_count
+        .or(map.roll_count)
+        .filter(|value| *value > 0);
+    let layers = template.effective_layers();
+    let layer = |index: usize| layers.get(index).cloned().unwrap_or_default();
+    let first_layer = layer(0);
+    let second_layer = layer(1);
+    let third_layer = layer(2);
+    let layers_json = serde_json::to_value(&layers).map_err(|_| MiniOrderError::StoreFailed)?;
+
+    sqlx::query(
+        "INSERT INTO mini_orders
                 (id, code, order_number, customer_ref, customer_name, product_code,
                  product_name, product_form, status, kg, width_mm, roll_count, updated_at)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'draft',
@@ -81,32 +91,32 @@ impl MiniOrderSink for PostgresMiniOrderSink {
                     excluded.product_code, excluded.product_name,
                     excluded.product_form, excluded.kg,
                     excluded.width_mm, excluded.roll_count)",
-        )
+    )
+    .bind(&order_id)
+    .bind(order_code)
+    .bind(first_non_empty([&template.order_number, &map.order_number]))
+    .bind(template.customer_ref.trim())
+    .bind(template.customer.trim())
+    .bind(first_non_empty([&template.item_code, &map.product_code]))
+    .bind(product_name)
+    .bind(template.status.trim())
+    .bind(kg)
+    .bind(width_mm)
+    .bind(roll_count)
+    .execute(&mut **tx)
+    .await
+    .map_err(|_| MiniOrderError::StoreFailed)?;
+
+    let product_id = format!("{order_id}:product");
+    sqlx::query("DELETE FROM mini_order_products WHERE order_id = $1 AND id <> $2")
         .bind(&order_id)
-        .bind(order_code)
-        .bind(first_non_empty([&template.order_number, &map.order_number]))
-        .bind(template.customer_ref.trim())
-        .bind(template.customer.trim())
-        .bind(first_non_empty([&template.item_code, &map.product_code]))
-        .bind(product_name)
-        .bind(template.status.trim())
-        .bind(kg)
-        .bind(width_mm)
-        .bind(roll_count)
-        .execute(&mut *tx)
+        .bind(&product_id)
+        .execute(&mut **tx)
         .await
         .map_err(|_| MiniOrderError::StoreFailed)?;
 
-        let product_id = format!("{order_id}:product");
-        sqlx::query("DELETE FROM mini_order_products WHERE order_id = $1 AND id <> $2")
-            .bind(&order_id)
-            .bind(&product_id)
-            .execute(&mut *tx)
-            .await
-            .map_err(|_| MiniOrderError::StoreFailed)?;
-
-        sqlx::query(
-            "INSERT INTO mini_order_products
+    sqlx::query(
+        "INSERT INTO mini_order_products
                 (id, order_id, item_code, product_name, material_display, color,
                  first_layer_material, first_layer_micron, second_layer_material,
                  second_layer_micron, third_layer_material, third_layer_micron,
@@ -147,37 +157,36 @@ impl MiniOrderSink for PostgresMiniOrderSink {
                     excluded.third_layer_micron,
                     excluded.layers_json,
                     excluded.note)",
-        )
-        .bind(product_id)
-        .bind(&order_id)
-        .bind(template.item_code.trim())
-        .bind(product_name)
-        .bind(template.material_display.trim())
-        .bind(template.color.trim())
-        .bind(first_layer.material)
-        .bind(first_layer.micron)
-        .bind(second_layer.material)
-        .bind(second_layer.micron)
-        .bind(third_layer.material)
-        .bind(third_layer.micron)
-        .bind(layers_json)
-        .bind(template.note.trim())
-        .execute(&mut *tx)
-        .await
-        .map_err(|_| MiniOrderError::StoreFailed)?;
+    )
+    .bind(product_id)
+    .bind(&order_id)
+    .bind(template.item_code.trim())
+    .bind(product_name)
+    .bind(template.material_display.trim())
+    .bind(template.color.trim())
+    .bind(first_layer.material)
+    .bind(first_layer.micron)
+    .bind(second_layer.material)
+    .bind(second_layer.micron)
+    .bind(third_layer.material)
+    .bind(third_layer.micron)
+    .bind(layers_json)
+    .bind(template.note.trim())
+    .execute(&mut **tx)
+    .await
+    .map_err(|_| MiniOrderError::StoreFailed)?;
 
-        sqlx::query(
-            "UPDATE mini_production_maps
+    sqlx::query(
+        "UPDATE mini_production_maps
              SET order_id = $1, updated_at = now()
              WHERE id = $1 AND order_id IS DISTINCT FROM $1",
-        )
-        .bind(&order_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(|_| MiniOrderError::StoreFailed)?;
+    )
+    .bind(&order_id)
+    .execute(&mut **tx)
+    .await
+    .map_err(|_| MiniOrderError::StoreFailed)?;
 
-        tx.commit().await.map_err(|_| MiniOrderError::StoreFailed)
-    }
+    Ok(())
 }
 
 fn order_id(map: &ProductionMapDefinition) -> String {

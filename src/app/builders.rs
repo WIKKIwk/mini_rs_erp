@@ -169,6 +169,15 @@ pub(super) fn build_mini_order_sink() -> Arc<dyn MiniOrderSink> {
     }
 }
 
+pub(super) fn build_pending_order_store()
+-> Option<Arc<dyn crate::core::pending_orders::PendingOrderStore>> {
+    postgres_pool("pending orders").map(|pool| {
+        Arc::new(
+            crate::db::postgres_production_map::pending_orders::PostgresPendingOrderStore(pool),
+        ) as Arc<dyn crate::core::pending_orders::PendingOrderStore>
+    })
+}
+
 pub(super) fn build_order_reset_store() -> Option<PostgresOrderResetStore> {
     postgres_pool("order reset").map(PostgresOrderResetStore::new)
 }

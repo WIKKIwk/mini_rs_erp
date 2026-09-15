@@ -257,7 +257,7 @@ fn json_rows_to_templates(
     Ok(dedupe_templates(templates))
 }
 
-fn stamp_template(
+pub(crate) fn stamp_template(
     template: CalculateOrderTemplate,
     existing_id: Option<String>,
 ) -> CalculateOrderTemplate {
@@ -332,7 +332,7 @@ fn dedupe_templates(templates: Vec<CalculateOrderTemplate>) -> Vec<CalculateOrde
     result
 }
 
-fn quick_template_key(template: &CalculateOrderTemplate) -> String {
+pub(crate) fn quick_template_key(template: &CalculateOrderTemplate) -> String {
     let product_key = [
         template.item_code.as_str(),
         template.product.as_str(),

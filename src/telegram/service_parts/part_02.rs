@@ -8,6 +8,7 @@ impl TelegramService {
             http: reqwest::Client::new(),
             worker_started: Arc::new(AtomicBool::new(false)),
             order_catalog: None,
+            pending_orders: None,
             order_choices: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
         }
     }
@@ -24,6 +25,83 @@ impl TelegramService {
             production_maps,
         )));
         self
+    }
+
+    pub fn with_pending_orders(
+        mut self,
+        store: Option<Arc<dyn crate::core::pending_orders::PendingOrderStore>>,
+    ) -> Self {
+        self.pending_orders = store;
+        self
+    }
+
+    pub(crate) async fn persist_pending_order(
+        &self,
+        account: &TelegramUserAccount,
+        draft: &TelegramOrderDraft,
+        image: CalculateOrderImage,
+    ) -> Result<CalculateOrderImage, TelegramError> {
+        let store = self
+            .pending_orders
+            .as_ref()
+            .ok_or(TelegramError::OrderCatalogNotConfigured)?;
+        let order = crate::core::pending_orders::PendingOrder {
+            id: format!("zakaz-{}", draft.order_number),
+            telegram_user_id: account.telegram_user_id.clone(),
+            manager_name: account.display_name.clone(),
+            created_at: OffsetDateTime::now_utc().unix_timestamp(),
+            completion: None,
+            template: CalculateOrderTemplate {
+                id: format!("telegram-template-{:032x}", rand::random::<u128>()),
+                code: format!("TG-{:032x}", rand::random::<u128>()),
+                name: draft.product_name.clone(),
+                order_number: draft.order_number.clone(),
+                customer_ref: draft.customer_ref.clone(),
+                customer: draft.customer_name.clone(),
+                item_code: draft.product_code.clone(),
+                product: draft.product_name.clone(),
+                status: draft.status.clone(),
+                kg: draft.tiraj_kg.unwrap_or_default(),
+                frame_product_size_mm: draft.frame_product_size_mm.unwrap_or_default(),
+                frame_count: draft.frame_count.unwrap_or_default(),
+                edge_allowance_mm: crate::core::formula::DEFAULT_EDGE_ALLOWANCE_MM,
+                waste_percent: 5.0,
+                layers: draft
+                    .layers
+                    .iter()
+                    .map(|l| {
+                        crate::core::formula::LayerInput::with_material_id(
+                            &l.material_id,
+                            &l.material,
+                            &l.micron,
+                        )
+                    })
+                    .collect(),
+                image_id: image.image_id.clone(),
+                image_name: image.image_name.clone(),
+                image_mime: image.image_mime.clone(),
+                image_size_bytes: image.image_size_bytes,
+                image_url: format!(
+                    "/v1/mobile/admin/pending-orders/image?id=zakaz-{}",
+                    draft.order_number
+                ),
+                ..CalculateOrderTemplate::default()
+            },
+        };
+        let saved = store
+            .create(order, image)
+            .await
+            .map_err(|e| TelegramError::OrderCatalog(e.to_string()))?;
+        if saved.completion.is_some() {
+            return Err(TelegramError::OrderCatalog(
+                "Bu order mobile’da allaqachon tugallangan. /cancel bosing.".into(),
+            ));
+        }
+        // Delivery retries use the durable original image, not a replacement attachment.
+        store
+            .image(&saved.id)
+            .await
+            .map_err(|e| TelegramError::OrderCatalog(e.to_string()))
     }
 
     pub async fn admin_overview(&self) -> Result<TelegramAdminOverview, TelegramError> {

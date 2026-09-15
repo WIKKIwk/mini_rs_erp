@@ -9,6 +9,7 @@ pub enum OrderResetError {
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct OrderResetReport {
+    pub pending_orders_deleted: u64,
     pub orders_deleted: u64,
     pub production_maps_deleted: u64,
     pub order_products_deleted: u64,
@@ -278,6 +279,8 @@ impl PostgresOrderResetStore {
         .await?;
         report.production_maps_deleted =
             delete_rows(&mut tx, "DELETE FROM mini_production_maps").await?;
+        report.pending_orders_deleted =
+            delete_rows(&mut tx, "DELETE FROM mini_pending_orders").await?;
         report.orders_deleted = delete_rows(
             &mut tx,
             "DELETE FROM mini_orders
@@ -308,6 +311,7 @@ impl PostgresOrderResetStore {
                  (SELECT COUNT(*) FROM mini_orders
                   WHERE lower(id) IN (SELECT lower(id) FROM reset_order_ids))
                + (SELECT COUNT(*) FROM mini_production_maps)
+               + (SELECT COUNT(*) FROM mini_pending_orders)
                + (SELECT COUNT(*) FROM mini_order_products
                   WHERE lower(order_id) IN (SELECT lower(id) FROM reset_order_ids))
                + (SELECT COUNT(*) FROM mini_queue_states

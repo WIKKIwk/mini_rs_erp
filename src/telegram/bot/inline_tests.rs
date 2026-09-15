@@ -1,5 +1,13 @@
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pending_order_frame_count_is_a_positive_integer() {
+        assert_eq!(super::parse_frame_count(" 3 "), Some(3.0));
+        assert_eq!(super::parse_frame_count("2,0"), Some(2.0));
+        for value in ["0", "-1", "1.5", "NaN", "inf", "2147483648", "abc"] {
+            assert_eq!(super::parse_frame_count(value), None, "{value}");
+        }
+    }
     use super::{
         InlineLoginInput, TelegramMessage, TelegramOrderNotification, is_login_code,
         number_or_dash, order_media_from_message, parse_command, parse_inline_login_input,
