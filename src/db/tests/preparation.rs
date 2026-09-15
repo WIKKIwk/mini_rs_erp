@@ -245,12 +245,14 @@ async fn preparation_postgres_partial_fifo_atomic_retry_concurrency_and_scope() 
             .iter()
             .any(|o| o["id"] == "order1" && o["saved"] == true)
     );
-    assert!(
-        store.snapshot("prep-2").await.unwrap()["materials"]
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
+    let other_snapshot = store.snapshot("prep-2").await.unwrap();
+    let shared_material = other_snapshot["materials"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["item_code"] == code)
+        .unwrap();
+    assert_eq!(shared_material["can_receive"], false);
     let other = Principal {
         ref_: "prep-2".into(),
         ..actor.clone()
@@ -385,6 +387,93 @@ async fn preparation_postgres_partial_fifo_atomic_retry_concurrency_and_scope() 
         .await
         .unwrap();
     assert_eq!(other_warehouse_receipt["warehouse"], "Other W");
+    pool.close().await;
+    sqlx::query(&format!("DROP DATABASE {db}"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    admin.close().await;
+}
+
+#[tokio::test]
+async fn preparation_snapshot_lists_shared_raw_catalog_and_balances() {
+    let url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
+        .unwrap_or_else(|_| "postgres:///postgres".into());
+    let admin = sqlx::PgPool::connect(&url).await.unwrap();
+    let db = format!(
+        "mini_rs_erp_test_prep_snapshot_{:016x}",
+        rand::random::<u64>()
+    );
+    sqlx::query(&format!("CREATE DATABASE {db}"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    let options = url.parse::<PgConnectOptions>().unwrap().database(&db);
+    let pool = sqlx::PgPool::connect_with(options).await.unwrap();
+    apply_foundation_migration(&pool).await.unwrap();
+    sqlx::raw_sql(
+        "INSERT INTO mini_system_users(id,role,name,phone)
+             VALUES ('prep-1','tayyorlov_masteri','Master','901234567');
+         INSERT INTO mini_warehouses(id,name)
+             VALUES ('prep-w','Preparation W'),('other-w','Other W');
+         INSERT INTO mini_warehouse_assignments(
+             assignment_kind,warehouse,warehouse_name,principal_role,principal_ref
+         ) VALUES ('warehouse','Preparation W','Preparation W',
+                   'tayyorlov_masteri','prep-1');",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let raw_group: String = sqlx::query_scalar(
+        "SELECT name FROM mini_item_groups
+         WHERE lower(name) = 'homashyo' AND is_group
+         ORDER BY name LIMIT 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO mini_item_groups(name,parent_item_group,is_group)
+         VALUES ('Snapshot Raw Group',$1,true)",
+    )
+    .bind(&raw_group)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(
+        "INSERT INTO mini_items(code,name,uom,item_group)
+             VALUES ('RAW-SHARED','Shared Raw','Kg','Snapshot Raw Group'),
+                    ('RAW-ZERO','Zero Raw','Kg','Snapshot Raw Group');
+         INSERT INTO mini_raw_material_stock(
+             id,warehouse,item_code,item_name,barcode,qty
+         ) VALUES ('raw:snapshot-shared','Other W','RAW-SHARED','Shared Raw',
+                   'SNAPSHOT-SHARED','17');",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let snapshot = PostgresPreparationStore::new(pool.clone())
+        .snapshot("prep-1")
+        .await
+        .unwrap();
+    let materials = snapshot["materials"].as_array().unwrap();
+    let shared = materials
+        .iter()
+        .find(|item| item["item_code"] == "RAW-SHARED")
+        .unwrap();
+    assert_eq!(shared["name"], "Shared Raw");
+    assert_eq!(shared["can_receive"], false);
+    assert_eq!(
+        shared["balances"],
+        json!([{"warehouse": "Other W", "kg": "17.000000"}])
+    );
+    let zero = materials
+        .iter()
+        .find(|item| item["item_code"] == "RAW-ZERO")
+        .unwrap();
+    assert_eq!(zero["balances"], json!([]));
+
     pool.close().await;
     sqlx::query(&format!("DROP DATABASE {db}"))
         .execute(&admin)

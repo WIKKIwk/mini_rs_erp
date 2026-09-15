@@ -79,19 +79,52 @@ impl PostgresPreparationStore {
         .bind(owner)
         .fetch_all(&mut *tx)
         .await?;
+        // The warehouse view uses the shared ERP raw-material catalog and its
+        // shared stock. Legacy preparation-owned items outside that catalog
+        // remain visible so existing preparation lots stay addressable.
         let materials: Vec<Value> = sqlx::query_scalar(&format!(
-            "SELECT jsonb_build_object('item_code', i.code, 'name', i.name, 'balances',
-                COALESCE((SELECT jsonb_agg(b) FROM (
+            "WITH RECURSIVE raw_groups AS (
+                SELECT g.name
+                FROM mini_item_groups g
+                WHERE lower(btrim(g.name)) = lower($1) AND g.is_group
+                UNION
+                SELECT child.name
+                FROM mini_item_groups child
+                JOIN raw_groups parent
+                  ON lower(btrim(child.parent_item_group)) = lower(btrim(parent.name))
+                WHERE child.is_group
+            ),
+            catalog AS (
+                SELECT i.code, i.name,
+                       EXISTS (
+                           SELECT 1 FROM mini_preparation_materials own
+                           WHERE own.item_code = i.code AND own.owner_ref = $2
+                       ) AS can_receive
+                FROM mini_items i
+                JOIN raw_groups g
+                  ON lower(btrim(g.name)) = lower(btrim(i.item_group))
+                UNION
+                SELECT i.code, i.name, TRUE
+                FROM mini_preparation_materials own
+                JOIN mini_items i ON i.code = own.item_code
+                WHERE own.owner_ref = $2
+            )
+            SELECT jsonb_build_object(
+                'item_code', catalog_item.code,
+                'name', catalog_item.name,
+                'can_receive', catalog_item.can_receive,
+                'balances', COALESCE((SELECT jsonb_agg(b ORDER BY lower(b.warehouse), b.warehouse) FROM (
                     SELECT s.warehouse, sum(s.qty)::text AS kg
-                    FROM mini_preparation_receipts r
-                    JOIN mini_raw_material_stock s ON s.id = r.stock_id
-                    WHERE r.owner_ref = $1 AND r.item_code = i.code
-                      AND s.warehouse = ANY($2) AND {AVAILABLE_STOCK}
+                    FROM mini_raw_material_stock s
+                    WHERE lower(s.item_code) = lower(catalog_item.code)
+                      AND s.warehouse = ANY($3) AND {AVAILABLE_STOCK}
                     GROUP BY s.warehouse
-                ) b), '[]'::jsonb))
-             FROM mini_preparation_materials m JOIN mini_items i ON i.code = m.item_code
-             WHERE m.owner_ref = $1 ORDER BY lower(i.name), i.code"
+                ) b), '[]'::jsonb)
+            )
+            FROM catalog catalog_item
+            ORDER BY lower(catalog_item.name), catalog_item.code"
         ))
+        .bind(PREPARATION_ITEM_GROUP)
         .bind(owner)
         .bind(&warehouses)
         .fetch_all(&mut *tx)
