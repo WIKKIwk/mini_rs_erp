@@ -6,6 +6,8 @@ use crate::core::mini_orders::{MiniOrderError, MiniOrderSink};
 use crate::core::production_map::ProductionMapDefinition;
 use crate::core::quantity::positive_erp_quantity;
 
+mod order_edit;
+
 #[derive(Clone)]
 pub struct PostgresMiniOrderSink {
     pool: PgPool,
@@ -19,6 +21,56 @@ impl PostgresMiniOrderSink {
 
 #[async_trait]
 impl MiniOrderSink for PostgresMiniOrderSink {
+    async fn sync_orders(
+        &self,
+        maps: &[ProductionMapDefinition],
+        templates: &[CalculateOrderTemplate],
+    ) -> Result<usize, MiniOrderError> {
+        let mut synced = 0;
+        for map in maps
+            .iter()
+            .filter(|map| map.id.starts_with("zakaz-") && !map.order_number.is_empty())
+        {
+            if let Some(template) = templates.iter().find(|template| {
+                template.source_map_id == map.id
+                    || template.order_number == map.order_number
+                    || template.code == map.code
+            }) {
+                let mut tx = self
+                    .pool
+                    .begin()
+                    .await
+                    .map_err(|_| MiniOrderError::StoreFailed)?;
+                save_order_tx_inner(&mut tx, map, template, false).await?;
+                tx.commit().await.map_err(|_| MiniOrderError::StoreFailed)?;
+                synced += 1;
+            }
+        }
+        Ok(synced)
+    }
+
+    async fn order_edit_source(
+        &self,
+        order_id: &str,
+    ) -> Result<crate::core::order_edit::OrderEditSource, crate::core::order_edit::OrderEditError>
+    {
+        let mut tx = self.pool.begin().await?;
+        let source = order_edit::load_source(&mut tx, order_id).await?;
+        order_edit::check_eligible(&mut tx, order_id).await?;
+        tx.commit().await?;
+        Ok(source)
+    }
+
+    async fn save_order_edit(
+        &self,
+        original: &crate::core::order_edit::OrderEditSource,
+        map: &ProductionMapDefinition,
+        template: &CalculateOrderTemplate,
+        actor: &crate::core::production_map::QueueActionActor,
+    ) -> Result<crate::core::order_edit::OrderEditSource, crate::core::order_edit::OrderEditError>
+    {
+        order_edit::save(&self.pool, original, map, template, actor).await
+    }
     fn enabled(&self) -> bool {
         true
     }
@@ -43,7 +95,39 @@ pub(crate) async fn save_order_tx(
     map: &ProductionMapDefinition,
     template: &CalculateOrderTemplate,
 ) -> Result<(), MiniOrderError> {
+    save_order_tx_inner(tx, map, template, true).await
+}
+
+async fn save_order_tx_inner(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    map: &ProductionMapDefinition,
+    template: &CalculateOrderTemplate,
+    capture_snapshot: bool,
+) -> Result<(), MiniOrderError> {
     let order_id = order_id(map);
+    super::postgres_production_map::lock_order_for_edit_tx(tx, &order_id)
+        .await
+        .map_err(|_| MiniOrderError::StoreFailed)?;
+    // Reconciliation must never replace an opened order's private calculation
+    // with a later edit to its reusable quick-order template.
+    let snapshot = sqlx::query_scalar::<_, Option<serde_json::Value>>(
+        "SELECT calculation_json FROM mini_orders WHERE id = $1 FOR UPDATE",
+    )
+    .bind(&order_id)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(|_| MiniOrderError::StoreFailed)?
+    .flatten();
+    let snapshot: Option<CalculateOrderTemplate> = snapshot
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|_| MiniOrderError::StoreFailed)?;
+    let mut initial_snapshot = template.clone();
+    initial_snapshot.kg = map.order_kg.unwrap_or(template.kg);
+    initial_snapshot.source_map_id = map.id.clone();
+    initial_snapshot.order_number = map.order_number.clone();
+    initial_snapshot.code = map.code.clone();
+    let template = snapshot.as_ref().unwrap_or(&initial_snapshot);
     let order_code = first_non_empty([&template.code, &map.code, &map.order_number, &map.id]);
     let product_name = first_non_empty([&template.product, &template.name, &map.title]);
     let kg = positive_erp_quantity(template.kg).unwrap_or(0.0);
@@ -106,6 +190,15 @@ pub(crate) async fn save_order_tx(
     .execute(&mut **tx)
     .await
     .map_err(|_| MiniOrderError::StoreFailed)?;
+
+    // Only the actual order-creation path owns the original input. A periodic
+    // reconciliation's product-code match is not evidence of that input.
+    if capture_snapshot {
+        sqlx::query("UPDATE mini_orders SET calculation_json = $2 WHERE id = $1 AND calculation_json IS NULL")
+        .bind(&order_id)
+        .bind(serde_json::to_value(template).map_err(|_| MiniOrderError::StoreFailed)?)
+        .execute(&mut **tx).await.map_err(|_| MiniOrderError::StoreFailed)?;
+    }
 
     let product_id = format!("{order_id}:product");
     sqlx::query("DELETE FROM mini_order_products WHERE order_id = $1 AND id <> $2")

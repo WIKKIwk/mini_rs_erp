@@ -12,6 +12,23 @@ pub enum MiniOrderError {
 
 #[async_trait]
 pub trait MiniOrderSink: Send + Sync {
+    async fn order_edit_source(
+        &self,
+        _order_id: &str,
+    ) -> Result<super::order_edit::OrderEditSource, super::order_edit::OrderEditError> {
+        Err(super::order_edit::OrderEditError::Store)
+    }
+
+    async fn save_order_edit(
+        &self,
+        _original: &super::order_edit::OrderEditSource,
+        _map: &ProductionMapDefinition,
+        _template: &CalculateOrderTemplate,
+        _actor: &crate::core::production_map::QueueActionActor,
+    ) -> Result<super::order_edit::OrderEditSource, super::order_edit::OrderEditError> {
+        Err(super::order_edit::OrderEditError::Store)
+    }
+
     fn enabled(&self) -> bool {
         false
     }

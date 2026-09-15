@@ -279,6 +279,7 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         ProductionMapError::ApparatusTransferTargetConflict => {
             conflict("apparatus_transfer_target_conflict")
         }
+        ProductionMapError::OpenedOrderCalculationLocked => conflict(error.to_string()),
         ProductionMapError::StoreFailed => server_error("store_failed"),
         ProductionMapError::QueueActionNotAllowed => bad_request("queue_action_not_allowed"),
         ProductionMapError::QueueSequenceOrderNotFound(_) => {

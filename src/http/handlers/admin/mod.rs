@@ -40,6 +40,7 @@ pub use production_maps::{
     production_map_progress_qr_reprint, production_map_qolip_validate, production_map_queue_action,
     production_map_queue_policies, production_map_rezka_astatka, production_map_run,
     production_map_save_with_order, production_map_schedule, production_map_schedule_cancel,
+    production_map_order_edit,
     production_map_sequence, production_map_wip_batches, production_maps,
     raw_material_assignment_candidate_orders, raw_material_assignment_candidates,
     raw_material_assignment_diagnostics, raw_material_assignment_lookup,

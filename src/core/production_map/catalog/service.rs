@@ -351,6 +351,13 @@ impl ProductionMapService {
         &self,
         map: ProductionMapDefinition,
     ) -> Result<ProductionMapSaved, ProductionMapError> {
+        if !map.id.starts_with("template-")
+            && let Some(previous) = self.store.map_by_id(&map.id).await?
+            && !previous.order_number.trim().is_empty()
+            && crate::core::order_edit::calculation_map_changed(&previous, &map)
+        {
+            return Err(ProductionMapError::OpenedOrderCalculationLocked);
+        }
         let saved = self.prepare_map_for_save(map).await?;
         self.store.put_map(saved.map.clone()).await?;
         self.notify_live();

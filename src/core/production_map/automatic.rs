@@ -174,7 +174,7 @@ fn width_fits(a: &Apparatus, width: f64) -> bool {
         && p.max_web_width_mm.is_none_or(|max| width <= f64::from(max))
 }
 
-fn lamination_fits(a: &Apparatus, width: f64) -> bool {
+pub(crate) fn lamination_fits(a: &Apparatus, width: f64) -> bool {
     let p = &a.runtime.execution_profile;
     let limit = p.max_web_width_mm.unwrap_or(match p.technology {
         Technology::AdhesiveLamination => 1050,
@@ -186,7 +186,7 @@ fn lamination_fits(a: &Apparatus, width: f64) -> bool {
 
 /// Widths at this occurrence, stopping at the nearest upstream physical cut.
 /// Every incoming route is checked; a cut on an unrelated branch cannot help.
-pub(super) fn stage_input_widths(
+pub(crate) fn stage_input_widths(
     map: &ProductionMapDefinition,
     node_id: &str,
     cut_ids: &std::collections::BTreeSet<crate::core::apparatus_standard::ApparatusId>,

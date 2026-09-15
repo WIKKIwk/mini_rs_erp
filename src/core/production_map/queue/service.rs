@@ -54,7 +54,7 @@ impl ProductionMapService {
         ))
     }
 
-    pub(in crate::core::production_map) fn effective_apparatus_sequences_for_maps(
+    pub(crate) fn effective_apparatus_sequences_for_maps(
         maps: &[ProductionMapDefinition],
         sequences: &BTreeMap<String, Vec<String>>,
         frozen_order_ids: &BTreeSet<String>,

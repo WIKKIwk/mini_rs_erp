@@ -54,6 +54,8 @@ pub enum ProductionMapError {
     StartedOrderMoveRequiresTransfer,
     #[error("started production map stages cannot be changed")]
     StartedProductionMapStageLocked,
+    #[error("Buyurtma Calculate qiymatlarini faqat Buyurtmani tahrirlash orqali o‘zgartirish mumkin")]
+    OpenedOrderCalculationLocked,
     #[error("apparatus transfer reason is required")]
     ApparatusTransferReasonRequired,
     #[error("apparatus transfer requires a stable idempotency key")]

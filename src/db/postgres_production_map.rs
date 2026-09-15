@@ -57,6 +57,20 @@ mod queue_helpers;
 #[path = "postgres_production_map/materials/stock.rs"]
 mod raw_material_stock_helpers;
 mod transaction_locks;
+
+pub(crate) async fn save_edited_map_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    map: &ProductionMapDefinition,
+) -> Result<(), ProductionMapError> {
+    reject_order_number_immutable_tx(tx, map).await?;
+    put_map_inner_tx(tx, map).await
+}
+
+pub(crate) async fn lock_order_for_edit_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, id: &str,
+) -> Result<(), ProductionMapError> {
+    transaction_locks::lock_order_tx(tx, id).await
+}
 #[path = "postgres_production_map/transfer/helpers.rs"]
 mod transfer_helpers;
 #[path = "postgres_production_map/wip/query_helpers.rs"]

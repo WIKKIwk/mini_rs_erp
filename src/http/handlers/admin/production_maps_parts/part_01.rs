@@ -452,6 +452,7 @@ pub async fn production_map_save_with_order(
 
 include!("../production_maps_save_helpers.rs");
 include!("../production_maps_pending_order.rs");
+include!("../production_maps_order_edit.rs");
 
 #[derive(serde::Deserialize)]
 struct ApparatusSequencePutRequest {
