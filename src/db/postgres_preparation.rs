@@ -40,10 +40,9 @@ impl PostgresPreparationStore {
         sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
             .execute(&mut *tx)
             .await?;
-        // Receipt destination is deliberately broader than the master's own
-        // warehouses: an existing preparation material may be received into
-        // any real warehouse.  The stricter list below is used only for
-        // creating a new material in the selected warehouse.
+        // All real warehouses remain visible. Only material_warehouses permit
+        // new materials and manual bulk receipts; other destinations need
+        // the scale/QR receipt workflow.
         let warehouses: Vec<String> = sqlx::query_scalar(
             "SELECT name FROM mini_warehouses
              WHERE NOT is_group ORDER BY name",
@@ -291,7 +290,12 @@ impl PostgresPreparationStore {
         if let Some(result) = replay(&mut tx, &actor.ref_, &input.request_id, &request).await? {
             return Ok(result);
         }
-        let warehouse = receipt_warehouse(&mut tx, &input.warehouse).await?;
+        let warehouse = exclusive_warehouse(&mut tx, &actor.ref_, &input.warehouse)
+            .await
+            .map_err(|error| match error {
+                PreparationError::WarehouseNotExclusive => PreparationError::ReceiptRequiresQr,
+                other => other,
+            })?;
         let name = material_name(&mut tx, &actor.ref_, &input.item_code).await?;
         let id = new_id();
         let stock_id = format!("raw:prep:{id}");
@@ -886,20 +890,6 @@ async fn replay(
     }
 }
 
-async fn receipt_warehouse(
-    tx: &mut Transaction<'_, Postgres>,
-    name: &str,
-) -> Result<String, PreparationError> {
-    sqlx::query_scalar(
-        "SELECT w.name FROM mini_warehouses w
-         WHERE lower(w.name) = lower($1) AND NOT w.is_group FOR SHARE OF w",
-    )
-    .bind(name.trim())
-    .fetch_optional(&mut **tx)
-    .await?
-    .ok_or(PreparationError::Forbidden)
-}
-
 async fn assigned_warehouse(
     tx: &mut Transaction<'_, Postgres>,
     owner: &str,
@@ -923,6 +913,11 @@ async fn exclusive_warehouse(
     owner: &str,
     name: &str,
 ) -> Result<String, PreparationError> {
+    // Lock the assignment set, including absent competing rows: a concurrent
+    // assignment must not slip between the exclusivity check and stock write.
+    sqlx::query("LOCK TABLE mini_warehouse_assignments IN SHARE MODE")
+        .execute(&mut **tx)
+        .await?;
     sqlx::query_scalar(
         "SELECT w.name FROM mini_warehouses w
          JOIN mini_warehouse_assignments mine

@@ -261,15 +261,39 @@ pub async fn material_receipt_print(
     ))
 }
 
-async fn require_material_warehouse_access(
+pub(super) async fn require_material_warehouse_access(
     state: &AppState,
     principal: &Principal,
     warehouse: &str,
 ) -> Result<(), (StatusCode, Json<GscaleErrorResponse>)> {
-    if !matches!(
-        principal.role,
-        PrincipalRole::MaterialTaminotchi | PrincipalRole::TayyorlovMasteri
-    ) {
+    // Preparation may supply another person's warehouse, but only through
+    // this QR-producing workflow. Manual bulk receipts have stricter scope.
+    if principal.role == PrincipalRole::TayyorlovMasteri {
+        let destination = state
+            .warehouses
+            .warehouse(warehouse)
+            .await
+            .map_err(|_| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(GscaleErrorResponse::new(
+                        "warehouse_scope_failed",
+                        "warehouse scope failed",
+                    )),
+                )
+            })?;
+        return match destination {
+            Some(warehouse) if !warehouse.is_group => Ok(()),
+            _ => Err((
+                StatusCode::FORBIDDEN,
+                Json(GscaleErrorResponse::new(
+                    "warehouse_not_found",
+                    "real warehouse required",
+                )),
+            )),
+        };
+    }
+    if principal.role != PrincipalRole::MaterialTaminotchi {
         return Ok(());
     }
     let assigned = state
@@ -291,14 +315,12 @@ async fn require_material_warehouse_access(
     {
         return Ok(());
     }
-    let detail = if principal.role == PrincipalRole::TayyorlovMasteri {
-        "warehouse is not assigned to tayyorlov masteri"
-    } else {
-        "warehouse is not assigned to material taminotchi"
-    };
     Err((
         StatusCode::FORBIDDEN,
-        Json(GscaleErrorResponse::new("warehouse_not_assigned", detail)),
+        Json(GscaleErrorResponse::new(
+            "warehouse_not_assigned",
+            "warehouse is not assigned to material taminotchi",
+        )),
     ))
 }
 

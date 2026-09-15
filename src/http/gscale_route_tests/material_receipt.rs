@@ -13,6 +13,45 @@ use crate::http::router::build_router;
 use super::support::*;
 
 #[tokio::test]
+async fn tayyorlov_other_warehouse_receipt_requires_the_qr_print_workflow() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let mut state = test_state();
+    state.gscale = GscaleService::new()
+        .with_receipt_store(Arc::new(FakeReceiptStore {
+            events: events.clone(),
+            receipt_actors: Arc::new(Mutex::new(Vec::new())),
+        }))
+        .with_driver(Arc::new(FakeDriver { events: events.clone() }));
+    assign_warehouse_to_principal(&state, PrincipalRole::MaterialTaminotchi,
+        "supplier", "Other W").await;
+    let token = session(&state, PrincipalRole::TayyorlovMasteri).await;
+    let router = build_router(state);
+    for (warehouse, expected) in [("Missing W", StatusCode::FORBIDDEN), ("Other W", StatusCode::OK)] {
+        let body = serde_json::json!({
+            "driver_url": "http://127.0.0.1:39117", "item_code": "ITEM-1",
+            "item_name": "Green Tea", "warehouse": warehouse,
+            "printer": "godex", "print_mode": "label", "gross_qty": 2.5,
+            "tare_enabled": false, "tare_kg": 0,
+        });
+        let response = router.clone().oneshot(request("POST",
+            "/v1/mobile/gscale/material-receipt/print", &token, &body.to_string()))
+            .await.unwrap();
+        let status = response.status();
+        let body = json_body(response).await;
+        assert_eq!(status, expected, "{body}");
+        if expected == StatusCode::OK {
+            assert_eq!(body["status"], "printed");
+            assert!(!body["epc"].as_str().unwrap().is_empty());
+        } else {
+            assert!(events.lock().unwrap().is_empty());
+        }
+    }
+    tokio::time::sleep(Duration::from_millis(25)).await;
+    assert_eq!(events.lock().unwrap().as_slice(),
+        ["print", "create:2.500", "submit:MAT-STE-ROUTE"]);
+}
+
+#[tokio::test]
 async fn material_receipt_print_uses_parallel_driver_first_flow() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let mut state = test_state();

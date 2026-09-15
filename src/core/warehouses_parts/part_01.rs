@@ -201,6 +201,10 @@ impl WarehouseService {
         )
     }
 
+    pub async fn warehouse(&self, name: &str) -> Result<Option<AdminWarehouse>, WarehouseError> {
+        self.store.warehouse(name.trim()).await
+    }
+
     pub async fn warehouses(
         &self,
         query: &str,

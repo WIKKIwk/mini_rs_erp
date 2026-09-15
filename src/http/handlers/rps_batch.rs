@@ -296,6 +296,16 @@ async fn require_material_warehouse_access(
     principal: &Principal,
     warehouse: &str,
 ) -> Result<(), (StatusCode, Json<RpsBatchErrorResponse>)> {
+    if principal.role == PrincipalRole::TayyorlovMasteri {
+        return super::gscale::require_material_warehouse_access(state, principal, warehouse)
+            .await
+            .map_err(|(status, Json(error))| {
+                (
+                    status,
+                    Json(RpsBatchErrorResponse::new(error.error, error.detail)),
+                )
+            });
+    }
     if principal.role != PrincipalRole::MaterialTaminotchi {
         return Ok(());
     }

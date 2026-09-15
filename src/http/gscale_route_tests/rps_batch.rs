@@ -15,6 +15,33 @@ use crate::rps::RpsDriverClient;
 use super::support::*;
 
 #[tokio::test]
+async fn tayyorlov_batch_accepts_other_warehouse_but_rejects_missing_destination() {
+    let state = test_state();
+    assign_warehouse_to_principal(&state, PrincipalRole::MaterialTaminotchi,
+        "supplier", "Other W").await;
+    let token = session(&state, PrincipalRole::TayyorlovMasteri).await;
+    let router = build_router(state);
+    for (warehouse, expected) in [("Missing W", StatusCode::FORBIDDEN), ("Other W", StatusCode::OK)] {
+        let body = serde_json::json!({
+            "client_batch_id": "prep-other-batch", "driver_url": "usb://local",
+            "item_code": "ITEM-1", "item_name": "Kley", "warehouse": warehouse,
+            "printer": "godex", "print_mode": "label", "quantity_source": "manual",
+            "manual_qty_kg": 10, "tare_enabled": false, "tare_kg": 0, "length_m": 125,
+        });
+        let response = router.clone().oneshot(request("POST", "/v1/mobile/rps/batch/start",
+            &token, &body.to_string())).await.unwrap();
+        let status = response.status();
+        let body = json_body(response).await;
+        assert_eq!(status, expected, "{body}");
+        if expected == StatusCode::OK {
+            assert_eq!(body["batch"]["warehouse"], "Other W");
+            assert_eq!(body["batch"]["active"], true);
+            assert!(!body["batch"]["batch_code"].as_str().unwrap().is_empty());
+        }
+    }
+}
+
+#[tokio::test]
 async fn rps_batch_start_state_stop_is_persisted_by_rs() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Werka).await;

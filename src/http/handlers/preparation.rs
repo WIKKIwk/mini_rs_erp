@@ -69,13 +69,16 @@ fn error(error: PreparationError) -> ApiError {
         PreparationError::Conflict(_) => "preparation_conflict",
         PreparationError::Forbidden => "preparation_scope",
         PreparationError::WarehouseNotExclusive => "preparation_warehouse_not_exclusive",
+        PreparationError::ReceiptRequiresQr => "preparation_receipt_requires_qr",
         PreparationError::Insufficient => "preparation_insufficient_stock",
         PreparationError::StoreFailed => "preparation_store",
     };
     let status = match &error {
         PreparationError::Invalid(_) => StatusCode::BAD_REQUEST,
         PreparationError::Conflict(_) | PreparationError::Insufficient => StatusCode::CONFLICT,
-        PreparationError::Forbidden | PreparationError::WarehouseNotExclusive => {
+        PreparationError::Forbidden
+        | PreparationError::WarehouseNotExclusive
+        | PreparationError::ReceiptRequiresQr => {
             StatusCode::FORBIDDEN
         }
         PreparationError::StoreFailed => StatusCode::INTERNAL_SERVER_ERROR,

@@ -259,7 +259,7 @@ async fn preparation_postgres_partial_fifo_atomic_retry_concurrency_and_scope() 
     };
     assert!(matches!(
         store.receive(&other, receipt.clone()).await,
-        Err(PreparationError::Forbidden)
+        Err(PreparationError::ReceiptRequiresQr)
     ));
     // Roll back an earlier line's stock update and event when a later line fails.
     let second = store
@@ -384,9 +384,8 @@ async fn preparation_postgres_partial_fifo_atomic_retry_concurrency_and_scope() 
                 ..receipt.clone()
             },
         )
-        .await
-        .unwrap();
-    assert_eq!(other_warehouse_receipt["warehouse"], "Other W");
+        .await;
+    assert!(matches!(other_warehouse_receipt, Err(PreparationError::ReceiptRequiresQr)));
     pool.close().await;
     sqlx::query(&format!("DROP DATABASE {db}"))
         .execute(&admin)
@@ -731,14 +730,58 @@ async fn preparation_child_warehouse_receipt_lands_in_child() {
             &actor,
             ReceiptCreate {
                 request_id: "receipt-shared-parent".into(),
-                item_code: code,
+                item_code: code.clone(),
                 warehouse: "Preparation W".into(),
                 kg: "5".into(),
             },
         )
-        .await
-        .unwrap();
-    assert_eq!(shared_receipt["warehouse"], "Preparation W");
+        .await;
+    assert!(matches!(shared_receipt, Err(PreparationError::ReceiptRequiresQr)));
+
+    // A new assignment after the screen loaded revokes both actions. This
+    // includes another role using the same ref, not only a different master.
+    for (role, principal_ref) in [
+        ("material_taminotchi", "prep-1"),
+        ("omborchi", "warehouse-owner"),
+        ("tayyorlov_masteri", "prep-2"),
+    ] {
+        sqlx::query("INSERT INTO mini_warehouse_assignments
+            (assignment_kind,warehouse,warehouse_name,principal_role,principal_ref)
+            VALUES ('warehouse','Preparation W-1','Preparation W-1',$1,$2)")
+            .bind(role).bind(principal_ref).execute(&pool).await.unwrap();
+        assert_eq!(store.snapshot("prep-1").await.unwrap()["material_warehouses"], json!([]));
+        assert!(matches!(store.receive(&actor, ReceiptCreate {
+            request_id: format!("revoked-receipt-{role}"),
+            item_code: code.clone(), warehouse: "Preparation W-1".into(), kg: "1".into(),
+        }).await, Err(PreparationError::ReceiptRequiresQr)));
+        assert!(matches!(store.create_material(&actor, MaterialCreate {
+            request_id: format!("revoked-material-{role}"),
+            name: "Not allowed".into(), warehouse: "Preparation W-1".into(),
+        }).await, Err(PreparationError::WarehouseNotExclusive)));
+        sqlx::query("DELETE FROM mini_warehouse_assignments WHERE warehouse_name='Preparation W-1'
+            AND principal_role=$1 AND principal_ref=$2")
+            .bind(role).bind(principal_ref).execute(&pool).await.unwrap();
+    }
+    assert_eq!(store.snapshot("prep-1").await.unwrap()["material_warehouses"], json!(["Preparation W-1"]));
+    // A sharing transaction already in flight must win before the manual
+    // receipt checks exclusivity; no receipt may use an older assignment view.
+    let mut sharing = pool.begin().await.unwrap();
+    sqlx::query("INSERT INTO mini_warehouse_assignments
+        (assignment_kind,warehouse,warehouse_name,principal_role,principal_ref)
+        VALUES ('warehouse','Preparation W-1','Preparation W-1','material_taminotchi','mt-race')")
+        .execute(&mut *sharing).await.unwrap();
+    let race_store = store.clone();
+    let mut receiving = tokio::spawn(async move {
+        race_store.receive(&actor, ReceiptCreate {
+            request_id: "receipt-assignment-race".into(),
+            item_code: code, warehouse: "Preparation W-1".into(), kg: "1".into(),
+        }).await
+    });
+    assert!(tokio::time::timeout(std::time::Duration::from_millis(50), &mut receiving).await.is_err());
+    sharing.commit().await.unwrap();
+    assert!(matches!(receiving.await.unwrap(), Err(PreparationError::ReceiptRequiresQr)));
+    assert_eq!(sqlx::query_scalar::<_, i64>("SELECT count(*) FROM mini_preparation_receipts")
+        .fetch_one(&pool).await.unwrap(), 1);
     pool.close().await;
     sqlx::query(&format!("DROP DATABASE {db}"))
         .execute(&admin)
