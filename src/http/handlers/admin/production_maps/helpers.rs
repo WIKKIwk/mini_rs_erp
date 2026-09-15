@@ -23,7 +23,10 @@ pub(super) async fn production_map_order_customers(
 ) -> BTreeMap<String, String> {
     let mut order_map_count = 0;
     let mut customers = BTreeMap::new();
-    for saved in maps.iter().filter(|saved| is_customer_order_map(&saved.map)) {
+    for saved in maps
+        .iter()
+        .filter(|saved| is_customer_order_map(&saved.map))
+    {
         order_map_count += 1;
         let map_id = saved.map.id.trim();
         let customer = saved.map.customer_name.trim();
@@ -42,7 +45,10 @@ pub(super) async fn production_map_order_customers(
             return customers;
         }
     };
-    for saved in maps.iter().filter(|saved| is_customer_order_map(&saved.map)) {
+    for saved in maps
+        .iter()
+        .filter(|saved| is_customer_order_map(&saved.map))
+    {
         let map_id = saved.map.id.trim();
         if map_id.is_empty() || customers.contains_key(map_id) {
             continue;
@@ -73,8 +79,7 @@ fn resolve_production_map_customer(
         .filter(|template| {
             let source_map_id = template.source_map_id.trim();
             source_map_id == map_id
-                || (!map_id.is_empty()
-                    && source_map_id.strip_prefix("template-") == Some(map_id))
+                || (!map_id.is_empty() && source_map_id.strip_prefix("template-") == Some(map_id))
         })
         .peekable();
     if source_matches.peek().is_some() {
@@ -396,9 +401,7 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
             bad_request("rezka_progress_metrics_required")
         }
         ProductionMapError::RezkaKadrCountRequired => bad_request("rezka_kadr_count_required"),
-        ProductionMapError::InvalidRezkaFrameGroups => {
-            bad_request("rezka_frame_groups_invalid")
-        }
+        ProductionMapError::InvalidRezkaFrameGroups => bad_request("rezka_frame_groups_invalid"),
         ProductionMapError::RezkaFrameCountMismatch => bad_request("rezka_frame_count_mismatch"),
         ProductionMapError::RezkaOutputCycleConflict => conflict("rezka_output_cycle_conflict"),
         ProductionMapError::RezkaFinalRollRequired => bad_request("rezka_final_roll_required"),
@@ -425,9 +428,7 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         ProductionMapError::OpeningWipLocationMismatch => {
             bad_request("opening_wip_location_mismatch")
         }
-        ProductionMapError::OpeningWipSourceMismatch => {
-            bad_request("opening_wip_source_mismatch")
-        }
+        ProductionMapError::OpeningWipSourceMismatch => bad_request("opening_wip_source_mismatch"),
         ProductionMapError::OpeningWipSourceFinalStage => {
             bad_request("opening_wip_source_final_stage")
         }
@@ -440,9 +441,7 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         ProductionMapError::OpeningWipIdempotencyConflict => {
             conflict("opening_wip_idempotency_conflict")
         }
-        ProductionMapError::OpeningWipDeleteLocked => {
-            conflict("opening_wip_delete_locked")
-        }
+        ProductionMapError::OpeningWipDeleteLocked => conflict("opening_wip_delete_locked"),
         ProductionMapError::OpeningWipDeleteForbidden => forbidden(),
         ProductionMapError::PaddonInvalidInput => bad_request("paddon_invalid_input"),
         ProductionMapError::PaddonReceiptConflict => conflict("paddon_receipt_conflict"),
@@ -470,7 +469,6 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         ProductionMapError::ScheduleReservationLocked => conflict("schedule_reservation_locked"),
     }
 }
-
 
 #[cfg(test)]
 mod production_map_error_tests {
@@ -567,7 +565,6 @@ pub(super) fn principal_owner_key(principal: &Principal) -> String {
     let role = principal_role_code(&principal.role);
     owner_key(role, &principal.ref_)
 }
-
 
 #[cfg(test)]
 mod progress_qr_payload_tests {

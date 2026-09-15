@@ -45,11 +45,11 @@ async fn factory_default_bootstrap_populates_an_empty_repository() {
     );
     assert_eq!(
         flexo.execution_profile.min_web_width_mm,
-        Some(FLEXO_DEFAULT_MIN_WEB_WIDTH_MM)
+        FLEXO_DEFAULT_MIN_WEB_WIDTH_MM
     );
     assert_eq!(
         flexo.execution_profile.max_web_width_mm,
-        Some(FLEXO_DEFAULT_MAX_WEB_WIDTH_MM)
+        FLEXO_DEFAULT_MAX_WEB_WIDTH_MM
     );
     let actual = projections
         .into_iter()
@@ -104,11 +104,11 @@ async fn factory_default_bootstrap_upgrades_legacy_flexo_limits_once() {
     );
     assert_eq!(
         flexo.execution_profile.min_web_width_mm,
-        Some(FLEXO_DEFAULT_MIN_WEB_WIDTH_MM)
+        FLEXO_DEFAULT_MIN_WEB_WIDTH_MM
     );
     assert_eq!(
         flexo.execution_profile.max_web_width_mm,
-        Some(FLEXO_DEFAULT_MAX_WEB_WIDTH_MM)
+        FLEXO_DEFAULT_MAX_WEB_WIDTH_MM
     );
     assert_eq!(
         service
@@ -116,6 +116,49 @@ async fn factory_default_bootstrap_upgrades_legacy_flexo_limits_once() {
             .await
             .expect("restart after Flexo upgrade"),
         0
+    );
+}
+
+#[tokio::test]
+async fn factory_default_bootstrap_upgrades_previous_flexo_width_limits() {
+    let service = CanonicalApparatusService::memory();
+    let mut previous = TestApparatusSpec::print(
+        FLEXO_DEFAULT_APPARATUS_ID,
+        "Flexo pechat",
+        ProcessTechnology::Flexographic,
+        Some(FLEXO_DEFAULT_MAX_ROLL_COUNT),
+    )
+    .requiring_tooling();
+    previous.min_web_width_mm = Some(400);
+    previous.max_web_width_mm = Some(800);
+    service
+        .seed_for_test(
+            ApparatusId::new(FLEXO_DEFAULT_APPARATUS_ID).expect("Flexo ID"),
+            canonical_draft(&previous),
+        )
+        .await
+        .expect("seed previous Flexo default");
+
+    assert_eq!(
+        service
+            .bootstrap_factory_defaults()
+            .await
+            .expect("upgrade previous Flexo default"),
+        EXPECTED_FACTORY_DEFAULTS.len()
+    );
+    let flexo = service
+        .current_projection(&ApparatusId::new(FLEXO_DEFAULT_APPARATUS_ID).expect("Flexo ID"))
+        .await
+        .expect("read upgraded Flexo projection")
+        .expect("upgraded Flexo projection");
+    assert_eq!(flexo.source_revision, 2);
+    assert_eq!(
+        flexo.execution_profile.min_web_width_mm,
+        FLEXO_DEFAULT_MIN_WEB_WIDTH_MM
+    );
+    assert_eq!(
+        flexo.execution_profile.max_web_width_mm,
+        FLEXO_DEFAULT_MAX_WEB_WIDTH_MM
     );
 }
 

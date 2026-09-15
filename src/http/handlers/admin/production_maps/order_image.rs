@@ -53,8 +53,12 @@ pub async fn production_map_order_image_view(
     };
     let image = state
         .order_image_cache
-        .get(state.calculate_orders.as_ref(), None, &image_id,
-            crate::http::handlers::calculate_image::wants_thumbnail(&uri))
+        .get(
+            state.calculate_orders.as_ref(),
+            None,
+            &image_id,
+            crate::http::handlers::calculate_image::wants_thumbnail(&uri),
+        )
         .await
         .map_err(|_| server_error("order image store failed"))?
         .ok_or_else(|| not_found("rasm topilmadi"))?;
@@ -73,7 +77,9 @@ async fn template_image_id_for_map(
 ) -> Result<Option<String>, AdminError> {
     state
         .calculate_orders
-        .image_id_for_order(&crate::core::calculate_orders::OrderImageLookup::for_map(map))
+        .image_id_for_order(&crate::core::calculate_orders::OrderImageLookup::for_map(
+            map,
+        ))
         .await
         .map_err(|_| server_error("order template lookup failed"))
 }

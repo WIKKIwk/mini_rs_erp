@@ -132,7 +132,7 @@ impl CanonicalApparatusService {
                             },
                             CanonicalCommandMetadata::new(
                                 "system:factory-default-bootstrap",
-                                "command:factory-default-upgrade:flexo-order-limits-v1",
+                                "command:factory-default-upgrade:flexo-order-limits-v2",
                             ),
                         )
                         .await;

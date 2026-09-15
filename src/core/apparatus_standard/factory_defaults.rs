@@ -9,9 +9,12 @@ use super::{
 
 pub(super) const FACTORY_DEFAULT_COMMITTED_AT_UNIX_MS: i64 = 1_700_000_000_000;
 pub(super) const FLEXO_DEFAULT_APPARATUS_ID: &str = "apparatus:default:asset-005";
-pub(super) const FLEXO_DEFAULT_MIN_WEB_WIDTH_MM: u32 = 400;
-pub(super) const FLEXO_DEFAULT_MAX_WEB_WIDTH_MM: u32 = 800;
+pub(super) const FLEXO_DEFAULT_MIN_WEB_WIDTH_MM: Option<u32> = None;
+pub(super) const FLEXO_DEFAULT_MAX_WEB_WIDTH_MM: Option<u32> = Some(1_500);
 pub(super) const FLEXO_DEFAULT_MAX_ROLL_COUNT: u16 = 8;
+
+const FLEXO_PREVIOUS_DEFAULT_MIN_WEB_WIDTH_MM: u32 = 400;
+const FLEXO_PREVIOUS_DEFAULT_MAX_WEB_WIDTH_MM: u32 = 800;
 
 pub(super) struct FactoryDefaultApparatus {
     pub(super) apparatus_id: ApparatusId,
@@ -44,19 +47,24 @@ pub(super) fn flexo_default_execution_profile_upgrade(
     apparatus_id: &ApparatusId,
     profile: &ExecutionProfile,
 ) -> Option<ExecutionProfile> {
+    let is_unconfigured_legacy_profile = profile.color_station_count.is_none()
+        && profile.min_web_width_mm.is_none()
+        && profile.max_web_width_mm.is_none();
+    let is_previous_default_profile = profile.color_station_count
+        == Some(FLEXO_DEFAULT_MAX_ROLL_COUNT)
+        && profile.min_web_width_mm == Some(FLEXO_PREVIOUS_DEFAULT_MIN_WEB_WIDTH_MM)
+        && profile.max_web_width_mm == Some(FLEXO_PREVIOUS_DEFAULT_MAX_WEB_WIDTH_MM);
     if apparatus_id.as_str() != FLEXO_DEFAULT_APPARATUS_ID
         || profile.operation != ExecutionOperation::Print
         || profile.technology != ProcessTechnology::Flexographic
-        || profile.color_station_count.is_some()
-        || profile.min_web_width_mm.is_some()
-        || profile.max_web_width_mm.is_some()
+        || (!is_unconfigured_legacy_profile && !is_previous_default_profile)
     {
         return None;
     }
     let mut upgraded = profile.clone();
     upgraded.color_station_count = Some(FLEXO_DEFAULT_MAX_ROLL_COUNT);
-    upgraded.min_web_width_mm = Some(FLEXO_DEFAULT_MIN_WEB_WIDTH_MM);
-    upgraded.max_web_width_mm = Some(FLEXO_DEFAULT_MAX_WEB_WIDTH_MM);
+    upgraded.min_web_width_mm = FLEXO_DEFAULT_MIN_WEB_WIDTH_MM;
+    upgraded.max_web_width_mm = FLEXO_DEFAULT_MAX_WEB_WIDTH_MM;
     Some(upgraded)
 }
 
@@ -68,8 +76,8 @@ pub(super) fn is_flexo_default_execution_profile(
         && profile.operation == ExecutionOperation::Print
         && profile.technology == ProcessTechnology::Flexographic
         && profile.color_station_count == Some(FLEXO_DEFAULT_MAX_ROLL_COUNT)
-        && profile.min_web_width_mm == Some(FLEXO_DEFAULT_MIN_WEB_WIDTH_MM)
-        && profile.max_web_width_mm == Some(FLEXO_DEFAULT_MAX_WEB_WIDTH_MM)
+        && profile.min_web_width_mm == FLEXO_DEFAULT_MIN_WEB_WIDTH_MM
+        && profile.max_web_width_mm == FLEXO_DEFAULT_MAX_WEB_WIDTH_MM
 }
 
 pub(crate) fn canonical_factory_apparatus_id_for_legacy(value: &str) -> Option<ApparatusId> {
@@ -208,8 +216,8 @@ fn factory_default_specs() -> [FactoryDefaultSpec; 10] {
 fn factory_default_draft(spec: &FactoryDefaultSpec) -> CanonicalApparatusDraft {
     let (min_web_width_mm, max_web_width_mm) = if spec.apparatus_id == FLEXO_DEFAULT_APPARATUS_ID {
         (
-            Some(FLEXO_DEFAULT_MIN_WEB_WIDTH_MM),
-            Some(FLEXO_DEFAULT_MAX_WEB_WIDTH_MM),
+            FLEXO_DEFAULT_MIN_WEB_WIDTH_MM,
+            FLEXO_DEFAULT_MAX_WEB_WIDTH_MM,
         )
     } else {
         (None, None)

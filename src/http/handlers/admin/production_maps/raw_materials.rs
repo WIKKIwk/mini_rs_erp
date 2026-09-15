@@ -16,7 +16,6 @@ use crate::db::postgres_raw_material_events::{
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
-
 #[derive(Debug, serde::Deserialize)]
 pub struct RawMaterialStartRequirementsQuery {
     #[serde(default)]
@@ -88,10 +87,7 @@ struct RawMaterialAssignmentDiagnosticResponse {
 }
 
 impl RawMaterialAssignmentDiagnosticResponse {
-    fn from_stock(
-        stock: &RawMaterialStockEntry,
-        item: &SupplierItem,
-    ) -> Self {
+    fn from_stock(stock: &RawMaterialStockEntry, item: &SupplierItem) -> Self {
         Self {
             barcode: stock.barcode.trim().to_string(),
             compatible: false,
@@ -468,14 +464,11 @@ async fn require_tayyorlov_order_scope(
         .order_in_scope(&principal.ref_, order_id)
         .await
         .map_err(|_| forbidden())?;
-    if in_scope {
-        Ok(())
-    } else {
-        Err(forbidden())
-    }
+    if in_scope { Ok(()) } else { Err(forbidden()) }
 }
 
-async fn raw_material_already_assigned_error(state: &AppState, barcode: &str) -> AdminError {    let normalized_barcode = barcode.trim().to_ascii_uppercase();
+async fn raw_material_already_assigned_error(state: &AppState, barcode: &str) -> AdminError {
+    let normalized_barcode = barcode.trim().to_ascii_uppercase();
     let assignment = state
         .production_maps
         .raw_material_assignments()
@@ -568,7 +561,6 @@ pub async fn raw_material_assignment_orders(
     }
     Ok(json_response(scoped))
 }
-
 
 pub async fn raw_material_assignment_candidates(
     State(state): State<AppState>,
@@ -833,16 +825,16 @@ pub async fn raw_material_assignment_diagnostics(
         .raw_material_assignments()
         .await
         .map_err(production_map_error)?;
-    if let Some(assignment) = assignments.into_iter().find(|assignment| {
-        assignment.barcode.trim().to_ascii_uppercase() == normalized_barcode
-    }) {
-        diagnostic.reason = if assignment.order_id.trim() == requested_order_id
-            && !requested_order_id.is_empty()
-        {
-            "raw_material_already_assigned_to_order".to_string()
-        } else {
-            "raw_material_already_assigned".to_string()
-        };
+    if let Some(assignment) = assignments
+        .into_iter()
+        .find(|assignment| assignment.barcode.trim().to_ascii_uppercase() == normalized_barcode)
+    {
+        diagnostic.reason =
+            if assignment.order_id.trim() == requested_order_id && !requested_order_id.is_empty() {
+                "raw_material_already_assigned_to_order".to_string()
+            } else {
+                "raw_material_already_assigned".to_string()
+            };
         diagnostic.order_id = Some(assignment.order_id.trim().to_string());
         diagnostic.order_title = Some(raw_material_order_title(&state, &assignment.order_id).await);
         diagnostic.apparatus = Some(assignment.apparatus_id.to_string());
@@ -920,8 +912,8 @@ pub async fn raw_material_assignment_diagnostics(
                 diagnostic.order_id = Some(order.map.id.trim().to_string());
                 diagnostic.order_title = Some(order.map.title.trim().to_string());
                 diagnostic.apparatus_options = all_apparatus_options;
-                diagnostic.apparatus = (!requested_apparatus.is_empty())
-                    .then(|| requested_apparatus.to_string());
+                diagnostic.apparatus =
+                    (!requested_apparatus.is_empty()).then(|| requested_apparatus.to_string());
                 return Ok(json_response(diagnostic));
             }
             continue;
@@ -945,15 +937,13 @@ pub async fn raw_material_assignment_diagnostics(
                     diagnostic.order_title = Some(order.map.title.trim().to_string());
                     diagnostic.apparatus = Some(apparatus.clone());
                     diagnostic.apparatus_options = apparatus_options.clone();
-                    if let Some((order_width, roll_width, _)) =
-                        raw_material_rulon_match_metrics(
-                            &order.map,
-                            apparatus,
-                            &stock,
-                            &item,
-                            &group_path,
-                        )
-                    {
+                    if let Some((order_width, roll_width, _)) = raw_material_rulon_match_metrics(
+                        &order.map,
+                        apparatus,
+                        &stock,
+                        &item,
+                        &group_path,
+                    ) {
                         diagnostic.order_width_mm = Some(order_width);
                         diagnostic.roll_width_mm = Some(roll_width);
                         diagnostic.minimum_width_mm = Some(order_width);
@@ -1167,7 +1157,6 @@ fn sort_raw_material_assignments(assignments: &mut [RawMaterialAssignment]) {
             .then_with(|| left.barcode.cmp(&right.barcode))
     });
 }
-
 
 pub async fn raw_material_intake_candidates(
     State(state): State<AppState>,

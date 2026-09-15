@@ -25,38 +25,77 @@ pub async fn production_map_bosma_astatka(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, AdminError> {
-    let principal = authorize_any_capability(&state, &headers, &[
-        Capability::AdminAccess, Capability::ProductionMapManage, Capability::ApparatusQueueManage,
-    ]).await?;
-    if method != Method::POST { return Err(method_not_allowed()); }
+    let principal = authorize_any_capability(
+        &state,
+        &headers,
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::ApparatusQueueManage,
+        ],
+    )
+    .await?;
+    if method != Method::POST {
+        return Err(method_not_allowed());
+    }
     let input: BosmaAstatkaRequest = parse_json(&body)?;
     let apparatus = input.apparatus.trim().to_string();
     let order_id = input.order_id.trim().to_string();
-    if !state.admin.principal_has_capability(&principal, Capability::AdminAccess).await {
+    if !state
+        .admin
+        .principal_has_capability(&principal, Capability::AdminAccess)
+        .await
+    {
         let assigned = state.admin.principal_assigned_apparatus(&principal).await;
         if !queue_state::apparatus_matches_assigned(&apparatus, &assigned) {
-            return Err(production_map_error(ProductionMapError::ApparatusNotAssigned));
+            return Err(production_map_error(
+                ProductionMapError::ApparatusNotAssigned,
+            ));
         }
     }
-    let map = state.production_maps.raw_map(&order_id).await.map_err(production_map_error)?
+    let map = state
+        .production_maps
+        .raw_map(&order_id)
+        .await
+        .map_err(production_map_error)?
         .ok_or_else(|| production_map_error(ProductionMapError::MapNotFound))?;
     // Validate paint values and image ownership without creating a stock/queue action.
-    let returned_paint = state.returned_paint.prepare_request(
-        crate::core::returned_paint::ReturnedPaintRequestCreate {
-            order_id: order_id.clone(), order_code: map.code, order_name: map.title,
-            apparatus: apparatus.clone(), image_id: input.returned_paint_image_id,
-            items: input.returned_paint_items,
-        }, &principal, "bosma-astatka".to_string(),
-    ).await.map_err(|error| bad_request(error.to_string()))?;
-    let report = state.production_maps.record_bosma_astatka(
-        crate::core::production_map::BosmaAstatkaReport {
-            report_id: String::new(), order_id, apparatus, from_at_unix: 0, to_at_unix: 0,
-            total_waste: input.total_waste, finished_goods_meter: input.finished_goods_meter,
-            finished_goods_kg: input.finished_goods_kg, bobina_kg: input.bobina_kg,
-            returned_paint, description: input.description,
-        },
-    ).await.map_err(production_map_error)?;
-    Ok(json_response(serde_json::json!({"ok": true, "report": report})))
+    let returned_paint = state
+        .returned_paint
+        .prepare_request(
+            crate::core::returned_paint::ReturnedPaintRequestCreate {
+                order_id: order_id.clone(),
+                order_code: map.code,
+                order_name: map.title,
+                apparatus: apparatus.clone(),
+                image_id: input.returned_paint_image_id,
+                items: input.returned_paint_items,
+            },
+            &principal,
+            "bosma-astatka".to_string(),
+        )
+        .await
+        .map_err(|error| bad_request(error.to_string()))?;
+    let report = state
+        .production_maps
+        .record_bosma_astatka(crate::core::production_map::BosmaAstatkaReport {
+            report_id: String::new(),
+            order_id,
+            apparatus,
+            from_at_unix: 0,
+            to_at_unix: 0,
+            total_waste: input.total_waste,
+            finished_goods_meter: input.finished_goods_meter,
+            finished_goods_kg: input.finished_goods_kg,
+            bobina_kg: input.bobina_kg,
+            returned_paint,
+            description: input.description,
+        })
+        .await
+        .map_err(production_map_error)?;
+    Ok(json_response(
+        serde_json::json!({"ok": true, "report": report}),
+    ))
 }
 
 #[derive(Default, serde::Deserialize)]
