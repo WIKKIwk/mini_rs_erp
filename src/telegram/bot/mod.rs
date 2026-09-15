@@ -25,7 +25,6 @@ const INLINE_PASSWORD_PREFIX: &str = "p4 ";
 const INLINE_CUSTOMER_PREFIX: &str = "c7 ";
 const INLINE_PRODUCT_PREFIX: &str = "i7 ";
 const INLINE_MATERIAL_PREFIX: &str = "m7 ";
-const INLINE_MICRON_PREFIX: &str = "n7 ";
 const MAX_ORDER_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
 const TELEGRAM_FILE_BASE: &str = "https://api.telegram.org/file/bot";
 

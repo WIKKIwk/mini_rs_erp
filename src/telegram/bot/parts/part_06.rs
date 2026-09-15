@@ -3,7 +3,6 @@ enum OrderInlineKind {
     Customer,
     Product,
     Material,
-    Micron,
 }
 
 fn parse_order_inline_query(query: &str) -> Option<(OrderInlineKind, String)> {
@@ -14,7 +13,6 @@ fn parse_order_inline_query(query: &str) -> Option<(OrderInlineKind, String)> {
         "c7" => OrderInlineKind::Customer,
         "i7" => OrderInlineKind::Product,
         "m7" => OrderInlineKind::Material,
-        "n7" => OrderInlineKind::Micron,
         _ => return None,
     };
     Some((kind, value))
@@ -88,32 +86,6 @@ async fn order_inline_results(
                 ));
             }
         }
-        OrderInlineKind::Micron if draft.step == TelegramOrderStep::Micron => {
-            let Some(material) = catalog
-                .material_by_id(&draft.pending_material_id)
-                .await
-                .map_err(TelegramError::OrderCatalog)?
-            else {
-                return Ok(Vec::new());
-            };
-            for variant in material
-                .variants
-                .into_iter()
-                .filter(|variant| value.is_empty() || variant.micron.to_string().contains(&value))
-            {
-                let micron = variant.micron.to_string();
-                let token = service
-                    .remember_order_choice(telegram_user_id, micron.clone())
-                    .await;
-                results.push(inline_article(
-                    &token,
-                    &format!("{} mikron", micron),
-                    &material.name,
-                    &format!("{} {} mikron", material.name, micron),
-                    &format!("order:micron:{token}"),
-                ));
-            }
-        }
         _ => {}
     }
     Ok(results)
@@ -183,15 +155,6 @@ fn material_step_keyboard() -> serde_json::Value {
     })
 }
 
-fn micron_step_keyboard() -> serde_json::Value {
-    serde_json::json!({
-        "inline_keyboard": [
-            [{"text": "🔎 Mikron tanlash", "switch_inline_query_current_chat": INLINE_MICRON_PREFIX}],
-            [{"text": "❌ Bekor qilish", "callback_data": "order:cancel"}]
-        ]
-    })
-}
-
 fn layer_options_keyboard() -> serde_json::Value {
     serde_json::json!({
         "inline_keyboard": [
@@ -218,6 +181,15 @@ fn parse_frame_count(value: &str) -> Option<f64> {
 fn parse_edge_allowance(value: &str) -> Option<f64> {
     let allowance = value.trim().replace(',', ".").parse::<f64>().ok()?;
     (allowance.is_finite() && allowance >= 0.0).then_some(allowance)
+}
+
+fn parse_micron(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let micron = value.parse::<u32>().ok()?;
+    (micron > 0).then(|| micron.to_string())
 }
 
 async fn get_telegram_file(

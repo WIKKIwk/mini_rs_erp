@@ -109,6 +109,44 @@ async fn handle_order_text(
             service.save_order_draft(telegram_user_id, draft).await?;
             send_material_step(service, token, chat_id, 1).await?;
         }
+        TelegramOrderStep::Micron => {
+            let Some(micron) = parse_micron(value) else {
+                send_order_text(
+                    service,
+                    token,
+                    chat_id,
+                    "Mikron faqat musbat butun son bo‘lishi kerak (masalan: 19).",
+                )
+                .await?;
+                return Ok(true);
+            };
+            let Some(material) = catalog
+                .material_by_id(&draft.pending_material_id)
+                .await
+                .map_err(TelegramError::OrderCatalog)?
+            else {
+                send_order_text(
+                    service,
+                    token,
+                    chat_id,
+                    "Material topilmadi. Qavatni qayta tanlang.",
+                )
+                .await?;
+                return Ok(true);
+            };
+            draft.layers.push(TelegramOrderLayer {
+                material_id: material.id,
+                material: draft.pending_material_name.clone(),
+                micron,
+            });
+            draft.pending_material_id.clear();
+            draft.pending_material_name.clear();
+            draft.step = TelegramOrderStep::LayerOptions;
+            service
+                .save_order_draft(telegram_user_id, draft.clone())
+                .await?;
+            send_layer_options(service, token, chat_id, &draft).await?;
+        }
         TelegramOrderStep::Tiraj => {
             let Some(tiraj) = parse_tiraj(value) else {
                 send_order_text(
@@ -331,58 +369,6 @@ async fn handle_order_callback(
             draft.step = TelegramOrderStep::Micron;
             service.save_order_draft(telegram_user_id, draft).await?;
             send_micron_step(service, token, chat_id).await?;
-        }
-        "micron" if draft.step == TelegramOrderStep::Micron => {
-            let Some(micron) = service.take_order_choice(telegram_user_id, value).await else {
-                send_order_text(
-                    service,
-                    token,
-                    chat_id,
-                    "Mikron tanlovi eskirgan. Qayta qidiring.",
-                )
-                .await?;
-                return Ok(());
-            };
-            let Some(material) = catalog
-                .material_by_id(&draft.pending_material_id)
-                .await
-                .map_err(TelegramError::OrderCatalog)?
-            else {
-                send_order_text(
-                    service,
-                    token,
-                    chat_id,
-                    "Material topilmadi. Qavatni qayta tanlang.",
-                )
-                .await?;
-                return Ok(());
-            };
-            if !material
-                .variants
-                .iter()
-                .any(|variant| variant.micron.to_string() == micron)
-            {
-                send_order_text(
-                    service,
-                    token,
-                    chat_id,
-                    "Bu mikron tanlangan materialda mavjud emas.",
-                )
-                .await?;
-                return Ok(());
-            }
-            draft.layers.push(TelegramOrderLayer {
-                material_id: material.id,
-                material: draft.pending_material_name.clone(),
-                micron,
-            });
-            draft.pending_material_id.clear();
-            draft.pending_material_name.clear();
-            draft.step = TelegramOrderStep::LayerOptions;
-            service
-                .save_order_draft(telegram_user_id, draft.clone())
-                .await?;
-            send_layer_options(service, token, chat_id, &draft).await?;
         }
         "add_layer" if draft.step == TelegramOrderStep::LayerOptions => {
             draft.step = TelegramOrderStep::Material;

@@ -27,6 +27,16 @@ mod tests {
             assert_eq!(super::parse_frame_count(value), None, "{value}");
         }
     }
+
+    #[test]
+    fn micron_is_a_positive_integer_text_input_not_an_inline_choice() {
+        assert!(super::parse_order_inline_query("n7 19").is_none());
+        assert_eq!(super::parse_micron("19"), Some("19".to_string()));
+        assert_eq!(super::parse_micron(" 019 "), Some("19".to_string()));
+        for value in ["", "0", "-1", "1.5", "12a", "abc", "1/2"] {
+            assert_eq!(super::parse_micron(value), None, "{value}");
+        }
+    }
     use super::{
         InlineLoginInput, TelegramMessage, TelegramOrderNotification, is_login_code,
         number_or_dash, order_media_from_message, parse_command, parse_inline_login_input,

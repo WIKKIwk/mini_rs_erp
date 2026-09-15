@@ -423,13 +423,11 @@ async fn send_micron_step(
     token: &str,
     chat_id: &str,
 ) -> Result<(), TelegramError> {
-    send_message_with_markup(
+    send_order_text(
         service,
         token,
         chat_id,
-        "Material tanlandi. Endi mikronni tanlang:",
-        None,
-        Some(micron_step_keyboard()),
+        "Material tanlandi. Homashyo mikronini kiriting (musbat butun son):",
     )
     .await
 }
