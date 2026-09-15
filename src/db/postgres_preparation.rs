@@ -22,7 +22,7 @@ const AVAILABLE_STOCK: &str = "s.status = 'available' AND s.reserved_order_id = 
         WHERE p.asset_kind = 'raw_material' AND lower(p.asset_ref) = lower(s.id)
           AND (l.kind <> 'warehouse' OR w.name IS NULL OR lower(w.name) <> lower(s.warehouse)))";
 
-const PREPARATION_ITEM_GROUP: &str = "Tayyorlov homashyolari";
+const PREPARATION_ITEM_GROUP: &str = "Homashyo";
 const PREPARATION_MATERIAL_CHILD_GROUP: &str = "seriyo";
 
 #[derive(Clone)]
@@ -942,7 +942,7 @@ async fn preparation_material_group(
     {
         if !is_group || !parent.eq_ignore_ascii_case(PREPARATION_ITEM_GROUP) {
             return Err(PreparationError::Conflict(
-                "Seriyo guruhi Tayyorlov homashyolari ostida emas",
+                "Seriyo guruhi Homashyo guruhi ostida emas",
             ));
         }
         return Ok(name);

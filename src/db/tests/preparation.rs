@@ -133,7 +133,7 @@ async fn preparation_postgres_partial_fifo_atomic_retry_concurrency_and_scope() 
         .unwrap(),
         (
             "seriyo".to_string(),
-            "Tayyorlov homashyolari".to_string(),
+            "Homashyo".to_string(),
             true,
         )
     );
