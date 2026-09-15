@@ -28,17 +28,14 @@ async fn send_photo(
     notification: &TelegramOrderNotification,
     image: &CalculateOrderImage,
 ) -> Result<(), TelegramError> {
-    let file_name = if image.image_name.trim().is_empty() {
-        "order-image.jpg".to_string()
-    } else {
-        image.image_name.trim().to_string()
-    };
+    let photo = crate::telegram::photo::prepare_order_photo(image)
+        .map_err(|error| TelegramError::Transport(error.to_string()))?;
     let mut form = reqwest::multipart::Form::new()
         .text("chat_id", chat.chat_id.clone())
         .text("caption", truncate_caption(&notification.caption))
         .part(
             "photo",
-            reqwest::multipart::Part::bytes(image.body.clone()).file_name(file_name),
+            reqwest::multipart::Part::bytes(photo.body).file_name(photo.file_name),
         );
     if let Some(thread_id) = chat.thread_id {
         form = form.text("message_thread_id", thread_id.to_string());

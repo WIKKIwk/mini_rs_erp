@@ -8,6 +8,7 @@ pub mod bot;
 mod models;
 mod order;
 mod order_catalog;
+mod photo;
 mod service;
 mod store;
 pub mod useraccount;
