@@ -24,6 +24,7 @@ fn request() -> MaterialReceiptPrintRequest {
         tare_kg: 0.78,
         width_mm: None,
         micron: None,
+        length_m: None,
         print_count: 1,
         actor_role: String::new(),
         actor_ref: String::new(),
@@ -38,6 +39,7 @@ fn roll_receipt_keeps_canonical_code_and_formats_dimensions_for_the_label() {
     input.item_name = "PET".to_string();
     input.width_mm = Some(615.0);
     input.micron = Some(13.0);
+    input.length_m = Some(125.5);
 
     let response = GscaleService::new()
         .with_epc_source(Arc::new(QueueEpc::new(["303132333435363738394142"])))
@@ -48,6 +50,22 @@ fn roll_receipt_keeps_canonical_code_and_formats_dimensions_for_the_label() {
     assert_eq!(response.item_name, "PET 615/13");
     assert_eq!(response.width_mm, Some(615.0));
     assert_eq!(response.micron, Some(13.0));
+    assert_eq!(response.length_m, Some(125.5));
+}
+
+#[test]
+fn receipt_rejects_non_positive_length() {
+    let mut input = request();
+    input.length_m = Some(0.0);
+
+    let error = GscaleService::new()
+        .prepare_material_receipt_client_print(input)
+        .expect_err("length must be positive");
+
+    assert_eq!(
+        error.to_string(),
+        "invalid input: length_m_must_be_positive"
+    );
 }
 
 #[test]
@@ -245,6 +263,7 @@ async fn forwards_material_product_label_kind_to_driver() {
         .with_epc_source(Arc::new(QueueEpc::new(["EPC-LABEL"])));
     let mut request = request();
     request.label_kind = "material_product".to_string();
+    request.length_m = Some(125.5);
 
     service
         .print_material_receipt_driver_first(request)
@@ -257,6 +276,13 @@ async fn forwards_material_product_label_kind_to_driver() {
             .unwrap()
             .iter()
             .any(|event| { event == "print:material_product:EPC-LABEL::1" })
+    );
+    assert!(
+        events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|event| { event == "progress_unit:125.500 m" })
     );
 }
 
@@ -466,6 +492,7 @@ impl MaterialReceiptStorePort for FakeReceiptStore {
             qty: input.qty,
             width_mm: input.width_mm,
             micron: input.micron,
+            length_m: input.length_m,
             uom: "Kg".to_string(),
             barcode: input.barcode,
         })
@@ -516,6 +543,16 @@ impl ScaleDriverPort for FakeDriver {
             )
         };
         self.events.lock().unwrap().push(event);
+        if request
+            .label_kind
+            .trim()
+            .eq_ignore_ascii_case("material_product")
+        {
+            self.events
+                .lock()
+                .unwrap()
+                .push(format!("progress_unit:{}", request.progress_unit));
+        }
         Ok(ScaleDriverPrintResponse {
             ok: self.ok,
             status: self.status.to_string(),

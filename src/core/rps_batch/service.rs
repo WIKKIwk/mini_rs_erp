@@ -290,6 +290,7 @@ fn normalize_start(
         tare_kg,
         width_mm,
         micron,
+        length_m,
     } = request;
     let item_code = trim_owned(item_code);
     let warehouse = trim_owned(warehouse);
@@ -305,6 +306,7 @@ fn normalize_start(
         ));
     }
     let (width_mm, micron) = normalize_dimensions(width_mm, micron)?;
+    let length_m = normalize_required_length(length_m)?;
     let (tare_enabled, tare_kg) = normalize_tare(tare_enabled, tare_kg);
 
     Ok(RpsBatchSession {
@@ -327,6 +329,7 @@ fn normalize_start(
         tare_kg,
         width_mm,
         micron,
+        length_m,
         last_error: String::new(),
         last_error_at: String::new(),
         prints: Vec::new(),
@@ -370,6 +373,15 @@ fn normalize_dimensions(
     }
 }
 
+fn normalize_required_length(length_m: Option<f64>) -> Result<Option<f64>, RpsBatchServiceError> {
+    match length_m {
+        Some(length_m) if length_m.is_finite() && length_m > 0.0 => Ok(Some(length_m)),
+        _ => Err(RpsBatchServiceError::InvalidInput(
+            "length_m_required".to_string(),
+        )),
+    }
+}
+
 fn apply_update(
     batch: &mut RpsBatchSession,
     request: RpsBatchUpdateRequest,
@@ -380,6 +392,7 @@ fn apply_update(
         warehouse,
         width_mm,
         micron,
+        length_m,
         quantity_source,
         tare_enabled,
         tare_kg,
@@ -393,11 +406,13 @@ fn apply_update(
         ));
     }
     let (width_mm, micron) = normalize_dimensions(width_mm, micron)?;
+    let length_m = normalize_required_length(length_m)?;
     batch.item_name = trimmed_or(item_name, &item_code);
     batch.item_code = item_code;
     batch.warehouse = warehouse;
     batch.width_mm = width_mm;
     batch.micron = micron;
+    batch.length_m = length_m;
     if let Some(quantity_source) = quantity_source {
         batch.quantity_source = normalize_quantity_source(quantity_source);
     }
@@ -529,6 +544,14 @@ fn validate_print_context(
         || batch.warehouse.trim() != request.expected_warehouse.trim()
     {
         return Err(RpsBatchServiceError::BatchContextConflict);
+    }
+    if !batch
+        .length_m
+        .is_some_and(|length_m| length_m.is_finite() && length_m > 0.0)
+    {
+        return Err(RpsBatchServiceError::InvalidInput(
+            "length_m_required".to_string(),
+        ));
     }
     Ok(())
 }

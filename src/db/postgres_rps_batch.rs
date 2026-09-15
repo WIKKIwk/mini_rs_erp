@@ -145,6 +145,7 @@ impl RpsBatchStorePort for PostgresRpsBatchStore {
                          'manual_qty_kg', 0,
                          'tare_enabled', false,
                          'tare_kg', 0,
+                         'length_m', receipt.length_m,
                          'last_error', '',
                          'last_error_at', '',
                          'prints', jsonb_build_array(jsonb_build_object(
@@ -158,6 +159,7 @@ impl RpsBatchStorePort for PostgresRpsBatchStore {
                              'printer', '',
                              'print_mode', '',
                              'print_count', 1,
+                             'length_m', receipt.length_m,
                              'printed_at', receipt.created_at
                          )),
                          'created_at', receipt.created_at,

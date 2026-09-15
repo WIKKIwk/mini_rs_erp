@@ -34,6 +34,8 @@ pub struct RpsBatchStartRequest {
     pub width_mm: Option<f64>,
     #[serde(default)]
     pub micron: Option<f64>,
+    #[serde(default)]
+    pub length_m: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
@@ -52,6 +54,8 @@ pub struct RpsBatchUpdateRequest {
     pub width_mm: Option<f64>,
     #[serde(default)]
     pub micron: Option<f64>,
+    #[serde(default)]
+    pub length_m: Option<f64>,
     #[serde(default)]
     pub quantity_source: Option<String>,
     #[serde(default)]
@@ -85,6 +89,8 @@ pub struct RpsBatchSession {
     pub width_mm: Option<f64>,
     #[serde(default)]
     pub micron: Option<f64>,
+    #[serde(default)]
+    pub length_m: Option<f64>,
     #[serde(default)]
     pub last_error: String,
     #[serde(default)]
@@ -255,6 +261,7 @@ impl RpsBatchSession {
             tare_kg: self.tare_kg,
             width_mm: self.width_mm,
             micron: self.micron,
+            length_m: self.length_m,
             print_count,
             actor_role: String::new(),
             actor_ref: String::new(),
@@ -284,6 +291,7 @@ mod tests {
             item_name: "CPP".to_string(),
             width_mm: Some(1030.0),
             micron: Some(25.0),
+            length_m: Some(125.0),
             warehouse: "Kalidor".to_string(),
             printer: "zebra".to_string(),
             print_mode: "rfid".to_string(),
@@ -305,6 +313,7 @@ mod tests {
         assert_eq!(request.item_code, "cpp");
         assert_eq!(request.width_mm, Some(1030.0));
         assert_eq!(request.micron, Some(25.0));
+        assert_eq!(request.length_m, Some(125.0));
         assert_eq!(request.print_mode, "rfid");
     }
 

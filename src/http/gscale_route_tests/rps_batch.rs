@@ -36,7 +36,8 @@ async fn rps_batch_start_state_stop_is_persisted_by_rs() {
                 "print_mode":"label",
                 "quantity_source":"scale",
                 "tare_enabled":true,
-                "tare_kg":0.78
+                "tare_kg":0.78,
+                "length_m":125
             }"#,
         ))
         .await
@@ -61,6 +62,7 @@ async fn rps_batch_start_state_stop_is_persisted_by_rs() {
     assert_eq!(started_body["batch"]["item_code"], "ITEM-1");
     assert_eq!(started_body["batch"]["warehouse"], "Stores - A");
     assert_eq!(started_body["batch"]["tare_kg"], 0.78);
+    assert_eq!(started_body["batch"]["length_m"], 125.0);
 
     let current = router
         .clone()
@@ -112,7 +114,8 @@ async fn rps_batch_start_state_stop_is_persisted_by_rs() {
                 "client_batch_id":"batch-2",
                 "driver_url":"http://127.0.0.1:39117",
                 "item_code":"ITEM-2",
-                "warehouse":"Stores - B"
+                "warehouse":"Stores - B",
+                "length_m":125
             }"#,
         ))
         .await
@@ -165,7 +168,8 @@ async fn material_taminotchi_updates_active_batch_context_in_place() {
                 "printer":"godex",
                 "print_mode":"label",
                 "width_mm":615,
-                "micron":13
+                "micron":13,
+                "length_m":125
             }"#,
         ))
         .await
@@ -183,7 +187,8 @@ async fn material_taminotchi_updates_active_batch_context_in_place() {
                 "expected_revision":1,
                 "item_code":"INK-BLACK",
                 "item_name":"client supplied ink",
-                "warehouse":"Stores - B"
+                "warehouse":"Stores - B",
+                "length_m":125
             }"#,
         ))
         .await
@@ -217,7 +222,8 @@ async fn material_taminotchi_updates_active_batch_context_in_place() {
                 "micron":18,
                 "quantity_source":"manual",
                 "tare_enabled":true,
-                "tare_kg":0.78
+                "tare_kg":0.78,
+                "length_m":125
             }"#,
         ))
         .await
@@ -228,6 +234,7 @@ async fn material_taminotchi_updates_active_batch_context_in_place() {
     assert_eq!(updated_roll_body["batch"]["item_name"], "CPP 1000/35");
     assert_eq!(updated_roll_body["batch"]["width_mm"], 783.0);
     assert_eq!(updated_roll_body["batch"]["micron"], 18.0);
+    assert_eq!(updated_roll_body["batch"]["length_m"], 125.0);
     assert_eq!(updated_roll_body["batch"]["quantity_source"], "manual");
     assert_eq!(updated_roll_body["batch"]["tare_enabled"], true);
     assert_eq!(updated_roll_body["batch"]["tare_kg"], 0.78);
@@ -244,6 +251,7 @@ async fn material_taminotchi_updates_active_batch_context_in_place() {
     assert_eq!(current_body["batch"]["warehouse"], "Stores - A");
     assert_eq!(current_body["batch"]["width_mm"], 783.0);
     assert_eq!(current_body["batch"]["micron"], 18.0);
+    assert_eq!(current_body["batch"]["length_m"], 125.0);
     assert_eq!(current_body["batch"]["quantity_source"], "manual");
     assert_eq!(current_body["batch"]["tare_enabled"], true);
     assert_eq!(current_body["batch"]["tare_kg"], 0.78);
@@ -274,7 +282,8 @@ async fn rps_batch_rejects_stale_print_context_before_any_side_effect() {
                 "client_batch_id":"batch-context-1",
                 "driver_url":"http://127.0.0.1:39117",
                 "item_code":"ITEM-1",
-                "warehouse":"Stores - A"
+                "warehouse":"Stores - A",
+                "length_m":125
             }"#,
         ))
         .await
@@ -345,7 +354,8 @@ async fn rps_batch_print_uses_active_rs_batch_and_transaction_flow() {
                 "printer":"zebra",
                 "print_mode":"rfid",
                 "tare_enabled":true,
-                "tare_kg":0.78
+                "tare_kg":0.78,
+                "length_m":125
             }"#,
         ))
         .await
@@ -369,6 +379,7 @@ async fn rps_batch_print_uses_active_rs_batch_and_transaction_flow() {
     assert_eq!(body["warehouse"], "Stores - A");
     assert_eq!(body["gross_qty"], 2.5);
     assert_eq!(body["qty"], 1.72);
+    assert_eq!(body["length_m"], 125.0);
     tokio::time::sleep(Duration::from_millis(25)).await;
     assert_eq!(
         events.lock().unwrap().as_slice(),
@@ -482,7 +493,8 @@ async fn rps_batch_duplicate_count_records_distinct_products_and_epcs() {
                 "item_name":"GScale Film",
                 "warehouse":"Stores - A",
                 "printer":"godex",
-                "print_mode":"label"
+                "print_mode":"label",
+                "length_m":125
             }"#,
         ))
         .await
@@ -559,7 +571,8 @@ async fn rps_batch_client_print_prepares_then_confirms_without_driver() {
                 "item_name":"Green Tea",
                 "warehouse":"Stores - A",
                 "printer":"godex",
-                "print_mode":"label"
+                "print_mode":"label",
+                "length_m":125
             }"#,
         ))
         .await
@@ -634,7 +647,8 @@ async fn rps_batch_start_rejects_overwriting_active_cycle() {
         "client_batch_id":"batch-protected",
         "driver_url":"http://127.0.0.1:39117",
         "item_code":"ITEM-1",
-        "warehouse":"Stores - A"
+        "warehouse":"Stores - A",
+        "length_m":125
     }"#;
 
     let first = router
@@ -684,7 +698,8 @@ async fn rps_batch_print_waits_for_receipt_submit_before_success() {
                 "item_name":"Green Tea",
                 "warehouse":"Stores - A",
                 "printer":"godex",
-                "print_mode":"label"
+                "print_mode":"label",
+                "length_m":125
             }"#,
         ))
         .await
@@ -745,7 +760,8 @@ async fn rps_batch_stop_waits_for_in_flight_print_and_then_closes_exact_batch() 
                 "client_batch_id":"batch-stop-during-print",
                 "driver_url":"http://127.0.0.1:39117",
                 "item_code":"ITEM-1",
-                "warehouse":"Stores - A"
+                "warehouse":"Stores - A",
+                "length_m":125
             }"#,
         ))
         .await
@@ -822,7 +838,8 @@ async fn rps_batch_print_failure_is_returned_and_stops_the_batch() {
                 "item_name":"ABCD Family",
                 "warehouse":"Stores - A",
                 "printer":"godex",
-                "print_mode":"label"
+                "print_mode":"label",
+                "length_m":125
             }"#,
         ))
         .await
@@ -907,7 +924,8 @@ async fn live_rps_batch_print_routes_through_rs_to_driver_when_env_is_set() {
                     "warehouse":"5070 Lab",
                     "printer":"godex",
                     "print_mode":"label",
-                    "quantity_source":"scale"
+                    "quantity_source":"scale",
+                    "length_m":125
                 }}"#,
                 driver_url.trim().trim_end_matches('/')
             ),
@@ -984,6 +1002,33 @@ async fn rps_batch_start_requires_item_and_warehouse() {
 }
 
 #[tokio::test]
+async fn rps_batch_start_requires_positive_material_length() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Werka).await;
+    let response = build_router(state)
+        .oneshot(request(
+            "POST",
+            "/v1/mobile/rps/batch/start",
+            &token,
+            r#"{
+                "client_batch_id":"missing-length",
+                "driver_url":"http://127.0.0.1:39117",
+                "item_code":"ITEM-1",
+                "warehouse":"Stores - A",
+                "length_m":0
+            }"#,
+        ))
+        .await
+        .expect("response");
+    let status = response.status();
+    let body = json_body(response).await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "invalid_input");
+    assert_eq!(body["detail"], "invalid input: length_m_required");
+}
+
+#[tokio::test]
 async fn material_taminotchi_rps_batch_start_allows_assigned_warehouse() {
     let mut state = test_state();
     state.admin =
@@ -1022,7 +1067,8 @@ async fn material_taminotchi_rps_batch_start_allows_assigned_warehouse() {
                 "printer":"godex",
                 "print_mode":"label",
                 "width_mm":615,
-                "micron":13
+                "micron":13,
+                "length_m":125
             }"#,
         ))
         .await

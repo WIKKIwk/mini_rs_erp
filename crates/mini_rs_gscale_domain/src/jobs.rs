@@ -115,6 +115,7 @@ pub(super) struct NormalizedMaterialReceiptJob {
     pub(super) tare_kg: f64,
     pub(super) width_mm: Option<f64>,
     pub(super) micron: Option<f64>,
+    pub(super) length_m: Option<f64>,
     pub(super) print_count: u32,
     pub(super) actor_role: String,
     pub(super) actor_ref: String,
@@ -166,6 +167,7 @@ impl NormalizedMaterialReceiptJob {
             )));
         }
         let (width_mm, micron) = normalize_dimensions(request.width_mm, request.micron)?;
+        let length_m = normalize_length(request.length_m)?;
         let item_name = dimensioned_item_name(
             &blank_default(&request.item_name, &item_code),
             width_mm,
@@ -186,6 +188,7 @@ impl NormalizedMaterialReceiptJob {
             tare_kg,
             width_mm,
             micron,
+            length_m,
             print_count: normalize_print_count(request.print_count),
             actor_role: request.actor_role.trim().to_string(),
             actor_ref: request.actor_ref.trim().to_string(),
@@ -207,7 +210,10 @@ impl NormalizedMaterialReceiptJob {
             gross_qty: self.gross_qty,
             qty: None,
             unit: self.unit.clone(),
-            progress_unit: String::new(),
+            progress_unit: self
+                .length_m
+                .map(|length_m| format!("{length_m:.3} m"))
+                .unwrap_or_default(),
             tare_enabled: self.tare_enabled,
             tare_kg: self.tare_kg,
             print_count: self.print_count,
@@ -231,6 +237,16 @@ fn normalize_dimensions(
         )),
         _ => Err(GscaleServiceError::InvalidInput(
             "width_mm_and_micron_required_together".to_string(),
+        )),
+    }
+}
+
+fn normalize_length(length_m: Option<f64>) -> Result<Option<f64>, GscaleServiceError> {
+    match length_m {
+        None => Ok(None),
+        Some(length_m) if length_m.is_finite() && length_m > 0.0 => Ok(Some(length_m)),
+        Some(_) => Err(GscaleServiceError::InvalidInput(
+            "length_m_must_be_positive".to_string(),
         )),
     }
 }

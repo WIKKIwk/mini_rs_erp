@@ -44,6 +44,14 @@ impl RawMaterialStockLookup {
         item.status = status.trim().to_string();
         item.reserved_order_id = order_id.trim().to_string();
     }
+
+    pub(crate) async fn set_stock_length(&self, barcode: &str, length_m: f64) {
+        let mut stock = self.stock.lock().await;
+        let item = stock
+            .get_mut(&barcode.trim().to_ascii_uppercase())
+            .expect("stock item");
+        item.length_m = Some(length_m);
+    }
 }
 
 fn raw_material_stock_entry(
@@ -60,6 +68,7 @@ fn raw_material_stock_entry(
         qty,
         width_mm: None,
         micron: None,
+        length_m: None,
         uom: "Kg".to_string(),
         barcode: barcode.to_string(),
         status: "available".to_string(),

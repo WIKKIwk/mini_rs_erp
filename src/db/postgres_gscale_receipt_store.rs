@@ -17,6 +17,15 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
                 "item_code_warehouse_barcode_and_qty_required".to_string(),
             )
         })?;
+        let length_m = match input.length_m {
+            None => None,
+            Some(length_m) if length_m.is_finite() && length_m > 0.0 => Some(length_m),
+            Some(_) => {
+                return Err(GscalePortError::InvalidInput(
+                    "length_m_invalid".to_string(),
+                ));
+            }
+        };
         let deleted_exists = sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS(
                  SELECT 1
@@ -37,13 +46,14 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
         let name = receipt_name(barcode);
         sqlx::query_as::<_, MaterialReceiptRow>(
             "INSERT INTO mini_gscale_receipts (
-                 name, status, item_code, warehouse, qty, width_mm, micron,
+                 name, status, item_code, warehouse, qty, width_mm, micron, length_m,
                  uom, barcode, payload_json
              )
              VALUES ($1, 'draft', $2, $3,
                      ($4::double precision)::numeric(18,6),
                      ($5::double precision)::numeric(18,6),
-                     ($6::double precision)::numeric(18,6), 'kg', $7, $8)
+                     ($6::double precision)::numeric(18,6),
+                     ($7::double precision)::numeric(18,6), 'kg', $8, $9)
              ON CONFLICT (barcode) DO UPDATE SET
                name = excluded.name,
                status = 'draft',
@@ -52,12 +62,14 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
                qty = excluded.qty,
                width_mm = excluded.width_mm,
                micron = excluded.micron,
+               length_m = excluded.length_m,
                uom = excluded.uom,
                payload_json = excluded.payload_json,
                updated_at = now(),
                submitted_at = NULL
              RETURNING name, item_code, warehouse, qty::float8 AS qty,
                        width_mm::float8 AS width_mm, micron::float8 AS micron,
+                       length_m::float8 AS length_m,
                        uom, barcode, payload_json",
         )
         .bind(name)
@@ -66,6 +78,7 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
         .bind(qty)
         .bind(input.width_mm)
         .bind(input.micron)
+        .bind(length_m)
         .bind(barcode)
         .bind(serde_json::json!({
             "item_code": item_code,
@@ -74,6 +87,7 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
             "qty": qty,
             "width_mm": input.width_mm,
             "micron": input.micron,
+            "length_m": length_m,
             "uom": "kg",
             "barcode": barcode,
             "actor_role": input.actor_role.trim(),
@@ -98,6 +112,7 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
              WHERE name = $1 AND status = 'draft'
              RETURNING name, item_code, warehouse, qty::float8 AS qty,
                        width_mm::float8 AS width_mm, micron::float8 AS micron,
+                       length_m::float8 AS length_m,
                        uom, barcode, payload_json",
         )
         .bind(name.trim())
@@ -133,6 +148,7 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
         sqlx::query_as::<_, MaterialReceiptRow>(
             "SELECT name, item_code, warehouse, qty::float8 AS qty,
                     width_mm::float8 AS width_mm, micron::float8 AS micron,
+                    length_m::float8 AS length_m,
                     uom, barcode, payload_json
              FROM mini_gscale_receipts
              WHERE lower(barcode) = lower($1)
@@ -159,7 +175,7 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
         sqlx::query_as::<_, RawMaterialStockRow>(
             "SELECT id, warehouse, item_code, item_name, barcode,
                     qty::float8 AS qty, width_mm::float8 AS width_mm,
-                    micron::float8 AS micron, uom,
+                    micron::float8 AS micron, length_m::float8 AS length_m, uom,
                     status, reserved_order_id, source_receipt_id
              FROM mini_raw_material_stock
              WHERE lower(barcode) = lower($1)
@@ -183,7 +199,7 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
         sqlx::query_as::<_, RawMaterialStockRow>(
             "SELECT id, warehouse, item_code, item_name, barcode,
                     qty::float8 AS qty, width_mm::float8 AS width_mm,
-                    micron::float8 AS micron, uom,
+                    micron::float8 AS micron, length_m::float8 AS length_m, uom,
                     status, reserved_order_id, source_receipt_id
              FROM mini_raw_material_stock
              WHERE status <> 'deleted'
@@ -223,7 +239,7 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
         let previous = sqlx::query_as::<_, RawMaterialStockRow>(
             "SELECT id, warehouse, item_code, item_name, barcode,
                     qty::float8 AS qty, width_mm::float8 AS width_mm,
-                    micron::float8 AS micron, uom,
+                    micron::float8 AS micron, length_m::float8 AS length_m, uom,
                     status, reserved_order_id, source_receipt_id
              FROM mini_raw_material_stock
              WHERE lower(barcode) = lower($1)
@@ -273,7 +289,7 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
              WHERE lower(barcode) = lower($1)
              RETURNING id, warehouse, item_code, item_name, barcode,
                        qty::float8 AS qty, width_mm::float8 AS width_mm,
-                       micron::float8 AS micron, uom,
+                       micron::float8 AS micron, length_m::float8 AS length_m, uom,
                        status, reserved_order_id, source_receipt_id",
         )
         .bind(barcode)
@@ -348,7 +364,7 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
         let previous = sqlx::query_as::<_, RawMaterialStockRow>(
             "SELECT id, warehouse, item_code, item_name, barcode,
                     qty::float8 AS qty, width_mm::float8 AS width_mm,
-                    micron::float8 AS micron, uom,
+                    micron::float8 AS micron, length_m::float8 AS length_m, uom,
                     status, reserved_order_id, source_receipt_id
              FROM mini_raw_material_stock
              WHERE lower(barcode) = lower($1)
@@ -428,7 +444,7 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
              WHERE id = $1
              RETURNING id, warehouse, item_code, item_name, barcode,
                        qty::float8 AS qty, width_mm::float8 AS width_mm,
-                       micron::float8 AS micron, uom,
+                       micron::float8 AS micron, length_m::float8 AS length_m, uom,
                        status, reserved_order_id, source_receipt_id",
         )
         .bind(&previous.id)
@@ -504,7 +520,7 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
                AND (status = 'available' OR (status = 'in_use' AND reserved_order_id = $2))
              RETURNING id, warehouse, item_code, item_name, barcode,
                        qty::float8 AS qty, width_mm::float8 AS width_mm,
-                       micron::float8 AS micron, uom,
+                       micron::float8 AS micron, length_m::float8 AS length_m, uom,
                        status, reserved_order_id, source_receipt_id",
         )
         .bind(&barcodes)
@@ -570,7 +586,7 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
                AND status IN ('in_use', 'consumed')
              RETURNING id, warehouse, item_code, item_name, barcode,
                        qty::float8 AS qty, width_mm::float8 AS width_mm,
-                       micron::float8 AS micron, uom,
+                       micron::float8 AS micron, length_m::float8 AS length_m, uom,
                        status, reserved_order_id, source_receipt_id",
         )
         .bind(&barcodes)

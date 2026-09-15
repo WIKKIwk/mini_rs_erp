@@ -46,6 +46,7 @@ async fn postgres_gscale_receipt_preserves_precision_and_supports_stock_correcti
             qty: 13.00003,
             width_mm: Some(615.0),
             micron: Some(13.0),
+            length_m: Some(125.0),
             barcode: "PRECISION-0001".to_string(),
             actor_role: "material_taminotchi".to_string(),
             actor_ref: "MAT-001".to_string(),
@@ -70,15 +71,15 @@ async fn postgres_gscale_receipt_preserves_precision_and_supports_stock_correcti
     .fetch_one(&pool)
     .await
     .expect("stock qty");
-    let receipt_dimensions: (String, String) = sqlx::query_as(
-        "SELECT width_mm::text, micron::text
+    let receipt_dimensions: (String, String, String) = sqlx::query_as(
+        "SELECT width_mm::text, micron::text, length_m::text
          FROM mini_gscale_receipts WHERE barcode = 'PRECISION-0001'",
     )
     .fetch_one(&pool)
     .await
     .expect("receipt dimensions");
-    let stock_dimensions: (String, String) = sqlx::query_as(
-        "SELECT width_mm::text, micron::text
+    let stock_dimensions: (String, String, String) = sqlx::query_as(
+        "SELECT width_mm::text, micron::text, length_m::text
          FROM mini_raw_material_stock WHERE barcode = 'PRECISION-0001'",
     )
     .fetch_one(&pool)
@@ -96,7 +97,11 @@ async fn postgres_gscale_receipt_preserves_precision_and_supports_stock_correcti
     assert_eq!(event_qty, receipt_qty);
     assert_eq!(
         receipt_dimensions,
-        ("615.000000".to_string(), "13.000000".to_string())
+        (
+            "615.000000".to_string(),
+            "13.000000".to_string(),
+            "125.000000".to_string()
+        )
     );
     assert_eq!(stock_dimensions, receipt_dimensions);
 

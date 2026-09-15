@@ -49,6 +49,7 @@ pub(super) async fn record_confirmed_material_receipt(
             stock.qty,
             stock.width_mm,
             stock.micron,
+            stock.length_m,
             job,
         )?;
         return Ok(stock.source_receipt_id);
@@ -66,6 +67,7 @@ pub(super) async fn record_confirmed_material_receipt(
                 draft.qty,
                 draft.width_mm,
                 draft.micron,
+                draft.length_m,
                 job,
             )?;
             draft
@@ -89,6 +91,7 @@ fn validate_existing_receipt(
     qty: f64,
     width_mm: Option<f64>,
     micron: Option<f64>,
+    length_m: Option<f64>,
     job: &NormalizedMaterialReceiptJob,
 ) -> Result<(), GscaleServiceError> {
     if !item_code.trim().eq_ignore_ascii_case(&job.item_code)
@@ -96,6 +99,7 @@ fn validate_existing_receipt(
         || (qty - job.net_qty).abs() > 0.000_001
         || !same_optional_number(width_mm, job.width_mm)
         || !same_optional_number(micron, job.micron)
+        || !same_optional_number(length_m, job.length_m)
     {
         return Err(GscaleServiceError::InvalidInput(
             "client_print_epc_already_used".to_string(),
@@ -151,6 +155,7 @@ async fn create_material_receipt_draft(
         barcode: epc,
         width_mm: job.width_mm,
         micron: job.micron,
+        length_m: job.length_m,
         actor_role: job.actor_role.clone(),
         actor_ref: job.actor_ref.clone(),
         actor_display_name: job.actor_display_name.clone(),

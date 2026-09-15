@@ -404,6 +404,7 @@ impl MaterialReceiptStorePort for FakeReceiptStore {
             qty: input.qty,
             width_mm: input.width_mm,
             micron: input.micron,
+            length_m: input.length_m,
             uom: "Kg".to_string(),
             barcode: input.barcode,
         })
@@ -441,6 +442,7 @@ impl MaterialReceiptStorePort for FailingSubmitStore {
             qty: input.qty,
             width_mm: input.width_mm,
             micron: input.micron,
+            length_m: input.length_m,
             uom: "Kg".to_string(),
             barcode: input.barcode,
         })
@@ -482,6 +484,7 @@ impl MaterialReceiptStorePort for SlowReceiptStore {
             qty: input.qty,
             width_mm: input.width_mm,
             micron: input.micron,
+            length_m: input.length_m,
             uom: "Kg".to_string(),
             barcode: input.barcode,
         })

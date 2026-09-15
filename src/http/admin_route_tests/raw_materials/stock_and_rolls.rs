@@ -1007,6 +1007,7 @@ async fn material_taminotchi_safely_deletes_only_available_raw_material_in_own_s
 #[tokio::test]
 async fn material_taminotchi_reprints_existing_assigned_raw_material_identity() {
     let material_store = Arc::new(RawMaterialStockLookup::default());
+    material_store.set_stock_length("30AA", 125.0).await;
     let mut state = test_state();
     state.gscale = GscaleService::new().with_receipt_store(material_store.clone());
     state
@@ -1104,6 +1105,9 @@ async fn material_taminotchi_reprints_existing_assigned_raw_material_identity() 
     assert_eq!(body["print"]["epc"], "30AA");
     assert_eq!(body["print"]["item_code"], "INK-BLACK");
     assert_eq!(body["print"]["gross_qty"], 12.0);
+    assert_eq!(body["stock"]["length_m"], 125.0);
+    assert_eq!(body["print"]["progress_qty"], 125.0);
+    assert_eq!(body["print"]["progress_unit"], "m");
     assert_eq!(body["print"]["print_count"], 1);
     assert_eq!(body["print"]["label_kind"], "material_product");
     let reprint_id = body["reprint_id"].as_str().expect("reprint id");

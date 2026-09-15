@@ -41,11 +41,14 @@ impl<'a> BytesDecode<'a> for RpsBatchSessionCodec {
         if let Some(payload) = bytes.strip_prefix(RPS_BATCH_MAGIC) {
             let mut batch: RpsBatchSession = match bincode::deserialize(payload) {
                 Ok(batch) => batch,
-                Err(_) => match bincode::deserialize::<RpsBatchSessionV3>(payload) {
+                Err(_) => match bincode::deserialize::<RpsBatchSessionV4>(payload) {
                     Ok(batch) => batch.into(),
-                    Err(_) => match bincode::deserialize::<RpsBatchSessionV2>(payload) {
+                    Err(_) => match bincode::deserialize::<RpsBatchSessionV3>(payload) {
                         Ok(batch) => batch.into(),
-                        Err(_) => bincode::deserialize::<RpsBatchSessionV1>(payload)?.into(),
+                        Err(_) => match bincode::deserialize::<RpsBatchSessionV2>(payload) {
+                            Ok(batch) => batch.into(),
+                            Err(_) => bincode::deserialize::<RpsBatchSessionV1>(payload)?.into(),
+                        },
                     },
                 },
             };
@@ -55,6 +58,66 @@ impl<'a> BytesDecode<'a> for RpsBatchSessionCodec {
         let mut batch: RpsBatchSession = serde_json::from_slice(bytes)?;
         batch.ensure_context();
         Ok(batch)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+struct RpsBatchSessionV4 {
+    id: String,
+    batch_code: String,
+    revision: u64,
+    active: bool,
+    owner_key: String,
+    owner_role: String,
+    owner_ref: String,
+    driver_url: String,
+    item_code: String,
+    item_name: String,
+    warehouse: String,
+    printer: String,
+    print_mode: String,
+    quantity_source: String,
+    manual_qty_kg: f64,
+    tare_enabled: bool,
+    tare_kg: f64,
+    width_mm: Option<f64>,
+    micron: Option<f64>,
+    last_error: String,
+    last_error_at: String,
+    prints: Vec<super::models::RpsBatchPrintEntry>,
+    created_at: String,
+    updated_at: String,
+}
+
+impl From<RpsBatchSessionV4> for RpsBatchSession {
+    fn from(batch: RpsBatchSessionV4) -> Self {
+        Self {
+            id: batch.id,
+            batch_code: batch.batch_code,
+            revision: batch.revision,
+            active: batch.active,
+            owner_key: batch.owner_key,
+            owner_role: batch.owner_role,
+            owner_ref: batch.owner_ref,
+            driver_url: batch.driver_url,
+            item_code: batch.item_code,
+            item_name: batch.item_name,
+            warehouse: batch.warehouse,
+            printer: batch.printer,
+            print_mode: batch.print_mode,
+            quantity_source: batch.quantity_source,
+            manual_qty_kg: batch.manual_qty_kg,
+            tare_enabled: batch.tare_enabled,
+            tare_kg: batch.tare_kg,
+            width_mm: batch.width_mm,
+            micron: batch.micron,
+            length_m: None,
+            last_error: batch.last_error,
+            last_error_at: batch.last_error_at,
+            prints: batch.prints,
+            created_at: batch.created_at,
+            updated_at: batch.updated_at,
+        }
     }
 }
 
@@ -105,6 +168,7 @@ impl From<RpsBatchSessionV3> for RpsBatchSession {
             tare_kg: batch.tare_kg,
             width_mm: None,
             micron: None,
+            length_m: None,
             last_error: batch.last_error,
             last_error_at: batch.last_error_at,
             prints: batch.prints,
@@ -426,5 +490,32 @@ mod tests {
             &decoded.batch_code
         ));
         assert!(decoded.prints.is_empty());
+    }
+
+    #[test]
+    fn lmdb_batch_store_reads_pre_length_session_without_losing_dimensions() {
+        let legacy = RpsBatchSessionV4 {
+            id: "batch-v4".to_string(),
+            batch_code: "421234567890ABCDEF123456".to_string(),
+            revision: 3,
+            active: true,
+            owner_key: "material_taminotchi:M-1".to_string(),
+            item_code: "CPP".to_string(),
+            item_name: "CPP".to_string(),
+            warehouse: "Stores - A".to_string(),
+            width_mm: Some(1030.0),
+            micron: Some(25.0),
+            ..RpsBatchSessionV4::default()
+        };
+        let mut bytes = RPS_BATCH_MAGIC.to_vec();
+        bytes.extend_from_slice(&bincode::serialize(&legacy).expect("serialize legacy batch"));
+
+        let decoded = RpsBatchSessionCodec::bytes_decode(&bytes).expect("decode legacy batch");
+
+        assert_eq!(decoded.id, "batch-v4");
+        assert_eq!(decoded.revision, 3);
+        assert_eq!(decoded.width_mm, Some(1030.0));
+        assert_eq!(decoded.micron, Some(25.0));
+        assert_eq!(decoded.length_m, None);
     }
 }
