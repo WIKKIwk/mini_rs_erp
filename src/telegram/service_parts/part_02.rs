@@ -1,4 +1,3 @@
-
 impl TelegramService {
     pub fn new(path: PathBuf) -> Self {
         let store = Arc::new(TelegramStore::new(path));
@@ -173,6 +172,16 @@ impl TelegramService {
             .user_by_telegram_id(telegram_user_id)
             .await
             .map_err(map_store)
+    }
+
+    pub async fn delete_user_account(
+        &self,
+        telegram_user_id: &str,
+    ) -> Result<TelegramUserAccount, TelegramError> {
+        self.useraccount
+            .delete_account(telegram_user_id.trim())
+            .await
+            .map_err(map_user_account)
     }
 
     pub(crate) async fn user_by_phone(

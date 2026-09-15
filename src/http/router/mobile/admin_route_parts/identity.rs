@@ -10,8 +10,18 @@ fn identity_routes() -> Router<AppState> {
             any(admin::telegram_invite),
         )
         .route("/v1/mobile/admin/capabilities", any(admin::capabilities))
-        .route("/v1/mobile/admin/telegram/qr-logins", any(admin::telegram_qr_start))
-        .route("/v1/mobile/admin/telegram/qr-logins/{id}", any(admin::telegram_qr_login))
+        .route(
+            "/v1/mobile/admin/telegram/qr-logins",
+            any(admin::telegram_qr_start),
+        )
+        .route(
+            "/v1/mobile/admin/telegram/qr-logins/{id}",
+            any(admin::telegram_qr_login),
+        )
+        .route(
+            "/v1/mobile/admin/telegram/users/{id}",
+            any(admin::telegram_user),
+        )
         .route("/v1/mobile/admin/roles", any(admin::roles))
         .route("/v1/mobile/admin/workers", any(admin::workers))
         .route(

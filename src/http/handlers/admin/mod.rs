@@ -69,6 +69,7 @@ pub use system_users::{system_user_code_regenerate, system_user_detail, system_u
 pub use telegram::{
     invite as telegram_invite, settings as telegram_settings,
     qr_start as telegram_qr_start, qr_login as telegram_qr_login,
+    user as telegram_user,
 };
 pub use training::{
     training_apparatus_modes, training_completed_orders, training_input_batches,

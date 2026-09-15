@@ -133,6 +133,23 @@ impl TelegramStore {
         Ok(data.users.get(telegram_user_id).cloned())
     }
 
+    pub async fn delete_user_account(
+        &self,
+        telegram_user_id: &str,
+    ) -> Result<TelegramUserAccount, TelegramStoreError> {
+        let mut data = self.data.lock().await;
+        let mut updated = data.clone();
+        let user = updated
+            .users
+            .remove(telegram_user_id)
+            .ok_or(TelegramStoreError::UserNotFound)?;
+        updated.user_sessions.remove(telegram_user_id);
+        updated.order_drafts.remove(telegram_user_id);
+        self.persist(&updated).await?;
+        *data = updated;
+        Ok(user)
+    }
+
     pub async fn user_by_phone(
         &self,
         phone_number: &str,
@@ -210,9 +227,11 @@ impl TelegramStore {
         }
         let encrypted = encrypt_session(&session, &self.session_key()?)?;
         let mut updated = data.clone();
-        updated.user_sessions
+        updated
+            .user_sessions
             .insert(user.telegram_user_id.clone(), encrypted);
-        updated.users
+        updated
+            .users
             .insert(user.telegram_user_id.clone(), user.clone());
         self.persist(&updated).await?;
         *data = updated;

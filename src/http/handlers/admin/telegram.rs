@@ -115,7 +115,9 @@ pub async fn qr_start(
         return Err(method_not_allowed());
     }
     let input: TelegramInviteRequest = parse_json(&body)?;
-    state.telegram.qr_logins
+    state
+        .telegram
+        .qr_logins
         .start(qr_owner(&principal), input.role)
         .await
         .map(qr_response)
@@ -132,7 +134,12 @@ pub async fn qr_login(
     let principal = authorize_capability(&state, &headers, Capability::AdminSettingsManage).await?;
     let owner = qr_owner(&principal);
     if method == Method::DELETE {
-        state.telegram.qr_logins.cancel(&owner, &id).await.map_err(bad_request)?;
+        state
+            .telegram
+            .qr_logins
+            .cancel(&owner, &id)
+            .await
+            .map_err(bad_request)?;
         return Ok(qr_response(serde_json::json!({"cancelled": true})));
     }
     let password = match method {
@@ -150,15 +157,40 @@ pub async fn qr_login(
         }
         _ => return Err(method_not_allowed()),
     };
-    state.telegram.qr_logins
+    state
+        .telegram
+        .qr_logins
         .poll(&owner, &id, password)
         .await
         .map(qr_response)
         .map_err(bad_request)
 }
 
+pub async fn user(
+    State(state): State<AppState>,
+    Path(telegram_user_id): Path<String>,
+    method: Method,
+    headers: HeaderMap,
+) -> Result<Response, AdminError> {
+    authorize_capability(&state, &headers, Capability::AdminSettingsManage).await?;
+    if method != Method::DELETE {
+        return Err(method_not_allowed());
+    }
+    state
+        .telegram
+        .delete_user_account(&telegram_user_id)
+        .await
+        .map(|_| qr_response(serde_json::json!({ "deleted": true })))
+        .map_err(telegram_error)
+}
+
 fn qr_owner(principal: &Principal) -> String {
-    format!("{}:{}:{}", profile_role_key(&principal.role), principal.ref_, principal.phone)
+    format!(
+        "{}:{}:{}",
+        profile_role_key(&principal.role),
+        principal.ref_,
+        principal.phone
+    )
 }
 
 fn qr_response<T: Serialize>(value: T) -> Response {

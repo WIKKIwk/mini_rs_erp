@@ -89,7 +89,10 @@ async fn handle_update(
                 return Ok(());
             };
             if argument.is_empty()
-                && service.user_by_telegram_id(&user.id.to_string()).await?.is_none()
+                && service
+                    .user_by_telegram_id(&user.id.to_string())
+                    .await?
+                    .is_none()
             {
                 send_message(
                     service,

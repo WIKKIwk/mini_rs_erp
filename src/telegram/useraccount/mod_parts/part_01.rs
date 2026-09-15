@@ -262,8 +262,8 @@ impl TelegramUserAccountService {
                     pending.shutdown,
                 )
                 .await
-                .map(|_| ResendOutcome::Authorized)
             }
+                .map(|_| ResendOutcome::Authorized),
             Err(error) => {
                 // Flood bo'lsa ham pending saqlanadi: eski kod hali kelishi
                 // mumkin, user uni kiritib ko'ra oladi.
@@ -289,6 +289,17 @@ impl TelegramUserAccountService {
         if let Some(pending) = self.pending_logins.lock().await.remove(telegram_user_id) {
             pending.shutdown.cancel();
         }
+    }
+
+    pub(crate) async fn delete_account(
+        &self,
+        telegram_user_id: &str,
+    ) -> Result<TelegramUserAccount, UserAccountError> {
+        self.cancel_login(telegram_user_id).await;
+        self.store
+            .delete_user_account(telegram_user_id)
+            .await
+            .map_err(map_store)
     }
 
     pub(crate) async fn writable_groups(
