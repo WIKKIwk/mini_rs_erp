@@ -49,6 +49,7 @@ pub enum TelegramError {
 pub struct TelegramService {
     store: Arc<TelegramStore>,
     useraccount: TelegramUserAccountService,
+    pub(crate) qr_logins: super::useraccount::qr::QrLoginService,
     http: reqwest::Client,
     worker_started: Arc<AtomicBool>,
     order_catalog: Option<Arc<TelegramOrderCatalog>>,

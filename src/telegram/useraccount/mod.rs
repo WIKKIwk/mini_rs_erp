@@ -19,5 +19,7 @@ use crate::core::calculate_orders::CalculateOrderImage;
 use super::models::{TelegramDeliveryMode, TelegramUserGroup};
 use super::store::{TelegramStore, TelegramStoreError};
 
+pub(crate) mod qr;
+
 include!("mod_parts/part_01.rs");
 include!("mod_parts/part_02.rs");

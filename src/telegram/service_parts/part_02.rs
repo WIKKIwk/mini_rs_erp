@@ -4,6 +4,7 @@ impl TelegramService {
         let store = Arc::new(TelegramStore::new(path));
         Self {
             useraccount: TelegramUserAccountService::new(store.clone()),
+            qr_logins: super::useraccount::qr::QrLoginService::new(store.clone()),
             store,
             http: reqwest::Client::new(),
             worker_started: Arc::new(AtomicBool::new(false)),
@@ -142,6 +143,22 @@ impl TelegramService {
             )
             .await
             .map_err(map_store)
+    }
+
+    // Only Bot API updates may recognize an existing user without an invite.
+    // The public /telegram/start endpoint must still require the invite token.
+    pub(crate) async fn register_bot_start(
+        &self,
+        input: TelegramStartRequest,
+    ) -> Result<TelegramUserAccount, TelegramError> {
+        if !input.invite_token.trim().is_empty() {
+            return self.register_start(input).await;
+        }
+        self.store
+            .recognize_start(input.telegram_user_id.trim(), input.telegram_chat_id.trim())
+            .await
+            .map_err(map_store)?
+            .ok_or(TelegramError::InviteTokenRequired)
     }
 
     pub(crate) async fn connect_chat(&self, chat: TelegramChat) -> Result<(), TelegramError> {

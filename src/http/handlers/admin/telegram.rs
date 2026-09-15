@@ -103,3 +103,69 @@ fn telegram_error(error: TelegramError) -> AdminError {
         TelegramError::OrderCatalog(_) => server_error("telegram order catalog failed"),
     }
 }
+
+pub async fn qr_start(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AdminError> {
+    let principal = authorize_capability(&state, &headers, Capability::AdminSettingsManage).await?;
+    if method != Method::POST {
+        return Err(method_not_allowed());
+    }
+    let input: TelegramInviteRequest = parse_json(&body)?;
+    state.telegram.qr_logins
+        .start(qr_owner(&principal), input.role)
+        .await
+        .map(qr_response)
+        .map_err(bad_request)
+}
+
+pub async fn qr_login(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AdminError> {
+    let principal = authorize_capability(&state, &headers, Capability::AdminSettingsManage).await?;
+    let owner = qr_owner(&principal);
+    if method == Method::DELETE {
+        state.telegram.qr_logins.cancel(&owner, &id).await.map_err(bad_request)?;
+        return Ok(qr_response(serde_json::json!({"cancelled": true})));
+    }
+    let password = match method {
+        Method::GET => None,
+        Method::POST => {
+            #[derive(serde::Deserialize)]
+            struct PasswordInput {
+                password: String,
+            }
+            let input: PasswordInput = parse_json(&body)?;
+            if input.password.is_empty() || input.password.len() > 1024 {
+                return Err(bad_request("invalid_password"));
+            }
+            Some(input.password)
+        }
+        _ => return Err(method_not_allowed()),
+    };
+    state.telegram.qr_logins
+        .poll(&owner, &id, password)
+        .await
+        .map(qr_response)
+        .map_err(bad_request)
+}
+
+fn qr_owner(principal: &Principal) -> String {
+    format!("{}:{}:{}", profile_role_key(&principal.role), principal.ref_, principal.phone)
+}
+
+fn qr_response<T: Serialize>(value: T) -> Response {
+    let mut response = json_response(value);
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    response
+}

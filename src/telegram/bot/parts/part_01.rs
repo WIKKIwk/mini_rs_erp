@@ -88,7 +88,9 @@ async fn handle_update(
             let Some(user) = message.from.as_ref() else {
                 return Ok(());
             };
-            if argument.is_empty() {
+            if argument.is_empty()
+                && service.user_by_telegram_id(&user.id.to_string()).await?.is_none()
+            {
                 send_message(
                     service,
                     token,
@@ -100,7 +102,7 @@ async fn handle_update(
                 return Ok(());
             }
             let account = service
-                .register_start(TelegramStartRequest {
+                .register_bot_start(TelegramStartRequest {
                     invite_token: argument,
                     telegram_user_id: user.id.to_string(),
                     telegram_chat_id: chat_id.clone(),

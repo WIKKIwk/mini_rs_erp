@@ -197,6 +197,45 @@ impl TelegramStore {
         Ok(user)
     }
 
+    /// Only the authenticated MTProto identity may create a QR user. Never
+    /// overwrite an existing user's role/session when another QR is scanned.
+    pub(crate) async fn register_qr_user(
+        &self,
+        user: TelegramUserAccount,
+        session: String,
+    ) -> Result<Option<TelegramUserAccount>, TelegramStoreError> {
+        let mut data = self.data.lock().await;
+        if data.users.contains_key(&user.telegram_user_id) {
+            return Ok(None);
+        }
+        let encrypted = encrypt_session(&session, &self.session_key()?)?;
+        let mut updated = data.clone();
+        updated.user_sessions
+            .insert(user.telegram_user_id.clone(), encrypted);
+        updated.users
+            .insert(user.telegram_user_id.clone(), user.clone());
+        self.persist(&updated).await?;
+        *data = updated;
+        Ok(Some(user))
+    }
+
+    pub(crate) async fn recognize_start(
+        &self,
+        id: &str,
+        chat_id: &str,
+    ) -> Result<Option<TelegramUserAccount>, TelegramStoreError> {
+        let mut data = self.data.lock().await;
+        let mut updated = data.clone();
+        let Some(user) = updated.users.get_mut(id) else {
+            return Ok(None);
+        };
+        user.telegram_chat_id = chat_id.to_string();
+        let user = user.clone();
+        self.persist(&updated).await?;
+        *data = updated;
+        Ok(Some(user))
+    }
+
     pub async fn complete_user_profile_login(
         &self,
         telegram_user_id: &str,

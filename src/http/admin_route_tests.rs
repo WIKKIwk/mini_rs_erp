@@ -96,6 +96,7 @@ mod run_capabilities;
 mod suppliers_customers;
 mod system_monitor;
 mod users_settings;
+mod telegram_qr;
 mod warehouses_groups;
 mod werka_paddon_receipt;
 mod workers;
