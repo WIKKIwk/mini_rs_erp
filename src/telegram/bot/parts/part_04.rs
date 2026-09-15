@@ -192,6 +192,18 @@ fn role_guide_keyboard(role: TelegramAccountRole) -> Option<serde_json::Value> {
     (role == TelegramAccountRole::SalesManager).then(delivery_mode_keyboard)
 }
 
+fn account_guide_keyboard(account: &TelegramUserAccount) -> Option<serde_json::Value> {
+    if !account.user_profile_connected {
+        return role_guide_keyboard(account.role);
+    }
+    Some(serde_json::json!({
+        "inline_keyboard": [[{
+            "text": "👥 Guruh tanlash",
+            "callback_data": "user_groups"
+        }]]
+    }))
+}
+
 fn delivery_mode_keyboard() -> serde_json::Value {
     serde_json::json!({
         "inline_keyboard": [

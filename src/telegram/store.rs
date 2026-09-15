@@ -350,6 +350,7 @@ impl TelegramStore {
         user.selected_chat_id = Some(group.chat_id);
         user.selected_chat_title = Some(group.title);
         user.selected_chat_type = Some(group.chat_type);
+        user.delivery_mode = TelegramDeliveryMode::UserProfile;
         let user = user.clone();
         self.persist(&data).await?;
         Ok(user)

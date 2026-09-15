@@ -12,7 +12,7 @@ use crate::core::production_map::ProductionMapDefinition;
 
 use super::models::{
     TelegramAccountRole, TelegramChat, TelegramDeliveryMode, TelegramStartRequest,
-    TelegramUserGroup,
+    TelegramUserAccount, TelegramUserGroup,
 };
 use super::order::{TelegramOrderDraft, TelegramOrderLayer, TelegramOrderStep, order_caption};
 use super::service::{TelegramError, TelegramService};
@@ -251,3 +251,6 @@ include!("parts/part_05.rs");
 include!("parts/part_06.rs");
 include!("parts/part_07.rs");
 include!("inline_tests.rs");
+
+#[cfg(test)]
+mod user_profile_tests;

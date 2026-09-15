@@ -128,6 +128,8 @@ async fn handle_private_text(
     let command = parsed_command.as_ref().map(|(command, _)| command.as_str());
 
     match command {
+        // /start must reach account recognition even while an order draft exists.
+        Some("start") => return Ok(false),
         Some("new_order") if account.role == TelegramAccountRole::SalesManager => {
             start_new_order(service, token, &telegram_user_id, &chat_id).await?;
             return Ok(true);

@@ -176,6 +176,9 @@ async fn handle_callback_query(
             )
             .await?;
         }
+        "user_groups" => {
+            send_user_group_picker(service, token, &chat_id, &telegram_user_id).await?;
+        }
         "delivery:user" => {
             let account = service
                 .set_delivery_mode(&telegram_user_id, TelegramDeliveryMode::UserProfile)

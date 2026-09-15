@@ -115,14 +115,14 @@ async fn handle_update(
                 .await;
             match account {
                 Ok(account) => {
-                    let text = role_guide(account.role);
+                    let text = account_guide(&account);
                     send_message_with_markup(
                         service,
                         token,
                         &chat_id,
                         &text,
                         None,
-                        role_guide_keyboard(account.role),
+                        account_guide_keyboard(&account),
                     )
                     .await?;
                 }
@@ -136,7 +136,11 @@ async fn handle_update(
             let text = match message.from.as_ref() {
                 Some(user) => match service.user_by_telegram_id(&user.id.to_string()).await? {
                     Some(account) => {
-                        let text = role_guide(account.role);
+                        let text = if is_private {
+                            account_guide(&account)
+                        } else {
+                            role_guide(account.role)
+                        };
                         send_message_with_markup(
                             service,
                             token,
@@ -144,7 +148,7 @@ async fn handle_update(
                             &text,
                             message.message_thread_id,
                             if is_private {
-                                role_guide_keyboard(account.role)
+                                account_guide_keyboard(&account)
                             } else {
                                 None
                             },

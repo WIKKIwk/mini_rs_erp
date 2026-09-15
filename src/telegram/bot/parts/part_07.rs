@@ -114,6 +114,29 @@ fn general_guide() -> &'static str {
 /connect — bot turgan guruhni orderlar uchun ulash; bu command guruh ichida yuboriladi."#
 }
 
+fn account_guide(account: &TelegramUserAccount) -> String {
+    if !account.user_profile_connected {
+        return role_guide(account.role);
+    }
+    let group = match account
+        .selected_chat_title
+        .as_deref()
+        .filter(|title| !title.trim().is_empty())
+    {
+        Some(title) => format!("Tanlangan guruh: «{title}»."),
+        None => "Hali guruh tanlanmagan.".to_string(),
+    };
+    let order_command = if account.role == TelegramAccountRole::SalesManager {
+        "\n/new_order — yangi order yaratish.\n/bot_mode — bot orqali yuborishga o‘tish."
+    } else {
+        ""
+    };
+    format!(
+        "✅ Siz User profile orqali login qilgansiz.\nSizning rolingiz: {}\nHozirgi yuborish usuli: {}.\n\n{}\n/groups yuboring yoki pastdagi «Guruh tanlash» tugmasini bosing. Tanlangan guruhga orderlar userbot orqali yuboriladi.{}\n/help — qo‘llanmani ko‘rsatish.",
+        account.role.label(), account.delivery_mode.label(), group, order_command,
+    )
+}
+
 fn role_guide(role: TelegramAccountRole) -> String {
     let role_label = role.label();
     let role_details = match role {
