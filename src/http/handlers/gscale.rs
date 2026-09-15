@@ -74,8 +74,16 @@ async fn gscale_items_for_principal(
     let limit = positive_int(query.limit.as_deref(), 50).min(200);
     let offset = optional_offset(query.offset.as_deref());
     if principal.role == PrincipalRole::TayyorlovMasteri {
-        return gscale_items_for_tayyorlov(&state, &principal, group, search, limit, offset)
-            .await;
+        return gscale_items_for_tayyorlov(
+            &state,
+            &principal,
+            group,
+            search,
+            limit,
+            offset,
+            query.order_id.as_deref().unwrap_or_default(),
+        )
+        .await;
     }
     if principal.role != PrincipalRole::MaterialTaminotchi {
         return state
@@ -127,8 +135,9 @@ async fn gscale_items_for_tayyorlov(
     search: &str,
     limit: usize,
     offset: usize,
+    order_id: &str,
 ) -> Result<Vec<SupplierItem>, AdminPortError> {
-    let materials = match state.preparation.as_ref() {
+    let mut materials = match state.preparation.as_ref() {
         Some(store) => store
             .assigned_material_names(&principal.ref_)
             .await
@@ -137,6 +146,20 @@ async fn gscale_items_for_tayyorlov(
     };
     if materials.is_empty() {
         return Ok(Vec::new());
+    }
+    if !order_id.trim().is_empty() {
+        let order_scope = match state.preparation.as_ref() {
+            Some(store) => store
+                .order_materials(order_id)
+                .await
+                .map_err(|_| AdminPortError::LookupFailed)?,
+            None => return Ok(Vec::new()),
+        };
+        let order_material_ids = order_material_ids(&order_scope);
+        materials.retain(|(material_id, _)| order_material_ids.contains(material_id));
+        if materials.is_empty() {
+            return Ok(Vec::new());
+        }
     }
     let items = state
         .admin
@@ -157,6 +180,18 @@ async fn gscale_items_for_tayyorlov(
             .then_with(|| a.code.to_lowercase().cmp(&b.code.to_lowercase()))
     });
     Ok(out.into_iter().skip(offset).take(limit).collect())
+}
+
+fn order_material_ids(order_scope: &serde_json::Value) -> std::collections::BTreeSet<String> {
+    order_scope
+        .get("materials")
+        .and_then(|value| value.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|material| material.get("material_id")?.as_str())
+        .map(|material_id| material_id.trim().to_lowercase())
+        .filter(|material_id| !material_id.is_empty())
+        .collect()
 }
 
 fn material_item_matches_family(
@@ -419,6 +454,7 @@ pub struct GscaleItemsQuery {
     pub group: Option<String>,
     pub limit: Option<String>,
     pub offset: Option<String>,
+    pub order_id: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -426,7 +462,26 @@ fn _keeps_error_response_compatible(_response: ErrorResponse) {}
 
 #[cfg(test)]
 mod tests {
-    use super::material_item_matches_family;
+    use super::{material_item_matches_family, order_material_ids};
+
+    #[test]
+    fn tayyorlov_order_scope_intersects_assigned_materials() {
+        let order_scope = serde_json::json!({
+            "materials": [{"material_id": "calculate:material:opp"}]
+        });
+        let order_material_ids = order_material_ids(&order_scope);
+        let assigned = [
+            "calculate:material:bopp".to_string(),
+            "calculate:material:opp".to_string(),
+        ];
+
+        let visible = assigned
+            .into_iter()
+            .filter(|material_id| order_material_ids.contains(material_id))
+            .collect::<Vec<_>>();
+
+        assert_eq!(visible, ["calculate:material:opp"]);
+    }
 
     #[test]
     fn tayyorlov_material_scope_keeps_exact_and_dimension_variants() {
