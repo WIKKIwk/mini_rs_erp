@@ -46,6 +46,14 @@ mod tests {
             assert_eq!(super::parse_diameter(value), None, "{value}");
         }
     }
+
+    #[test]
+    fn roll_count_is_a_positive_integer() {
+        assert_eq!(super::parse_roll_count(" 6 "), Some(6));
+        for value in ["", "0", "-1", "1.5", "2,0", "NaN", "abc"] {
+            assert_eq!(super::parse_roll_count(value), None, "{value}");
+        }
+    }
     use super::{
         InlineLoginInput, TelegramMessage, TelegramOrderNotification, is_login_code,
         number_or_dash, order_media_from_message, parse_command, parse_inline_login_input,

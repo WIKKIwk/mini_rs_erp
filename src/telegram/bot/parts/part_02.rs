@@ -319,6 +319,18 @@ async fn handle_private_media(
         .await?;
         return Ok(());
     }
+    if draft.roll_count.is_none() {
+        draft.step = TelegramOrderStep::ValCount;
+        service.save_order_draft(&telegram_user_id, draft).await?;
+        send_order_text(
+            service,
+            token,
+            &chat_id,
+            "Val sonini kiriting (musbat butun son):",
+        )
+        .await?;
+        return Ok(());
+    }
     let Some(media) = order_media_from_message(message) else {
         send_order_text(
             service,

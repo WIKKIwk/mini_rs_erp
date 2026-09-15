@@ -201,6 +201,28 @@ async fn handle_order_text(
                 return Ok(true);
             };
             draft.diameter_mm = Some(diameter);
+            draft.step = TelegramOrderStep::ValCount;
+            service.save_order_draft(telegram_user_id, draft).await?;
+            send_order_text(
+                service,
+                token,
+                chat_id,
+                "Val sonini kiriting (musbat butun son):",
+            )
+            .await?;
+        }
+        TelegramOrderStep::ValCount => {
+            let Some(roll_count) = parse_roll_count(value) else {
+                send_order_text(
+                    service,
+                    token,
+                    chat_id,
+                    "Val soni musbat butun son bo‘lishi kerak (masalan: 6).",
+                )
+                .await?;
+                return Ok(true);
+            };
+            draft.roll_count = Some(roll_count);
             let order_number = if draft.order_number.trim().is_empty() {
                 catalog
                     .next_order_number()

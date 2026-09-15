@@ -24,6 +24,7 @@ pub(crate) enum TelegramOrderStep {
     FrameSize,
     FrameCount,
     Diameter,
+    ValCount,
     Attachment,
 }
 
@@ -44,6 +45,7 @@ pub(crate) struct TelegramOrderDraft {
     pub frame_product_size_mm: Option<f64>,
     pub frame_count: Option<f64>,
     pub diameter_mm: Option<f64>,
+    pub roll_count: Option<i64>,
     pub step: TelegramOrderStep,
 }
 
@@ -134,13 +136,18 @@ pub(crate) fn order_caption(
         .diameter_mm
         .map(format_number)
         .unwrap_or_else(|| "—".to_string());
+    let color = draft
+        .roll_count
+        .filter(|value| *value > 0)
+        .map(|value| format!("{value} xil"))
+        .unwrap_or_else(|| "—".to_string());
     format!(
         "Buyurtma raqami: №T{} {}\n\
 Mijoz: {}\n\
 Mahsulot: {}\n\
 Holat: {}\n\n\
 1. Material: {}\n\
-2. Rang: —\n\
+2. Rang: {}\n\
 3. Tiraj: {} kg\n\
 4. Menedjer: {}\n\
 5. Diametr: {} mm",
@@ -150,6 +157,7 @@ Holat: {}\n\n\
         dash(&draft.product_name),
         dash(&draft.status),
         material,
+        color,
         tiraj,
         manager,
         diameter,
@@ -219,11 +227,13 @@ mod tests {
             frame_product_size_mm: Some(300.0),
             frame_count: Some(2.0),
             diameter_mm: Some(45.5),
+            roll_count: Some(6),
             ..TelegramOrderDraft::default()
         };
         let caption = order_caption("2730", &draft, "Valiyev Abdulloh");
         assert!(caption.contains("№T2730"));
         assert!(caption.contains("1. Material: PET 12"));
+        assert!(caption.contains("2. Rang: 6 xil"));
         assert!(caption.contains("3. Tiraj: 1000 kg"));
         assert!(caption.contains("4. Menedjer: Valiyev Abdulloh"));
         assert!(caption.contains("5. Diametr: 45.5 mm"));

@@ -197,6 +197,11 @@ fn parse_diameter(value: &str) -> Option<f64> {
     (diameter.is_finite() && diameter > 0.0).then_some(diameter)
 }
 
+fn parse_roll_count(value: &str) -> Option<i64> {
+    let roll_count = value.trim().parse::<i64>().ok()?;
+    (roll_count > 0).then_some(roll_count)
+}
+
 async fn get_telegram_file(
     service: &TelegramService,
     token: &str,
