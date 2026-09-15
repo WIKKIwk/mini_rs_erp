@@ -22,6 +22,9 @@ const AVAILABLE_STOCK: &str = "s.status = 'available' AND s.reserved_order_id = 
         WHERE p.asset_kind = 'raw_material' AND lower(p.asset_ref) = lower(s.id)
           AND (l.kind <> 'warehouse' OR w.name IS NULL OR lower(w.name) <> lower(s.warehouse)))";
 
+const PREPARATION_ITEM_GROUP: &str = "Tayyorlov homashyolari";
+const PREPARATION_MATERIAL_CHILD_GROUP: &str = "seriyo";
+
 #[derive(Clone)]
 pub struct PostgresPreparationStore {
     pool: PgPool,
@@ -211,21 +214,24 @@ impl PostgresPreparationStore {
         if duplicate {
             return Err(PreparationError::Conflict("Bunday homashyo nomi mavjud"));
         }
+        let item_group = preparation_material_group(&mut tx).await?;
         let id = new_id();
         let code = format!("PREP-{id}");
         sqlx::query(
             "INSERT INTO mini_items (code, name, uom, item_group, payload_json)
-             VALUES ($1, $2, 'kg', 'Tayyorlov homashyolari', $3)",
+             VALUES ($1, $2, 'kg', $3, $4)",
         )
         .bind(&code)
         .bind(&name)
-        .bind(json!({"source": "preparation", "owner_ref": actor.ref_}))
+        .bind(&item_group)
+        .bind(json!({"source": "preparation", "owner_ref": actor.ref_,
+            "item_group": item_group}))
         .execute(&mut *tx)
         .await?;
         sqlx::query("INSERT INTO mini_preparation_materials(item_code, owner_ref, name_key) VALUES ($1,$2,lower($3))")
             .bind(&code).bind(&actor.ref_).bind(&name).execute(&mut *tx).await?;
         let result = json!({"id": id, "kind": "material", "warehouse": warehouse,
-            "item_code": code, "name": name});
+            "item_group": item_group, "item_code": code, "name": name});
         record(
             &mut tx,
             &id,
@@ -907,6 +913,69 @@ async fn exclusive_warehouse(
     .fetch_optional(&mut **tx)
     .await?
     .ok_or(PreparationError::WarehouseNotExclusive)
+}
+
+async fn preparation_material_group(
+    tx: &mut Transaction<'_, Postgres>,
+) -> Result<String, PreparationError> {
+    // The group is shared by all Tayyorlov masters. Serialize the ensure path
+    // so two first-time material creations cannot race on the same group.
+    sqlx::query(
+        "SELECT pg_advisory_xact_lock(
+             hashtextextended('preparation:seriyo-material-group', 0)
+         )",
+    )
+    .execute(&mut **tx)
+    .await?;
+
+    if let Some((name, parent, is_group)) = sqlx::query_as::<_, (String, String, bool)>(
+        "SELECT name, COALESCE(parent_item_group, ''), is_group
+         FROM mini_item_groups
+         WHERE lower(name) = lower($1)
+         ORDER BY (name = $1) DESC, name
+         LIMIT 1
+         FOR UPDATE",
+    )
+    .bind(PREPARATION_MATERIAL_CHILD_GROUP)
+    .fetch_optional(&mut **tx)
+    .await?
+    {
+        if !is_group || !parent.eq_ignore_ascii_case(PREPARATION_ITEM_GROUP) {
+            return Err(PreparationError::Conflict(
+                "Seriyo guruhi Tayyorlov homashyolari ostida emas",
+            ));
+        }
+        return Ok(name);
+    }
+
+    let parent = sqlx::query_scalar::<_, String>(
+        "SELECT name FROM mini_item_groups
+         WHERE lower(name) = lower($1) AND is_group
+         ORDER BY (name = $1) DESC, name
+         LIMIT 1
+         FOR SHARE",
+    )
+    .bind(PREPARATION_ITEM_GROUP)
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or(PreparationError::StoreFailed)?;
+    let name = sqlx::query_scalar::<_, String>(
+        "INSERT INTO mini_item_groups
+             (name, parent_item_group, is_group, payload_json, updated_at)
+         VALUES ($1, $2, TRUE,
+             jsonb_build_object(
+                 'name', $1,
+                 'item_group_name', $1,
+                 'parent_item_group', $2,
+                 'is_group', TRUE
+             ), now())
+         RETURNING name",
+    )
+    .bind(PREPARATION_MATERIAL_CHILD_GROUP)
+    .bind(parent)
+    .fetch_one(&mut **tx)
+    .await?;
+    Ok(name)
 }
 
 async fn material_name(

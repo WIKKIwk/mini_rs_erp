@@ -122,6 +122,29 @@ async fn preparation_postgres_partial_fifo_atomic_retry_concurrency_and_scope() 
         .create_material(&actor, material_input.clone())
         .await
         .unwrap();
+    assert_eq!(material["item_group"], "seriyo");
+    assert_eq!(
+        sqlx::query_as::<_, (String, String, bool)>(
+            "SELECT name, parent_item_group, is_group
+             FROM mini_item_groups WHERE lower(name) = 'seriyo'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        (
+            "seriyo".to_string(),
+            "Tayyorlov homashyolari".to_string(),
+            true,
+        )
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, String>("SELECT item_group FROM mini_items WHERE code = $1",)
+            .bind(material["item_code"].as_str().unwrap())
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        "seriyo"
+    );
     assert_eq!(
         material,
         store.create_material(&actor, material_input).await.unwrap()
@@ -435,6 +458,7 @@ async fn preparation_formula_material_scope_and_order_materials() {
         )
         .await
         .unwrap();
+    assert_eq!(material["item_group"], "seriyo");
     let code = material["item_code"].as_str().unwrap().to_string();
     let formula_input = |material_id: &str| FormulaUpsert {
         product_code: "PC-1".into(),
