@@ -116,6 +116,7 @@ async fn preparation_postgres_partial_fifo_atomic_retry_concurrency_and_scope() 
     let material_input = MaterialCreate {
         request_id: "material-001".into(),
         name: "Kley".into(),
+        warehouse: "Preparation W".into(),
     };
     let material = store
         .create_material(&actor, material_input.clone())
@@ -132,7 +133,8 @@ async fn preparation_postgres_partial_fifo_atomic_retry_concurrency_and_scope() 
                 &actor,
                 MaterialCreate {
                     request_id: "material-002".into(),
-                    name: " kley ".into()
+                    name: " kley ".into(),
+                    warehouse: "Preparation W".into(),
                 }
             )
             .await,
@@ -234,20 +236,6 @@ async fn preparation_postgres_partial_fifo_atomic_retry_concurrency_and_scope() 
         store.receive(&other, receipt.clone()).await,
         Err(PreparationError::Forbidden)
     ));
-    assert!(matches!(
-        store
-            .receive(
-                &actor,
-                ReceiptCreate {
-                    request_id: "receipt-other-w".into(),
-                    warehouse: "Other W".into(),
-                    ..receipt.clone()
-                }
-            )
-            .await,
-        Err(PreparationError::Forbidden)
-    ));
-
     // Roll back an earlier line's stock update and event when a later line fails.
     let second = store
         .create_material(
@@ -255,6 +243,7 @@ async fn preparation_postgres_partial_fifo_atomic_retry_concurrency_and_scope() 
             MaterialCreate {
                 request_id: "material-other".into(),
                 name: "Solvent".into(),
+                warehouse: "Preparation W".into(),
             },
         )
         .await
@@ -361,6 +350,18 @@ async fn preparation_postgres_partial_fifo_atomic_retry_concurrency_and_scope() 
             .await
             .is_err()
     );
+    let other_warehouse_receipt = store
+        .receive(
+            &actor,
+            ReceiptCreate {
+                request_id: "receipt-other-w".into(),
+                warehouse: "Other W".into(),
+                ..receipt.clone()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(other_warehouse_receipt["warehouse"], "Other W");
     pool.close().await;
     sqlx::query(&format!("DROP DATABASE {db}"))
         .execute(&admin)
@@ -387,6 +388,9 @@ async fn preparation_formula_material_scope_and_order_materials() {
     apply_foundation_migration(&pool).await.unwrap();
     sqlx::raw_sql("INSERT INTO mini_system_users(id,role,name,phone) VALUES
             ('prep-1','tayyorlov_masteri','Master','901234567');
+        INSERT INTO mini_warehouses(id,name) VALUES ('prep-w','Preparation W');
+        INSERT INTO mini_warehouse_assignments(assignment_kind,warehouse,warehouse_name,principal_role,principal_ref)
+            VALUES ('warehouse','Preparation W','Preparation W','tayyorlov_masteri','prep-1');
         INSERT INTO mini_calculate_materials(id,lower_name,payload_json) VALUES
             ('test-mat','testmat','{\"id\":\"test-mat\",\"name\":\"TestMat\",\"active\":true}'),
             ('other-mat','othermat','{\"id\":\"other-mat\",\"name\":\"OtherMat\",\"active\":true}');
@@ -426,6 +430,7 @@ async fn preparation_formula_material_scope_and_order_materials() {
             MaterialCreate {
                 request_id: "material-f1".into(),
                 name: "Kley".into(),
+                warehouse: "Preparation W".into(),
             },
         )
         .await
@@ -500,7 +505,8 @@ async fn preparation_child_warehouse_receipt_lands_in_child() {
             ('prep-1','tayyorlov_masteri','Master','901234567');
         INSERT INTO mini_warehouses(id,name) VALUES ('prep-w','Preparation W');
         INSERT INTO mini_warehouse_assignments(assignment_kind,warehouse,warehouse_name,principal_role,principal_ref)
-            VALUES ('warehouse','Preparation W','Preparation W','tayyorlov_masteri','prep-1');")
+            VALUES ('warehouse','Preparation W','Preparation W','tayyorlov_masteri','prep-1'),
+                   ('warehouse','Preparation W','Preparation W','material_taminotchi','mt-1');")
         .execute(&pool).await.unwrap();
     let actor = Principal {
         role: PrincipalRole::TayyorlovMasteri,
@@ -513,31 +519,59 @@ async fn preparation_child_warehouse_receipt_lands_in_child() {
     let store = PostgresPreparationStore::new(pool.clone());
     // Ota ombor o'zimizniki — tasdiqlanadi; begona ombor — Forbidden.
     assert_eq!(
-        store.owned_warehouse_name("prep-1", "Preparation W").await.unwrap(),
+        store
+            .owned_warehouse_name("prep-1", "Preparation W")
+            .await
+            .unwrap(),
         "Preparation W"
     );
     assert!(matches!(
         store.owned_warehouse_name("prep-1", "Other W").await,
         Err(PreparationError::Forbidden)
     ));
-    assert!(!store.warehouse_name_exists("Preparation W-1").await.unwrap());
+    assert!(
+        !store
+            .warehouse_name_exists("Preparation W-1")
+            .await
+            .unwrap()
+    );
     // Handler shared service lar orqali yaratadigan qatorlar.
     sqlx::raw_sql("INSERT INTO mini_warehouses(id,name,parent_warehouse) VALUES
             ('warehouse:preparation w-1','Preparation W-1','Preparation W');
         INSERT INTO mini_warehouse_assignments(assignment_kind,warehouse,warehouse_name,principal_role,principal_ref)
             VALUES ('warehouse','Preparation W-1','Preparation W-1','tayyorlov_masteri','prep-1');")
         .execute(&pool).await.unwrap();
-    assert!(store.warehouse_name_exists("preparation w-1").await.unwrap());
+    assert!(
+        store
+            .warehouse_name_exists("preparation w-1")
+            .await
+            .unwrap()
+    );
+    assert!(matches!(
+        store
+            .create_material(
+                &actor,
+                MaterialCreate {
+                    request_id: "material-shared-parent".into(),
+                    name: "Parent material".into(),
+                    warehouse: "Preparation W".into(),
+                },
+            )
+            .await,
+        Err(PreparationError::WarehouseNotExclusive)
+    ));
     let material = store
         .create_material(
             &actor,
             MaterialCreate {
                 request_id: "material-child".into(),
                 name: "Kley".into(),
+                warehouse: "Preparation W-1".into(),
             },
         )
         .await
         .unwrap();
+    assert_eq!(material["warehouse"], "Preparation W-1");
     let code = material["item_code"].as_str().unwrap().to_string();
     // Kirim bola omborga yoziladi va snapshot da shu omborda ko'rinadi.
     let receipt = store
@@ -561,6 +595,14 @@ async fn preparation_child_warehouse_receipt_lands_in_child() {
             .iter()
             .any(|w| w == "Preparation W-1")
     );
+    assert!(
+        snapshot["assigned_warehouses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w == "Preparation W")
+    );
+    assert_eq!(snapshot["material_warehouses"], json!(["Preparation W-1"]));
     let material_snapshot = snapshot["materials"]
         .as_array()
         .unwrap()
@@ -571,6 +613,19 @@ async fn preparation_child_warehouse_receipt_lands_in_child() {
         material_snapshot["balances"],
         json!([{"warehouse": "Preparation W-1", "kg": "25.000000"}])
     );
+    let shared_receipt = store
+        .receive(
+            &actor,
+            ReceiptCreate {
+                request_id: "receipt-shared-parent".into(),
+                item_code: code,
+                warehouse: "Preparation W".into(),
+                kg: "5".into(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(shared_receipt["warehouse"], "Preparation W");
     pool.close().await;
     sqlx::query(&format!("DROP DATABASE {db}"))
         .execute(&admin)

@@ -14,6 +14,8 @@ pub enum PreparationError {
     Conflict(&'static str),
     #[error("Ombor yoki homashyo sizga biriktirilmagan")]
     Forbidden,
+    #[error("Bu omborga yangi homashyo ulash huquqi yo‘q")]
+    WarehouseNotExclusive,
     #[error("Homashyo qoldig‘i yetarli emas")]
     Insufficient,
     #[error("Tayyorlov ma’lumotlarini saqlashda xatolik")]
@@ -69,6 +71,7 @@ pub fn required_kg(order: i64, percent: i64) -> Result<i64, PreparationError> {
 pub struct MaterialCreate {
     pub request_id: String,
     pub name: String,
+    pub warehouse: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

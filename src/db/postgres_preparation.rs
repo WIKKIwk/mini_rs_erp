@@ -37,11 +37,41 @@ impl PostgresPreparationStore {
         sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
             .execute(&mut *tx)
             .await?;
+        // Receipt destination is deliberately broader than the master's own
+        // warehouses: an existing preparation material may be received into
+        // any real warehouse.  The stricter list below is used only for
+        // creating a new material in the selected warehouse.
         let warehouses: Vec<String> = sqlx::query_scalar(
+            "SELECT name FROM mini_warehouses
+             WHERE NOT is_group ORDER BY name",
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        let assigned_warehouses: Vec<String> = sqlx::query_scalar(
             "SELECT DISTINCT w.name FROM mini_warehouses w
              JOIN mini_warehouse_assignments a ON lower(a.warehouse_name) = lower(w.name)
              WHERE a.assignment_kind = 'warehouse' AND a.principal_role = 'tayyorlov_masteri'
                AND a.principal_ref = $1 AND NOT w.is_group ORDER BY w.name",
+        )
+        .bind(owner)
+        .fetch_all(&mut *tx)
+        .await?;
+        let material_warehouses: Vec<String> = sqlx::query_scalar(
+            "SELECT DISTINCT w.name FROM mini_warehouses w
+             JOIN mini_warehouse_assignments mine
+               ON lower(mine.warehouse_name) = lower(w.name)
+             WHERE mine.assignment_kind = 'warehouse'
+               AND mine.principal_role = 'tayyorlov_masteri'
+               AND mine.principal_ref = $1
+               AND NOT w.is_group
+               AND NOT EXISTS (
+                   SELECT 1 FROM mini_warehouse_assignments other
+                   WHERE other.assignment_kind = 'warehouse'
+                     AND lower(other.warehouse_name) = lower(w.name)
+                     AND (other.principal_role <> 'tayyorlov_masteri'
+                          OR other.principal_ref <> $1)
+               )
+             ORDER BY w.name",
         )
         .bind(owner)
         .fetch_all(&mut *tx)
@@ -150,7 +180,9 @@ impl PostgresPreparationStore {
         .await?;
         tx.commit().await?;
         Ok(
-            json!({"warehouses": warehouses, "materials": materials, "orders": orders, "history": history, "responsibilities": responsibilities}),
+            json!({"warehouses": warehouses, "assigned_warehouses": assigned_warehouses,
+                "material_warehouses": material_warehouses, "materials": materials,
+                "orders": orders, "history": history, "responsibilities": responsibilities}),
         )
     }
 
@@ -165,11 +197,15 @@ impl PostgresPreparationStore {
                 "Homashyo nomi 1–160 ta belgidan iborat bo‘lishi kerak",
             ));
         }
+        if input.warehouse.trim().is_empty() {
+            return Err(PreparationError::Invalid("Ombor tanlanmagan"));
+        }
         let request = json!({"kind": "material", "input": &input});
         let mut tx = self.begin(&actor.ref_, &input.request_id).await?;
         if let Some(result) = replay(&mut tx, &actor.ref_, &input.request_id, &request).await? {
             return Ok(result);
         }
+        let warehouse = exclusive_warehouse(&mut tx, &actor.ref_, &input.warehouse).await?;
         let duplicate: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM mini_preparation_materials WHERE owner_ref = $1 AND name_key = lower($2))")
             .bind(&actor.ref_).bind(&name).fetch_one(&mut *tx).await?;
         if duplicate {
@@ -188,7 +224,8 @@ impl PostgresPreparationStore {
         .await?;
         sqlx::query("INSERT INTO mini_preparation_materials(item_code, owner_ref, name_key) VALUES ($1,$2,lower($3))")
             .bind(&code).bind(&actor.ref_).bind(&name).execute(&mut *tx).await?;
-        let result = json!({"id": id, "kind": "material", "item_code": code, "name": name});
+        let result = json!({"id": id, "kind": "material", "warehouse": warehouse,
+            "item_code": code, "name": name});
         record(
             &mut tx,
             &id,
@@ -215,7 +252,7 @@ impl PostgresPreparationStore {
         if let Some(result) = replay(&mut tx, &actor.ref_, &input.request_id, &request).await? {
             return Ok(result);
         }
-        let warehouse = warehouse(&mut tx, &actor.ref_, &input.warehouse).await?;
+        let warehouse = receipt_warehouse(&mut tx, &input.warehouse).await?;
         let name = material_name(&mut tx, &actor.ref_, &input.item_code).await?;
         let id = new_id();
         let stock_id = format!("raw:prep:{id}");
@@ -282,7 +319,7 @@ impl PostgresPreparationStore {
         if let Some(result) = replay(&mut tx, &actor.ref_, &input.request_id, &request).await? {
             return Ok(result);
         }
-        let warehouse = warehouse(&mut tx, &actor.ref_, &input.warehouse).await?;
+        let warehouse = assigned_warehouse(&mut tx, &actor.ref_, &input.warehouse).await?;
         let order = sqlx::query(
             "SELECT code, title, lifecycle_status,
                 round((map_json->>'order_kg')::numeric, 6)::text AS kg
@@ -651,7 +688,7 @@ impl PostgresPreparationStore {
         name: &str,
     ) -> Result<String, PreparationError> {
         let mut tx = self.pool.begin().await?;
-        let canonical = warehouse(&mut tx, owner, name).await?;
+        let canonical = assigned_warehouse(&mut tx, owner, name).await?;
         tx.rollback().await?;
         Ok(canonical)
     }
@@ -810,7 +847,21 @@ async fn replay(
     }
 }
 
-async fn warehouse(
+async fn receipt_warehouse(
+    tx: &mut Transaction<'_, Postgres>,
+    name: &str,
+) -> Result<String, PreparationError> {
+    sqlx::query_scalar(
+        "SELECT w.name FROM mini_warehouses w
+         WHERE lower(w.name) = lower($1) AND NOT w.is_group FOR SHARE OF w",
+    )
+    .bind(name.trim())
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or(PreparationError::Forbidden)
+}
+
+async fn assigned_warehouse(
     tx: &mut Transaction<'_, Postgres>,
     owner: &str,
     name: &str,
@@ -826,6 +877,36 @@ async fn warehouse(
     .fetch_optional(&mut **tx)
     .await?
     .ok_or(PreparationError::Forbidden)
+}
+
+async fn exclusive_warehouse(
+    tx: &mut Transaction<'_, Postgres>,
+    owner: &str,
+    name: &str,
+) -> Result<String, PreparationError> {
+    sqlx::query_scalar(
+        "SELECT w.name FROM mini_warehouses w
+         JOIN mini_warehouse_assignments mine
+           ON lower(mine.warehouse_name) = lower(w.name)
+         WHERE mine.assignment_kind = 'warehouse'
+           AND mine.principal_role = 'tayyorlov_masteri'
+           AND mine.principal_ref = $1
+           AND lower(w.name) = lower($2)
+           AND NOT w.is_group
+           AND NOT EXISTS (
+               SELECT 1 FROM mini_warehouse_assignments other
+               WHERE other.assignment_kind = 'warehouse'
+                 AND lower(other.warehouse_name) = lower(w.name)
+                 AND (other.principal_role <> 'tayyorlov_masteri'
+                      OR other.principal_ref <> $1)
+           )
+         FOR SHARE OF w, mine",
+    )
+    .bind(owner)
+    .bind(name.trim())
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or(PreparationError::WarehouseNotExclusive)
 }
 
 async fn material_name(

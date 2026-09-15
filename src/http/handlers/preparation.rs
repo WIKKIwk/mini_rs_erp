@@ -68,13 +68,16 @@ fn error(error: PreparationError) -> ApiError {
         PreparationError::Invalid(_) => "preparation_invalid",
         PreparationError::Conflict(_) => "preparation_conflict",
         PreparationError::Forbidden => "preparation_scope",
+        PreparationError::WarehouseNotExclusive => "preparation_warehouse_not_exclusive",
         PreparationError::Insufficient => "preparation_insufficient_stock",
         PreparationError::StoreFailed => "preparation_store",
     };
     let status = match &error {
         PreparationError::Invalid(_) => StatusCode::BAD_REQUEST,
         PreparationError::Conflict(_) | PreparationError::Insufficient => StatusCode::CONFLICT,
-        PreparationError::Forbidden => StatusCode::FORBIDDEN,
+        PreparationError::Forbidden | PreparationError::WarehouseNotExclusive => {
+            StatusCode::FORBIDDEN
+        }
         PreparationError::StoreFailed => StatusCode::INTERNAL_SERVER_ERROR,
     };
     (status, Json(json!({"code":code,"error":error.to_string()})))
