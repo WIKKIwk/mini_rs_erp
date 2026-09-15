@@ -16,6 +16,7 @@ pub(crate) enum TelegramOrderStep {
     Product,
     ProductName,
     Status,
+    EdgeAllowance,
     Material,
     Micron,
     LayerOptions,
@@ -34,6 +35,7 @@ pub(crate) struct TelegramOrderDraft {
     pub product_code: String,
     pub product_name: String,
     pub status: String,
+    pub edge_allowance_mm: Option<f64>,
     pub layers: Vec<TelegramOrderLayer>,
     pub pending_material_id: String,
     pub pending_material_name: String,
@@ -173,6 +175,22 @@ fn format_number(value: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::{TelegramOrderDraft, normalize_order_text, order_caption};
+
+    #[test]
+    fn flexo_draft_retains_allowance_and_older_drafts_still_load() {
+        let old: TelegramOrderDraft =
+            serde_json::from_str(r#"{"status":"rulon","step":"material"}"#).unwrap();
+        assert_eq!(old.edge_allowance_mm, None);
+        let draft = TelegramOrderDraft {
+            status: "flexo".into(),
+            edge_allowance_mm: Some(40.5),
+            step: super::TelegramOrderStep::EdgeAllowance,
+            ..Default::default()
+        };
+        let restored: TelegramOrderDraft =
+            serde_json::from_value(serde_json::to_value(&draft).unwrap()).unwrap();
+        assert_eq!(restored, draft);
+    }
 
     #[test]
     fn latin_and_cyrillic_customer_names_have_the_same_key() {

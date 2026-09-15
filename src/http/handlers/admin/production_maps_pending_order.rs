@@ -21,6 +21,17 @@ async fn complete_pending_order(
             .take()
             .ok_or_else(|| bad_request("template kerak"))?,
     );
+    if !template.image_id.trim().is_empty() && template.image_id != pending.template.image_id {
+        let image = state
+            .calculate_orders
+            .get_image(&principal_owner_key(principal), &template.image_id)
+            .await
+            .map_err(calculate_order_error)?
+            .ok_or_else(|| bad_request("order image not found"))?;
+        template.image_name = image.image_name;
+        template.image_mime = image.image_mime;
+        template.image_size_bytes = image.image_size_bytes;
+    }
     validate_template(&template).map_err(calculate_order_error)?;
     input.map.id = pending.id.clone();
     input.map.code = template.order_number.clone();

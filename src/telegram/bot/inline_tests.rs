@@ -1,6 +1,25 @@
 #[cfg(test)]
 mod tests {
     #[test]
+    fn order_types_include_mobile_flexo_and_allowance_uses_the_same_rules() {
+        let keyboard = super::status_keyboard();
+        let choices = keyboard["inline_keyboard"][0].as_array().unwrap();
+        let callbacks: Vec<_> = choices
+            .iter()
+            .map(|c| c["callback_data"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            callbacks,
+            ["order:status:roll", "order:status:package", "order:status:flexo"]
+        );
+        assert_eq!(super::parse_edge_allowance("0"), Some(0.0));
+        assert_eq!(super::parse_edge_allowance(" 40,5 "), Some(40.5));
+        for value in ["", "-1", "NaN", "inf", "abc"] {
+            assert_eq!(super::parse_edge_allowance(value), None, "{value}");
+        }
+    }
+
+    #[test]
     fn pending_order_frame_count_is_a_positive_integer() {
         assert_eq!(super::parse_frame_count(" 3 "), Some(3.0));
         assert_eq!(super::parse_frame_count("2,0"), Some(2.0));

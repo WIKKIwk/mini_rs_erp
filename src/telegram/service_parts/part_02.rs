@@ -64,7 +64,9 @@ impl TelegramService {
                 kg: draft.tiraj_kg.unwrap_or_default(),
                 frame_product_size_mm: draft.frame_product_size_mm.unwrap_or_default(),
                 frame_count: draft.frame_count.unwrap_or_default(),
-                edge_allowance_mm: crate::core::formula::DEFAULT_EDGE_ALLOWANCE_MM,
+                edge_allowance_mm: draft
+                    .edge_allowance_mm
+                    .unwrap_or(crate::core::formula::DEFAULT_EDGE_ALLOWANCE_MM),
                 waste_percent: 5.0,
                 layers: draft
                     .layers

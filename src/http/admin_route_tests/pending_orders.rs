@@ -77,7 +77,9 @@ async fn pending_orders_postgres_atomic_completion_and_worker_isolation() {
     state.calculate_orders = Arc::new(PostgresCalculateOrderStore::new(pool.clone()));
     let store = Arc::new(PostgresPendingOrderStore(pool.clone()));
     state.pending_orders = Some(store.clone());
-    let (pending, image) = test_pending_order("9011");
+    let (mut pending, image) = test_pending_order("9011");
+    pending.template.status = "flexo".into();
+    pending.template.edge_allowance_mm = 40.0;
     store.create(pending.clone(), image.clone()).await.unwrap();
     store.create(pending.clone(), image.clone()).await.unwrap();
     let reopened = PostgresPendingOrderStore(pool.clone());
@@ -102,9 +104,18 @@ async fn pending_orders_postgres_atomic_completion_and_worker_isolation() {
         "apparatus:default:bosma_8",
     ))
     .unwrap();
+    let mut edited = pending.template.clone();
+    edited.product = "Edited product".into();
+    edited.kg = 600.0;
+    edited.order_number = "9999".into();
+    edited.frame_product_size_mm = 250.0;
+    edited.frame_count = 3.0;
+    edited.edge_allowance_mm = 55.0;
+    edited.waste_percent = 7.0;
+    edited.roll_count = Some(10);
+    edited.color = "Qizil".into();
     let body = serde_json::json!({"pending_order_id":pending.id,"map":map,
-        "template":{"product":"Wrong product","kg":1,"order_number":"9999",
-            "frame_product_size_mm":1,"frame_count":1,"waste_percent":7,"roll_count":10,"color":"Qizil"}}).to_string();
+        "template":edited}).to_string();
     // Force the LAST business-table write to fail. Maps/template/image must roll back too.
     sqlx::query("ALTER TABLE mini_order_products ADD CONSTRAINT pending_test_failure CHECK (color <> 'Qizil')")
         .execute(&pool).await.unwrap();
@@ -163,12 +174,15 @@ async fn pending_orders_postgres_atomic_completion_and_worker_isolation() {
     let done = store.get(&pending.id).await.unwrap().completion.unwrap();
     assert_eq!(done.saved.map.id, "zakaz-9011");
     assert_eq!(done.saved.map.order_number, "9011");
-    assert_eq!(done.saved.map.order_kg, Some(500.0));
+    assert_eq!(done.saved.map.order_kg, Some(600.0));
     assert!(done.saved.map.base_length.unwrap() > 0.0);
-    assert_eq!(done.template.kg, 500.0);
-    assert_eq!(done.template.frame_product_size_mm, 300.0);
-    assert_eq!(done.template.frame_count, 2.0);
-    assert_eq!(done.template.width_mm, 615.0);
+    assert_eq!(done.template.product, "Edited product");
+    assert_eq!(done.template.kg, 600.0);
+    assert_eq!(done.template.frame_product_size_mm, 250.0);
+    assert_eq!(done.template.frame_count, 3.0);
+    assert_eq!(done.template.edge_allowance_mm, 55.0);
+    assert_eq!(done.template.width_mm, 805.0);
+    assert_eq!(done.saved.map.width_mm, Some(805.0));
     assert_eq!(done.template.waste_percent, 7.0);
     assert_eq!(done.template.color, "Qizil");
     assert!(store.list().await.unwrap().is_empty());

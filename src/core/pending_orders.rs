@@ -47,7 +47,9 @@ impl PendingOrder {
             || t.item_code.trim().is_empty()
             || t.product.trim().is_empty()
             || t.customer.trim().is_empty()
-            || !matches!(t.status.as_str(), "rulon" | "paket")
+            || !matches!(t.status.as_str(), "rulon" | "paket" | "flexo")
+            || !t.edge_allowance_mm.is_finite()
+            || t.edge_allowance_mm < 0.0
             || !positive(t.kg)
             || !positive(t.frame_product_size_mm)
             || !positive(t.frame_count)
@@ -63,35 +65,18 @@ impl PendingOrder {
         Ok(())
     }
 
-    /// The completion form cannot silently replace the Telegram order identity.
+    /// Reuse the normal editor's values, but keep the reserved order identity.
     pub fn merge_completion(&self, mut t: CalculateOrderTemplate) -> CalculateOrderTemplate {
         let source = &self.template;
         t.id = source.id.clone();
         t.code = source.code.clone();
         t.order_number = source.order_number.clone();
-        t.name = source.product.clone();
-        t.customer_ref = source.customer_ref.clone();
-        t.customer = source.customer.clone();
-        t.item_code = source.item_code.clone();
-        t.product = source.product.clone();
-        t.status = source.status.clone();
-        t.kg = source.kg;
-        t.frame_product_size_mm = source.frame_product_size_mm;
-        t.frame_count = source.frame_count;
-        t.edge_allowance_mm = source.edge_allowance_mm;
-        t.roll_count = source.roll_count.or(t.roll_count);
-        t.print_val_size_mm = source.print_val_size_mm.or(t.print_val_size_mm);
-        if !source.color.trim().is_empty() {
-            t.color = source.color.clone();
+        t.name = t.product.clone();
+        if t.image_id == source.image_id {
+            t.image_name = source.image_name.clone();
+            t.image_mime = source.image_mime.clone();
+            t.image_size_bytes = source.image_size_bytes;
         }
-        if !source.note.trim().is_empty() {
-            t.note = source.note.clone();
-        }
-        t.layers = source.layers.clone();
-        t.image_id = source.image_id.clone();
-        t.image_name = source.image_name.clone();
-        t.image_mime = source.image_mime.clone();
-        t.image_size_bytes = source.image_size_bytes;
         t.image_url.clear();
         t
     }
@@ -162,26 +147,35 @@ mod tests {
     }
 
     #[test]
-    fn pending_completion_preserves_telegram_data_and_accepts_missing_fields() {
+    fn pending_completion_preserves_identity_and_accepts_normal_editor_values() {
         let (order, _) = test_pending_order("9011");
         let incoming = CalculateOrderTemplate {
             order_number: "9999".into(),
             kg: 1.0,
             product: "Replaced".into(),
+            status: "Flexo".into(),
+            frame_product_size_mm: 250.0,
+            frame_count: 3.0,
+            edge_allowance_mm: 55.0,
             waste_percent: 7.0,
             roll_count: Some(10),
             print_val_size_mm: Some(600.0),
             color: "Qizil".into(),
             note: "Tezroq".into(),
-            ..Default::default()
+            ..order.template.clone()
         };
         let merged = order.merge_completion(incoming);
+        assert_eq!(merged.id, order.template.id);
+        assert_eq!(merged.code, order.template.code);
         assert_eq!(merged.order_number, "9011");
-        assert_eq!(merged.kg, 500.0);
-        assert_eq!(merged.product, "Mahsulot");
+        assert_eq!(merged.kg, 1.0);
+        assert_eq!(merged.product, "Replaced");
+        assert_eq!(merged.name, "Replaced");
+        assert_eq!(merged.status, "Flexo");
         assert_eq!(merged.customer_ref, "CUST-1");
-        assert_eq!(merged.frame_product_size_mm, 300.0);
-        assert_eq!(merged.frame_count, 2.0);
+        assert_eq!(merged.frame_product_size_mm, 250.0);
+        assert_eq!(merged.frame_count, 3.0);
+        assert_eq!(merged.edge_allowance_mm, 55.0);
         assert_eq!(merged.layers.len(), 1);
         assert_eq!(merged.image_id, order.template.image_id);
         assert_eq!(merged.waste_percent, 7.0);
@@ -189,6 +183,33 @@ mod tests {
         assert_eq!(merged.print_val_size_mm, Some(600.0));
         assert_eq!(merged.color, "Qizil");
         assert_eq!(merged.note, "Tezroq");
+    }
+
+    #[test]
+    fn pending_flexo_accepts_custom_allowance_and_rejects_invalid_values() {
+        let (mut order, _) = test_pending_order("9011");
+        order.template.status = "flexo".into();
+        for value in [0.0, 40.0, 40.5] {
+            order.template.edge_allowance_mm = value;
+            assert!(order.validate().is_ok());
+        }
+        for value in [-1.0, f64::NAN, f64::INFINITY] {
+            order.template.edge_allowance_mm = value;
+            assert!(order.validate().is_err());
+        }
+    }
+
+    #[test]
+    fn pending_completion_allows_replacing_or_clearing_the_prefilled_image() {
+        let (order, _) = test_pending_order("9011");
+        for image_id in ["replacement-upload", ""] {
+            let mut incoming = order.template.clone();
+            incoming.image_id = image_id.into();
+            incoming.image_url = "old-url".into();
+            let merged = order.merge_completion(incoming);
+            assert_eq!(merged.image_id, image_id);
+            assert!(merged.image_url.is_empty());
+        }
     }
 }
 

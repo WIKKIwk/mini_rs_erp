@@ -96,6 +96,19 @@ async fn handle_order_text(
             )
             .await?;
         }
+        TelegramOrderStep::EdgeAllowance => {
+            let Some(allowance) = parse_edge_allowance(value) else {
+                send_order_text(
+                    service, token, chat_id,
+                    "Qo‘shimcha uzunlik 0 yoki undan katta raqam bo‘lishi kerak (mm).",
+                ).await?;
+                return Ok(true);
+            };
+            draft.edge_allowance_mm = Some(allowance);
+            draft.step = TelegramOrderStep::Material;
+            service.save_order_draft(telegram_user_id, draft).await?;
+            send_material_step(service, token, chat_id, 1).await?;
+        }
         TelegramOrderStep::Tiraj => {
             let Some(tiraj) = parse_tiraj(value) else {
                 send_order_text(
@@ -268,11 +281,25 @@ async fn handle_order_callback(
             draft.status = match value {
                 "roll" => "rulon".to_string(),
                 "package" => "paket".to_string(),
+                "flexo" => "flexo".to_string(),
                 _ => return Ok(()),
             };
-            draft.step = TelegramOrderStep::Material;
+            let flexo = draft.status == "flexo";
+            draft.edge_allowance_mm = None;
+            draft.step = if flexo {
+                TelegramOrderStep::EdgeAllowance
+            } else {
+                TelegramOrderStep::Material
+            };
             service.save_order_draft(telegram_user_id, draft).await?;
-            send_material_step(service, token, chat_id, 1).await?;
+            if flexo {
+                send_order_text(
+                    service, token, chat_id,
+                    "Flexo uchun qo‘shimcha uzunlikni mm da kiriting (0 mumkin):",
+                ).await?;
+            } else {
+                send_material_step(service, token, chat_id, 1).await?;
+            }
         }
         "material" if draft.step == TelegramOrderStep::Material => {
             let Some(material_id) = service.take_order_choice(telegram_user_id, value).await else {

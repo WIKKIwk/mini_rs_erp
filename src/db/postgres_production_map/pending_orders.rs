@@ -128,11 +128,13 @@ impl PendingOrderStore for PostgresPendingOrderStore {
             .bind(serde_json::to_value(t).map_err(store_error)?)
             .bind(crate::db::postgres_calculate_order::quick_template_key(t))
             .execute(&mut *tx).await.map_err(store_error)?;
-        sqlx::query("INSERT INTO mini_quick_order_images
+        if !t.image_id.is_empty() && t.image_id == order.template.image_id {
+            sqlx::query("INSERT INTO mini_quick_order_images
             (owner_key,image_id,image_name,image_mime,image_size_bytes,body) VALUES ($1,$2,$3,$4,$5,$6)")
-            .bind(owner_key).bind(&t.image_id).bind(&t.image_name).bind(&t.image_mime)
-            .bind(t.image_size_bytes as i64).bind(row.try_get::<Vec<u8>, _>("image_body").map_err(store_error)?)
-            .execute(&mut *tx).await.map_err(store_error)?;
+                .bind(owner_key).bind(&t.image_id).bind(&t.image_name).bind(&t.image_mime)
+                .bind(t.image_size_bytes as i64).bind(row.try_get::<Vec<u8>, _>("image_body").map_err(store_error)?)
+                .execute(&mut *tx).await.map_err(store_error)?;
+        }
         let mut order_snapshot = t.clone();
         order_snapshot.code = completion.saved.map.code.clone();
         order_snapshot.source_map_id = completion.saved.map.id.clone();
