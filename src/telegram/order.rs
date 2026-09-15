@@ -23,6 +23,7 @@ pub(crate) enum TelegramOrderStep {
     Tiraj,
     FrameSize,
     FrameCount,
+    Diameter,
     Attachment,
 }
 
@@ -42,6 +43,7 @@ pub(crate) struct TelegramOrderDraft {
     pub tiraj_kg: Option<f64>,
     pub frame_product_size_mm: Option<f64>,
     pub frame_count: Option<f64>,
+    pub diameter_mm: Option<f64>,
     pub step: TelegramOrderStep,
 }
 
@@ -128,6 +130,10 @@ pub(crate) fn order_caption(
     } else {
         manager_name.trim()
     };
+    let diameter = draft
+        .diameter_mm
+        .map(format_number)
+        .unwrap_or_else(|| "—".to_string());
     format!(
         "Buyurtma raqami: №T{} {}\n\
 Mijoz: {}\n\
@@ -137,9 +143,7 @@ Holat: {}\n\n\
 2. Rang: —\n\
 3. Tiraj: {} kg\n\
 4. Menedjer: {}\n\
-5. Kadrdagi o‘lcham: {} mm\n\
-6. Kadr soni: {} ta\n\n\
-🟣 Chala buyurtma — mobile’da tugallang.\nEslatma:",
+5. Diametr: {} mm",
         order_number.trim(),
         date,
         dash(&draft.customer_name),
@@ -148,8 +152,7 @@ Holat: {}\n\n\
         material,
         tiraj,
         manager,
-        draft.frame_product_size_mm.map(format_number).unwrap_or_else(|| "—".into()),
-        draft.frame_count.map(format_number).unwrap_or_else(|| "—".into()),
+        diameter,
     )
 }
 
@@ -215,6 +218,7 @@ mod tests {
             tiraj_kg: Some(1000.0),
             frame_product_size_mm: Some(300.0),
             frame_count: Some(2.0),
+            diameter_mm: Some(45.5),
             ..TelegramOrderDraft::default()
         };
         let caption = order_caption("2730", &draft, "Valiyev Abdulloh");
@@ -222,8 +226,10 @@ mod tests {
         assert!(caption.contains("1. Material: PET 12"));
         assert!(caption.contains("3. Tiraj: 1000 kg"));
         assert!(caption.contains("4. Menedjer: Valiyev Abdulloh"));
-        assert!(caption.contains("Kadrdagi o‘lcham: 300 mm"));
-        assert!(caption.contains("Kadr soni: 2 ta"));
-        assert!(caption.contains("Chala buyurtma"));
+        assert!(caption.contains("5. Diametr: 45.5 mm"));
+        assert!(!caption.contains("Kadrdagi o‘lcham"));
+        assert!(!caption.contains("Kadr soni"));
+        assert!(!caption.contains("Chala buyurtma"));
+        assert!(!caption.contains("Eslatma:"));
     }
 }

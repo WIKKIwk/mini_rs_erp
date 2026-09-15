@@ -307,6 +307,18 @@ async fn handle_private_media(
         send_order_text(service, token, &chat_id, "1 ta kadrdagi mahsulot o‘lchamini mm da kiriting:").await?;
         return Ok(());
     }
+    if draft.diameter_mm.is_none() {
+        draft.step = TelegramOrderStep::Diameter;
+        service.save_order_draft(&telegram_user_id, draft).await?;
+        send_order_text(
+            service,
+            token,
+            &chat_id,
+            "Diametrni mm da kiriting (masalan: 45.5):",
+        )
+        .await?;
+        return Ok(());
+    }
     let Some(media) = order_media_from_message(message) else {
         send_order_text(
             service,

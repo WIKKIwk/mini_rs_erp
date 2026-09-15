@@ -37,6 +37,15 @@ mod tests {
             assert_eq!(super::parse_micron(value), None, "{value}");
         }
     }
+
+    #[test]
+    fn diameter_accepts_a_positive_decimal_and_rejects_invalid_input() {
+        assert_eq!(super::parse_diameter("45.5"), Some(45.5));
+        assert_eq!(super::parse_diameter(" 45,5 "), Some(45.5));
+        for value in ["", "0", "-1", "NaN", "inf", "abc"] {
+            assert_eq!(super::parse_diameter(value), None, "{value}");
+        }
+    }
     use super::{
         InlineLoginInput, TelegramMessage, TelegramOrderNotification, is_login_code,
         number_or_dash, order_media_from_message, parse_command, parse_inline_login_input,

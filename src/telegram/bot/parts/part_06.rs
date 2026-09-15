@@ -192,6 +192,11 @@ fn parse_micron(value: &str) -> Option<String> {
     (micron > 0).then(|| micron.to_string())
 }
 
+fn parse_diameter(value: &str) -> Option<f64> {
+    let diameter = value.trim().replace(',', ".").parse::<f64>().ok()?;
+    (diameter.is_finite() && diameter > 0.0).then_some(diameter)
+}
+
 async fn get_telegram_file(
     service: &TelegramService,
     token: &str,

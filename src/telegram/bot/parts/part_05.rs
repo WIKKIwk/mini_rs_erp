@@ -179,6 +179,28 @@ async fn handle_order_text(
                 return Ok(true);
             };
             draft.frame_count = Some(count);
+            draft.step = TelegramOrderStep::Diameter;
+            service.save_order_draft(telegram_user_id, draft).await?;
+            send_order_text(
+                service,
+                token,
+                chat_id,
+                "Diametrni mm da kiriting (masalan: 45.5):",
+            )
+            .await?;
+        }
+        TelegramOrderStep::Diameter => {
+            let Some(diameter) = parse_diameter(value) else {
+                send_order_text(
+                    service,
+                    token,
+                    chat_id,
+                    "Diametr musbat son bo‘lishi kerak (masalan: 45.5).",
+                )
+                .await?;
+                return Ok(true);
+            };
+            draft.diameter_mm = Some(diameter);
             let order_number = if draft.order_number.trim().is_empty() {
                 catalog
                     .next_order_number()
@@ -194,7 +216,7 @@ async fn handle_order_text(
                 service,
                 token,
                 chat_id,
-                "Endi order rasmini photo yoki file ko‘rinishida yuboring. Chala buyurtma mobile’da saqlanadi va guruhga yuboriladi.",
+                "Endi order rasmini photo yoki file ko‘rinishida yuboring.",
             )
             .await?;
         }
