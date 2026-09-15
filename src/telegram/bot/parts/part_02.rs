@@ -441,33 +441,64 @@ async fn handle_private_media(
             .await?;
     }
     let caption = order_caption(&draft.order_number, &draft, &account.display_name);
-    tracing::debug!(mime = %media.mime_type, "optimizing Telegram order image");
+    let original_body = body.clone();
+    let original_file_name = media.file_name.clone();
+    let original_mime_type = media.mime_type.clone();
+    tracing::debug!(mime = %original_mime_type, "optimizing Telegram order image for ERP storage");
     let optimized = match tokio::task::spawn_blocking(move || {
-        crate::http::handlers::calculate_image::optimize_order_image_for_store(&body, &media.file_name)
-    }).await {
+        crate::http::handlers::calculate_image::optimize_order_image_for_store(
+            &body,
+            &original_file_name,
+        )
+    })
+    .await
+    {
         Ok(Ok(image)) => image,
         _ => {
-            send_order_text(service, token, &chat_id,
-                "Rasmni ochib bo‘lmadi. Boshqa JPG yoki PNG rasm yuboring.").await?;
+            send_order_text(
+                service,
+                token,
+                &chat_id,
+                "Rasmni ochib bo‘lmadi. Boshqa JPG yoki PNG rasm yuboring.",
+            )
+            .await?;
             return Ok(());
         }
     };
-    let image = CalculateOrderImage {
-        image_id: format!("telegram-order-{}-{:032x}", draft.order_number, rand::random::<u128>()),
+    let image_id = format!(
+        "telegram-order-{}-{:032x}",
+        draft.order_number,
+        rand::random::<u128>()
+    );
+    let delivery_image = CalculateOrderImage {
+        image_id: image_id.clone(),
+        image_name: media.file_name.clone(),
+        image_mime: original_mime_type,
+        image_size_bytes: original_body.len() as u64,
+        body: original_body,
+    };
+    let storage_image = CalculateOrderImage {
+        image_id,
         image_name: optimized.file_name,
         image_mime: "image/webp".into(),
         image_size_bytes: optimized.body.len() as u64,
         body: optimized.body,
     };
-    let image = match service.persist_pending_order(&account, &draft, image).await {
-        Ok(image) => image,
-        Err(error) => {
-            send_order_text(service, token, &chat_id, &format!("Order saqlanmadi: {error}. Ma’lumotlar saqlandi, qayta urinib ko‘ring.")).await?;
-            return Ok(());
-        }
-    };
+    if let Err(error) = service
+        .persist_pending_order(&account, &draft, storage_image)
+        .await
+    {
+        send_order_text(
+            service,
+            token,
+            &chat_id,
+            &format!("Order saqlanmadi: {error}. Ma’lumotlar saqlandi, qayta urinib ko‘ring."),
+        )
+        .await?;
+        return Ok(());
+    }
     match service
-        .deliver_order(&telegram_user_id, &caption, Some(image))
+        .deliver_order(&telegram_user_id, &caption, Some(delivery_image))
         .await
     {
         Ok(0) => {

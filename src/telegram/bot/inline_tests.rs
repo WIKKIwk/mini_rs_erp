@@ -13,7 +13,7 @@ mod tests {
         number_or_dash, order_media_from_message, parse_command, parse_inline_login_input,
         role_guide,
     };
-    use crate::core::calculate_orders::CalculateOrderTemplate;
+    use crate::core::calculate_orders::{CalculateOrderImage, CalculateOrderTemplate};
     use crate::core::production_map::ProductionMapDefinition;
     use crate::telegram::TelegramAccountRole;
 
@@ -97,6 +97,20 @@ mod tests {
         }))
         .expect("other document message");
         assert!(order_media_from_message(&other_document).is_none());
+    }
+
+    #[test]
+    fn telegram_delivery_does_not_treat_webp_as_a_photo() {
+        let mut image = CalculateOrderImage {
+            image_mime: "image/webp".to_string(),
+            image_name: "order.webp".to_string(),
+            body: vec![1, 2, 3],
+            ..CalculateOrderImage::default()
+        };
+        assert!(!super::can_send_as_telegram_photo(&image));
+
+        image.image_mime = "image/jpeg".to_string();
+        assert!(super::can_send_as_telegram_photo(&image));
     }
 
     #[test]

@@ -8,7 +8,11 @@ pub(crate) async fn send_order_to_chat(
         return Err(TelegramError::BotTokenRequired);
     }
     if let Some(image) = notification.image.as_ref() {
-        send_photo(service, &token, chat, notification, image).await
+        if can_send_as_telegram_photo(image) {
+            send_photo(service, &token, chat, notification, image).await
+        } else {
+            send_document(service, &token, chat, notification, image).await
+        }
     } else {
         send_message(
             service,
@@ -28,14 +32,13 @@ async fn send_photo(
     notification: &TelegramOrderNotification,
     image: &CalculateOrderImage,
 ) -> Result<(), TelegramError> {
-    let photo = crate::telegram::photo::prepare_order_photo(image)
-        .map_err(|error| TelegramError::Transport(error.to_string()))?;
+    let file_name = telegram_file_name(image);
     let mut form = reqwest::multipart::Form::new()
         .text("chat_id", chat.chat_id.clone())
         .text("caption", truncate_caption(&notification.caption))
         .part(
             "photo",
-            reqwest::multipart::Part::bytes(photo.body).file_name(photo.file_name),
+            reqwest::multipart::Part::bytes(image.body.clone()).file_name(file_name),
         );
     if let Some(thread_id) = chat.thread_id {
         form = form.text("message_thread_id", thread_id.to_string());
@@ -50,6 +53,51 @@ async fn send_photo(
     parse_api_response(response)
         .await
         .map(|_: serde_json::Value| ())
+}
+
+async fn send_document(
+    service: &TelegramService,
+    token: &str,
+    chat: &TelegramChat,
+    notification: &TelegramOrderNotification,
+    image: &CalculateOrderImage,
+) -> Result<(), TelegramError> {
+    let file_name = telegram_file_name(image);
+    let mut form = reqwest::multipart::Form::new()
+        .text("chat_id", chat.chat_id.clone())
+        .text("caption", truncate_caption(&notification.caption))
+        .part(
+            "document",
+            reqwest::multipart::Part::bytes(image.body.clone()).file_name(file_name),
+        );
+    if let Some(thread_id) = chat.thread_id {
+        form = form.text("message_thread_id", thread_id.to_string());
+    }
+    let response = service
+        .http_client()
+        .post(bot_url(token, "sendDocument"))
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|error| TelegramError::Transport(error.to_string()))?;
+    parse_api_response(response)
+        .await
+        .map(|_: serde_json::Value| ())
+}
+
+fn can_send_as_telegram_photo(image: &CalculateOrderImage) -> bool {
+    matches!(
+        image.image_mime.trim().to_ascii_lowercase().as_str(),
+        "image/jpeg" | "image/jpg" | "image/png"
+    )
+}
+
+fn telegram_file_name(image: &CalculateOrderImage) -> String {
+    if image.image_name.trim().is_empty() {
+        "order-image.jpg".to_string()
+    } else {
+        image.image_name.trim().to_string()
+    }
 }
 
 async fn send_message(

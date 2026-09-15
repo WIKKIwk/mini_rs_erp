@@ -40,7 +40,7 @@ impl TelegramService {
         account: &TelegramUserAccount,
         draft: &TelegramOrderDraft,
         image: CalculateOrderImage,
-    ) -> Result<CalculateOrderImage, TelegramError> {
+    ) -> Result<(), TelegramError> {
         let store = self
             .pending_orders
             .as_ref()
@@ -97,11 +97,7 @@ impl TelegramService {
                 "Bu order mobile’da allaqachon tugallangan. /cancel bosing.".into(),
             ));
         }
-        // Delivery retries use the durable original image, not a replacement attachment.
-        store
-            .image(&saved.id)
-            .await
-            .map_err(|e| TelegramError::OrderCatalog(e.to_string()))
+        Ok(())
     }
 
     pub async fn admin_overview(&self) -> Result<TelegramAdminOverview, TelegramError> {

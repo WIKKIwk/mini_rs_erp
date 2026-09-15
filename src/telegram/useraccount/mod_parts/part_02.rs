@@ -7,17 +7,25 @@ async fn send_image_to_selected_group(
     image: &CalculateOrderImage,
 ) -> Result<(), UserAccountError> {
     let peer = selected_group_peer(client, selected_chat_id, selected_chat_type).await?;
-    let photo = crate::telegram::photo::prepare_order_photo(image)
-        .map_err(|error| UserAccountError::Transport(error.to_string()))?;
+    let file_name = if image.image_name.trim().is_empty() {
+        "order-image.jpg"
+    } else {
+        image.image_name.trim()
+    };
     let uploaded = client
-        .upload(Cursor::new(photo.body), photo.file_name)
+        .upload(Cursor::new(image.body.clone()), file_name)
         .await
         .map_err(map_transport)?;
+    let input_media = if matches!(
+        image.image_mime.trim().to_ascii_lowercase().as_str(),
+        "image/jpeg" | "image/jpg" | "image/png"
+    ) {
+        uploaded.as_auto_media()
+    } else {
+        uploaded.as_document_media()
+    };
     client
-        .send_message(
-            peer,
-            InputMessage::text(text).copy_media(uploaded.as_auto_media()),
-        )
+        .send_message(peer, InputMessage::text(text).copy_media(input_media))
         .await
         .map_err(map_transport)?;
     Ok(())
