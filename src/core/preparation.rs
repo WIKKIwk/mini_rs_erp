@@ -1,7 +1,7 @@
 //! Bulk raw-material preparation. Quantities and percentages use six decimal
 //! places, like the ERP quantity columns; no floating-point stock arithmetic.
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub const SCALE: i64 = 1_000_000;
 const MAX: i64 = 999_999_999_999_999_999;
@@ -23,6 +23,15 @@ pub enum PreparationError {
     #[error("Tayyorlov ma’lumotlarini saqlashda xatolik")]
     StoreFailed,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PreparationWarehouseMaterialScope {
+    OwnSeriyo,
+    AssignedItemGroups(Vec<String>),
+}
+
+pub type PreparationWarehouseMaterialScopes =
+    BTreeMap<String, PreparationWarehouseMaterialScope>;
 
 pub fn decimal(value: &str) -> Result<i64, PreparationError> {
     let value = value.trim();

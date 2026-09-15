@@ -14,6 +14,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 
 type ApiError = (StatusCode, Json<Value>);
 
@@ -109,13 +110,98 @@ fn warehouse_api_error(error: WarehouseError) -> ApiError {
     }
 }
 
+fn material_scope_admin_error(error: crate::core::admin::ports::AdminPortError) -> ApiError {
+    tracing::error!(%error, "preparation warehouse material scope lookup failed");
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({
+            "code": "preparation_store",
+            "error": "Tayyorlov ombori ko‘rinishini aniqlab bo‘lmadi"
+        })),
+    )
+}
+
+async fn warehouse_material_scopes(
+    state: &AppState,
+    actor: &Principal,
+) -> Result<PreparationWarehouseMaterialScopes, ApiError> {
+    let role_assignments = state
+        .admin
+        .role_assignments()
+        .await
+        .map_err(material_scope_admin_error)?;
+    let assigned_warehouses = state
+        .warehouses
+        .assigned_warehouse_names(actor)
+        .await
+        .map_err(warehouse_api_error)?;
+    let mut scopes = BTreeMap::new();
+
+    for warehouse in assigned_warehouses {
+        let assignments = state
+            .warehouses
+            .warehouse_assignments(&warehouse)
+            .await
+            .map_err(warehouse_api_error)?;
+        let is_current_owner = assignments.iter().any(|assignment| {
+            assignment.principal_role == actor.role
+                && assignment
+                    .principal_ref
+                    .trim()
+                    .eq_ignore_ascii_case(actor.ref_.trim())
+        });
+        if !is_current_owner {
+            continue;
+        }
+
+        let other_assignments = assignments.into_iter().filter(|assignment| {
+            assignment.principal_role != actor.role
+                || !assignment
+                    .principal_ref
+                    .trim()
+                    .eq_ignore_ascii_case(actor.ref_.trim())
+        });
+        let mut other_item_groups = Vec::new();
+        let mut shared = false;
+        for assignment in other_assignments {
+            shared = true;
+            if let Some(role_assignment) = role_assignments.iter().find(|candidate| {
+                candidate.principal_role == assignment.principal_role
+                    && candidate
+                        .principal_ref
+                        .trim()
+                        .eq_ignore_ascii_case(assignment.principal_ref.trim())
+            }) {
+                other_item_groups.extend(role_assignment.assigned_item_groups.iter().cloned());
+            }
+        }
+
+        let scope = if !shared {
+            PreparationWarehouseMaterialScope::OwnSeriyo
+        } else {
+            PreparationWarehouseMaterialScope::AssignedItemGroups(
+                state
+                    .admin
+                    .item_group_scope(other_item_groups)
+                    .await
+                    .map_err(material_scope_admin_error)?,
+            )
+        };
+        scopes.insert(warehouse, scope);
+    }
+
+    Ok(scopes)
+}
+
 pub async fn snapshot(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
     let actor = authorize(&state, &headers).await?;
-    store(&state)?
-        .snapshot(&actor.ref_)
+    let preparation = store(&state)?;
+    let scopes = warehouse_material_scopes(&state, &actor).await?;
+    preparation
+        .snapshot_with_warehouse_material_scopes(&actor.ref_, &scopes)
         .await
         .map(Json)
         .map_err(error)

@@ -37,6 +37,22 @@ impl PostgresPreparationStore {
     }
 
     pub async fn snapshot(&self, owner: &str) -> Result<Value, PreparationError> {
+        self.snapshot_inner(owner, None).await
+    }
+
+    pub async fn snapshot_with_warehouse_material_scopes(
+        &self,
+        owner: &str,
+        scopes: &PreparationWarehouseMaterialScopes,
+    ) -> Result<Value, PreparationError> {
+        self.snapshot_inner(owner, Some(scopes)).await
+    }
+
+    async fn snapshot_inner(
+        &self,
+        owner: &str,
+        warehouse_scopes: Option<&PreparationWarehouseMaterialScopes>,
+    ) -> Result<Value, PreparationError> {
         let mut tx = self.pool.begin().await?;
         sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
             .execute(&mut *tx)
@@ -106,7 +122,7 @@ impl PostgresPreparationStore {
                 WHERE child.is_group
             ),
             catalog AS (
-                SELECT i.code, i.name,
+                SELECT i.code, i.name, i.item_group,
                        EXISTS (
                            SELECT 1 FROM mini_preparation_materials own
                            WHERE own.item_code = i.code AND own.owner_ref = $2
@@ -119,7 +135,7 @@ impl PostgresPreparationStore {
                 JOIN raw_groups g
                   ON lower(btrim(g.name)) = lower(btrim(i.item_group))
                 UNION
-                SELECT i.code, i.name,
+                SELECT i.code, i.name, i.item_group,
                        EXISTS (
                            SELECT 1 FROM seriyo_groups allowed
                            WHERE lower(btrim(allowed.name)) = lower(btrim(i.item_group))
@@ -131,6 +147,7 @@ impl PostgresPreparationStore {
             SELECT jsonb_build_object(
                 'item_code', catalog_item.code,
                 'name', catalog_item.name,
+                'item_group', catalog_item.item_group,
                 'can_receive', catalog_item.can_receive,
                 'balances', COALESCE((SELECT jsonb_agg(b ORDER BY lower(b.warehouse), b.warehouse) FROM (
                     SELECT s.warehouse, sum(s.qty)::text AS kg
@@ -149,6 +166,42 @@ impl PostgresPreparationStore {
         .bind(PREPARATION_MATERIAL_CHILD_GROUP)
         .fetch_all(&mut *tx)
         .await?;
+        let materials: Vec<Value> = materials
+            .into_iter()
+            .map(|mut material| {
+                let item_group = material
+                    .get("item_group")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string();
+                if let Some(scopes) = warehouse_scopes {
+                    let can_receive = material
+                        .get("can_receive")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    let visible_warehouses = scopes
+                        .iter()
+                        .filter_map(|(warehouse, scope)| {
+                            let visible = match scope {
+                                PreparationWarehouseMaterialScope::OwnSeriyo => can_receive,
+                                PreparationWarehouseMaterialScope::AssignedItemGroups(groups) => {
+                                    groups.iter().any(|group| {
+                                        group.trim().eq_ignore_ascii_case(&item_group)
+                                    })
+                                }
+                            };
+                            visible.then(|| warehouse.clone())
+                        })
+                        .collect::<Vec<_>>();
+                    material["visible_warehouses"] = json!(visible_warehouses);
+                }
+                if let Some(object) = material.as_object_mut() {
+                    object.remove("item_group");
+                }
+                material
+            })
+            .collect();
         // Javobgar homashyolar (calculate-material id, micron'siz).
         // Biriktirilmagan master fail-closed: order list bo'sh.
         let responsibilities: Vec<Value> = sqlx::query_scalar(

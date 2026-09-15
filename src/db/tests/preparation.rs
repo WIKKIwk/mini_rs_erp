@@ -7,6 +7,7 @@ use crate::db::{
 };
 use serde_json::{Value, json};
 use sqlx::postgres::PgConnectOptions;
+use std::collections::BTreeMap;
 
 fn consume(order: &str, code: &str, percent: &str) -> ConsumptionCreate {
     ConsumptionCreate {
@@ -473,6 +474,35 @@ async fn preparation_snapshot_lists_shared_raw_catalog_and_balances() {
         .unwrap();
     assert_eq!(zero["balances"], json!([]));
 
+    let scopes = BTreeMap::from([(
+        "Other W".to_string(),
+        PreparationWarehouseMaterialScope::AssignedItemGroups(vec![
+            "Snapshot Raw Group".to_string(),
+        ]),
+    )]);
+    let scoped = PostgresPreparationStore::new(pool.clone())
+        .snapshot_with_warehouse_material_scopes("prep-1", &scopes)
+        .await
+        .unwrap();
+    assert_eq!(
+        scoped["materials"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["item_code"] == "RAW-SHARED")
+            .unwrap()["visible_warehouses"],
+        json!(["Other W"])
+    );
+    assert_eq!(
+        scoped["materials"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["item_code"] == "RAW-ZERO")
+            .unwrap()["visible_warehouses"],
+        json!(["Other W"])
+    );
+
     pool.close().await;
     sqlx::query(&format!("DROP DATABASE {db}"))
         .execute(&admin)
@@ -589,6 +619,22 @@ async fn preparation_formula_material_scope_and_order_materials() {
         .cloned()
         .unwrap();
     assert_eq!(snapshot_material["can_receive"], false);
+    let own_scope = BTreeMap::from([(
+        "Preparation W".to_string(),
+        PreparationWarehouseMaterialScope::OwnSeriyo,
+    )]);
+    let scoped = store
+        .snapshot_with_warehouse_material_scopes("prep-1", &own_scope)
+        .await
+        .unwrap();
+    let own_material = scoped["materials"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["item_code"] == code)
+        .unwrap();
+    assert_eq!(own_material["visible_warehouses"], json!(["Preparation W"]));
+    assert_eq!(snapshot_material["visible_warehouses"], Value::Null);
     let formula_input = |material_id: &str| FormulaUpsert {
         product_code: "PC-1".into(),
         name: "Asosiy".into(),
