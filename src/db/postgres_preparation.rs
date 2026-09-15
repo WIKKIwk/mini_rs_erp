@@ -1,5 +1,6 @@
 use crate::core::auth::models::Principal;
 use crate::core::preparation::*;
+use crate::core::werka::models::SupplierItem;
 use serde_json::{Value, json};
 use sqlx::{PgPool, Postgres, Row, Transaction};
 
@@ -93,17 +94,36 @@ impl PostgresPreparationStore {
                   ON lower(btrim(child.parent_item_group)) = lower(btrim(parent.name))
                 WHERE child.is_group
             ),
+            seriyo_groups AS (
+                SELECT g.name
+                FROM mini_item_groups g
+                WHERE lower(btrim(g.name)) = lower($4) AND g.is_group
+                UNION
+                SELECT child.name
+                FROM mini_item_groups child
+                JOIN seriyo_groups parent
+                  ON lower(btrim(child.parent_item_group)) = lower(btrim(parent.name))
+                WHERE child.is_group
+            ),
             catalog AS (
                 SELECT i.code, i.name,
                        EXISTS (
                            SELECT 1 FROM mini_preparation_materials own
                            WHERE own.item_code = i.code AND own.owner_ref = $2
+                             AND EXISTS (
+                                 SELECT 1 FROM seriyo_groups allowed
+                                 WHERE lower(btrim(allowed.name)) = lower(btrim(i.item_group))
+                             )
                        ) AS can_receive
                 FROM mini_items i
                 JOIN raw_groups g
                   ON lower(btrim(g.name)) = lower(btrim(i.item_group))
                 UNION
-                SELECT i.code, i.name, TRUE
+                SELECT i.code, i.name,
+                       EXISTS (
+                           SELECT 1 FROM seriyo_groups allowed
+                           WHERE lower(btrim(allowed.name)) = lower(btrim(i.item_group))
+                       ) AS can_receive
                 FROM mini_preparation_materials own
                 JOIN mini_items i ON i.code = own.item_code
                 WHERE own.owner_ref = $2
@@ -126,6 +146,7 @@ impl PostgresPreparationStore {
         .bind(PREPARATION_ITEM_GROUP)
         .bind(owner)
         .bind(&warehouses)
+        .bind(PREPARATION_MATERIAL_CHILD_GROUP)
         .fetch_all(&mut *tx)
         .await?;
         // Javobgar homashyolar (calculate-material id, micron'siz).
@@ -831,6 +852,64 @@ impl PostgresPreparationStore {
         .fetch_all(&self.pool)
         .await?;
         Ok(rows)
+    }
+
+    /// Tayyorlov masteri kirimi uchun faqat o'zi yaratgan Seriyo guruhidagi
+    /// itemlar. Bu katalog Rulon/ERP umumiy katalogidan mustaqil bo'lib,
+    /// oddiy kirim va tarozi kirimida bir xil scope beradi.
+    pub async fn owned_seriyo_items(
+        &self,
+        owner: &str,
+        search: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<SupplierItem>, PreparationError> {
+        let rows: Vec<(String, String, String, String)> = sqlx::query_as(
+            "WITH RECURSIVE seriyo_groups AS (
+                SELECT g.name
+                FROM mini_item_groups g
+                WHERE lower(btrim(g.name)) = lower($1) AND g.is_group
+                UNION
+                SELECT child.name
+                FROM mini_item_groups child
+                JOIN seriyo_groups parent
+                  ON lower(btrim(child.parent_item_group)) = lower(btrim(parent.name))
+                WHERE child.is_group
+            )
+            SELECT i.code, i.name, i.uom, i.item_group
+            FROM mini_preparation_materials owned
+            JOIN mini_items i ON i.code = owned.item_code
+            WHERE owned.owner_ref = $2
+              AND EXISTS (
+                  SELECT 1 FROM seriyo_groups allowed
+                  WHERE lower(btrim(allowed.name)) = lower(btrim(i.item_group))
+              )
+              AND (
+                  btrim($3) = ''
+                  OR lower(i.code) LIKE '%' || lower(btrim($3)) || '%'
+                  OR lower(i.name) LIKE '%' || lower(btrim($3)) || '%'
+              )
+            ORDER BY lower(i.name), i.code
+            LIMIT $4 OFFSET $5",
+        )
+        .bind(PREPARATION_MATERIAL_CHILD_GROUP)
+        .bind(owner.trim())
+        .bind(search.trim())
+        .bind(limit as i64)
+        .bind(offset as i64)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|(code, name, uom, item_group)| SupplierItem {
+                code,
+                name,
+                uom,
+                warehouse: String::new(),
+                item_group,
+                customer_names: Vec::new(),
+            })
+            .collect())
     }
 
     /// Order shu master'ning biriktirilgan homashyolaridan birini

@@ -125,104 +125,35 @@ async fn gscale_items_for_principal(
         .await
 }
 
-/// Tayyorlov masteri katalogi: faqat o'ziga biriktirilgan homashyo
-/// oilalariga mos itemlar (kod/nom exact yoki o'lchamli variant,
-/// masalan PET -> "PET 615/12"). Biriktirilmagan bo'lsa bo'sh (fail-closed).
+/// Tayyorlov masteri kirimi: faqat shu masterga tegishli Seriyo guruhidagi
+/// itemlar. Umumiy ERP/Rulon katalogi bu oqimga kiritilmaydi.
 async fn gscale_items_for_tayyorlov(
     state: &AppState,
     principal: &Principal,
-    group: &str,
+    _group: &str,
     search: &str,
     limit: usize,
     offset: usize,
     order_id: &str,
 ) -> Result<Vec<SupplierItem>, AdminPortError> {
-    let mut materials = match state.preparation.as_ref() {
-        Some(store) => store
-            .assigned_material_names(&principal.ref_)
-            .await
-            .map_err(|_| AdminPortError::LookupFailed)?,
-        None => Vec::new(),
-    };
-    if materials.is_empty() {
+    let Some(store) = state.preparation.as_ref() else {
         return Ok(Vec::new());
-    }
+    };
     if !order_id.trim().is_empty() {
-        let order_scope = match state.preparation.as_ref() {
-            Some(store) => store
-                .order_materials(order_id)
-                .await
-                .map_err(|_| AdminPortError::LookupFailed)?,
-            None => return Ok(Vec::new()),
-        };
-        let order_material_ids = order_material_ids(&order_scope);
-        materials.retain(|(material_id, _)| order_material_ids.contains(material_id));
-        if materials.is_empty() {
+        let in_scope = store
+            .order_in_scope(&principal.ref_, order_id)
+            .await
+            .map_err(|_| AdminPortError::LookupFailed)?;
+        if !in_scope {
             return Ok(Vec::new());
         }
     }
-    let items = state
-        .admin
-        .items_page_by_group(group, search, 200, 0)
-        .await?;
-    let mut out: Vec<SupplierItem> = items
-        .into_iter()
-        .filter(|item| {
-            materials.iter().any(|(id, material_name)| {
-                material_item_matches_family(&item.code, &item.name, id, material_name)
-            })
-        })
-        .collect();
-    out.sort_by(|a, b| {
-        a.name
-            .to_lowercase()
-            .cmp(&b.name.to_lowercase())
-            .then_with(|| a.code.to_lowercase().cmp(&b.code.to_lowercase()))
-    });
-    Ok(out.into_iter().skip(offset).take(limit).collect())
-}
-
-fn order_material_ids(order_scope: &serde_json::Value) -> std::collections::BTreeSet<String> {
-    order_scope
-        .get("materials")
-        .and_then(|value| value.as_array())
-        .into_iter()
-        .flatten()
-        .filter_map(|material| material.get("material_id")?.as_str())
-        .map(|material_id| material_id.trim().to_lowercase())
-        .filter(|material_id| !material_id.is_empty())
-        .collect()
-}
-
-fn material_item_matches_family(
-    code: &str,
-    name: &str,
-    material_id: &str,
-    material_name: &str,
-) -> bool {
-    let code = code.trim().to_lowercase();
-    let name = name.trim().to_lowercase();
-    let material_id = material_id.trim().to_lowercase();
-    let material_name = material_name.trim().to_lowercase();
-    if material_id.is_empty() && material_name.is_empty() {
-        return false;
-    }
-
-    let values = [code.as_str(), name.as_str()];
-    if values
-        .iter()
-        .any(|value| *value == material_id || *value == material_name)
-    {
-        return true;
-    }
-
-    let variant_prefix = format!("{material_name} ");
-    values.iter().any(|value| {
-        value
-            .strip_prefix(&variant_prefix)
-            .and_then(|suffix| suffix.chars().next())
-            .is_some_and(|first| first.is_ascii_digit())
-    })
+    // The mobile picker may send a generic group. It is intentionally ignored
+    // here so that a Rulon request can never widen this already scoped result.
+    store
+        .owned_seriyo_items(&principal.ref_, search, limit, offset)
+        .await
+        .map_err(|_| AdminPortError::LookupFailed)
 }
 
 pub async fn material_receipt_print(
@@ -481,71 +412,3 @@ pub struct GscaleItemsQuery {
 
 #[allow(dead_code)]
 fn _keeps_error_response_compatible(_response: ErrorResponse) {}
-
-#[cfg(test)]
-mod tests {
-    use super::{material_item_matches_family, order_material_ids};
-
-    #[test]
-    fn tayyorlov_order_scope_intersects_assigned_materials() {
-        let order_scope = serde_json::json!({
-            "materials": [{"material_id": "calculate:material:opp"}]
-        });
-        let order_material_ids = order_material_ids(&order_scope);
-        let assigned = [
-            "calculate:material:bopp".to_string(),
-            "calculate:material:opp".to_string(),
-        ];
-
-        let visible = assigned
-            .into_iter()
-            .filter(|material_id| order_material_ids.contains(material_id))
-            .collect::<Vec<_>>();
-
-        assert_eq!(visible, ["calculate:material:opp"]);
-    }
-
-    #[test]
-    fn tayyorlov_material_scope_keeps_exact_and_dimension_variants() {
-        assert!(material_item_matches_family(
-            "builtin-bopp",
-            "BOPP",
-            "builtin-bopp",
-            "BOPP",
-        ));
-        assert!(material_item_matches_family(
-            "bopp 700/12",
-            "BOPP 700/12",
-            "builtin-bopp",
-            "BOPP",
-        ));
-        assert!(material_item_matches_family(
-            "pe 1700/80",
-            "PE 1700/80",
-            "builtin-pe",
-            "PE",
-        ));
-    }
-
-    #[test]
-    fn tayyorlov_material_scope_does_not_leak_similar_material_names() {
-        assert!(!material_item_matches_family(
-            "bopp metal",
-            "BOPP metal",
-            "builtin-bopp",
-            "BOPP",
-        ));
-        assert!(!material_item_matches_family(
-            "pe oq",
-            "PE oq",
-            "builtin-pe",
-            "PE",
-        ));
-        assert!(!material_item_matches_family(
-            "pe pr",
-            "PE PR",
-            "builtin-pe",
-            "PE",
-        ));
-    }
-}

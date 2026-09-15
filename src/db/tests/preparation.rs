@@ -548,6 +548,47 @@ async fn preparation_formula_material_scope_and_order_materials() {
         .unwrap();
     assert_eq!(material["item_group"], "seriyo");
     let code = material["item_code"].as_str().unwrap().to_string();
+    sqlx::query(
+        "INSERT INTO mini_item_groups(name,parent_item_group,is_group)
+         VALUES ('Non Seriyo',$1,true)",
+    )
+    .bind("Homashyo")
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO mini_items(code,name,uom,item_group)
+         VALUES ('PREP-NON-SERIYO','Non Seriyo item','kg','Non Seriyo')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO mini_preparation_materials(item_code,owner_ref,name_key)
+         VALUES ('PREP-NON-SERIYO','prep-1','non seriyo item')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let owned_seriyo = store
+        .owned_seriyo_items("prep-1", "", 50, 0)
+        .await
+        .unwrap();
+    assert!(owned_seriyo.iter().any(|item| item.code == code));
+    assert!(!owned_seriyo
+        .iter()
+        .any(|item| item.code == "PREP-NON-SERIYO"));
+    let snapshot_material = store
+        .snapshot("prep-1")
+        .await
+        .unwrap()["materials"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["item_code"] == "PREP-NON-SERIYO")
+        .cloned()
+        .unwrap();
+    assert_eq!(snapshot_material["can_receive"], false);
     let formula_input = |material_id: &str| FormulaUpsert {
         product_code: "PC-1".into(),
         name: "Asosiy".into(),
