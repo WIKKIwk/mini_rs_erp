@@ -285,7 +285,7 @@ mod tests {
 
     #[test]
     fn admin_error_response_stays_flat_and_pointer_sized() {
-        let response = AdminErrorResponse::roll_size_mismatch(100.0, 110.0, 120.0);
+        let response = AdminErrorResponse::roll_size_mismatch(100.0, 110.0, 100.0, 120.0);
         let value = serde_json::to_value(&response).expect("admin error json");
 
         assert_eq!(value["error"], "raw_material_roll_size_mismatch");
@@ -455,13 +455,18 @@ impl AdminErrorResponse {
         }
     }
 
-    fn roll_size_mismatch(order_width_mm: f64, roll_width_mm: f64, maximum_width_mm: f64) -> Self {
+    fn roll_size_mismatch(
+        order_width_mm: f64,
+        roll_width_mm: f64,
+        minimum_width_mm: f64,
+        maximum_width_mm: f64,
+    ) -> Self {
         Self {
             error: "raw_material_roll_size_mismatch".to_string(),
             details: Box::new(AdminErrorDetails {
                 order_width_mm: Some(order_width_mm),
                 roll_width_mm: Some(roll_width_mm),
-                minimum_width_mm: Some(order_width_mm),
+                minimum_width_mm: Some(minimum_width_mm),
                 maximum_width_mm: Some(maximum_width_mm),
                 ..AdminErrorDetails::default()
             }),

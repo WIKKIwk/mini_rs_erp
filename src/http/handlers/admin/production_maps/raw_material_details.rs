@@ -5,6 +5,9 @@ use crate::core::gscale::models::RawMaterialStockEntry;
 use crate::core::production_map::ProductionMapDefinition;
 use crate::core::werka::models::SupplierItem;
 
+const RULON_WIDTH_UNDERSIZE_TOLERANCE_MM: f64 = 10.0;
+const RULON_WIDTH_EXTRA_TOLERANCE_MM: f64 = 10.0;
+
 #[derive(serde::Serialize)]
 pub(super) struct RawMaterialLookupResponse {
     barcode: String,
@@ -231,19 +234,28 @@ pub(super) async fn validate_rulon_size_for_apparatus_map(
         .ok_or_else(|| production_map_error(ProductionMapError::RawMaterialRollSizeMissing))?;
     let roll_width = roll_width_mm(stock, item)
         .ok_or_else(|| production_map_error(ProductionMapError::RawMaterialRollSizeMissing))?;
-    if roll_width + f64::EPSILON < order_width
-        || roll_width > order_width + maximum_leftover_width_mm + f64::EPSILON
+    let (minimum_width_mm, maximum_width_mm) =
+        rulon_width_bounds(order_width, maximum_leftover_width_mm);
+    if roll_width + f64::EPSILON < minimum_width_mm || roll_width > maximum_width_mm + f64::EPSILON
     {
         return Err((
             StatusCode::BAD_REQUEST,
             Json(AdminErrorResponse::roll_size_mismatch(
                 order_width,
                 roll_width,
-                order_width + maximum_leftover_width_mm,
+                minimum_width_mm,
+                maximum_width_mm,
             )),
         ));
     }
     Ok(())
+}
+
+pub(super) fn rulon_width_bounds(order_width: f64, maximum_leftover_width_mm: f64) -> (f64, f64) {
+    (
+        order_width - RULON_WIDTH_UNDERSIZE_TOLERANCE_MM,
+        order_width + maximum_leftover_width_mm + RULON_WIDTH_EXTRA_TOLERANCE_MM,
+    )
 }
 
 fn rulon_width_restriction_applies(role: PrincipalRole) -> bool {

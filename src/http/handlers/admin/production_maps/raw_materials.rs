@@ -3,7 +3,7 @@ use super::raw_material_details::{
     fill_raw_material_assignment_input, item_group_path, lookup_raw_material_detail,
     raw_material_rulon_match_metrics, require_material_item_group_scope,
     require_material_warehouse_scope, resolve_raw_material_stock_item, roll_width_allowance_mm,
-    validate_rulon_size_for_apparatus_map,
+    rulon_width_bounds, validate_rulon_size_for_apparatus_map,
 };
 use super::*;
 use crate::core::apparatus_standard::{MaterialExecutionPolicy, ToolingExecutionPolicy};
@@ -330,8 +330,9 @@ async fn raw_material_execution_status(
 fn roll_execution_status(order_width: Option<f64>, roll_width: Option<f64>, allowance: f64) -> &'static str {
     match (order_width, roll_width) {
         (Some(order), Some(roll)) if order.is_finite() && roll.is_finite() && order > 0.0 && roll > 0.0 => {
-            if roll > order + allowance + f64::EPSILON { "needs_cutting" }
-            else if roll + f64::EPSILON < order { "width_mismatch" }
+            let (minimum, maximum) = rulon_width_bounds(order, allowance);
+            if roll > maximum + f64::EPSILON { "needs_cutting" }
+            else if roll + f64::EPSILON < minimum { "width_mismatch" }
             else { "compatible" }
         }
         _ => "dimensions_missing",
@@ -842,7 +843,7 @@ pub async fn raw_material_assignment_candidates(
                     Some(order_width),
                     Some(roll_width),
                     Some(leftover_width),
-                    if leftover_width <= 0.001 {
+                    if leftover_width.abs() <= 0.001 {
                         "exact_width".to_string()
                     } else {
                         "closest_width".to_string()
@@ -1056,10 +1057,12 @@ pub async fn raw_material_assignment_diagnostics(
                     ) {
                         diagnostic.order_width_mm = Some(order_width);
                         diagnostic.roll_width_mm = Some(roll_width);
-                        diagnostic.minimum_width_mm = Some(order_width);
-                        diagnostic.maximum_width_mm = roll_width_allowance_mm(&state, apparatus)
+                        let bounds = roll_width_allowance_mm(&state, apparatus)
                             .await?
-                            .map(|allowance| order_width + allowance);
+                            .map(|allowance| rulon_width_bounds(order_width, allowance));
+                        diagnostic.minimum_width_mm =
+                            Some(bounds.map_or(order_width, |(minimum, _)| minimum));
+                        diagnostic.maximum_width_mm = bounds.map(|(_, maximum)| maximum);
                     }
                     return Ok(json_response(diagnostic));
                 }
@@ -1771,8 +1774,10 @@ mod raw_material_assignment_quantity_tests {
         assert_eq!(roll_execution_status(Some(1015.0), Some(2030.0), 20.0), "needs_cutting");
         assert_eq!(roll_execution_status(Some(1015.0), Some(1015.0), 20.0), "compatible");
         assert_eq!(roll_execution_status(Some(1015.0), Some(1035.0), 20.0), "compatible");
-        assert_eq!(roll_execution_status(Some(1015.0), Some(1036.0), 20.0), "needs_cutting");
-        assert_eq!(roll_execution_status(Some(1015.0), Some(900.0), 20.0), "width_mismatch");
+        assert_eq!(roll_execution_status(Some(1015.0), Some(1045.0), 20.0), "compatible");
+        assert_eq!(roll_execution_status(Some(1015.0), Some(1046.0), 20.0), "needs_cutting");
+        assert_eq!(roll_execution_status(Some(1015.0), Some(1005.0), 20.0), "compatible");
+        assert_eq!(roll_execution_status(Some(1015.0), Some(1004.0), 20.0), "width_mismatch");
         assert_eq!(roll_execution_status(None, Some(1015.0), 20.0), "dimensions_missing");
     }
 

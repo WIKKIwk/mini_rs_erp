@@ -216,13 +216,19 @@ async fn queue_start_commit_failure_does_not_reserve_raw_material_stock() {
 async fn raw_material_assignment_checks_rulon_size_for_pechat_orders() {
     let material_store = Arc::new(RawMaterialStockLookup::default());
     material_store
-        .insert_stock("30R980", "ROLL-980", "CPP 980/35", 10.0)
+        .insert_stock("30R974", "ROLL-1000", "CPP 974/35", 10.0)
+        .await;
+    material_store
+        .insert_stock("30R975", "ROLL-1000", "CPP 975/35", 10.5)
         .await;
     material_store
         .insert_stock("30R1000", "ROLL-1000", "CPP 1000/35", 11.0)
         .await;
     material_store
-        .insert_stock("30R1020", "ROLL-1020", "CPP 1020/35", 9.0)
+        .insert_stock("30R1015", "ROLL-1000", "CPP 1015/35", 9.5)
+        .await;
+    material_store
+        .insert_stock("30R1016", "ROLL-1000", "CPP 1016/35", 9.0)
         .await;
     let mut state = test_state();
     state.gscale = GscaleService::new().with_receipt_store(material_store);
@@ -269,7 +275,7 @@ async fn raw_material_assignment_checks_rulon_size_for_pechat_orders() {
         .clone()
         .oneshot(request(
             "GET",
-            "/v1/mobile/admin/raw-material-assignments/diagnostics?barcode=30R980&order_id=zakaz-rulon-size&apparatus=apparatus%3Adefault%3Abosma_7",
+            "/v1/mobile/admin/raw-material-assignments/diagnostics?barcode=30R974&order_id=zakaz-rulon-size&apparatus=apparatus%3Adefault%3Abosma_7",
             &token,
         ))
         .await
@@ -282,9 +288,9 @@ async fn raw_material_assignment_checks_rulon_size_for_pechat_orders() {
         "raw_material_roll_size_mismatch"
     );
     assert_eq!(diagnostics_body["order_width_mm"], 985.0);
-    assert_eq!(diagnostics_body["roll_width_mm"], 980.0);
-    assert_eq!(diagnostics_body["minimum_width_mm"], 985.0);
-    assert_eq!(diagnostics_body["maximum_width_mm"], 1005.0);
+    assert_eq!(diagnostics_body["roll_width_mm"], 974.0);
+    assert_eq!(diagnostics_body["minimum_width_mm"], 975.0);
+    assert_eq!(diagnostics_body["maximum_width_mm"], 1015.0);
 
     let assigned = router
         .clone()
@@ -308,6 +314,36 @@ async fn raw_material_assignment_checks_rulon_size_for_pechat_orders() {
     assert_eq!(assigned_body["item_name"], "CPP 1000/35");
     assert_eq!(assigned_body["item_group"], "Rulon eni");
 
+    let lower_boundary = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/raw-material-assignments",
+            &token,
+            r#"{
+                "order_id":"zakaz-rulon-size",
+                "barcode":"30R975"
+            }"#,
+        ))
+        .await
+        .expect("assign lower rulon width boundary");
+    assert_eq!(lower_boundary.status(), StatusCode::OK);
+
+    let upper_boundary = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/raw-material-assignments",
+            &token,
+            r#"{
+                "order_id":"zakaz-rulon-size",
+                "barcode":"30R1015"
+            }"#,
+        ))
+        .await
+        .expect("assign upper rulon width boundary");
+    assert_eq!(upper_boundary.status(), StatusCode::OK);
+
     let undersized = router
         .clone()
         .oneshot(request_with_body(
@@ -316,7 +352,7 @@ async fn raw_material_assignment_checks_rulon_size_for_pechat_orders() {
             &token,
             r#"{
                 "order_id":"zakaz-rulon-size",
-                "barcode":"30R980"
+                "barcode":"30R974"
             }"#,
         ))
         .await
@@ -325,9 +361,9 @@ async fn raw_material_assignment_checks_rulon_size_for_pechat_orders() {
     let undersized_body = json_body(undersized).await;
     assert_eq!(undersized_body["error"], "raw_material_roll_size_mismatch");
     assert_eq!(undersized_body["order_width_mm"], 985.0);
-    assert_eq!(undersized_body["roll_width_mm"], 980.0);
-    assert_eq!(undersized_body["minimum_width_mm"], 985.0);
-    assert_eq!(undersized_body["maximum_width_mm"], 1005.0);
+    assert_eq!(undersized_body["roll_width_mm"], 974.0);
+    assert_eq!(undersized_body["minimum_width_mm"], 975.0);
+    assert_eq!(undersized_body["maximum_width_mm"], 1015.0);
 
     let oversized = router
         .clone()
@@ -337,7 +373,7 @@ async fn raw_material_assignment_checks_rulon_size_for_pechat_orders() {
             &token,
             r#"{
                 "order_id":"zakaz-rulon-size",
-                "barcode":"30R1020"
+                "barcode":"30R1016"
             }"#,
         ))
         .await
@@ -346,9 +382,9 @@ async fn raw_material_assignment_checks_rulon_size_for_pechat_orders() {
     let oversized_body = json_body(oversized).await;
     assert_eq!(oversized_body["error"], "raw_material_roll_size_mismatch");
     assert_eq!(oversized_body["order_width_mm"], 985.0);
-    assert_eq!(oversized_body["roll_width_mm"], 1020.0);
-    assert_eq!(oversized_body["minimum_width_mm"], 985.0);
-    assert_eq!(oversized_body["maximum_width_mm"], 1005.0);
+    assert_eq!(oversized_body["roll_width_mm"], 1016.0);
+    assert_eq!(oversized_body["minimum_width_mm"], 975.0);
+    assert_eq!(oversized_body["maximum_width_mm"], 1015.0);
 }
 
 #[tokio::test]
@@ -584,16 +620,20 @@ async fn optional_rulon_policy_requires_scan_once_material_is_assigned() {
 }
 
 #[tokio::test]
-async fn raw_material_assignment_limits_laminatsiya_roll_width_to_thirty_mm() {
+async fn raw_material_assignment_limits_laminatsiya_roll_width_to_ten_mm_below_and_forty_mm_above_order(
+) {
     let material_store = Arc::new(RawMaterialStockLookup::default());
+    material_store
+        .insert_stock("30L650", "ROLL-1000", "CPP 650/35", 10.0)
+        .await;
     material_store
         .insert_stock("30L660", "ROLL-1000", "CPP 660/35", 10.0)
         .await;
     material_store
-        .insert_stock("30L690", "ROLL-1000", "CPP 690/35", 11.0)
+        .insert_stock("30L700", "ROLL-1000", "CPP 700/35", 11.0)
         .await;
     material_store
-        .insert_stock("30L691", "ROLL-1000", "CPP 691/35", 9.0)
+        .insert_stock("30L701", "ROLL-1000", "CPP 701/35", 9.0)
         .await;
     let mut state = test_state();
     state.gscale = GscaleService::new().with_receipt_store(material_store);
@@ -671,10 +711,12 @@ async fn raw_material_assignment_limits_laminatsiya_roll_width_to_thirty_mm() {
         .expect("laminatsiya candidates");
     assert_eq!(candidates.status(), StatusCode::OK);
     let candidates_body = json_body(candidates).await;
-    assert_eq!(candidates_body.as_array().map(Vec::len), Some(2));
+    assert_eq!(candidates_body.as_array().map(Vec::len), Some(3));
     assert_eq!(candidates_body[0]["barcode"], "30L660");
-    assert_eq!(candidates_body[1]["barcode"], "30L690");
-    assert_eq!(candidates_body[1]["leftover_width_mm"], 30.0);
+    assert_eq!(candidates_body[1]["barcode"], "30L650");
+    assert_eq!(candidates_body[1]["leftover_width_mm"], -10.0);
+    assert_eq!(candidates_body[2]["barcode"], "30L700");
+    assert_eq!(candidates_body[2]["leftover_width_mm"], 40.0);
 
     let maximum_allowed = router
         .clone()
@@ -684,7 +726,7 @@ async fn raw_material_assignment_limits_laminatsiya_roll_width_to_thirty_mm() {
             &material_token,
             r#"{
                 "order_id":"zakaz-laminatsiya-rulon-size",
-                "barcode":"30L690",
+                "barcode":"30L700",
                 "apparatus":"apparatus:default:asset-007"
             }"#,
         ))
@@ -694,6 +736,22 @@ async fn raw_material_assignment_limits_laminatsiya_roll_width_to_thirty_mm() {
     let maximum_body = json_body(maximum_allowed).await;
     assert_eq!(maximum_status, StatusCode::OK, "{maximum_body:?}");
 
+    let lower_boundary = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/raw-material-assignments",
+            &material_token,
+            r#"{
+                "order_id":"zakaz-laminatsiya-rulon-size",
+                "barcode":"30L650",
+                "apparatus":"apparatus:default:asset-007"
+            }"#,
+        ))
+        .await
+        .expect("assign lower laminatsiya width boundary");
+    assert_eq!(lower_boundary.status(), StatusCode::OK);
+
     let oversized = router
         .oneshot(request_with_body(
             "POST",
@@ -701,7 +759,7 @@ async fn raw_material_assignment_limits_laminatsiya_roll_width_to_thirty_mm() {
             &material_token,
             r#"{
                 "order_id":"zakaz-laminatsiya-rulon-size",
-                "barcode":"30L691",
+                "barcode":"30L701",
                 "apparatus":"apparatus:default:asset-007"
             }"#,
         ))
@@ -711,7 +769,7 @@ async fn raw_material_assignment_limits_laminatsiya_roll_width_to_thirty_mm() {
     let oversized_body = json_body(oversized).await;
     assert_eq!(oversized_body["error"], "raw_material_roll_size_mismatch");
     assert_eq!(oversized_body["order_width_mm"], 660.0);
-    assert_eq!(oversized_body["roll_width_mm"], 691.0);
+    assert_eq!(oversized_body["roll_width_mm"], 701.0);
 }
 
 #[tokio::test]
