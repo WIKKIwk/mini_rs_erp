@@ -183,45 +183,16 @@ pub(super) fn apply_authoritative_calculation(
     Ok(())
 }
 
-fn spawn_order_integrations(
-    state: AppState,
+fn spawn_order_sheet_append(
+    order_sheets: std::sync::Arc<dyn crate::google_sheets::OrderSheetSink>,
     map: ProductionMapDefinition,
     template: CalculateOrderTemplate,
-    owner_key: String,
-    sender_display_name: String,
-    sender_phone: String,
 ) {
+    // Mobile orders sync to Sheets only. Telegram group delivery belongs to
+    // the bot intake flow, not to saving an order through the Mobile API.
     tokio::spawn(async move {
-        if let Err(error) = state.order_sheets.append_order(&map, &template).await {
+        if let Err(error) = order_sheets.append_order(&map, &template).await {
             tracing::warn!(?error, map_id = %map.id, "google sheets order append failed");
-        }
-        // Order, map and calculation are committed before this task starts.
-        // Only external notifications are best-effort background work.
-        let image = if template.image_id.trim().is_empty() {
-            None
-        } else {
-            match state
-                .calculate_orders
-                .get_image(&owner_key, &template.image_id)
-                .await
-            {
-                Ok(image) => image,
-                Err(error) => {
-                    tracing::warn!(
-                        ?error,
-                        image_id = %template.image_id,
-                        "telegram order image lookup failed"
-                    );
-                    None
-                }
-            }
-        };
-        if let Err(error) = state
-            .telegram
-            .notify_order_created(map, template, image, sender_display_name, sender_phone)
-            .await
-        {
-            tracing::warn!(?error, "telegram order delivery failed");
         }
     });
 }

@@ -418,13 +418,10 @@ pub async fn production_map_save_with_order(
             .await
             .map_err(production_map_error)?;
         state.production_maps.notify_live();
-        spawn_order_integrations(
-            state.clone(),
+        spawn_order_sheet_append(
+            state.order_sheets.clone(),
             saved.map.clone(),
             snapshot,
-            owner_key,
-            principal.display_name.clone(),
-            principal.phone.clone(),
         );
         return Ok(json_response(serde_json::json!({
             "ok": true, "saved": saved, "template": saved_template,
@@ -504,13 +501,10 @@ pub async fn production_map_save_with_order(
             .cloned()
             .or_else(|| saved_template.clone())
     {
-        spawn_order_integrations(
-            state.clone(),
+        spawn_order_sheet_append(
+            state.order_sheets.clone(),
             saved_map.map.clone(),
             template,
-            owner_key,
-            principal.display_name.clone(),
-            principal.phone.clone(),
         );
     }
     Ok(json_response(serde_json::json!({
