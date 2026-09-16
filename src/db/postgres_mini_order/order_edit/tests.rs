@@ -204,18 +204,23 @@ async fn order_edit_postgres_atomic_save_history_and_races() {
         service::CanonicalApparatusService,
         test_support::{TestApparatusSpec, canonical_draft},
     };
-    let spec = TestApparatusSpec::cut("apparatus:test:cut", "Cut");
-    CanonicalApparatusService::new(std::sync::Arc::new(
+    let apparatus_service = CanonicalApparatusService::new(std::sync::Arc::new(
         crate::db::postgres_canonical_apparatus::PostgresCanonicalApparatusRepository::new(
             pool.clone(),
         ),
-    ))
-    .seed_for_test(
-        ApparatusId::new(spec.apparatus_id).unwrap(),
-        canonical_draft(&spec),
-    )
-    .await
-    .unwrap();
+    ));
+    for spec in [
+        TestApparatusSpec::cut("apparatus:test:cut", "Cut"),
+        TestApparatusSpec::laminate("apparatus:test:lam", "Laminate"),
+    ] {
+        apparatus_service
+            .seed_for_test(
+                ApparatusId::new(spec.apparatus_id).unwrap(),
+                canonical_draft(&spec),
+            )
+            .await
+            .unwrap();
+    }
     let maps = PostgresProductionMapStore::new(pool.clone());
     let sink = PostgresMiniOrderSink::new(pool.clone());
     let template = CalculateOrderTemplate {
@@ -237,12 +242,21 @@ async fn order_edit_postgres_atomic_save_history_and_races() {
             "order_number": number, "order_kg": 500, "width_mm": 615, "roll_count": 6,
             "nodes": [{"id":"start", "kind":"start", "title":"Start"},
                 {"id":"cut", "kind":"apparatus", "title":"Cut", "apparatus_id":"apparatus:test:cut"},
+                {"id":"lam", "kind":"apparatus", "title":"Laminate", "apparatus_id":"apparatus:test:lam"},
                 {"id":"end", "kind":"end", "title":"End"}],
-            "edges": [{"from":"start","to":"cut"},{"from":"cut","to":"end"}],
+            "edges": [{"from":"start","to":"cut"},{"from":"cut","to":"lam"},{"from":"lam","to":"end"}],
         })).unwrap();
         maps.put_map(map.clone()).await.unwrap();
         sink.save_order(&map, &template).await.unwrap();
     }
+    // A downstream queue head must allow both form loading and saving while
+    // the order remains behind another order at its initial physical stage.
+    maps.put_apparatus_sequence(
+        "apparatus:test:lam",
+        vec!["zakaz-1002".into(), "zakaz-1001".into()],
+    )
+    .await
+    .unwrap();
     let head = sink.order_edit_source("zakaz-1001").await;
     assert!(matches!(head, Err(Error::Locked(_))), "{head:?}");
     let source = sink.order_edit_source("zakaz-1002").await.unwrap();

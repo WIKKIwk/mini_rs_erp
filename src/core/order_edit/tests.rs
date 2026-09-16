@@ -10,30 +10,102 @@ use crate::core::production_map::{
 };
 use std::collections::BTreeMap;
 
+fn queue_position_map() -> ProductionMapDefinition {
+    // Node array order is deliberately different from production order;
+    // transparent tasks must not hide the physical predecessors.
+    serde_json::from_value(serde_json::json!({
+        "id": "edit", "product_code": "P", "title": "P",
+        "nodes": [
+            {"id":"lam", "kind":"apparatus", "title":"Laminate", "apparatus_id":"apparatus:test:lam"},
+            {"id":"cut", "kind":"apparatus", "title":"Cut", "apparatus_id":"apparatus:test:cut"},
+            {"id":"print", "kind":"apparatus", "title":"Print", "apparatus_id":"apparatus:test:print"},
+            {"id":"start", "kind":"start", "title":"Start"},
+            {"id":"prepare", "kind":"task", "title":"Prepare"},
+            {"id":"dry", "kind":"task", "title":"Dry"},
+            {"id":"end", "kind":"end", "title":"End"}
+        ],
+        "edges": [
+            {"from":"start", "to":"prepare"},
+            {"from":"prepare", "to":"print"},
+            {"from":"print", "to":"dry"},
+            {"from":"dry", "to":"lam"},
+            {"from":"lam", "to":"cut"},
+            {"from":"cut", "to":"end"}
+        ]
+    }))
+    .unwrap()
+}
+
 #[test]
-fn order_edit_blocks_first_on_any_apparatus_and_first_actionable() {
+fn order_edit_allows_downstream_head_when_initial_stage_is_fifth() {
+    let map = queue_position_map();
+    let sequences = BTreeMap::from([
+        (
+            "apparatus:test:print".into(),
+            ["first", "second", "third", "fourth", "edit"]
+                .map(String::from)
+                .to_vec(),
+        ),
+        ("apparatus:test:lam".into(), vec!["edit".into()]),
+        ("apparatus:test:cut".into(), vec!["edit".into()]),
+        ("apparatus:test:unrelated".into(), vec!["edit".into()]),
+    ]);
+    assert!(check_queue_position(&map, &sequences, &BTreeMap::new()).is_ok());
+}
+
+#[test]
+fn order_edit_blocks_initial_head_and_first_actionable() {
+    let map = queue_position_map();
     let mut sequences = BTreeMap::from([(
-        "apparatus:test:a".into(),
-        vec!["first".into(), "edit".into()],
+        "apparatus:test:print".into(),
+        vec!["edit".into(), "first".into()],
     )]);
     let mut states = BTreeMap::new();
-    assert!(check_queue_position("edit", &sequences, &states).is_ok());
-    let reason = check_queue_position("first", &sequences, &states)
+    let reason = check_queue_position(&map, &sequences, &states)
         .unwrap_err()
         .to_string();
-    assert!(reason.contains("navbatida birinchi"));
-    assert!(reason.contains("Barcha apparatlardagi navbatini tekshiring"));
+    assert!(reason.contains("boshlang‘ich apparat navbatida birinchi"));
+    sequences.insert(
+        "apparatus:test:print".into(),
+        vec!["first".into(), "edit".into()],
+    );
+    assert!(check_queue_position(&map, &sequences, &states).is_ok());
     states.insert(
-        "apparatus:test:a".into(),
+        "apparatus:test:print".into(),
         BTreeMap::from([("first".into(), State::Completed)]),
     );
-    assert!(check_queue_position("edit", &sequences, &states).is_err());
-    states.clear();
+    assert!(check_queue_position(&map, &sequences, &states).is_err());
+}
+
+#[test]
+fn order_edit_checks_initial_alternatives_but_not_downstream_alternatives() {
+    let mut map = queue_position_map();
+    for stage in ["print", "lam"] {
+        let node = map.nodes.iter_mut().find(|node| node.id == stage).unwrap();
+        node.alternative_group_id = stage.into();
+        let mut alternative = node.clone();
+        alternative.id = format!("{stage}-alternative");
+        alternative.apparatus_id = format!("apparatus:test:{stage}-alternative");
+        map.nodes.push(alternative);
+    }
+    let mut sequences = BTreeMap::from([
+        (
+            "apparatus:test:print".into(),
+            vec!["first".into(), "edit".into()],
+        ),
+        (
+            "apparatus:test:print-alternative".into(),
+            vec!["first".into(), "edit".into()],
+        ),
+        ("apparatus:test:lam".into(), vec!["edit".into()]),
+        ("apparatus:test:lam-alternative".into(), vec!["edit".into()]),
+    ]);
+    assert!(check_queue_position(&map, &sequences, &BTreeMap::new()).is_ok());
     sequences.insert(
-        "apparatus:test:b".into(),
+        "apparatus:test:print-alternative".into(),
         vec!["edit".into(), "first".into()],
     );
-    assert!(check_queue_position("edit", &sequences, &states).is_err());
+    assert!(check_queue_position(&map, &sequences, &BTreeMap::new()).is_err());
 }
 
 #[test]

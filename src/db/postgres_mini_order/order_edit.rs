@@ -304,7 +304,11 @@ async fn check_queues(tx: &mut Transaction<'_, Postgres>, id: &str) -> Result<()
             ApparatusQueueOrderState::parse(&state).ok_or(Error::Store)?,
         );
     }
-    check_queue_position(id, &sequences, &states)
+    let map = maps
+        .iter()
+        .find(|map| map.id == id)
+        .ok_or(Error::NotFound)?;
+    check_queue_position(map, &sequences, &states)
 }
 
 pub(super) async fn save(

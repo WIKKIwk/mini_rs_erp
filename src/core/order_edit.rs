@@ -29,7 +29,7 @@ pub enum OrderEditError {
 }
 
 pub(crate) fn check_queue_position(
-    order_id: &str,
+    map: &ProductionMapDefinition,
     sequences: &std::collections::BTreeMap<String, Vec<String>>,
     states: &std::collections::BTreeMap<
         String,
@@ -39,15 +39,26 @@ pub(crate) fn check_queue_position(
         >,
     >,
 ) -> Result<(), OrderEditError> {
-    use super::production_map::queue_state::first_actionable_order_id;
+    use super::production_map::{chain, queue_state::first_actionable_order_id};
+    // Only entry stages can start this untouched order. A downstream queue
+    // head still waits for its physical predecessors and must not block edits.
+    let initial_apparatuses = chain::linear_work_stages(map)
+        .into_iter()
+        .filter(|stage| chain::previous_work_stages_for_node(map, &stage.node_id).is_empty())
+        .filter_map(|stage| stage.apparatus_id)
+        .collect::<std::collections::BTreeSet<_>>();
+    let order_id = map.id.as_str();
     for (apparatus, sequence) in sequences {
+        if !initial_apparatuses.contains(apparatus) {
+            continue;
+        }
         let empty = std::collections::BTreeMap::new();
         if sequence.first().is_some_and(|id| id == order_id)
             || first_actionable_order_id(sequence, states.get(apparatus).unwrap_or(&empty))
                 == Some(order_id)
         {
             return Err(OrderEditError::Locked(
-                "Buyurtma kamida bitta apparat navbatida birinchi yoki ishga tushirish uchun birinchi hisoblanadi. Barcha apparatlardagi navbatini tekshiring. Faqat birinchi bo‘lmagan va hech qanday harakat boshlanmagan buyurtmani tahrirlash mumkin",
+                "Buyurtma production mapdagi boshlang‘ich apparat navbatida birinchi yoki ishga tushirish uchun birinchi hisoblanadi. Boshlang‘ich bosqichdagi navbatini tekshiring. Faqat birinchi bo‘lmagan va hech qanday harakat boshlanmagan buyurtmani tahrirlash mumkin",
             ));
         }
     }
