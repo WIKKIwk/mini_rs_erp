@@ -59,6 +59,107 @@ async fn raw_material_assignment_orders_only_return_active_orders() {
 }
 
 #[tokio::test]
+async fn material_taminotchi_rps_batch_can_link_active_order() {
+    let state = test_state();
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::MaterialTaminotchi,
+            principal_ref: "material-rps-order".to_string(),
+            role_id: "material_taminotchi".to_string(),
+            assigned_apparatus: vec!["apparatus:default:bosma_7".to_string()],
+            assigned_item_groups: vec!["Kraska".to_string()],
+        })
+        .await
+        .expect("material assignment");
+    assign_warehouse_to_principal(
+        &state,
+        PrincipalRole::MaterialTaminotchi,
+        "material-rps-order",
+        "Stores - A",
+    )
+    .await;
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+    let material_token = session_for(
+        &state,
+        PrincipalRole::MaterialTaminotchi,
+        "material-rps-order",
+    )
+    .await;
+    let router = build_router(state);
+
+    let map = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &admin_token,
+            &pechat_order_map_json(
+                "zakaz-material-rps-order",
+                "Material RPS order",
+                "8816",
+                "apparatus:default:bosma_7",
+            ),
+        ))
+        .await
+        .expect("production map save");
+    assert_eq!(map.status(), StatusCode::OK);
+
+    let rule = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/raw-material-rules",
+            &admin_token,
+            &canonical_requirement_set_material_policy_body(
+                "apparatus:default:bosma_7",
+                1,
+                &["Kraska"],
+                true,
+            ),
+        ))
+        .await
+        .expect("material rule save");
+    assert_eq!(rule.status(), StatusCode::OK);
+
+    let started = router
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/rps/batch/start",
+            &material_token,
+            r#"{
+                "client_batch_id":"material-rps-order-batch",
+                "driver_url":"http://127.0.0.1:39117",
+                "item_code":"INK-BLACK",
+                "item_name":"client supplied name",
+                "warehouse":"Stores - A",
+                "printer":"godex",
+                "print_mode":"label",
+                "quantity_source":"manual",
+                "manual_qty_kg":2.5,
+                "length_m":125,
+                "order_id":"zakaz-material-rps-order",
+                "apparatus":"apparatus:default:bosma_7"
+            }"#,
+        ))
+        .await
+        .expect("rps batch start");
+    let status = started.status();
+    let body = json_body(started).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["batch"]["order_assignment"]["order_id"], "zakaz-material-rps-order");
+    assert_eq!(
+        body["batch"]["order_assignment"]["apparatus"],
+        "apparatus:default:bosma_7"
+    );
+    assert_eq!(
+        body["batch"]["order_assignment"]["assigned_by_role"],
+        "material_taminotchi"
+    );
+}
+
+#[tokio::test]
 async fn raw_material_assignment_candidates_only_return_assignable_stock() {
     let material_store = Arc::new(RawMaterialStockLookup::default());
     material_store

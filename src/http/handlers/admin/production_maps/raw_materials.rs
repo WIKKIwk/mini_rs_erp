@@ -27,7 +27,12 @@ pub(crate) async fn validate_receipt_order_assignment(
     micron: Option<f64>,
 ) -> Result<Option<serde_json::Value>, AdminError> {
     if order_id.trim().is_empty() { return Ok(None); }
-    if principal.role != PrincipalRole::TayyorlovMasteri { return Err(forbidden()); }
+    if !matches!(
+        principal.role,
+        PrincipalRole::TayyorlovMasteri | PrincipalRole::MaterialTaminotchi
+    ) {
+        return Err(forbidden());
+    }
     require_capability(state, principal, Capability::RawMaterialAssign).await?;
     let destination = state.warehouses.warehouse(warehouse).await.map_err(warehouse_error)?;
     if !destination.is_some_and(|warehouse| !warehouse.is_group) {
@@ -51,11 +56,12 @@ pub(crate) async fn validate_receipt_order_assignment(
             order_id: order_id.trim().into(), apparatus: apparatus.trim().into(), ..Default::default()
         }, stock, item,
     ).await?;
+    let actor = queue_action_actor(principal);
     Ok(Some(serde_json::json!({
         "order_id":input.order_id,"apparatus":input.apparatus,"apparatus_id":input.apparatus,
         "barcode":"","item_code":input.item_code,"item_name":input.item_name,"item_group":input.item_group,
-        "assigned_by_role":"tayyorlov_masteri","assigned_by_ref":principal.ref_,
-        "assigned_by_display_name":principal.display_name,
+        "assigned_by_role":actor.role,"assigned_by_ref":actor.ref_,
+        "assigned_by_display_name":actor.display_name,
         "assigned_at":time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339).unwrap_or_default()
     })))
 }
