@@ -429,6 +429,20 @@ impl ProductionMapService {
                 freeze_request_safe_stop_with_issue,
             );
         }
+        if freeze_request_finalization || freeze_with_issue {
+            let original = active_session.as_ref()
+                .ok_or(ProductionMapError::OrderFreezeTargetNotFound)?;
+            // Safe stopping another shift's work is not a worker handoff.
+            // Keep production ownership; the queue/progress events record
+            // the actual operator who stopped it.
+            let owner = serde_json::json!({
+                "role": original.worker_role,
+                "ref": original.worker_ref,
+                "display_name": original.worker_display_name,
+            });
+            event.payload_json["freeze_session_owner"] = owner.clone();
+            preserve_freeze_work_owner(&mut progress, original, &actor, &owner);
+        }
         let has_unprocessed_previous_wips = if queue_action
             == queue_state::ApparatusQueueAction::Complete
             && to_state == queue_state::ApparatusQueueOrderState::Completed
@@ -975,11 +989,14 @@ fn validate_freeze_request_pause(
     let request_id_matches = !supplied_request_id.is_empty()
         && request.request_id.trim() == supplied_request_id
         && request.status == OrderFreezeRequestStatus::Pending;
-    let worker_matches = request.target_worker_role.trim() == actor.role.trim()
-        && request.target_worker_ref.trim() == actor.ref_.trim();
+    // Apparatus assignment is checked before entering this function. A
+    // replacement worker of the same role may stop the targeted session;
+    // target_worker_ref remains audit context, not an exclusive permission.
+    let worker_role_matches = request.target_worker_role.trim() == actor.role.trim()
+        && !actor.ref_.trim().is_empty();
     let apparatus_matches =
         super::super::types::apparatus_ids_match(&request.target_apparatus, apparatus);
-    if !request_id_matches || !worker_matches || !apparatus_matches {
+    if !request_id_matches || !worker_role_matches || !apparatus_matches {
         return Err(ProductionMapError::OrderFreezeRequestMismatch);
     }
     Ok(())
@@ -1000,6 +1017,37 @@ fn validate_freeze_request_target_session(
         return Err(ProductionMapError::OrderFreezeRequestMismatch);
     }
     Ok(())
+}
+
+fn preserve_freeze_work_owner(
+    progress: &mut QueueProgressRecords,
+    original: &OrderRunSession,
+    actor: &QueueActionActor,
+    owner: &serde_json::Value,
+) {
+    let performed_by = serde_json::json!({
+        "role": actor.role, "ref": actor.ref_, "display_name": actor.display_name,
+    });
+    let stamp = |payload: &mut serde_json::Value| {
+        if !payload.is_object() { *payload = serde_json::json!({}); }
+        payload["freeze_session_owner"] = owner.clone();
+        payload["freeze_performed_by"] = performed_by.clone();
+    };
+    if let Some(session) = &mut progress.session {
+        session.worker_role.clone_from(&original.worker_role);
+        session.worker_ref.clone_from(&original.worker_ref);
+        session.worker_display_name.clone_from(&original.worker_display_name);
+        stamp(&mut session.payload_json);
+    }
+    if let Some(event) = &mut progress.progress_event {
+        stamp(&mut event.payload_json);
+    }
+    for batch in progress.progress_batch.iter_mut().chain(progress.progress_batches.iter_mut()) {
+        batch.worker_role.clone_from(&original.worker_role);
+        batch.worker_ref.clone_from(&original.worker_ref);
+        batch.worker_display_name.clone_from(&original.worker_display_name);
+        stamp(&mut batch.payload_json);
+    }
 }
 
 fn mark_freeze_request_safe_stop_progress(

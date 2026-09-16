@@ -1,7 +1,7 @@
 use super::*;
 
 #[tokio::test]
-async fn admin_freeze_request_is_finalized_by_linked_worker_safe_stop() {
+async fn admin_freeze_request_is_finalized_by_assigned_replacement_worker_safe_stop() {
     let production_store = Arc::new(MemoryProductionMapStore::new());
     let mut state = test_state();
     state.production_maps = production_map_service_with_store(&state, production_store.clone());
@@ -23,6 +23,19 @@ async fn admin_freeze_request_is_finalized_by_linked_worker_safe_stop() {
         "worker-laminatsiya-freeze-request",
     )
     .await;
+    state.admin.upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+        principal_role: PrincipalRole::Aparatchi,
+        principal_ref: "worker-replacement".into(), role_id: "aparatchi".into(),
+        assigned_apparatus: vec!["apparatus:default:asset-007".into()],
+        assigned_item_groups: Vec::new(),
+    }).await.unwrap();
+    let replacement_token = session_for(&state, PrincipalRole::Aparatchi, "worker-replacement").await;
+    state.admin.upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+        principal_role: PrincipalRole::Aparatchi,
+        principal_ref: "worker-unassigned".into(), role_id: "aparatchi".into(),
+        assigned_apparatus: Vec::new(), assigned_item_groups: Vec::new(),
+    }).await.unwrap();
+    let unassigned_token = session_for(&state, PrincipalRole::Aparatchi, "worker-unassigned").await;
     let router = build_router(state);
     let order_id = "zakaz-laminatsiya-freeze-request";
 
@@ -120,6 +133,16 @@ async fn admin_freeze_request_is_finalized_by_linked_worker_safe_stop() {
         .as_str()
         .expect("linked freeze request id")
         .to_string();
+
+    let denied = router.clone().oneshot(request_with_body(
+        "POST", "/v1/mobile/admin/production-maps/queue-action", &unassigned_token,
+        &serde_json::json!({"apparatus":"apparatus:default:asset-007", "order_id":order_id,
+            "action":"detach_roll", "freeze_request_id":freeze_request_id,
+            "description":"unassigned worker must not freeze"}).to_string(),
+    )).await.unwrap();
+    assert_eq!(denied.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(denied).await["error"], "apparatus_not_assigned");
+    let worker_token = replacement_token;
 
     let missing_request_id = router
         .clone()
@@ -290,6 +313,11 @@ async fn admin_freeze_request_is_finalized_by_linked_worker_safe_stop() {
     assert_eq!(safe_stop_body["states"][order_id], "frozen");
     assert_eq!(safe_stop_body["order_control"]["state"], "frozen");
     assert_eq!(safe_stop_body["session"]["status"], "frozen");
+    assert_eq!(safe_stop_body["session"]["session_id"], session_id);
+    assert_eq!(safe_stop_body["session"]["worker_ref"], "worker-laminatsiya-freeze-request");
+    assert_eq!(safe_stop_body["progress_batch"]["worker_ref"], "worker-laminatsiya-freeze-request");
+    assert_eq!(safe_stop_body["progress_event"]["worker_ref"], "worker-replacement");
+    assert_eq!(safe_stop_body["session"]["payload_json"]["freeze_performed_by"]["ref"], "worker-replacement");
     assert_eq!(safe_stop_body["progress_event"]["action"], "detach_roll");
     assert_eq!(
         safe_stop_body["progress_batch"]["finished_goods_meter"],

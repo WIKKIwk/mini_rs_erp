@@ -288,6 +288,87 @@ async fn freeze_request_requires_worker_pause_then_blocks_worker_actions() {
 }
 
 #[tokio::test]
+async fn assigned_replacement_worker_can_freeze_without_taking_work_ownership() {
+    for mode in ["admin-issue", "admin-output", "worker-issue"] {
+        let store = std::sync::Arc::new(MemoryProductionMapStore::new());
+        let service = service_with_default_apparatus(store.clone()).await;
+        let order_id = format!("zakaz-replacement-freeze-{mode}");
+        let worker1 = QueueActionActor {
+            role: "aparatchi".into(), ref_: "worker-1".into(), display_name: "Worker 1".into(),
+        };
+        let worker2 = QueueActionActor {
+            ref_: "worker-2".into(), display_name: "Worker 2".into(), ..worker1.clone()
+        };
+        service.upsert_map(canonical_apparatus_stage_map(&order_id, PECHAT_ID, "Bosma"))
+            .await.unwrap();
+        let started = start_with_qolip(&service, PECHAT_ID, &order_id, worker1.clone())
+            .await.unwrap();
+        let original = started.session.unwrap();
+        let mut input = QueueProgressInput {
+            description: "Worker 1 ketgan; Worker 2 rulonni xavfsiz yechdi".into(),
+            ..Default::default()
+        };
+        let action = if mode == "worker-issue" {
+            input.freeze_with_issue = true;
+            queue_state::ApparatusQueueAction::Freeze
+        } else {
+            let control = service.request_order_freeze(&order_id, actor("admin")).await.unwrap();
+            input.freeze_request_id = control.freeze_request.as_ref().unwrap().request_id.clone();
+            if mode == "admin-output" {
+                input.produced_qty = Some(100.0);
+                input.gross_qty = Some(20.0);
+                input.bobina_kg = Some(2.0);
+                input.uom = "m".into();
+            }
+            let mut stale = control.clone();
+            stale.freeze_request.as_mut().unwrap().target_session_id = "previous-session".into();
+            store.put_order_control_state(stale).await.unwrap();
+            assert_eq!(service.apply_apparatus_queue_action_with_progress(
+                PECHAT_ID, &order_id, queue_state::ApparatusQueueAction::DetachRoll,
+                &[PECHAT_ID.into()], worker2.clone(), input.clone(),
+            ).await, Err(ProductionMapError::OrderFreezeRequestMismatch));
+            store.put_order_control_state(control).await.unwrap();
+            queue_state::ApparatusQueueAction::DetachRoll
+        };
+        for assigned in [vec![], vec![LAMINATION_ID.into()]] {
+            assert_eq!(service.apply_apparatus_queue_action_with_progress(
+                PECHAT_ID, &order_id, action, &assigned, worker2.clone(), input.clone(),
+            ).await, Err(ProductionMapError::ApparatusNotAssigned));
+        }
+        let frozen = service.apply_apparatus_queue_action_with_progress(
+            PECHAT_ID, &order_id, action, &[PECHAT_ID.into()], worker2, input,
+        ).await.expect("assigned replacement worker safe stop");
+        let saved = frozen.session.as_ref().unwrap();
+        assert_eq!(saved.session_id, original.session_id);
+        assert_eq!(saved.worker_ref, worker1.ref_);
+        assert_eq!(saved.worker_display_name, worker1.display_name);
+        assert_eq!(saved.status, OrderRunStatus::Frozen);
+        assert_eq!(saved.payload_json["freeze_performed_by"]["ref"], "worker-2");
+        assert_eq!(saved.payload_json["freeze_session_owner"]["ref"], "worker-1");
+        let event = frozen.progress_event.as_ref().unwrap();
+        assert_eq!(event.worker_ref, "worker-2");
+        assert_eq!(event.payload_json["freeze_session_owner"]["ref"], "worker-1");
+        assert_eq!(event.description, "Worker 1 ketgan; Worker 2 rulonni xavfsiz yechdi");
+        if mode == "admin-output" {
+            let batch = frozen.progress_batch.as_ref().unwrap();
+            assert_eq!(batch.worker_ref, "worker-1");
+            assert_eq!(batch.produced_qty, 100.0);
+            assert_eq!(batch.payload_json["freeze_performed_by"]["ref"], "worker-2");
+        } else {
+            assert!(frozen.progress_batch.is_none());
+        }
+        if mode != "worker-issue" {
+            let control = frozen.order_control.as_ref().unwrap();
+            assert_eq!(control.actor.role, "admin");
+            assert_eq!(control.freeze_request.as_ref().unwrap().target_worker_ref, "worker-1");
+        }
+        let persisted = service.order_run_sessions_for_order(&order_id).await.unwrap();
+        assert_eq!(persisted[0].worker_ref, "worker-1");
+        assert_eq!(persisted[0].payload_json["freeze_performed_by"]["ref"], "worker-2");
+    }
+}
+
+#[tokio::test]
 async fn freeze_request_issue_safe_stop_rejects_partial_output_without_mutation() {
     let service =
         service_with_default_apparatus(std::sync::Arc::new(MemoryProductionMapStore::new())).await;
