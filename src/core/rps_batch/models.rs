@@ -9,6 +9,12 @@ use crate::core::text::trim_owned;
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct RpsBatchStartRequest {
     #[serde(default)]
+    pub order_id: String,
+    #[serde(default)]
+    pub apparatus: String,
+    #[serde(skip)]
+    pub order_assignment: Option<serde_json::Value>,
+    #[serde(default)]
     pub client_batch_id: String,
     #[serde(default)]
     pub driver_url: String,
@@ -41,6 +47,12 @@ pub struct RpsBatchStartRequest {
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct RpsBatchUpdateRequest {
     #[serde(default)]
+    pub order_id: String,
+    #[serde(default)]
+    pub apparatus: String,
+    #[serde(skip)]
+    pub order_assignment: Option<serde_json::Value>,
+    #[serde(default)]
     pub batch_id: String,
     #[serde(default)]
     pub expected_revision: u64,
@@ -66,6 +78,8 @@ pub struct RpsBatchUpdateRequest {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RpsBatchSession {
+    #[serde(default)]
+    pub order_assignment: Option<serde_json::Value>,
     pub id: String,
     #[serde(default)]
     pub batch_code: String,
@@ -248,6 +262,9 @@ impl RpsBatchSession {
             ..
         } = request;
         MaterialReceiptPrintRequest {
+            order_id: self.order_assignment.as_ref().and_then(|v| v["order_id"].as_str()).unwrap_or_default().into(),
+            apparatus: self.order_assignment.as_ref().and_then(|v| v["apparatus"].as_str()).unwrap_or_default().into(),
+            order_assignment: self.order_assignment.clone(),
             driver_url: trimmed_or(driver_url, &self.driver_url),
             item_code: self.item_code.clone(),
             item_name: self.item_name.clone(),

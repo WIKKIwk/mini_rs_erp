@@ -271,7 +271,7 @@ impl AppState {
         let system_monitor_hub = SystemMonitorHub::new();
         let backup_doctor = BackupDoctor::from_env();
         backup_doctor.start_scheduler();
-        let gscale = build_gscale_service(scale_driver.clone(), warehouse_events.clone());
+        let gscale = build_gscale_service(scale_driver.clone(), warehouse_events.clone(), production_maps.clone());
         let rezka = build_rezka_service(scale_driver);
         let qolip = build_qolip_service();
         let returned_paint = build_returned_paint_service();

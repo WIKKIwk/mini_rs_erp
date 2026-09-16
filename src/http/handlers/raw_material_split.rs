@@ -85,6 +85,7 @@ pub async fn split(
 ) -> Result<Json<Value>, ApiError> {
     let actor = authorize(&state, &headers).await?;
     let result = store(&state)?.split(&actor, input).await.map_err(error)?;
+    state.production_maps.notify_live();
     state.warehouse_events.notify_updated(
         result["warehouse"].as_str().unwrap_or_default(),
         "raw_material_stock",

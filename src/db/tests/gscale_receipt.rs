@@ -51,6 +51,7 @@ async fn postgres_gscale_receipt_preserves_precision_and_supports_stock_correcti
             actor_role: "material_taminotchi".to_string(),
             actor_ref: "MAT-001".to_string(),
             actor_display_name: "Material".to_string(),
+            order_assignment: None,
         })
         .await
         .expect("create receipt draft");

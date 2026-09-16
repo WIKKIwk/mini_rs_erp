@@ -399,6 +399,7 @@ impl MaterialReceiptStorePort for FakeReceiptStore {
             .push(format!("create:{:.3}", input.qty));
         Ok(MaterialReceiptDraft {
             name: "MAT-STE-ROUTE".to_string(),
+            order_assignment: input.order_assignment,
             item_code: input.item_code,
             warehouse: input.warehouse,
             qty: input.qty,
@@ -437,6 +438,7 @@ impl MaterialReceiptStorePort for FailingSubmitStore {
             .push(format!("create:{:.3}", input.qty));
         Ok(MaterialReceiptDraft {
             name: "MAT-STE-ROUTE".to_string(),
+            order_assignment: input.order_assignment,
             item_code: input.item_code,
             warehouse: input.warehouse,
             qty: input.qty,
@@ -479,6 +481,7 @@ impl MaterialReceiptStorePort for SlowReceiptStore {
             .push(format!("create:{:.3}", input.qty));
         Ok(MaterialReceiptDraft {
             name: "MAT-STE-ROUTE".to_string(),
+            order_assignment: input.order_assignment,
             item_code: input.item_code,
             warehouse: input.warehouse,
             qty: input.qty,

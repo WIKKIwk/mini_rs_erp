@@ -4,6 +4,7 @@ mod items;
 mod pending_orders;
 pub use pending_orders::{pending_orders, pending_order_image};
 mod production_maps;
+pub(crate) use production_maps::validate_receipt_order_assignment;
 mod supplier_mutations;
 mod suppliers;
 mod system;

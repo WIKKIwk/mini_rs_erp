@@ -93,6 +93,7 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
             "actor_role": input.actor_role.trim(),
             "actor_ref": input.actor_ref.trim(),
             "actor_display_name": input.actor_display_name.trim(),
+            "order_assignment": input.order_assignment,
         }))
         .fetch_one(&self.pool)
         .await
@@ -126,6 +127,18 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
         };
         let previous_status = raw_material_stock_status_tx(&mut tx, &row.barcode).await?;
         upsert_raw_material_stock_tx(&mut tx, &row).await?;
+        if let Some(mut assignment) = row.payload_json.get("order_assignment").filter(|value| value.is_object()).cloned() {
+            assignment["barcode"] = serde_json::json!(row.barcode);
+            assignment["item_name"] = serde_json::json!(row_item_name(&row));
+            sqlx::query("INSERT INTO mini_raw_material_assignments
+                (barcode,order_id,apparatus,canonical_apparatus_id,item_code,item_group,payload_json)
+                VALUES($1,$2,$3,$3,$4,$5,$6)")
+                .bind(&row.barcode).bind(assignment["order_id"].as_str())
+                .bind(assignment["apparatus"].as_str()).bind(&row.item_code)
+                .bind(assignment["item_group"].as_str()).bind(&assignment)
+                .execute(&mut *tx).await
+                .map_err(|error| GscalePortError::StoreWrite(error.to_string()))?;
+        }
         insert_raw_material_event_tx(&mut tx, receipt_event_draft(&row, previous_status))
             .await
             .map_err(|error| GscalePortError::StoreWrite(error.to_string()))?;

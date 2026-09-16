@@ -1711,6 +1711,20 @@ async fn raw_material_state_policy_requires_only_staged_scan_before_start() {
     assert!(requirements.assignments_satisfied);
     assert!(requirements.scan_satisfied);
 
+    let pending = service.raw_material_start_requirements_for_stock(
+        FLOW_PECHAT_ID, "zakaz-raw-1", &["30AA".into()], "30AA", Some(&[]),
+    ).await.expect("pending preparation stock");
+    assert_eq!(pending.assigned_barcodes.len(), 2);
+    assert!(pending.eligible_barcodes.is_empty());
+    assert!(pending.material_scan_required);
+    assert!(!pending.assignments_satisfied);
+    assert!(!pending.scan_satisfied);
+    let ready = service.raw_material_start_requirements_for_stock(
+        FLOW_PECHAT_ID, "zakaz-raw-1", &["30AA".into(), "30CC".into()], "30AA", Some(&["30AA".into()]),
+    ).await.expect("only compatible staged roll");
+    assert_eq!(ready.eligible_barcodes, vec!["30AA"]);
+    assert!(ready.scan_satisfied);
+
     let states = service
         .apply_apparatus_queue_action_with_material_scan(
             FLOW_PECHAT_ID,

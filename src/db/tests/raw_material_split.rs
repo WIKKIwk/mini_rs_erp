@@ -508,10 +508,76 @@ async fn raw_material_split_postgres_atomic_exact_retry_concurrency_scope_and_li
         completion.request_id.push_str("-again");
         assert!(store.split(&actor, completion).await.is_err());
     }
+    preparation_receipt_assignment_survives_split(&pool, &actor, &store).await;
     pool.close().await;
     sqlx::query(&format!("DROP DATABASE {db} WITH (FORCE)"))
         .execute(&admin)
         .await
         .unwrap();
     admin.close().await;
+}
+
+async fn preparation_receipt_assignment_survives_split(pool: &PgPool, actor: &Principal, cutter: &PostgresRawMaterialSplitStore) {
+    use crate::core::apparatus_standard::{ApparatusId, CanonicalApparatusService, ProcessTechnology,
+        test_support::{canonical_draft, TestApparatusSpec}};
+    use crate::core::gscale::{models::CreateMaterialReceiptDraftInput, ports::MaterialReceiptStorePort};
+    use crate::db::{postgres_canonical_apparatus::PostgresCanonicalApparatusRepository,
+        postgres_gscale_receipt::PostgresGscaleReceiptStore};
+    let apparatus = "apparatus:default:bosma_7";
+    CanonicalApparatusService::new(std::sync::Arc::new(PostgresCanonicalApparatusRepository::new(pool.clone())))
+        .seed_for_test(ApparatusId::new(apparatus).unwrap(), canonical_draft(&TestApparatusSpec::print(
+            apparatus, "Bosma 7", ProcessTechnology::Rotogravure, Some(7),
+        ))).await.unwrap();
+    sqlx::query("INSERT INTO mini_production_maps(id,product_code,title,map_json) VALUES('zakaz-preparation','prep','Preparation','{}')")
+        .execute(pool).await.unwrap();
+    let receipts = PostgresGscaleReceiptStore::new(pool.clone());
+    let assignment = json!({"order_id":"zakaz-preparation","apparatus":apparatus,"apparatus_id":apparatus,
+        "barcode":"","item_code":"FILM","item_name":"Test film","item_group":"All Item Groups",
+        "assigned_by_role":"tayyorlov_masteri","assigned_by_ref":"preparer","assigned_by_display_name":"Preparer","assigned_at":"2026-09-16T00:00:00Z"});
+    for barcode in ["linked-parent", "supplier-parent", "busy-parent", "rollback-parent"] {
+        let draft = receipts.create_material_receipt_draft(CreateMaterialReceiptDraftInput {
+            item_code:"FILM".into(), item_name:"Test film 1000/20".into(), warehouse:"Raw W".into(),
+            barcode:barcode.into(), qty:100.0, width_mm:Some(1000.0), micron:Some(20.0), length_m:Some(2500.0),
+            actor_role:"tayyorlov_masteri".into(), actor_ref:"preparer".into(),
+            order_assignment:Some(assignment.clone()), ..Default::default()
+        }).await.unwrap();
+        receipts.submit_stock_entry_draft(&draft.name).await.unwrap();
+    }
+    let source = cutter.source(&actor.ref_, "linked-parent").await.unwrap();
+    let mut command = input("linked-parent", "linked-parent-cut");
+    command.expected_revision = source["revision"].as_str().unwrap().into();
+    let result = cutter.split(actor, command.clone()).await.unwrap();
+    assert_eq!(result["order_id"], "zakaz-preparation");
+    assert_eq!(result["apparatus"], apparatus);
+    assert_eq!(cutter.split(actor, command).await.unwrap(), result);
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM mini_raw_material_assignments WHERE barcode='linked-parent'")
+        .fetch_one(pool).await.unwrap();
+    assert_eq!(count, 0);
+    for output in result["outputs"].as_array().unwrap() {
+        let payload: Value = sqlx::query_scalar("SELECT payload_json FROM mini_raw_material_assignments WHERE barcode=$1")
+            .bind(output["barcode"].as_str().unwrap()).fetch_one(pool).await.unwrap();
+        assert_eq!(payload["order_id"], "zakaz-preparation");
+        assert_eq!(payload["apparatus"], apparatus);
+        assert_eq!(payload["item_name"], output["item_name"]);
+        assert_eq!(payload["assigned_by_role"], "tayyorlov_masteri");
+        assert_eq!(payload["parent_barcode"], "linked-parent");
+    }
+    sqlx::query("UPDATE mini_raw_material_assignments SET payload_json=jsonb_set(payload_json,'{assigned_by_role}','\"material_taminotchi\"') WHERE barcode='supplier-parent'")
+        .execute(pool).await.unwrap();
+    assert!(cutter.source(&actor.ref_, "supplier-parent").await.is_err());
+    sqlx::query("UPDATE mini_raw_material_stock SET status='in_use',reserved_order_id='zakaz-preparation' WHERE barcode='busy-parent'")
+        .execute(pool).await.unwrap();
+    assert!(cutter.source(&actor.ref_, "busy-parent").await.is_err());
+    let source = cutter.source(&actor.ref_, "rollback-parent").await.unwrap();
+    sqlx::raw_sql("CREATE FUNCTION reject_split_assignment() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+        IF NEW.payload_json->>'parent_barcode'='rollback-parent' THEN RAISE EXCEPTION 'forced child failure'; END IF; RETURN NEW; END $$;
+        CREATE TRIGGER reject_split_assignment BEFORE INSERT ON mini_raw_material_assignments FOR EACH ROW EXECUTE FUNCTION reject_split_assignment();")
+        .execute(pool).await.unwrap();
+    let mut command = input("rollback-parent", "rollback-parent-cut");
+    command.expected_revision = source["revision"].as_str().unwrap().into();
+    assert!(cutter.split(actor, command).await.is_err());
+    assert_eq!(cutter.source(&actor.ref_, "rollback-parent").await.unwrap()["kg"], "100");
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM mini_raw_material_assignments WHERE barcode='rollback-parent'")
+        .fetch_one(pool).await.unwrap();
+    assert_eq!(count, 1);
 }

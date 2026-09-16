@@ -153,8 +153,8 @@ fn receipt_event_draft(
         uom: row.uom.trim().to_string(),
         stock_status_before: previous_status,
         stock_status_after: Some("available".to_string()),
-        order_id: None,
-        apparatus: None,
+        order_id: row.payload_json["order_assignment"]["order_id"].as_str().map(str::to_string),
+        apparatus: row.payload_json["order_assignment"]["apparatus"].as_str().map(str::to_string),
         actor_role: actor_role.clone(),
         actor_ref: actor_ref.clone(),
         actor_display_name: actor_display_name.clone(),
@@ -289,6 +289,7 @@ fn stock_key(barcode: &str) -> String {
 
 fn row_to_draft(row: MaterialReceiptRow) -> MaterialReceiptDraft {
     MaterialReceiptDraft {
+        order_assignment: row.payload_json.get("order_assignment").filter(|value| value.is_object()).cloned(),
         name: row.name,
         item_code: row.item_code,
         warehouse: row.warehouse,

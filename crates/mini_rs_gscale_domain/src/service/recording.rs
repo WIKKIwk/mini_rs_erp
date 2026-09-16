@@ -38,6 +38,16 @@ pub(super) async fn record_confirmed_material_receipt(
     epc: String,
     warehouse_event_handler: Option<WarehouseEventHandler>,
 ) -> Result<String, GscaleServiceError> {
+    let existing_draft = receipt_store.material_receipt_by_barcode(&epc).await
+        .map_err(|error| GscaleServiceError::StoreWrite(error.to_string()))?;
+    if let Some(draft) = &existing_draft {
+        for key in ["order_id", "apparatus", "item_code", "assigned_by_ref"] {
+            if draft.order_assignment.as_ref().and_then(|value| value.get(key))
+                != job.order_assignment.as_ref().and_then(|value| value.get(key)) {
+                return Err(GscaleServiceError::InvalidInput("client_print_epc_already_used".into()));
+            }
+        }
+    }
     if let Some(stock) = receipt_store
         .raw_material_stock_by_barcode(&epc)
         .await
@@ -55,11 +65,7 @@ pub(super) async fn record_confirmed_material_receipt(
         return Ok(stock.source_receipt_id);
     }
 
-    let draft = match receipt_store
-        .material_receipt_by_barcode(&epc)
-        .await
-        .map_err(|error| GscaleServiceError::StoreWrite(error.to_string()))?
-    {
+    let draft = match existing_draft {
         Some(draft) => {
             validate_existing_receipt(
                 &draft.item_code,
@@ -148,6 +154,7 @@ async fn create_material_receipt_draft(
     epc: String,
 ) -> Result<MaterialReceiptDraft, GscaleServiceError> {
     let input = CreateMaterialReceiptDraftInput {
+        order_assignment: job.order_assignment.clone(),
         item_code: job.item_code.clone(),
         item_name: job.item_name.clone(),
         warehouse: job.warehouse.clone(),

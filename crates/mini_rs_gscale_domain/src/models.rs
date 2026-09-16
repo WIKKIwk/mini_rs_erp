@@ -3,6 +3,13 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct MaterialReceiptPrintRequest {
     #[serde(default)]
+    pub order_id: String,
+    #[serde(default)]
+    pub apparatus: String,
+    // Server-validated assignment; never trust an assignment supplied by a client.
+    #[serde(skip)]
+    pub order_assignment: Option<serde_json::Value>,
+    #[serde(default)]
     pub driver_url: String,
     #[serde(default)]
     pub item_code: String,
@@ -128,6 +135,7 @@ pub struct ProgressLabelPrintResponse {
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct MaterialReceiptDraft {
+    pub order_assignment: Option<serde_json::Value>,
     pub name: String,
     pub item_code: String,
     pub warehouse: String,
@@ -178,6 +186,7 @@ pub struct RawMaterialStockDeleteInput {
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CreateMaterialReceiptDraftInput {
+    pub order_assignment: Option<serde_json::Value>,
     pub item_code: String,
     pub item_name: String,
     pub warehouse: String,

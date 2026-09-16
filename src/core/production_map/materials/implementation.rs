@@ -286,20 +286,48 @@ impl ProductionMapService {
         state_material_barcodes: &[String],
         material_barcodes: &str,
     ) -> Result<RawMaterialStartRequirements, ProductionMapError> {
+        self.raw_material_start_requirements_for_stock(
+            apparatus, order_id, state_material_barcodes, material_barcodes, None,
+        ).await
+    }
+
+    pub async fn raw_material_start_requirements_for_stock(
+        &self,
+        apparatus: &str,
+        order_id: &str,
+        state_material_barcodes: &[String],
+        material_barcodes: &str,
+        usable_barcodes: Option<&[String]>,
+    ) -> Result<RawMaterialStartRequirements, ProductionMapError> {
         let apparatus_id = parse_apparatus_id(apparatus)?;
-        let assignments = self
+        let mut assignments = self
             .raw_material_assignments_for_order_apparatus(order_id, &apparatus_id)
             .await?;
         let rule = self.material_rule_for_apparatus(&apparatus_id).await?;
+        let has_commitment = rule.is_some() && !assignments.is_empty();
+        let committed_barcodes = assignments.iter().map(|assignment| normalize_barcode(&assignment.barcode)).collect::<BTreeSet<_>>().into_iter().collect();
+        if let Some(usable) = usable_barcodes {
+            assignments.retain(|assignment| usable.iter().any(|barcode|
+                barcode.trim().eq_ignore_ascii_case(assignment.barcode.trim())));
+        }
         let assignments_for_policy: &[RawMaterialAssignment] =
             if rule.is_some() { &assignments } else { &[] };
         let material_barcodes = parse_material_barcodes(std::iter::once(material_barcodes));
-        Ok(build_raw_material_start_requirements(
+        let mut requirements = build_raw_material_start_requirements(
             rule.as_ref(),
             assignments_for_policy,
             state_material_barcodes,
             &normalized_barcodes_list(&material_barcodes),
-        ))
+        );
+        // Pending preparation stock is still attached, but is never a scan
+        // candidate and must not turn an optional-material policy into a bypass.
+        if has_commitment && assignments.is_empty() {
+            requirements.material_scan_required = true;
+            requirements.assignments_satisfied = false;
+            requirements.scan_satisfied = false;
+        }
+        if has_commitment { requirements.assigned_barcodes = committed_barcodes; }
+        Ok(requirements)
     }
 
     pub async fn unlink_raw_material_assignment(

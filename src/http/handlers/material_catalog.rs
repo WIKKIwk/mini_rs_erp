@@ -15,6 +15,7 @@ pub(super) fn roll_material_item_group_roots() -> Vec<String> {
 }
 
 pub(super) enum MaterialCatalogError {
+    OrderAssignment(String),
     ReadFailed,
     ItemNotFound,
     Forbidden,
@@ -26,12 +27,13 @@ pub(super) async fn normalize_material_batch_item(
     principal: &Principal,
     request: &mut RpsBatchStartRequest,
 ) -> Result<(), MaterialCatalogError> {
-    let Some(item) = authorized_material_item(state, principal, &request.item_code).await? else {
-        return Ok(());
-    };
-    require_dimensions(state, &item, request.width_mm, request.micron).await?;
-    request.item_code = item.code;
-    request.item_name = item.name;
+    if let Some(item) = authorized_material_item(state, principal, &request.item_code).await? {
+        require_dimensions(state, &item, request.width_mm, request.micron).await?;
+        request.item_code = item.code;
+        request.item_name = item.name;
+    }
+    request.order_assignment = receipt_order_assignment(state, principal, &request.order_id, &request.apparatus,
+        &request.item_code, &request.warehouse, request.width_mm, request.micron).await?;
     Ok(())
 }
 
@@ -40,12 +42,24 @@ pub(super) async fn normalize_material_batch_update_item(
     principal: &Principal,
     request: &mut RpsBatchUpdateRequest,
 ) -> Result<(), MaterialCatalogError> {
-    let Some(item) = authorized_material_item(state, principal, &request.item_code).await? else {
-        return Ok(());
-    };
-    require_dimensions(state, &item, request.width_mm, request.micron).await?;
-    request.item_code = item.code;
-    request.item_name = item.name;
+    if let Some(item) = authorized_material_item(state, principal, &request.item_code).await? {
+        require_dimensions(state, &item, request.width_mm, request.micron).await?;
+        request.item_code = item.code;
+        request.item_name = item.name;
+    }
+    // Older clients omit order fields during batch edits. Never silently erase
+    // the server-owned commitment in that case.
+    if request.order_id.trim().is_empty() {
+        let current = state.rps_batch.state(principal).await.map_err(|_| MaterialCatalogError::ReadFailed)?;
+        if current.batch.id == request.batch_id {
+            if let Some(link) = current.batch.order_assignment {
+                request.order_id = link["order_id"].as_str().unwrap_or_default().into();
+                request.apparatus = link["apparatus"].as_str().unwrap_or_default().into();
+            }
+        }
+    }
+    request.order_assignment = receipt_order_assignment(state, principal, &request.order_id, &request.apparatus,
+        &request.item_code, &request.warehouse, request.width_mm, request.micron).await?;
     Ok(())
 }
 
@@ -54,13 +68,22 @@ pub(super) async fn normalize_material_receipt_item(
     principal: &Principal,
     request: &mut MaterialReceiptPrintRequest,
 ) -> Result<(), MaterialCatalogError> {
-    let Some(item) = authorized_material_item(state, principal, &request.item_code).await? else {
-        return Ok(());
-    };
-    require_dimensions(state, &item, request.width_mm, request.micron).await?;
-    request.item_code = item.code;
-    request.item_name = item.name;
+    if let Some(item) = authorized_material_item(state, principal, &request.item_code).await? {
+        require_dimensions(state, &item, request.width_mm, request.micron).await?;
+        request.item_code = item.code;
+        request.item_name = item.name;
+    }
+    request.order_assignment = receipt_order_assignment(state, principal, &request.order_id, &request.apparatus,
+        &request.item_code, &request.warehouse, request.width_mm, request.micron).await?;
     Ok(())
+}
+
+async fn receipt_order_assignment(
+    state: &AppState, principal: &Principal, order_id: &str, apparatus: &str,
+    item_code: &str, warehouse: &str, width_mm: Option<f64>, micron: Option<f64>,
+) -> Result<Option<serde_json::Value>, MaterialCatalogError> {
+    super::admin::validate_receipt_order_assignment(state, principal, order_id, apparatus, item_code, warehouse, width_mm, micron)
+        .await.map_err(|(_, axum::Json(error))| MaterialCatalogError::OrderAssignment(error.error))
 }
 
 async fn authorized_material_item(

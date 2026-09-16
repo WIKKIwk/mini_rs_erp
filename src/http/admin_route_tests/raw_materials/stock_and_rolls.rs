@@ -354,6 +354,7 @@ async fn raw_material_assignment_checks_rulon_size_for_pechat_orders() {
 #[tokio::test]
 async fn optional_rulon_policy_requires_scan_once_material_is_assigned() {
     let material_store = Arc::new(RawMaterialStockLookup::default());
+    material_store.insert_stock("30R1530", "ROLL-1000", "JEM 1530/25", 48.0).await;
     material_store
         .insert_stock("30R765", "ROLL-1000", "JEM 765/25", 244.5)
         .await;
@@ -379,7 +380,7 @@ async fn optional_rulon_policy_requires_scan_once_material_is_assigned() {
         .await;
     inventory_store
         .seed_assets(
-            ["30R765", "30R785"]
+            ["30R765", "30R785", "30R1530"]
                 .into_iter()
                 .map(|barcode| InventoryAsset {
                     kind: InventoryAssetKind::RawMaterial,
@@ -426,6 +427,7 @@ async fn optional_rulon_policy_requires_scan_once_material_is_assigned() {
         "material-optional-rulon",
     )
     .await;
+    let production_maps = state.production_maps.clone();
     let router = build_router(state);
 
     let map = router
@@ -531,7 +533,7 @@ async fn optional_rulon_policy_requires_scan_once_material_is_assigned() {
     assert_eq!(requirements_body["assignments_satisfied"], true);
     assert_eq!(requirements_body["scan_satisfied"], false);
 
-    let scanned_requirements = router
+    let scanned_requirements = router.clone()
         .oneshot(request(
             "GET",
             "/v1/mobile/admin/raw-material-start-requirements?order_id=zakaz-optional-rulon&apparatus=apparatus%3Adefault%3Abosma_7&material_barcodes=30R765",
@@ -545,6 +547,40 @@ async fn optional_rulon_policy_requires_scan_once_material_is_assigned() {
     assert_eq!(scanned_body["required_scan_count"], 1);
     assert_eq!(scanned_body["matched_scan_count"], 1);
     assert_eq!(scanned_body["scan_satisfied"], true);
+
+    let denied = router.clone().oneshot(request_with_body(
+        "POST", "/v1/mobile/admin/raw-material-assignments", &material_token,
+        r#"{"order_id":"zakaz-optional-rulon","barcode":"30R1530","apparatus":"apparatus:default:bosma_7"}"#,
+    )).await.unwrap();
+    assert_eq!(denied.status(), StatusCode::BAD_REQUEST, "supplier cannot attach oversized preparation roll");
+    production_maps.assign_raw_material_to_order(
+        crate::core::production_map::RawMaterialAssignmentInput {
+            order_id:"zakaz-optional-rulon".into(), barcode:"30R1530".into(),
+            apparatus:"apparatus:default:bosma_7".into(), item_code:"ROLL-1000".into(),
+            item_name:"JEM 1530/25".into(), item_group:"Rulon eni".into(),
+            item_group_path:vec!["Rulon eni".into(), "Rulon".into()],
+        },
+        &crate::core::production_map::QueueActionActor {
+            role:"tayyorlov_masteri".into(), ref_:"preparer".into(), display_name:"Preparer".into(),
+        },
+    ).await.unwrap();
+    let requirements = router.clone().oneshot(request(
+        "GET", "/v1/mobile/admin/raw-material-start-requirements?order_id=zakaz-optional-rulon&apparatus=apparatus%3Adefault%3Abosma_7&material_barcodes=30R765", &admin_token,
+    )).await.unwrap();
+    assert_eq!(requirements.status(), StatusCode::OK);
+    let body = json_body(requirements).await;
+    assert_eq!(body["assigned_barcodes"].as_array().unwrap().len(), 2);
+    assert_eq!(body["eligible_barcodes"], serde_json::json!(["30R765"]));
+    assert_eq!(body["start_assignments"].as_array().unwrap().len(), 1);
+    assert!(body["assignments"].as_array().unwrap().iter().any(|assignment|
+        assignment["barcode"] == "30R1530" && assignment["execution_status"] == "needs_cutting"));
+    assert_eq!(body["scan_satisfied"], true, "an oversized roll at the machine does not pollute eligible child scans");
+    let start = router.oneshot(request_with_body(
+        "POST", "/v1/mobile/admin/production-maps/queue-action", &admin_token,
+        r#"{"order_id":"zakaz-optional-rulon","apparatus":"apparatus:default:bosma_7","action":"start","material_barcodes":["30R1530"]}"#,
+    )).await.unwrap();
+    assert_eq!(start.status(), StatusCode::BAD_REQUEST, "worker cannot bypass compatibility with a direct start request");
+    assert_eq!(json_body(start).await["error"], "raw_material_stock_unavailable");
 }
 
 #[tokio::test]

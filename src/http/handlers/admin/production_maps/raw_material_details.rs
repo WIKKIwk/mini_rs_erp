@@ -22,7 +22,7 @@ pub(super) struct RawMaterialLookupResponse {
 pub(super) async fn fill_raw_material_assignment_input(
     state: &AppState,
     principal: &Principal,
-    mut input: RawMaterialAssignmentInput,
+    input: RawMaterialAssignmentInput,
 ) -> Result<(RawMaterialAssignmentInput, String), AdminError> {
     let barcode = input.barcode.trim();
     if barcode.is_empty() {
@@ -36,6 +36,21 @@ pub(super) async fn fill_raw_material_assignment_input(
         ));
     }
     let (stock, item) = resolve_raw_material_stock_item(state, barcode).await?;
+    let (input, warehouse) =
+        fill_raw_material_assignment_for_stock(state, principal, input, stock, item).await?;
+    require_material_warehouse_scope(state, principal, &warehouse).await?;
+    Ok((input, warehouse))
+}
+
+// The caller checks the warehouse: existing-stock assignment is owner-scoped,
+// while a preparation QR receipt may supply any authorized destination.
+pub(super) async fn fill_raw_material_assignment_for_stock(
+    state: &AppState,
+    principal: &Principal,
+    mut input: RawMaterialAssignmentInput,
+    stock: RawMaterialStockEntry,
+    item: SupplierItem,
+) -> Result<(RawMaterialAssignmentInput, String), AdminError> {
     if !stock.status.trim().eq_ignore_ascii_case("available")
         || !stock.reserved_order_id.trim().is_empty()
     {
@@ -134,7 +149,6 @@ pub(super) async fn fill_raw_material_assignment_input(
     input.item_group_path = item_group_path;
     input.apparatus = apparatus;
     require_material_item_group_scope(state, principal, &input.item_group).await?;
-    require_material_warehouse_scope(state, principal, &stock.warehouse).await?;
     Ok((input, stock.warehouse.trim().to_string()))
 }
 
@@ -330,7 +344,7 @@ pub(super) fn assigned_apparatus_contains(candidate: &str, assigned: &[String]) 
         .any(|assigned| apparatus_id_matches_text_value(candidate, assigned))
 }
 
-fn roll_width_mm(stock: &RawMaterialStockEntry, item: &SupplierItem) -> Option<f64> {
+pub(super) fn roll_width_mm(stock: &RawMaterialStockEntry, item: &SupplierItem) -> Option<f64> {
     if let Some(width_mm) = stock
         .width_mm
         .filter(|value| value.is_finite() && *value > 0.0)

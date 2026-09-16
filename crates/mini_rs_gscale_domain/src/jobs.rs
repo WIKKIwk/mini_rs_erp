@@ -101,6 +101,7 @@ impl NormalizedProgressLabelJob {
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct NormalizedMaterialReceiptJob {
+    pub(super) order_assignment: Option<serde_json::Value>,
     pub(super) driver_url: String,
     pub(super) item_code: String,
     pub(super) item_name: String,
@@ -193,6 +194,7 @@ impl NormalizedMaterialReceiptJob {
             actor_role: request.actor_role.trim().to_string(),
             actor_ref: request.actor_ref.trim().to_string(),
             actor_display_name: request.actor_display_name.trim().to_string(),
+            order_assignment: request.order_assignment.clone(),
         })
     }
 

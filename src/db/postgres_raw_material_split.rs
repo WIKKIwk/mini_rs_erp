@@ -14,7 +14,8 @@ impl From<sqlx::Error> for SplitError {
 const AVAILABLE: &str = "s.status='available' AND s.reserved_order_id='' AND s.uom='kg'
  AND s.qty > 0 AND s.width_mm > 0 AND s.micron > 0
  AND btrim(COALESCE(s.payload_json->>'inventory_transfer_id',''))=''
- AND NOT EXISTS(SELECT 1 FROM mini_raw_material_assignments a WHERE lower(a.barcode)=lower(s.barcode))
+ AND NOT EXISTS(SELECT 1 FROM mini_raw_material_assignments a WHERE lower(a.barcode)=lower(s.barcode)
+ AND COALESCE(a.payload_json->>'assigned_by_role','') <> 'tayyorlov_masteri')
  AND NOT EXISTS(SELECT 1 FROM mini_inventory_placements p
  JOIN mini_inventory_locations l ON l.id=p.physical_location_id
  LEFT JOIN mini_warehouses w ON w.id=l.warehouse_id
@@ -167,6 +168,11 @@ impl PostgresRawMaterialSplitStore {
                 "Rulon band, ko‘chirilmoqda yoki allaqachon ishlatilgan",
             ));
         }
+        // Assignment and stock consumers all lock the source stock first. Keep
+        // the preparation commitment while replacing its physical roll.
+        let assignment = sqlx::query("SELECT order_id,apparatus,canonical_apparatus_id,item_group,payload_json
+            FROM mini_raw_material_assignments WHERE lower(barcode)=lower($1) FOR UPDATE")
+            .bind(&input.source_barcode).fetch_optional(&mut *tx).await?;
         if source["revision"].as_str() != Some(input.expected_revision.as_str()) {
             return Err(SplitError::Conflict(
                 "Rulon ma’lumotlari o‘zgargan. Qayta skanerlang",
@@ -233,8 +239,30 @@ impl PostgresRawMaterialSplitStore {
                 .execute(&mut *tx).await?;
             outputs.push(output);
         }
+        if let Some(assignment) = &assignment {
+            for output in &outputs {
+                let mut payload: Value = assignment.try_get("payload_json")?;
+                payload["barcode"] = output["barcode"].clone();
+                payload["item_name"] = output["item_name"].clone();
+                payload["parent_barcode"] = json!(input.source_barcode);
+                payload["split_id"] = json!(id);
+                sqlx::query("INSERT INTO mini_raw_material_assignments
+                    (barcode,order_id,apparatus,canonical_apparatus_id,item_code,item_group,payload_json)
+                    VALUES($1,$2,$3,$4,$5,$6,$7)")
+                    .bind(output["barcode"].as_str())
+                    .bind(assignment.try_get::<String,_>("order_id")?)
+                    .bind(assignment.try_get::<String,_>("apparatus")?)
+                    .bind(assignment.try_get::<String,_>("canonical_apparatus_id")?)
+                    .bind(code).bind(assignment.try_get::<String,_>("item_group")?)
+                    .bind(payload).execute(&mut *tx).await?;
+            }
+            sqlx::query("DELETE FROM mini_raw_material_assignments WHERE lower(barcode)=lower($1)")
+                .bind(&input.source_barcode).execute(&mut *tx).await?;
+        }
         let result = json!({"id":id,"warehouse":warehouse,"source":source,"source_kg":decimal_text(source_kg),
             "output_kg":decimal_text(output_kg),"waste_kg":decimal_text(waste),"outputs":outputs,
+            "order_id":assignment.as_ref().map(|a| a.get::<String,_>("order_id")),
+            "apparatus":assignment.as_ref().map(|a| a.get::<String,_>("canonical_apparatus_id")),
             "issue_id":input.issue_id,"issue_note":issue.as_ref().map(|(_, saved)| &saved["note"]),
             "difference_kg":split_issue_decimal(difference)});
         sqlx::query("INSERT INTO mini_raw_material_splits
@@ -281,6 +309,7 @@ impl PostgresRawMaterialSplitStore {
                 .bind(owner["role"].as_str().unwrap_or("")).bind(owner["ref"].as_str().unwrap_or(""))
                 .bind(owner["name"].as_str().unwrap_or("")).bind(&id)
                 .bind(json!({"split_id":id,"parent_stock_id":parent,"waste_kg":decimal_text(waste),
+                    "order_id":result["order_id"],"apparatus":result["apparatus"],
                     "issue_id":input.issue_id,"difference_kg":split_issue_decimal(difference),
                     "gross_qty":entry["gross_kg"],"net_qty":entry["kg"],"tare_kg":entry["bobina_kg"],
                     "width_mm":entry["width_mm"],"micron":entry["micron"]}))

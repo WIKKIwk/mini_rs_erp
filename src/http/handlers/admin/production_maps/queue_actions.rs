@@ -123,7 +123,18 @@ pub async fn production_map_queue_action(
         return Ok(json_response(training_result));
     }
     let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
-    let state_material_barcodes =
+    let _queue_action_guard = state.production_maps.queue_action_guard().await;
+    let mut usable_material_barcodes = Vec::new();
+    if matches!(input.action, queue_state::ApparatusQueueAction::Start) {
+        let usable = super::raw_materials::raw_material_usable_barcodes(&state, &input.order_id, &input.apparatus).await?;
+        for barcode in &input.materials.scan_barcodes {
+            if !barcode.trim().is_empty() && !usable.iter().any(|candidate| candidate.eq_ignore_ascii_case(barcode.trim())) {
+                return Err(production_map_error(ProductionMapError::RawMaterialStockUnavailable));
+            }
+        }
+        usable_material_barcodes = usable;
+    }
+    let mut state_material_barcodes =
         if matches!(input.action, queue_state::ApparatusQueueAction::Start) {
             super::raw_materials::raw_material_state_barcodes_for_order_apparatus(
                 &state,
@@ -134,8 +145,9 @@ pub async fn production_map_queue_action(
         } else {
             Vec::new()
         };
+    state_material_barcodes.retain(|barcode| usable_material_barcodes.iter()
+        .any(|usable| usable.eq_ignore_ascii_case(barcode)));
     let preflight = validate_queue_action_preflight(&input, &apparatus)?;
-    let _queue_action_guard = state.production_maps.queue_action_guard().await;
     let returned_paint_report = prepare_returned_paint_report(
         &state,
         &principal,

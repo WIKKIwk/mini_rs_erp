@@ -1,6 +1,6 @@
 use super::*;
 use crate::core::inventory_movements::{
-    InventoryActor, InventoryAssetQuery, InventoryMovementError, InventoryRelocationBatchCreate,
+    InventoryActor, InventoryAssetKind, InventoryAssetQuery, InventoryMovementError, InventoryRelocationBatchCreate,
     InventoryRelocationCreate, InventoryReturnBatchCreate, InventoryTransferAction,
     InventoryTransferActionKind, InventoryTransferCreate, InventoryTransferQuery,
 };
@@ -59,6 +59,7 @@ pub async fn inventory_relocations(
     state
         .warehouse_events
         .notify_updated(&asset.custody_warehouse, "inventory_relocated");
+    if asset.kind == InventoryAssetKind::RawMaterial { state.production_maps.notify_live(); }
     Ok(json_response(asset))
 }
 
@@ -87,6 +88,7 @@ pub async fn inventory_relocations_batch(
             .warehouse_events
             .notify_updated(warehouse, "inventory_relocated");
     }
+    if assets.iter().any(|asset| asset.kind == InventoryAssetKind::RawMaterial) { state.production_maps.notify_live(); }
     Ok(json_response(assets))
 }
 
@@ -115,6 +117,7 @@ pub async fn inventory_returns_batch(
             .warehouse_events
             .notify_updated(warehouse, "inventory_relocated");
     }
+    if assets.iter().any(|asset| asset.kind == InventoryAssetKind::RawMaterial) { state.production_maps.notify_live(); }
     Ok(json_response(assets))
 }
 

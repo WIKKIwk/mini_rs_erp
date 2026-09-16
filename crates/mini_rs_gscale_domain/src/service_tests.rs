@@ -29,7 +29,18 @@ fn request() -> MaterialReceiptPrintRequest {
         actor_role: String::new(),
         actor_ref: String::new(),
         actor_display_name: String::new(),
+        ..Default::default()
     }
+}
+
+#[test]
+fn receipt_client_cannot_forge_server_validated_order_assignment() {
+    let request: MaterialReceiptPrintRequest = serde_json::from_value(serde_json::json!({
+        "order_id":"zakaz-1","apparatus":"apparatus:default:bosma_7",
+        "order_assignment":{"assigned_by_role":"tayyorlov_masteri","order_id":"forged"}
+    })).unwrap();
+    assert_eq!(request.order_id, "zakaz-1");
+    assert!(request.order_assignment.is_none());
 }
 
 #[test]
@@ -487,6 +498,7 @@ impl MaterialReceiptStorePort for FakeReceiptStore {
         }
         Ok(MaterialReceiptDraft {
             name: "MAT-STE-001".to_string(),
+            order_assignment: input.order_assignment,
             item_code: input.item_code,
             warehouse: input.warehouse,
             qty: input.qty,

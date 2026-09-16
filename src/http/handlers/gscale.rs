@@ -45,15 +45,32 @@ pub async fn items(
         .item_group_scope(roll_material_item_group_roots())
         .await
         .map_err(admin_read_error)?;
-    let items = items
-        .into_iter()
-        .map(|item| GscaleCatalogItem {
+    let mut catalog = Vec::with_capacity(items.len());
+    let order_id = query.order_id.as_deref().unwrap_or_default().trim();
+    let groups = if order_id.is_empty() { Vec::new() } else {
+        state.admin.item_group_tree().await.map_err(admin_read_error)?
+    };
+    for item in items {
+        let mut order_apparatus_options = std::collections::BTreeMap::new();
+        if !order_id.is_empty() {
+            let group_path = material_group_path(&groups, &item.item_group);
+            let options = state.production_maps.raw_material_assignment_apparatus_options(order_id, &group_path)
+                .await.map_err(|_| bad_request("order_material_options_failed", "Order apparatlarini aniqlab bo‘lmadi"))?;
+            for option in options {
+                let id = crate::core::apparatus_standard::ApparatusId::new(option.clone())
+                    .map_err(|_| bad_request("invalid_apparatus", "Apparat noto‘g‘ri"))?;
+                let name = state.apparatus.current_configuration(&id).await.ok().flatten()
+                    .map(|config| config.runtime.display.display_name.clone()).unwrap_or_else(|| option.clone());
+                order_apparatus_options.insert(option, name);
+            }
+        }
+        catalog.push(GscaleCatalogItem {
             requires_dimensions: requires_material_dimensions(&item, &dimension_groups),
-            item,
-        })
-        .collect::<Vec<_>>();
+            item, order_apparatus_options,
+        });
+    }
     Ok(Json(
-        serde_json::to_value(items).unwrap_or_else(|_| serde_json::json!([])),
+        serde_json::to_value(catalog).unwrap_or_else(|_| serde_json::json!([])),
     ))
 }
 
@@ -62,6 +79,16 @@ struct GscaleCatalogItem {
     #[serde(flatten)]
     item: SupplierItem,
     requires_dimensions: bool,
+    order_apparatus_options: std::collections::BTreeMap<String, String>,
+}
+
+fn material_group_path(groups: &[crate::core::admin::models::AdminItemGroup], group: &str) -> Vec<String> {
+    let mut path = vec![group.to_string()];
+    while let Some(parent) = groups.iter().find(|item| item.name == *path.last().unwrap())
+        .map(|item| item.parent_item_group.clone()).filter(|parent| !parent.is_empty() && !path.contains(parent)) {
+        path.push(parent);
+    }
+    path
 }
 
 async fn gscale_items_for_principal(
@@ -285,6 +312,7 @@ fn gscale_error(error: GscaleServiceError) -> (StatusCode, Json<GscaleErrorRespo
 
 fn material_catalog_error(error: MaterialCatalogError) -> (StatusCode, Json<GscaleErrorResponse>) {
     match error {
+        MaterialCatalogError::OrderAssignment(detail) => (StatusCode::BAD_REQUEST, Json(GscaleErrorResponse::new("order_material_assignment_invalid", detail))),
         MaterialCatalogError::ReadFailed => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(GscaleErrorResponse::new(

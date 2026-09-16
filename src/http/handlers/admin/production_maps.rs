@@ -36,6 +36,7 @@ mod progress_qr;
 mod qolip_validation;
 mod queue_actions;
 mod raw_material_details;
+pub(crate) use raw_materials::validate_receipt_order_assignment;
 mod raw_material_reprint;
 mod raw_materials;
 mod wip;

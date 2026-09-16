@@ -21,14 +21,15 @@ pub struct RpsBatchLmdbStore {
 struct RpsBatchSessionCodec;
 
 const RPS_BATCH_MAGIC: &[u8] = b"RPSB1";
+const RPS_BATCH_JSON_MAGIC: &[u8] = b"RPSJ1";
 
 impl<'a> BytesEncode<'a> for RpsBatchSessionCodec {
     type EItem = RpsBatchSession;
 
     fn bytes_encode(item: &'a Self::EItem) -> Result<Cow<'a, [u8]>, BoxedError> {
-        let payload = bincode::serialize(item)?;
-        let mut bytes = Vec::with_capacity(RPS_BATCH_MAGIC.len() + payload.len());
-        bytes.extend_from_slice(RPS_BATCH_MAGIC);
+        let payload = serde_json::to_vec(item)?;
+        let mut bytes = Vec::with_capacity(RPS_BATCH_JSON_MAGIC.len() + payload.len());
+        bytes.extend_from_slice(RPS_BATCH_JSON_MAGIC);
         bytes.extend_from_slice(&payload);
         Ok(Cow::Owned(bytes))
     }
@@ -38,9 +39,14 @@ impl<'a> BytesDecode<'a> for RpsBatchSessionCodec {
     type DItem = RpsBatchSession;
 
     fn bytes_decode(bytes: &'a [u8]) -> Result<Self::DItem, BoxedError> {
+        if let Some(payload) = bytes.strip_prefix(RPS_BATCH_JSON_MAGIC) {
+            let mut batch: RpsBatchSession = serde_json::from_slice(payload)?;
+            batch.ensure_context();
+            return Ok(batch);
+        }
         if let Some(payload) = bytes.strip_prefix(RPS_BATCH_MAGIC) {
-            let mut batch: RpsBatchSession = match bincode::deserialize(payload) {
-                Ok(batch) => batch,
+            let mut batch: RpsBatchSession = match bincode::deserialize::<RpsBatchSessionV5>(payload) {
+                Ok(batch) => serde_json::from_value(serde_json::to_value(batch)?)?,
                 Err(_) => match bincode::deserialize::<RpsBatchSessionV4>(payload) {
                     Ok(batch) => batch.into(),
                     Err(_) => match bincode::deserialize::<RpsBatchSessionV3>(payload) {
@@ -59,6 +65,35 @@ impl<'a> BytesDecode<'a> for RpsBatchSessionCodec {
         batch.ensure_context();
         Ok(batch)
     }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+struct RpsBatchSessionV5 {
+    id: String,
+    batch_code: String,
+    revision: u64,
+    active: bool,
+    owner_key: String,
+    owner_role: String,
+    owner_ref: String,
+    driver_url: String,
+    item_code: String,
+    item_name: String,
+    warehouse: String,
+    printer: String,
+    print_mode: String,
+    quantity_source: String,
+    manual_qty_kg: f64,
+    tare_enabled: bool,
+    tare_kg: f64,
+    width_mm: Option<f64>,
+    micron: Option<f64>,
+    length_m: Option<f64>,
+    last_error: String,
+    last_error_at: String,
+    prints: Vec<super::models::RpsBatchPrintEntry>,
+    created_at: String,
+    updated_at: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -92,6 +127,7 @@ struct RpsBatchSessionV4 {
 impl From<RpsBatchSessionV4> for RpsBatchSession {
     fn from(batch: RpsBatchSessionV4) -> Self {
         Self {
+            order_assignment: None,
             id: batch.id,
             batch_code: batch.batch_code,
             revision: batch.revision,
@@ -149,6 +185,7 @@ struct RpsBatchSessionV3 {
 impl From<RpsBatchSessionV3> for RpsBatchSession {
     fn from(batch: RpsBatchSessionV3) -> Self {
         Self {
+            order_assignment: None,
             id: batch.id,
             batch_code: batch.batch_code,
             revision: 1,
@@ -398,6 +435,27 @@ fn lmdb_store_error(_: heed::Error) -> RpsBatchStoreError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn order_commitment_round_trips_and_reads_previous_binary_session() {
+        let batch = RpsBatchSession {
+            id: "linked-batch".into(), batch_code: "12345".into(), revision: 1,
+            order_assignment: Some(serde_json::json!({"order_id":"zakaz-1","apparatus":"apparatus:default:bosma_7"})),
+            ..Default::default()
+        };
+        let encoded = RpsBatchSessionCodec::bytes_encode(&batch).unwrap();
+        assert_eq!(RpsBatchSessionCodec::bytes_decode(&encoded).unwrap(), batch);
+        let legacy = RpsBatchSessionV5 {
+            id: "legacy".into(), batch_code: "12345".into(), revision: 3, length_m: Some(125.0),
+            ..Default::default()
+        };
+        let mut bytes = RPS_BATCH_MAGIC.to_vec();
+        bytes.extend(bincode::serialize(&legacy).unwrap());
+        let restored = RpsBatchSessionCodec::bytes_decode(&bytes).unwrap();
+        assert_eq!(restored.id, "legacy");
+        assert_eq!(restored.length_m, Some(125.0));
+        assert!(restored.order_assignment.is_none());
+    }
 
     #[tokio::test]
     async fn lmdb_batch_store_round_trips_session() {

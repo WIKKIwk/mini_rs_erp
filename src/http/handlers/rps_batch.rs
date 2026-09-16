@@ -150,6 +150,8 @@ pub async fn print(
     material_request.actor_role = principal_role_code(&principal.role).to_string();
     material_request.actor_ref = principal.ref_.trim().to_string();
     material_request.actor_display_name = principal.display_name.trim().to_string();
+    super::material_catalog::normalize_material_receipt_item(&state, &principal, &mut material_request)
+        .await.map_err(material_catalog_error)?;
     let prepared = state
         .gscale
         .prepare_material_receipt_print(&material_request)
@@ -204,6 +206,8 @@ pub async fn client_print_prepare(
         .await
         .map_err(batch_error)?;
     attach_actor(&mut material_request, &principal);
+    super::material_catalog::normalize_material_receipt_item(&state, &principal, &mut material_request)
+        .await.map_err(material_catalog_error)?;
     let response = state
         .gscale
         .prepare_material_receipt_client_print(material_request)
@@ -231,6 +235,8 @@ pub async fn client_print_confirm(
         .await
         .map_err(batch_error)?;
     attach_actor(&mut material_request, &principal);
+    super::material_catalog::normalize_material_receipt_item(&state, &principal, &mut material_request)
+        .await.map_err(material_catalog_error)?;
     let response = match state
         .gscale
         .confirm_material_receipt_client_print(material_request, &request.epc)
@@ -380,6 +386,7 @@ fn material_catalog_error(
     error: MaterialCatalogError,
 ) -> (StatusCode, Json<RpsBatchErrorResponse>) {
     match error {
+        MaterialCatalogError::OrderAssignment(detail) => (StatusCode::BAD_REQUEST, Json(RpsBatchErrorResponse::new("order_material_assignment_invalid", detail))),
         MaterialCatalogError::ReadFailed => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(RpsBatchErrorResponse::new(

@@ -46,11 +46,13 @@ pub(super) fn build_telegram_service() -> TelegramService {
 pub(super) fn build_gscale_service(
     scale_driver: Arc<RpsDriverClient>,
     warehouse_events: WarehouseEventHub,
+    production_maps: crate::core::production_map::ProductionMapService,
 ) -> GscaleService {
     let service = GscaleService::new()
         .with_driver(scale_driver)
         .with_warehouse_event_handler(Arc::new(move |warehouse, reason| {
             warehouse_events.notify_updated(&warehouse, &reason);
+            production_maps.notify_live();
         }));
     match postgres_pool("GScale receipt") {
         Some(pool) => {

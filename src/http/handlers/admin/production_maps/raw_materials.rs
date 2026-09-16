@@ -16,6 +16,50 @@ use crate::db::postgres_raw_material_events::{
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
+pub(crate) async fn validate_receipt_order_assignment(
+    state: &AppState,
+    principal: &Principal,
+    order_id: &str,
+    apparatus: &str,
+    item_code: &str,
+    warehouse: &str,
+    width_mm: Option<f64>,
+    micron: Option<f64>,
+) -> Result<Option<serde_json::Value>, AdminError> {
+    if order_id.trim().is_empty() { return Ok(None); }
+    if principal.role != PrincipalRole::TayyorlovMasteri { return Err(forbidden()); }
+    require_capability(state, principal, Capability::RawMaterialAssign).await?;
+    let destination = state.warehouses.warehouse(warehouse).await.map_err(warehouse_error)?;
+    if !destination.is_some_and(|warehouse| !warehouse.is_group) {
+        return Err(bad_request("warehouse_not_found"));
+    }
+    require_tayyorlov_order_scope(state, principal, order_id).await?;
+    if !state.production_maps.raw_material_assignment_orders().await.map_err(production_map_error)?
+        .iter().any(|saved| saved.map.id == order_id.trim()) {
+        return Err(bad_request("raw_material_order_not_active"));
+    }
+    let item = state.admin.items_by_codes(&[item_code.trim().to_string()]).await
+        .map_err(|_| server_error("material item lookup failed"))?
+        .into_iter().next().ok_or_else(|| bad_request("material_item_not_found"))?;
+    let stock = RawMaterialStockEntry {
+        warehouse: warehouse.trim().into(), item_code: item.code.clone(),
+        item_name: item.name.clone(), status: "available".into(), qty: 1.0,
+        width_mm, micron, ..Default::default()
+    };
+    let (input, _) = super::raw_material_details::fill_raw_material_assignment_for_stock(
+        state, principal, RawMaterialAssignmentInput {
+            order_id: order_id.trim().into(), apparatus: apparatus.trim().into(), ..Default::default()
+        }, stock, item,
+    ).await?;
+    Ok(Some(serde_json::json!({
+        "order_id":input.order_id,"apparatus":input.apparatus,"apparatus_id":input.apparatus,
+        "barcode":"","item_code":input.item_code,"item_name":input.item_name,"item_group":input.item_group,
+        "assigned_by_role":"tayyorlov_masteri","assigned_by_ref":principal.ref_,
+        "assigned_by_display_name":principal.display_name,
+        "assigned_at":time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339).unwrap_or_default()
+    })))
+}
+
 #[derive(Debug, serde::Deserialize)]
 pub struct RawMaterialStartRequirementsQuery {
     #[serde(default)]
@@ -149,13 +193,15 @@ pub async fn raw_material_start_requirements(
     let staged_barcodes =
         raw_material_state_barcodes_for_order_apparatus(&state, &query.order_id, &query.apparatus)
             .await?;
+    let usable_barcodes = raw_material_usable_barcodes(&state, &query.order_id, &query.apparatus).await?;
     let requirements = state
         .production_maps
-        .raw_material_start_requirements(
+        .raw_material_start_requirements_for_stock(
             &query.apparatus,
             &query.order_id,
             &staged_barcodes,
             &query.material_barcodes,
+            Some(&usable_barcodes),
         )
         .await
         .map_err(production_map_error)?;
@@ -204,18 +250,10 @@ pub(super) async fn raw_material_state_barcodes_for_order_apparatus(
     order_id: &str,
     apparatus: &str,
 ) -> Result<Vec<String>, AdminError> {
-    let assignment_barcodes = state
-        .production_maps
-        .raw_material_assignments_for_order(order_id)
-        .await
-        .map_err(production_map_error)?
-        .into_iter()
-        .filter(|assignment| {
-            assignment.order_id.trim() == order_id.trim()
-                && apparatus_id_matches_text(&assignment.apparatus_id, apparatus)
-        })
-        .map(|assignment| assignment.barcode)
-        .collect::<Vec<_>>();
+    let assignment_barcodes = state.production_maps.raw_material_assignments_for_order(order_id)
+        .await.map_err(production_map_error)?.into_iter()
+        .filter(|assignment| apparatus_id_matches_text(&assignment.apparatus_id, apparatus))
+        .map(|assignment| assignment.barcode).collect::<Vec<_>>();
     let placements = state
         .inventory_movements
         .raw_material_state_placements(&assignment_barcodes)
@@ -226,6 +264,72 @@ pub(super) async fn raw_material_state_barcodes_for_order_apparatus(
         .filter(|placement| state_placement_matches_apparatus(placement, apparatus))
         .map(|placement| placement.barcode)
         .collect())
+}
+
+pub(super) async fn raw_material_usable_barcodes(
+    state: &AppState,
+    order_id: &str,
+    apparatus: &str,
+) -> Result<Vec<String>, AdminError> {
+    let assignments = state
+        .production_maps
+        .raw_material_assignments_for_order(order_id)
+        .await
+        .map_err(production_map_error)?
+        .into_iter()
+        .filter(|assignment| {
+            assignment.order_id.trim() == order_id.trim()
+                && apparatus_id_matches_text(&assignment.apparatus_id, apparatus)
+        })
+        .collect::<Vec<_>>();
+    let mut usable = Vec::new();
+    for assignment in assignments {
+        let stock = state.gscale.raw_material_stock_by_barcode(&assignment.barcode)
+            .await.map_err(|_| server_error("raw material stock lookup failed"))?;
+        if raw_material_execution_status(state, &assignment, stock.as_ref()).await? == "compatible" {
+            usable.push(assignment.barcode);
+        }
+    }
+    Ok(usable)
+}
+
+async fn raw_material_execution_status(
+    state: &AppState,
+    assignment: &RawMaterialAssignment,
+    stock: Option<&RawMaterialStockEntry>,
+) -> Result<&'static str, AdminError> {
+    let Some(stock) = stock else { return Ok("unavailable"); };
+    if stock.reserved_order_id == assignment.order_id && stock.status == "in_use" {
+        return Ok("in_use");
+    }
+    if stock.status == "consumed" { return Ok("consumed"); }
+    if stock.status != "available" || !stock.reserved_order_id.is_empty() || stock.qty <= 0.0 {
+        return Ok("unavailable");
+    }
+    let (_, item) = resolve_raw_material_stock_item(state, &assignment.barcode).await?;
+    let groups = state.admin.item_group_tree().await
+        .map_err(|_| server_error("item group tree fetch failed"))?;
+    let group_path = item_group_path(&groups, &item.item_group);
+    if !group_path.iter().any(|group| group.eq_ignore_ascii_case("Rulon")) {
+        return Ok("compatible");
+    }
+    let Some(allowance) = roll_width_allowance_mm(state, assignment.apparatus_id.as_str()).await? else {
+        return Ok("compatible");
+    };
+    let map = state.production_maps.raw_map(&assignment.order_id).await
+        .map_err(production_map_error)?.ok_or_else(|| production_map_error(ProductionMapError::MapNotFound))?;
+    Ok(roll_execution_status(map.width_mm, super::raw_material_details::roll_width_mm(stock, &item), allowance))
+}
+
+fn roll_execution_status(order_width: Option<f64>, roll_width: Option<f64>, allowance: f64) -> &'static str {
+    match (order_width, roll_width) {
+        (Some(order), Some(roll)) if order.is_finite() && roll.is_finite() && order > 0.0 && roll > 0.0 => {
+            if roll > order + allowance + f64::EPSILON { "needs_cutting" }
+            else if roll + f64::EPSILON < order { "width_mismatch" }
+            else { "compatible" }
+        }
+        _ => "dimensions_missing",
+    }
 }
 
 fn state_placement_matches_apparatus(
@@ -1258,7 +1362,9 @@ pub async fn raw_material_intake_candidates(
         {
             continue;
         }
-        candidates.push(assignment);
+        if raw_material_execution_status(&state, &assignment, Some(&stock)).await? == "compatible" {
+            candidates.push(assignment);
+        }
     }
     sort_raw_material_assignments(&mut candidates);
     Ok(json_response(
@@ -1555,7 +1661,18 @@ async fn raw_material_assignment_response(
         .ok()
         .flatten();
     let mut value = serde_json::to_value(&assignment).unwrap_or_else(|_| serde_json::json!({}));
+    let mut execution_status = raw_material_execution_status(state, &assignment, stock.as_ref())
+        .await.unwrap_or("unavailable");
+    if execution_status == "compatible" {
+        execution_status = match state.inventory_movements.raw_material_state_placements(&[assignment.barcode.clone()]).await {
+            Ok(placements) if placements.iter().any(|placement| state_placement_matches_apparatus(placement, assignment.apparatus_id.as_str())) => "ready",
+            Ok(_) => "awaiting_delivery",
+            Err(_) => "unavailable",
+        };
+    }
     if let Some(object) = value.as_object_mut() {
+        object.insert("execution_status".into(), serde_json::json!(execution_status));
+        object.insert("roll_width_mm".into(), serde_json::json!(stock.as_ref().and_then(|stock| stock.width_mm)));
         let stock_status = stock
             .as_ref()
             .map(|entry| entry.status.trim())
@@ -1642,6 +1759,16 @@ fn raw_material_assignment_quantities(
 #[cfg(test)]
 mod raw_material_assignment_quantity_tests {
     use super::*;
+
+    #[test]
+    fn preparation_roll_is_attached_but_only_cut_children_are_executable() {
+        assert_eq!(roll_execution_status(Some(1015.0), Some(2030.0), 20.0), "needs_cutting");
+        assert_eq!(roll_execution_status(Some(1015.0), Some(1015.0), 20.0), "compatible");
+        assert_eq!(roll_execution_status(Some(1015.0), Some(1035.0), 20.0), "compatible");
+        assert_eq!(roll_execution_status(Some(1015.0), Some(1036.0), 20.0), "needs_cutting");
+        assert_eq!(roll_execution_status(Some(1015.0), Some(900.0), 20.0), "width_mismatch");
+        assert_eq!(roll_execution_status(None, Some(1015.0), 20.0), "dimensions_missing");
+    }
 
     fn assignment() -> RawMaterialAssignment {
         RawMaterialAssignment {

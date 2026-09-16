@@ -277,6 +277,7 @@ fn normalize_start(
     now: String,
 ) -> Result<RpsBatchSession, RpsBatchServiceError> {
     let RpsBatchStartRequest {
+        order_assignment,
         client_batch_id,
         driver_url,
         item_code,
@@ -291,6 +292,7 @@ fn normalize_start(
         width_mm,
         micron,
         length_m,
+        ..
     } = request;
     let item_code = trim_owned(item_code);
     let warehouse = trim_owned(warehouse);
@@ -310,6 +312,7 @@ fn normalize_start(
     let (tare_enabled, tare_kg) = normalize_tare(tare_enabled, tare_kg);
 
     Ok(RpsBatchSession {
+        order_assignment,
         id: batch_id(client_batch_id, &owner.key),
         batch_code: new_batch_code(),
         revision: 1,
@@ -387,6 +390,7 @@ fn apply_update(
     request: RpsBatchUpdateRequest,
 ) -> Result<(), RpsBatchServiceError> {
     let RpsBatchUpdateRequest {
+        order_assignment,
         item_code,
         item_name,
         warehouse,
@@ -413,6 +417,7 @@ fn apply_update(
     batch.width_mm = width_mm;
     batch.micron = micron;
     batch.length_m = length_m;
+    batch.order_assignment = order_assignment;
     if let Some(quantity_source) = quantity_source {
         batch.quantity_source = normalize_quantity_source(quantity_source);
     }
