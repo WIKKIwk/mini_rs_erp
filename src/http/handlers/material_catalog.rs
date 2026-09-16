@@ -68,6 +68,20 @@ async fn authorized_material_item(
     principal: &Principal,
     item_code: &str,
 ) -> Result<Option<SupplierItem>, MaterialCatalogError> {
+    if principal.role == PrincipalRole::TayyorlovMasteri {
+        // GScale/Tarozi katalogi backend scope'idan kelgan itemlargina RPS va
+        // print oqimlariga kiradi. Preparation store yo'q konfiguratsiyada
+        // avvalgi test/dev fallback saqlanadi.
+        let Some(store) = state.preparation.as_ref() else {
+            return Ok(None);
+        };
+        let item = store
+            .assigned_rulon_item(&principal.ref_, item_code)
+            .await
+            .map_err(|_| MaterialCatalogError::ReadFailed)?
+            .ok_or(MaterialCatalogError::Forbidden)?;
+        return Ok(Some(item));
+    }
     if principal.role != PrincipalRole::MaterialTaminotchi {
         return Ok(None);
     }

@@ -125,8 +125,9 @@ async fn gscale_items_for_principal(
         .await
 }
 
-/// Tayyorlov masteri kirimi: faqat shu masterga tegishli Seriyo guruhidagi
-/// itemlar. Umumiy ERP/Rulon katalogi bu oqimga kiritilmaydi.
+/// Tayyorlov masteri Tarozi kirimi: faqat Admin shu masterga biriktirgan
+/// calculate-material oilalariga mos ERP Rulon itemlari. Seriyo va boshqa
+/// guruhlar bu picker'ga kiritilmaydi.
 async fn gscale_items_for_tayyorlov(
     state: &AppState,
     principal: &Principal,
@@ -151,7 +152,7 @@ async fn gscale_items_for_tayyorlov(
     // The mobile picker may send a generic group. It is intentionally ignored
     // here so that a Rulon request can never widen this already scoped result.
     store
-        .owned_seriyo_items(&principal.ref_, search, limit, offset)
+        .assigned_rulon_items(&principal.ref_, search, limit, offset)
         .await
         .map_err(|_| AdminPortError::LookupFailed)
 }

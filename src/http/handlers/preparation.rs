@@ -234,6 +234,33 @@ pub async fn receipt(
     Ok(Json(result))
 }
 
+/// GScale/Tarozi sahifasidagi Tayyorlov masteri uchun QR'siz sodda kirim.
+/// Oddiy preparation/receipts oqimi Seriyo materiallari uchun o'z qoidasi bilan
+/// qoladi; bu endpoint faqat Tarozi sahifasining Rulon scope'ini ishlatadi.
+pub async fn gscale_simple_receipt(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<ReceiptCreate>,
+) -> Result<Json<Value>, ApiError> {
+    let actor = authorize(&state, &headers).await?;
+    if !state
+        .admin
+        .principal_has_capability(&actor, Capability::GscalePrint)
+        .await
+    {
+        return Err((StatusCode::FORBIDDEN, Json(json!({"error":"forbidden"}))));
+    }
+    let result = store(&state)?
+        .receive_gscale_simple(&actor, input)
+        .await
+        .map_err(error)?;
+    state.warehouse_events.notify_updated(
+        result["warehouse"].as_str().unwrap_or_default(),
+        "raw_material_stock",
+    );
+    Ok(Json(result))
+}
+
 pub async fn consumption(
     State(state): State<AppState>,
     headers: HeaderMap,

@@ -424,6 +424,102 @@ impl PostgresPreparationStore {
         Ok(result)
     }
 
+    /// GScale/Tarozi sahifasidagi masterga tegishli (exclusive) omborga QR'siz
+    /// sodda kirim. Oddiy Tayyorlov kirimi uchun ishlatiladigan Seriyo scope'i
+    /// bu yo'lga aralashtirilmaydi: faqat responsibility + Rulon item o'tadi.
+    pub async fn receive_gscale_simple(
+        &self,
+        actor: &Principal,
+        input: ReceiptCreate,
+    ) -> Result<Value, PreparationError> {
+        let kg = decimal(&input.kg)?;
+        let item_code = input.item_code.trim().to_string();
+        if item_code.is_empty() {
+            return Err(PreparationError::Invalid("Homashyo tanlanmagan"));
+        }
+        let request = json!({"kind": "gscale_simple_receipt", "input": &input});
+        let mut tx = self.begin(&actor.ref_, &input.request_id).await?;
+        if let Some(result) = replay(&mut tx, &actor.ref_, &input.request_id, &request).await? {
+            return Ok(result);
+        }
+        let warehouse = exclusive_warehouse(&mut tx, &actor.ref_, &input.warehouse)
+            .await
+            .map_err(|error| match error {
+                PreparationError::WarehouseNotExclusive => PreparationError::ReceiptRequiresQr,
+                other => other,
+            })?;
+        let (canonical_code, name) =
+            assigned_rulon_item_for_receipt(&mut tx, &actor.ref_, &item_code).await?;
+        let id = new_id();
+        let stock_id = format!("raw:prep:{id}");
+        // Shared stock requires an internal identity, but this value is never
+        // returned to the client and is not printed as a QR label.
+        let barcode = format!("PREP-{id}");
+        sqlx::query(
+            "INSERT INTO mini_raw_material_stock
+            (id, warehouse, item_code, item_name, barcode, qty, source_receipt_id, payload_json)
+            VALUES ($1,$2,$3,$4,$5,$6::text::numeric,$7,$8)",
+        )
+        .bind(&stock_id)
+        .bind(&warehouse)
+        .bind(&canonical_code)
+        .bind(&name)
+        .bind(&barcode)
+        .bind(decimal_text(kg))
+        .bind(&id)
+        .bind(json!({
+            "source": "gscale_simple",
+            "owner_ref": actor.ref_,
+            "initial_kg": decimal_text(kg)
+        }))
+        .execute(&mut *tx)
+        .await?;
+        let result = json!({
+            "id": id,
+            "kind": "receipt",
+            "status": "received",
+            "warehouse": warehouse,
+            "item_code": canonical_code,
+            "name": name,
+            "kg": decimal_text(kg),
+            "qr_printed": false
+        });
+        record(
+            &mut tx,
+            &id,
+            &actor.ref_,
+            &input.request_id,
+            "receipt",
+            None,
+            request,
+            &result,
+        )
+        .await?;
+        sqlx::query("INSERT INTO mini_preparation_receipts(id,stock_id,item_code,owner_ref,initial_kg) VALUES ($1,$2,$3,$4,$5::text::numeric)")
+            .bind(&id)
+            .bind(&stock_id)
+            .bind(&canonical_code)
+            .bind(&actor.ref_)
+            .bind(decimal_text(kg))
+            .execute(&mut *tx)
+            .await?;
+        event(
+            &mut tx,
+            actor,
+            &id,
+            &warehouse,
+            &barcode,
+            &canonical_code,
+            &name,
+            kg,
+            None,
+            "available",
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(result)
+    }
+
     pub async fn consume(
         &self,
         actor: &Principal,
@@ -965,6 +1061,131 @@ impl PostgresPreparationStore {
             .collect())
     }
 
+    /// GScale/Tarozi kirimi uchun admin biriktirgan calculate-material
+    /// oilalariga mos ERP Rulon itemlari. Seriyo va boshqa guruhlar bu scope'ga
+    /// kirmaydi.
+    pub async fn assigned_rulon_items(
+        &self,
+        owner: &str,
+        search: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<SupplierItem>, PreparationError> {
+        let rows: Vec<(String, String, String, String)> = sqlx::query_as(
+            "WITH RECURSIVE rulon_groups AS (
+                SELECT g.name
+                FROM mini_item_groups g
+                WHERE lower(btrim(g.name)) IN ('rulon', 'rulon materiallari')
+                  AND g.is_group
+                UNION
+                SELECT child.name
+                FROM mini_item_groups child
+                JOIN rulon_groups parent
+                  ON lower(btrim(child.parent_item_group)) = lower(btrim(parent.name))
+                WHERE child.is_group
+            )
+            SELECT i.code, i.name, i.uom, i.item_group
+            FROM mini_items i
+            WHERE EXISTS (
+                SELECT 1
+                FROM mini_preparation_material_responsibilities r
+                WHERE r.principal_role = 'tayyorlov_masteri'
+                  AND r.principal_ref = $1
+                  AND (
+                      lower(btrim(r.material_name)) = lower(btrim(i.code))
+                      OR lower(btrim(r.material_name)) = lower(btrim(i.name))
+                      OR lower(btrim(r.material_id)) = lower(btrim(i.code))
+                      OR lower(btrim(r.material_id)) = lower(btrim(i.name))
+                  )
+            )
+              AND EXISTS (
+                  SELECT 1
+                  FROM rulon_groups allowed
+                  WHERE lower(btrim(allowed.name)) = lower(btrim(i.item_group))
+              )
+              AND (
+                  btrim($2) = ''
+                  OR lower(i.code) LIKE '%' || lower(btrim($2)) || '%'
+                  OR lower(i.name) LIKE '%' || lower(btrim($2)) || '%'
+              )
+            ORDER BY lower(i.name), i.code
+            LIMIT $3 OFFSET $4",
+        )
+        .bind(owner.trim())
+        .bind(search.trim())
+        .bind(limit as i64)
+        .bind(offset as i64)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|(code, name, uom, item_group)| SupplierItem {
+                code,
+                name,
+                uom,
+                warehouse: String::new(),
+                item_group,
+                customer_names: Vec::new(),
+            })
+            .collect())
+    }
+
+    /// GScale kirimida yuborilgan itemni server-side responsibility scope'da
+    /// qayta tekshirish uchun canonical item.
+    pub async fn assigned_rulon_item(
+        &self,
+        owner: &str,
+        item_code: &str,
+    ) -> Result<Option<SupplierItem>, PreparationError> {
+        let row: Option<(String, String, String, String)> = sqlx::query_as(
+            "WITH RECURSIVE rulon_groups AS (
+                SELECT g.name
+                FROM mini_item_groups g
+                WHERE lower(btrim(g.name)) IN ('rulon', 'rulon materiallari')
+                  AND g.is_group
+                UNION
+                SELECT child.name
+                FROM mini_item_groups child
+                JOIN rulon_groups parent
+                  ON lower(btrim(child.parent_item_group)) = lower(btrim(parent.name))
+                WHERE child.is_group
+            )
+            SELECT i.code, i.name, i.uom, i.item_group
+            FROM mini_items i
+            WHERE lower(btrim(i.code)) = lower(btrim($2))
+              AND EXISTS (
+                  SELECT 1
+                  FROM mini_preparation_material_responsibilities r
+                  WHERE r.principal_role = 'tayyorlov_masteri'
+                    AND r.principal_ref = $1
+                    AND (
+                        lower(btrim(r.material_name)) = lower(btrim(i.code))
+                        OR lower(btrim(r.material_name)) = lower(btrim(i.name))
+                        OR lower(btrim(r.material_id)) = lower(btrim(i.code))
+                        OR lower(btrim(r.material_id)) = lower(btrim(i.name))
+                    )
+              )
+              AND EXISTS (
+                  SELECT 1
+                  FROM rulon_groups allowed
+                  WHERE lower(btrim(allowed.name)) = lower(btrim(i.item_group))
+              )
+            LIMIT 1",
+        )
+        .bind(owner.trim())
+        .bind(item_code.trim())
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|(code, name, uom, item_group)| SupplierItem {
+            code,
+            name,
+            uom,
+            warehouse: String::new(),
+            item_group,
+            customer_names: Vec::new(),
+        }))
+    }
+
     /// Order shu master'ning biriktirilgan homashyolaridan birini
     /// o'z ichiga oladimi (raw-material ulash scope tekshiruvi uchun).
     pub async fn order_in_scope(        &self,
@@ -1149,6 +1370,53 @@ async fn material_name(
     )
     .bind(owner)
     .bind(code)
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or(PreparationError::Forbidden)
+}
+
+async fn assigned_rulon_item_for_receipt(
+    tx: &mut Transaction<'_, Postgres>,
+    owner: &str,
+    item_code: &str,
+) -> Result<(String, String), PreparationError> {
+    sqlx::query_as(
+        "WITH RECURSIVE rulon_groups AS (
+            SELECT g.name
+            FROM mini_item_groups g
+            WHERE lower(btrim(g.name)) IN ('rulon', 'rulon materiallari')
+              AND g.is_group
+            UNION
+            SELECT child.name
+            FROM mini_item_groups child
+            JOIN rulon_groups parent
+              ON lower(btrim(child.parent_item_group)) = lower(btrim(parent.name))
+            WHERE child.is_group
+        )
+        SELECT i.code, i.name
+        FROM mini_items i
+        WHERE lower(btrim(i.code)) = lower(btrim($2))
+          AND EXISTS (
+              SELECT 1
+              FROM mini_preparation_material_responsibilities r
+              WHERE r.principal_role = 'tayyorlov_masteri'
+                AND r.principal_ref = $1
+                AND (
+                    lower(btrim(r.material_name)) = lower(btrim(i.code))
+                    OR lower(btrim(r.material_name)) = lower(btrim(i.name))
+                    OR lower(btrim(r.material_id)) = lower(btrim(i.code))
+                    OR lower(btrim(r.material_id)) = lower(btrim(i.name))
+                )
+          )
+          AND EXISTS (
+              SELECT 1
+              FROM rulon_groups allowed
+              WHERE lower(btrim(allowed.name)) = lower(btrim(i.item_group))
+          )
+        LIMIT 1",
+    )
+    .bind(owner.trim())
+    .bind(item_code.trim())
     .fetch_optional(&mut **tx)
     .await?
     .ok_or(PreparationError::Forbidden)

@@ -147,6 +147,10 @@ pub(super) fn routes() -> Router<AppState> {
             "/v1/mobile/gscale/material-receipt/print",
             any(gscale::material_receipt_print),
         )
+        .route(
+            "/v1/mobile/gscale/material-receipt/simple",
+            axum::routing::post(crate::http::handlers::preparation::gscale_simple_receipt),
+        )
         .route("/v1/mobile/rps/batch/start", any(rps_batch::start))
         .route("/v1/mobile/rps/batch/state", any(rps_batch::state))
         .route("/v1/mobile/rps/batch/update", any(rps_batch::update))

@@ -453,10 +453,105 @@ async fn preparation_snapshot_lists_shared_raw_catalog_and_balances() {
     .await
     .unwrap();
 
-    let snapshot = PostgresPreparationStore::new(pool.clone())
-        .snapshot("prep-1")
+    let roll_group: String = sqlx::query_scalar(
+        "SELECT name FROM mini_item_groups
+         WHERE lower(name) = 'rulon' AND is_group
+         ORDER BY name LIMIT 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO mini_item_groups(name,parent_item_group,is_group)
+         SELECT 'seriyo',$1,true
+         WHERE NOT EXISTS (
+             SELECT 1 FROM mini_item_groups WHERE lower(name) = 'seriyo'
+         )",
+    )
+    .bind(&raw_group)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let seriyo_group: String = sqlx::query_scalar(
+        "SELECT name FROM mini_item_groups
+         WHERE lower(name) = 'seriyo' AND is_group
+         ORDER BY name LIMIT 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO mini_calculate_materials(id,lower_name,payload_json)
+         VALUES ('snapshot-mat','snapshotassigned',
+                 '{\"id\":\"snapshot-mat\",\"name\":\"Snapshot Assigned\",\"active\":true}')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO mini_items(code,name,uom,item_group)
+         VALUES ('SNAP-RULON','Snapshot Assigned','Kg',$1),
+                ('SNAP-SERIYO','Snapshot Assigned','Kg',$2),
+                ('SNAP-OTHER','Snapshot Assigned','Kg','Snapshot Raw Group')",
+    )
+    .bind(&roll_group)
+    .bind(&seriyo_group)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let store = PostgresPreparationStore::new(pool.clone());
+    store
+        .assign_responsibility(MaterialResponsibilityAssign {
+            principal_ref: "prep-1".into(),
+            material_id: "snapshot-mat".into(),
+        })
         .await
         .unwrap();
+    let assigned_rulon = store
+        .assigned_rulon_items("prep-1", "", 50, 0)
+        .await
+        .unwrap();
+    assert_eq!(
+        assigned_rulon
+            .iter()
+            .map(|item| item.code.as_str())
+            .collect::<Vec<_>>(),
+        vec!["SNAP-RULON"]
+    );
+    let simple = store
+        .receive_gscale_simple(
+            &Principal {
+                role: PrincipalRole::TayyorlovMasteri,
+                display_name: "Master".into(),
+                legal_name: String::new(),
+                ref_: "prep-1".into(),
+                phone: String::new(),
+                avatar_url: String::new(),
+            },
+            ReceiptCreate {
+                request_id: "gscale-simple-001".into(),
+                item_code: "SNAP-RULON".into(),
+                warehouse: "Preparation W".into(),
+                kg: "12.5".into(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(simple["qr_printed"], false);
+    assert_eq!(simple["item_code"], "SNAP-RULON");
+    assert_eq!(simple["kg"], "12.500000");
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM mini_preparation_receipts WHERE item_code = 'SNAP-RULON'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        1
+    );
+
+    let snapshot = store.snapshot("prep-1").await.unwrap();
     let materials = snapshot["materials"].as_array().unwrap();
     let shared = materials
         .iter()
