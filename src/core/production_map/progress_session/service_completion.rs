@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use super::*;
 
-use super::apparatus::visible_order_ids_for_apparatus;
+use super::apparatus::selected_order_ids_for_apparatus;
 use super::progress::{
     actor_display_name, completion_request_decision_event_id, effective_apparatus_queue_policy,
     queue_action_event_id, unix_seconds,
@@ -44,7 +44,7 @@ impl ProductionMapService {
         let storage_key = apparatus.to_string();
         let stored_sequence = sequences.get(&storage_key).cloned().unwrap_or_default();
         let all_maps = self.store.maps().await?;
-        let visible_order_ids = visible_order_ids_for_apparatus(&all_maps, apparatus);
+        let visible_order_ids = selected_order_ids_for_apparatus(&all_maps, &canonical);
         let sequence =
             queue_state::effective_apparatus_sequence(&stored_sequence, &visible_order_ids);
         if !sequence.iter().any(|id| id.trim() == order_id) {

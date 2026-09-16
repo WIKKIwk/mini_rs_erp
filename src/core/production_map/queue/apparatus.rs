@@ -78,6 +78,75 @@ fn is_template_map(map: &ProductionMapDefinition) -> bool {
     map.id.trim().starts_with("template-")
 }
 
+/// Print alternatives are an exclusive dispatch choice. Other operations keep
+/// their cooperative candidate queues, including historical assignments.
+/// Classify by canonical runtime operation, never by an ID or display label.
+pub(super) fn print_assignment_allows_order(
+    map: &ProductionMapDefinition,
+    apparatus: &RuntimeApparatusConfiguration,
+) -> bool {
+    if apparatus.runtime.execution_profile.operation != ExecutionOperation::Print {
+        return true;
+    }
+    let apparatus_id = apparatus.runtime.apparatus_id.as_str();
+    map.nodes.iter().any(|node| {
+        if node.kind != ProductionMapNodeKind::Apparatus || node.apparatus_id.trim() != apparatus_id
+        {
+            return false;
+        }
+        let group = node.alternative_group_id.trim();
+        group.is_empty()
+            || map
+                .nodes
+                .iter()
+                .filter(|candidate| {
+                    candidate.kind == ProductionMapNodeKind::Apparatus
+                        && candidate.alternative_group_id.trim() == group
+                })
+                .all(|candidate| candidate.alternative_assigned_apparatus_id.trim() == apparatus_id)
+    })
+}
+
+pub(super) fn selected_order_ids_for_apparatus(
+    maps: &[ProductionMapDefinition],
+    apparatus: &RuntimeApparatusConfiguration,
+) -> Vec<String> {
+    let mut orders = visible_order_ids_for_apparatus(maps, apparatus.runtime.apparatus_id.as_str());
+    retain_selected_print_orders(maps, apparatus, &mut orders);
+    orders
+}
+
+fn retain_selected_print_orders(
+    maps: &[ProductionMapDefinition],
+    apparatus: &RuntimeApparatusConfiguration,
+    orders: &mut Vec<String>,
+) {
+    if apparatus.runtime.execution_profile.operation != ExecutionOperation::Print {
+        return;
+    }
+    let by_id = maps
+        .iter()
+        .map(|map| (map.id.trim(), map))
+        .collect::<BTreeMap<_, _>>();
+    orders.retain(|id| {
+        by_id
+            .get(id.trim())
+            .is_some_and(|map| print_assignment_allows_order(map, apparatus))
+    });
+}
+
+pub(super) fn filter_unselected_print_orders(
+    maps: &[ProductionMapDefinition],
+    apparatuses: &[std::sync::Arc<RuntimeApparatusConfiguration>],
+    orders: &mut BTreeMap<String, Vec<String>>,
+) {
+    for apparatus in apparatuses {
+        if let Some(ids) = orders.get_mut(apparatus.runtime.apparatus_id.as_str()) {
+            retain_selected_print_orders(maps, apparatus, ids);
+        }
+    }
+}
+
 /// Queue-owned stage-specific helpers cannot classify an opaque ID without a
 /// canonical apparatus lookup. They fail closed for operations that require a
 /// specific family; callers use these only as conservative guards.

@@ -110,7 +110,7 @@ impl ProductionMapService {
             .get(&storage_key)
             .map(Vec::as_slice)
             .unwrap_or_default();
-        let visible_order_ids = visible_order_ids_for_apparatus(&all_maps, apparatus);
+        let visible_order_ids = apparatus::selected_order_ids_for_apparatus(&all_maps, &canonical);
         let frozen_order_ids = order_controls
             .iter()
             .filter_map(|(id, control)| {
@@ -133,6 +133,9 @@ impl ProductionMapService {
             .iter()
             .find(|map| map.id.trim() == order_id)
             .ok_or(ProductionMapError::MapNotFound)?;
+        if !apparatus::print_assignment_allows_order(order_map, &canonical) {
+            return Err(ProductionMapError::QueueActionNotAllowed);
+        }
         // Alternative candidates share the operation, not its input rolls.
         // The transaction claims the scanned WIP; never claim the whole map.
         let claimed_alternative_map = None;

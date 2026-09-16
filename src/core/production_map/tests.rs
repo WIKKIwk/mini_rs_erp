@@ -6,6 +6,7 @@ mod compile_run;
 mod fixtures;
 mod map_edit;
 mod opening_wip;
+mod print_dispatch;
 mod order_control;
 mod queue_controls;
 mod service_flow;

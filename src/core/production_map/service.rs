@@ -353,16 +353,26 @@ impl ProductionMapService {
         let canonical_apparatuses = self.snapshot_canonical_apparatuses().await;
 
         let mut visible_order_ids = visible_order_ids_by_apparatus(&raw_maps);
+        apparatus::filter_unselected_print_orders(
+            &raw_maps,
+            &canonical_apparatuses,
+            &mut visible_order_ids,
+        );
         let frozen_order_ids = order_controls
             .iter()
             .filter_map(|(id, control)| {
                 (control.state == OrderControlState::Frozen).then_some(id.clone())
             })
             .collect::<BTreeSet<_>>();
-        let sequences = Self::effective_apparatus_sequences_for_maps(
+        let mut sequences = Self::effective_apparatus_sequences_for_maps(
             &raw_maps,
             &stored_sequences,
             &frozen_order_ids,
+        );
+        apparatus::filter_unselected_print_orders(
+            &raw_maps,
+            &canonical_apparatuses,
+            &mut sequences,
         );
         let queue_policies = canonical_apparatuses
             .iter()

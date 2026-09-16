@@ -4,8 +4,7 @@ use super::super::*;
 use super::{QueueActionPolicyInput, QueueActionPolicyProfile, allowed_actions_for_control};
 
 use super::super::apparatus::{
-    queue_order_ids_by_apparatus,
-    visible_order_ids_by_apparatus, visible_order_ids_for_apparatus,
+    queue_order_ids_by_apparatus, visible_order_ids_by_apparatus,
 };
 use super::super::chain;
 use super::super::materials::{
@@ -47,11 +46,17 @@ impl ProductionMapService {
             .into_iter()
             .filter_map(|(id, control)| (control.state == OrderControlState::Frozen).then_some(id))
             .collect::<BTreeSet<_>>();
-        Ok(Self::effective_apparatus_sequences_for_maps(
+        let mut effective = Self::effective_apparatus_sequences_for_maps(
             &maps,
             &sequences,
             &frozen_order_ids,
-        ))
+        );
+        apparatus::filter_unselected_print_orders(
+            &maps,
+            &self.active_canonical_apparatuses().await?,
+            &mut effective,
+        );
+        Ok(effective)
     }
 
     pub(crate) fn effective_apparatus_sequences_for_maps(
@@ -95,7 +100,13 @@ impl ProductionMapService {
         &self,
     ) -> Result<BTreeMap<String, Vec<String>>, ProductionMapError> {
         let maps = self.store.maps().await?;
-        Ok(visible_order_ids_by_apparatus(&maps))
+        let mut visible = visible_order_ids_by_apparatus(&maps);
+        apparatus::filter_unselected_print_orders(
+            &maps,
+            &self.active_canonical_apparatuses().await?,
+            &mut visible,
+        );
+        Ok(visible)
     }
 
     pub async fn set_apparatus_sequence(
@@ -119,7 +130,8 @@ impl ProductionMapService {
             .map(|map| map.id.trim())
             .filter(|id| !id.is_empty())
             .collect::<BTreeSet<_>>();
-        let visible_order_ids = visible_order_ids_for_apparatus(&maps, apparatus)
+        let canonical = self.resolve_canonical_apparatus_text(apparatus).await?;
+        let visible_order_ids = apparatus::selected_order_ids_for_apparatus(&maps, &canonical)
             .into_iter()
             .collect::<BTreeSet<_>>();
         for order_id in &order_ids {
@@ -153,7 +165,6 @@ impl ProductionMapService {
                 (control.state == OrderControlState::Frozen).then_some(order_id)
             })
             .collect::<BTreeSet<_>>();
-        let canonical = self.resolve_canonical_apparatus_text(apparatus).await?;
         let mut barrier_states = states.clone();
         if pechat::is_pechat_apparatus(&canonical) {
             for state in barrier_states.values_mut() {
@@ -468,7 +479,12 @@ impl ProductionMapService {
                 .or_default()
                 .push(record);
         }
-        let queue_orders_by_apparatus = queue_order_ids_by_apparatus(maps);
+        let mut queue_orders_by_apparatus = queue_order_ids_by_apparatus(maps);
+        apparatus::filter_unselected_print_orders(
+            maps,
+            canonical_apparatuses,
+            &mut queue_orders_by_apparatus,
+        );
         let frozen_order_ids = order_controls
             .iter()
             .filter_map(|(order_id, control)| {
