@@ -33,9 +33,8 @@ pub(super) async fn load_source(
     if id.starts_with("template-") || map.order_number.trim().is_empty() {
         return Err(Error::Locked("Faqat ochilgan buyurtmani tahrirlash mumkin"));
     }
-    let legacy = calculation.is_none();
-    let calculation = match calculation {
-        Some(value) => value,
+    let mut template: CalculateOrderTemplate = match calculation {
+        Some(value) => serde_json::from_value(value).map_err(|_| Error::Store)?,
         None => {
             // Legacy fallback only accepts an unambiguous order-specific input,
             // never another order with the same product code.
@@ -48,26 +47,15 @@ pub(super) async fn load_source(
             .bind(&map.order_number)
             .fetch_all(&mut **tx)
             .await?;
-            legacy_calculation(values)?
+            let layers = sqlx::query_scalar::<_, serde_json::Value>(
+                "SELECT layers_json FROM mini_order_products WHERE order_id = $1",
+            )
+            .bind(id)
+            .fetch_all(&mut **tx)
+            .await?;
+            legacy_calculation(values, &map, &layers)?
         }
     };
-    let mut template: CalculateOrderTemplate =
-        serde_json::from_value(calculation).map_err(|_| Error::Store)?;
-    if legacy {
-        let layers = sqlx::query_scalar::<_, serde_json::Value>(
-            "SELECT layers_json FROM mini_order_products WHERE order_id = $1",
-        )
-        .bind(id)
-        .fetch_all(&mut **tx)
-        .await?;
-        let expected =
-            serde_json::to_value(template.effective_layers()).map_err(|_| Error::Store)?;
-        if layers.len() != 1 || layers[0] != expected {
-            return Err(Error::Locked(
-                "Buyurtmada saqlangan material qatlamlari tezkor buyurtma shabloniga mos kelmaydi. Noto‘g‘ri hisob-kitobni yuklamaslik uchun tahrirlash bloklandi. Mas’ul administratorga buyurtma raqamini yuboring",
-            ));
-        }
-    }
     template.source_map_id = map.id.clone();
     template.order_number = map.order_number.clone();
     template.code = map.code.clone();
@@ -79,14 +67,70 @@ pub(super) async fn load_source(
     })
 }
 
-fn legacy_calculation(values: Vec<serde_json::Value>) -> Result<serde_json::Value, Error> {
-    match values.len() {
-        0 => Err(Error::Locked(
+fn legacy_calculation(
+    values: Vec<serde_json::Value>,
+    map: &ProductionMapDefinition,
+    layers: &[serde_json::Value],
+) -> Result<CalculateOrderTemplate, Error> {
+    if values.is_empty() {
+        return Err(Error::Locked(
             "Bu buyurtmaning dastlabki Calculate hisob-kitobi bazada saqlanmagan va unga mos shablon topilmadi. Bu hozir kiritgan ma’lumotlaringizdagi xato emas. Hisob-kitobni taxmin qilib o‘zgartirmaslik uchun tahrirlash bloklandi. Mas’ul administratorga buyurtma raqamini yuboring",
+        ));
+    }
+    let candidates = values
+        .into_iter()
+        .map(serde_json::from_value)
+        .collect::<Result<Vec<CalculateOrderTemplate>, _>>()
+        .map_err(|_| Error::Store)?;
+    // Order numbers are stronger evidence than reusable source-map links.
+    // Never select by recency or product alone, and never fall back to a weaker
+    // link when an explicit order-specific record exists but is incompatible.
+    let has_exact_order = candidates
+        .iter()
+        .any(|t| t.order_number.trim() == map.order_number.trim());
+    let same = |a: f64, b: f64| a.is_finite() && b.is_finite() && (a - b).abs() < 0.001;
+    let same_optional = |a: Option<f64>, b: Option<f64>| match (a, b) {
+        (Some(a), Some(b)) => same(a, b),
+        (None, None) => true,
+        _ => false,
+    };
+    let mut matches = Vec::new();
+    for template in candidates {
+        let identity_matches = if has_exact_order {
+            template.order_number.trim() == map.order_number.trim()
+        } else {
+            template.order_number.trim().is_empty()
+                && (template.source_map_id.trim() == map.id
+                    || template.source_map_id.trim() == format!("template-{}", map.id))
+        };
+        let width = crate::core::formula::derive_width_mm(
+            Some(template.frame_product_size_mm),
+            Some(template.frame_count),
+            Some(template.edge_allowance_mm),
+        )
+        .ok();
+        if !identity_matches
+            || template.item_code.trim() != map.product_code.trim()
+            || template.product.trim() != map.title.trim()
+            || !same_optional(width, map.width_mm)
+            || template.roll_count != map.roll_count
+            || !same_optional(template.print_val_size_mm, map.print_val_size_mm)
+            || (template.kg != 0.0 && !map.order_kg.is_some_and(|kg| same(template.kg, kg)))
+            || layers.len() != 1
+            || layers[0]
+                != serde_json::to_value(template.effective_layers()).map_err(|_| Error::Store)?
+        {
+            continue;
+        }
+        matches.push(template);
+    }
+    match matches.len() {
+        0 => Err(Error::Locked(
+            "Buyurtmaning Calculate shablonlari topildi, lekin order raqami, mahsulot, o‘lcham, rang yoki materiallari saqlangan buyurtmaga mos kelmadi. Noto‘g‘ri hisob-kitobni yuklamaslik uchun tahrirlash bloklandi. Mas’ul administrator buyurtma va shablonlarni tekshirishi kerak",
         )),
-        1 => values.into_iter().next().ok_or(Error::Store),
+        1 => matches.pop().ok_or(Error::Store),
         _ => Err(Error::Locked(
-            "Bu buyurtmaning dastlabki Calculate hisob-kitobi bazada saqlanmagan. Unga mos bir nechta shablon topildi, qaysi biri asl nusxa ekanini aniqlab bo‘lmadi. Tahrirlash uchun mas’ul administrator buyurtma va shablon bog‘lanishini tekshirishi kerak",
+            "Bu buyurtmaga mos bir nechta Calculate shabloni topildi. Order raqami, o‘lcham va materiallar bo‘yicha ham yagona nusxani ajratib bo‘lmadi. Tahrirlash uchun mas’ul administrator buyurtma va shablon bog‘lanishini tekshirishi kerak",
         )),
     }
 }

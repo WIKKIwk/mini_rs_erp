@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use sqlx::PgPool;
 
 use crate::core::calculate_orders::CalculateOrderTemplate;
-use crate::core::mini_orders::{MiniOrderError, MiniOrderSink};
-use crate::core::production_map::ProductionMapDefinition;
+use crate::core::mini_orders::{MiniOrderError, MiniOrderSink, NewProductionOrder};
+use crate::core::production_map::{ProductionMapDefinition, ProductionMapError};
 use crate::core::quantity::positive_erp_quantity;
 
 mod order_edit;
@@ -21,6 +21,47 @@ impl PostgresMiniOrderSink {
 
 #[async_trait]
 impl MiniOrderSink for PostgresMiniOrderSink {
+    async fn create_order_atomic(
+        &self,
+        order: &NewProductionOrder,
+    ) -> Result<Option<CalculateOrderTemplate>, ProductionMapError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        super::postgres_production_map::create_order_maps_tx(
+            &mut tx,
+            &order.map,
+            order.template_map.as_ref(),
+        )
+        .await?;
+        let quick_template = if let Some(template) = &order.quick_template {
+            Some(
+                super::postgres_calculate_order::upsert_template_tx(
+                    &mut tx,
+                    &order.owner_key,
+                    template.clone(),
+                )
+                .await
+                .map_err(|_| ProductionMapError::StoreFailed)?,
+            )
+        } else {
+            None
+        };
+        save_order_tx(
+            &mut tx,
+            &order.map,
+            quick_template.as_ref().unwrap_or(&order.template),
+        )
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+        tx.commit()
+            .await
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        Ok(quick_template)
+    }
+
     async fn sync_orders(
         &self,
         maps: &[ProductionMapDefinition],

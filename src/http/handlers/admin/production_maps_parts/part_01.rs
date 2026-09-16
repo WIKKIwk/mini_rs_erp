@@ -248,6 +248,19 @@ pub async fn production_maps(
             assign_order_number_if_missing(&state, &mut input)
                 .await
                 .map_err(production_map_error)?;
+            if state.production_orders.enabled()
+                && is_sheet_order_map(&input)
+                && state
+                    .production_maps
+                    .raw_map(&input.id)
+                    .await
+                    .map_err(production_map_error)?
+                    .is_none()
+            {
+                return Err(bad_request(
+                    "Yangi orderni Calculate hisob-kitobi bilan oching. Faqat production mapni saqlash order ochish uchun yetarli emas",
+                ));
+            }
             match state.production_maps.upsert_map(input).await {
                 Ok(saved) => Ok(json_response(saved)),
                 Err(error) => Err(production_map_error(error)),
@@ -359,6 +372,63 @@ pub async fn production_map_save_with_order(
         return Err(production_map_error(
             ProductionMapError::DuplicateOrderNumber,
         ));
+    }
+    if previous.is_none() && is_sheet_order_map(&input.map) && state.production_orders.enabled() {
+        let template = input
+            .template
+            .as_ref()
+            .ok_or_else(|| bad_request("Order ochish uchun Calculate hisob-kitobi kerak"))?;
+        let _guard = state.production_maps.queue_action_guard().await;
+        let saved = state
+            .production_maps
+            .prepare_map_for_save(input.map.clone())
+            .await
+            .map_err(production_map_error)?;
+        let template_map = match template_map {
+            Some(map) => Some(
+                state
+                    .production_maps
+                    .prepare_map_for_save(map)
+                    .await
+                    .map_err(production_map_error)?
+                    .map,
+            ),
+            None => None,
+        };
+        let snapshot = order_template_snapshot_for_map(&saved.map, template);
+        let quick_template = if opens_quick_template_as_order {
+            None
+        } else {
+            let mut quick = template.clone();
+            quick.source_map_id = template_map
+                .as_ref()
+                .map(|m| m.id.clone())
+                .unwrap_or_else(|| template_source_map_id_for_save(&saved.map, template));
+            Some(quick)
+        };
+        let saved_template = state
+            .production_orders
+            .create_order_atomic(&crate::core::mini_orders::NewProductionOrder {
+                map: saved.map.clone(),
+                template_map,
+                template: snapshot.clone(),
+                quick_template,
+                owner_key: owner_key.clone(),
+            })
+            .await
+            .map_err(production_map_error)?;
+        state.production_maps.notify_live();
+        spawn_order_integrations(
+            state.clone(),
+            saved.map.clone(),
+            snapshot,
+            owner_key,
+            principal.display_name.clone(),
+            principal.phone.clone(),
+        );
+        return Ok(json_response(serde_json::json!({
+            "ok": true, "saved": saved, "template": saved_template,
+        })));
     }
     let saved_map = if let Some(template_map) = template_map {
         state

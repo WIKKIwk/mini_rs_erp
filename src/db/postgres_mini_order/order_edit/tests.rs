@@ -1,19 +1,151 @@
 use super::*;
 
+fn legacy_fixture() -> (
+    ProductionMapDefinition,
+    CalculateOrderTemplate,
+    Vec<serde_json::Value>,
+) {
+    let map = serde_json::from_value(serde_json::json!({
+        "id":"zakaz-0005", "order_number":"0005", "product_code":"magnus",
+        "title":"Magnus", "order_kg":100, "width_mm":765, "roll_count":6,
+    }))
+    .unwrap();
+    let template = CalculateOrderTemplate {
+        id: "current".into(),
+        order_number: "0005".into(),
+        source_map_id: "template-zakaz-0005".into(),
+        item_code: "magnus".into(),
+        product: "Magnus".into(),
+        kg: 100.0,
+        frame_product_size_mm: 250.0,
+        frame_count: 3.0,
+        edge_allowance_mm: 15.0,
+        width_mm: 765.0,
+        roll_count: Some(6),
+        waste_percent: 5.0,
+        layers: vec![crate::core::formula::LayerInput::new("BOPP metal", "5")],
+        ..Default::default()
+    };
+    let layers = vec![serde_json::to_value(template.effective_layers()).unwrap()];
+    (map, template, layers)
+}
+
 #[test]
 fn order_edit_legacy_source_explains_missing_and_ambiguous_calculations() {
-    let missing = legacy_calculation(vec![]).unwrap_err().to_string();
+    let (map, template, layers) = legacy_fixture();
+    let missing = legacy_calculation(vec![], &map, &layers)
+        .unwrap_err()
+        .to_string();
     assert!(missing.contains("shablon topilmadi"));
     assert!(missing.contains("hozir kiritgan ma’lumotlaringizdagi xato emas"));
     assert!(missing.contains("administrator"));
-    let value = serde_json::json!({"id": "original"});
-    assert_eq!(legacy_calculation(vec![value.clone()]).unwrap(), value);
-    let ambiguous = legacy_calculation(vec![value.clone(), value])
+    let value = serde_json::to_value(&template).unwrap();
+    assert_eq!(
+        legacy_calculation(vec![value.clone()], &map, &layers).unwrap(),
+        template
+    );
+    let ambiguous = legacy_calculation(vec![value.clone(), value], &map, &layers)
         .unwrap_err()
         .to_string();
-    assert!(ambiguous.contains("bir nechta shablon"));
+    assert!(ambiguous.contains("bir nechta Calculate shabloni"));
     assert!(ambiguous.contains("administrator"));
     assert_ne!(missing, ambiguous);
+}
+
+#[test]
+fn order_edit_legacy_reused_source_link_selects_verified_order_not_old_template() {
+    let (map, template, layers) = legacy_fixture();
+    let mut old = template.clone();
+    old.id = "old".into();
+    old.order_number.clear();
+    old.kg = 0.0;
+    old.frame_product_size_mm = 400.0;
+    old.width_mm = 1215.0;
+    old.roll_count = Some(9);
+    old.layers = vec![crate::core::formula::LayerInput::new("BOPP", "12")];
+    let old = serde_json::to_value(old).unwrap();
+    let current = serde_json::to_value(&template).unwrap();
+    for values in [vec![old.clone(), current.clone()], vec![current, old]] {
+        assert_eq!(legacy_calculation(values, &map, &layers).unwrap(), template);
+    }
+    // An equally shaped reusable template still does not outrank an exact order.
+    let mut reusable = template.clone();
+    reusable.order_number.clear();
+    reusable.note = "changed reusable template".into();
+    assert_eq!(
+        legacy_calculation(
+            vec![
+                serde_json::to_value(reusable).unwrap(),
+                serde_json::to_value(&template).unwrap()
+            ],
+            &map,
+            &layers
+        )
+        .unwrap(),
+        template
+    );
+}
+
+#[test]
+fn order_edit_legacy_rejects_incompatible_identity_dimensions_and_materials() {
+    let (map, template, layers) = legacy_fixture();
+    let mut variants = Vec::new();
+    let mut wrong = template.clone();
+    wrong.order_number = "9999".into();
+    variants.push(wrong);
+    let mut wrong = template.clone();
+    wrong.item_code = "other".into();
+    variants.push(wrong);
+    let mut wrong = template.clone();
+    wrong.frame_count = 4.0;
+    variants.push(wrong);
+    let mut wrong = template.clone();
+    wrong.roll_count = Some(9);
+    variants.push(wrong);
+    let mut wrong = template.clone();
+    wrong.kg = 200.0;
+    variants.push(wrong);
+    let mut wrong = template.clone();
+    wrong.layers.clear();
+    variants.push(wrong);
+    let mut wrong = template.clone();
+    wrong.print_val_size_mm = Some(1000.0);
+    variants.push(wrong);
+    for wrong in variants {
+        assert!(matches!(
+            legacy_calculation(vec![serde_json::to_value(wrong).unwrap()], &map, &layers),
+            Err(Error::Locked(_))
+        ));
+    }
+    let mut mismatched_exact = template.clone();
+    mismatched_exact.roll_count = Some(9);
+    let mut reusable = template.clone();
+    reusable.order_number.clear();
+    assert!(
+        legacy_calculation(
+            vec![
+                serde_json::to_value(mismatched_exact).unwrap(),
+                serde_json::to_value(reusable).unwrap()
+            ],
+            &map,
+            &layers
+        )
+        .is_err()
+    );
+    let mut competing = template.clone();
+    competing.waste_percent = 10.0;
+    assert!(
+        legacy_calculation(
+            vec![
+                serde_json::to_value(&template).unwrap(),
+                serde_json::to_value(competing).unwrap()
+            ],
+            &map,
+            &layers
+        )
+        .is_err()
+    );
+    assert!(legacy_calculation(vec![serde_json::to_value(template).unwrap()], &map, &[]).is_err());
 }
 
 #[test]
@@ -93,6 +225,7 @@ async fn order_edit_postgres_atomic_save_history_and_races() {
         kg: 500.0,
         frame_product_size_mm: 300.0,
         frame_count: 2.0,
+        edge_allowance_mm: 15.0,
         width_mm: 615.0,
         roll_count: Some(6),
         layers: vec![crate::core::formula::LayerInput::new("pet", "12")],
@@ -113,6 +246,44 @@ async fn order_edit_postgres_atomic_save_history_and_races() {
     let head = sink.order_edit_source("zakaz-1001").await;
     assert!(matches!(head, Err(Error::Locked(_))), "{head:?}");
     let source = sink.order_edit_source("zakaz-1002").await.unwrap();
+    // Reproduce a reused template-zakaz link without touching live data. The
+    // matching calculation is recoverable, but eligibility is still enforced.
+    for number in ["1001", "1002"] {
+        let mut tx = pool.begin().await.unwrap();
+        let id = format!("zakaz-{number}");
+        sqlx::query("UPDATE mini_orders SET calculation_json=NULL WHERE id=$1")
+            .bind(&id)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        let mut current = source.template.clone();
+        current.order_number = number.into();
+        current.source_map_id = format!("template-{id}");
+        let mut old = current.clone();
+        old.order_number.clear();
+        old.frame_product_size_mm = 400.0;
+        old.layers = vec![crate::core::formula::LayerInput::new("BOPP", "12")];
+        for (key, template) in [("old", old), ("current", current)] {
+            sqlx::query("INSERT INTO mini_quick_order_templates(id,owner_key,code,name,item_code,product_name,payload_json,quick_key) VALUES($1,'admin',$1,'Order','item','Product',$2,$1)")
+                .bind(key).bind(serde_json::to_value(template).unwrap())
+                .execute(&mut *tx).await.unwrap();
+        }
+        let recovered = load_source(&mut tx, &id).await.unwrap();
+        assert_eq!(recovered.template.frame_product_size_mm, 300.0);
+        assert_eq!(recovered.template.order_number, number);
+        let eligibility = check_eligible(&mut tx, &id).await;
+        if number == "1001" {
+            assert!(
+                eligibility
+                    .unwrap_err()
+                    .to_string()
+                    .contains("navbatida birinchi")
+            );
+        } else {
+            eligibility.unwrap();
+        }
+        tx.rollback().await.unwrap();
+    }
     let timestamp: String = sqlx::query_scalar(
         "SELECT updated_at::text FROM mini_production_maps WHERE id='zakaz-1002'",
     )
@@ -211,6 +382,87 @@ async fn order_edit_postgres_atomic_save_history_and_races() {
             .await
             .unwrap();
     assert_eq!(revision, 1, "rejected save must not mutate the order");
+
+    // New ordinary and quick-clone orders must persist their private input in
+    // the same transaction as their map. Rejected writes must leave no order.
+    use crate::core::mini_orders::NewProductionOrder;
+    let make_order = |number: &str, save_quick: bool| {
+        let mut map = source.map.clone();
+        map.id = format!("zakaz-{number}");
+        map.code = number.into();
+        map.order_number = number.into();
+        let mut template_map = map.clone();
+        template_map.id = format!("template-{}", map.id);
+        template_map.order_number.clear();
+        template_map.code.clear();
+        template_map.order_kg = None;
+        template_map.base_length = None;
+        let mut template = source.template.clone();
+        template.id = format!("quick-{number}");
+        template.code = format!("Q-{number}");
+        template.order_number = number.into();
+        template.source_map_id = template_map.id.clone();
+        NewProductionOrder {
+            map,
+            template_map: save_quick.then_some(template_map),
+            quick_template: save_quick.then_some(template.clone()),
+            template,
+            owner_key: "admin".into(),
+        }
+    };
+    let create = make_order("2001", true);
+    let quick = sink.create_order_atomic(&create).await.unwrap().unwrap();
+    assert_eq!(quick.source_map_id, "template-zakaz-2001");
+    let persisted: (String, String, i64) = sqlx::query_as(
+        "SELECT o.calculation_json->>'source_map_id', o.calculation_json->>'order_number',
+         (SELECT count(*) FROM mini_order_products WHERE order_id=o.id)
+         FROM mini_orders o JOIN mini_production_maps m ON m.id=o.id WHERE o.id='zakaz-2001'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(persisted, ("zakaz-2001".into(), "2001".into(), 1));
+    assert!(matches!(
+        sink.create_order_atomic(&create).await,
+        Err(crate::core::production_map::ProductionMapError::DuplicateOrderNumber)
+    ));
+    // Force failure specifically when the private calculation is written,
+    // after maps and quick-template writes have already happened inside the tx.
+    sqlx::query("ALTER TABLE mini_orders ADD CONSTRAINT test_snapshot_failure CHECK (id <> 'zakaz-2002' OR calculation_json IS NULL)")
+        .execute(&pool).await.unwrap();
+    assert!(
+        sink.create_order_atomic(&make_order("2002", true))
+            .await
+            .is_err()
+    );
+    let partial: (i64, i64, i64) = sqlx::query_as(
+        "SELECT (SELECT count(*) FROM mini_production_maps WHERE id IN ('zakaz-2002','template-zakaz-2002')),
+         (SELECT count(*) FROM mini_orders WHERE id='zakaz-2002'),
+         (SELECT count(*) FROM mini_quick_order_templates WHERE id='quick-2002')",
+    ).fetch_one(&pool).await.unwrap();
+    assert_eq!(partial, (0, 0, 0));
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM mini_quick_order_templates")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(
+        sink.create_order_atomic(&make_order("2003", false))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let cloned: (bool, i64) = sqlx::query_as(
+        "SELECT calculation_json IS NOT NULL, (SELECT count(*) FROM mini_quick_order_templates)
+         FROM mini_orders WHERE id='zakaz-2003'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        cloned,
+        (true, count),
+        "quick clones do not modify reusable templates"
+    );
     pool.close().await;
     sqlx::query(&format!("DROP DATABASE {db}"))
         .execute(&admin)

@@ -195,9 +195,8 @@ fn spawn_order_integrations(
         if let Err(error) = state.order_sheets.append_order(&map, &template).await {
             tracing::warn!(?error, map_id = %map.id, "google sheets order append failed");
         }
-        if let Err(error) = state.production_orders.save_order(&map, &template).await {
-            tracing::warn!(?error, map_id = %map.id, "mini order save failed");
-        }
+        // Order, map and calculation are committed before this task starts.
+        // Only external notifications are best-effort background work.
         let image = if template.image_id.trim().is_empty() {
             None
         } else {

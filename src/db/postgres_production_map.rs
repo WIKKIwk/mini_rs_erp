@@ -66,6 +66,31 @@ pub(crate) async fn save_edited_map_tx(
     put_map_inner_tx(tx, map).await
 }
 
+pub(crate) async fn create_order_maps_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    map: &ProductionMapDefinition,
+    template_map: Option<&ProductionMapDefinition>,
+) -> Result<(), ProductionMapError> {
+    transaction_locks::lock_order_tx(tx, &map.id).await?;
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM mini_production_maps WHERE id=$1)
+            OR EXISTS(SELECT 1 FROM mini_orders WHERE id=$1)",
+    )
+    .bind(&map.id)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    if exists {
+        return Err(ProductionMapError::DuplicateOrderNumber);
+    }
+    for map in std::iter::once(map).chain(template_map) {
+        reject_order_number_immutable_tx(tx, map).await?;
+        reject_duplicate_order_number_tx(tx, map).await?;
+        put_map_inner_tx(tx, map).await?;
+    }
+    Ok(())
+}
+
 pub(crate) async fn lock_order_for_edit_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, id: &str,
 ) -> Result<(), ProductionMapError> {

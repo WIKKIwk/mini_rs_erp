@@ -2,7 +2,16 @@ use async_trait::async_trait;
 use thiserror::Error;
 
 use crate::core::calculate_orders::CalculateOrderTemplate;
-use crate::core::production_map::ProductionMapDefinition;
+use crate::core::production_map::{ProductionMapDefinition, ProductionMapError};
+
+/// Prepared maps and the exact calculation must become visible together.
+pub struct NewProductionOrder {
+    pub map: ProductionMapDefinition,
+    pub template_map: Option<ProductionMapDefinition>,
+    pub template: CalculateOrderTemplate,
+    pub quick_template: Option<CalculateOrderTemplate>,
+    pub owner_key: String,
+}
 
 #[derive(Debug, Error)]
 pub enum MiniOrderError {
@@ -12,6 +21,14 @@ pub enum MiniOrderError {
 
 #[async_trait]
 pub trait MiniOrderSink: Send + Sync {
+    async fn create_order_atomic(
+        &self,
+        _order: &NewProductionOrder,
+    ) -> Result<Option<CalculateOrderTemplate>, ProductionMapError> {
+        // A persistence-enabled sink must explicitly support atomic creation.
+        Err(ProductionMapError::StoreFailed)
+    }
+
     async fn order_edit_source(
         &self,
         _order_id: &str,

@@ -339,7 +339,7 @@ async fn production_map_save_with_order_snapshots_rezka_frame_count_on_new_order
 }
 
 #[tokio::test]
-async fn production_map_save_with_order_records_mini_order_without_blocking_response() {
+async fn production_map_save_with_order_waits_for_database_and_rejects_failed_creation() {
     let sink = Arc::new(FakeProductionOrderSink::fail_after(Duration::from_millis(
         200,
     )));
@@ -374,8 +374,8 @@ async fn production_map_save_with_order_records_mini_order_without_blocking_resp
     );
 
     let response = tokio::time::timeout(
-        Duration::from_millis(75),
-        build_router(state).oneshot(request_with_body(
+        Duration::from_secs(5),
+        build_router(state.clone()).oneshot(request_with_body(
             "PUT",
             "/v1/mobile/admin/production-maps/with-order",
             &token,
@@ -383,12 +383,36 @@ async fn production_map_save_with_order_records_mini_order_without_blocking_resp
         )),
     )
     .await
-    .expect("response must not wait for mini order write")
+    .expect("database write must finish within the test deadline")
     .expect("save with order");
 
-    assert_eq!(response.status(), StatusCode::OK);
-    tokio::time::sleep(Duration::from_millis(250)).await;
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(sink.calls.load(Ordering::SeqCst), 1);
+    assert!(state.production_maps.maps().await.unwrap().is_empty());
+    assert!(state.calculate_orders.list_all().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn production_map_save_with_order_requires_calculation_for_persisted_orders() {
+    let sink = Arc::new(FakeProductionOrderSink::fail_after(Duration::ZERO));
+    let mut state = test_state();
+    state.production_orders = sink.clone();
+    let token = session(&state, PrincipalRole::Admin).await;
+    let map = pechat_order_map_json(
+        "zakaz-7798", "No calculation", "7798", "apparatus:default:bosma_8",
+    );
+    for (path, body) in [
+        ("/v1/mobile/admin/production-maps/with-order", format!(r#"{{"map":{map}}}"#)),
+        ("/v1/mobile/admin/production-maps", map),
+    ] {
+        let response = build_router(state.clone())
+            .oneshot(request_with_body("PUT", path, &token, &body))
+            .await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(json_body(response).await["error"].as_str().unwrap().contains("Calculate"));
+    }
+    assert_eq!(sink.calls.load(Ordering::SeqCst), 0);
+    assert!(state.production_maps.maps().await.unwrap().is_empty());
 }
 
 #[tokio::test]

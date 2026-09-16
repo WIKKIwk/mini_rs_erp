@@ -165,6 +165,20 @@ impl FakeProductionOrderSink {
 
 #[async_trait]
 impl MiniOrderSink for FakeProductionOrderSink {
+    fn enabled(&self) -> bool {
+        true
+    }
+
+    async fn create_order_atomic(
+        &self,
+        order: &crate::core::mini_orders::NewProductionOrder,
+    ) -> Result<Option<CalculateOrderTemplate>, crate::core::production_map::ProductionMapError> {
+        self.save_order(&order.map, &order.template)
+            .await
+            .map_err(|_| crate::core::production_map::ProductionMapError::StoreFailed)?;
+        Ok(None)
+    }
+
     async fn save_order(
         &self,
         _map: &crate::core::production_map::ProductionMapDefinition,

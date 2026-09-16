@@ -84,45 +84,15 @@ impl CalculateOrderStorePort for PostgresCalculateOrderStore {
         owner_key: &str,
         template: CalculateOrderTemplate,
     ) -> Result<CalculateOrderTemplate, CalculateOrderError> {
-        validate_template(&template)?;
-        let mut incoming = template;
-        if incoming.code.trim().is_empty() {
-            incoming.code = format!("Z-{}", new_id());
-        }
-        let existing = existing_id_by_code(&self.pool, owner_key, &incoming.code).await?;
-        let saved = stamp_template(incoming, existing);
-        let payload = serde_json::to_value(&saved).map_err(|_| CalculateOrderError::StoreFailed)?;
-
-        sqlx::query(
-            "INSERT INTO mini_quick_order_templates
-                (id, owner_key, code, name, item_code, product_name, customer_ref,
-                 customer_name, payload_json, quick_key, saved_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
-             ON CONFLICT (id) DO UPDATE SET
-                code = excluded.code,
-                name = excluded.name,
-                item_code = excluded.item_code,
-                product_name = excluded.product_name,
-                customer_ref = excluded.customer_ref,
-                customer_name = excluded.customer_name,
-                payload_json = excluded.payload_json,
-                quick_key = excluded.quick_key,
-                saved_at = excluded.saved_at",
-        )
-        .bind(&saved.id)
-        .bind(owner_key.trim())
-        .bind(&saved.code)
-        .bind(&saved.name)
-        .bind(&saved.item_code)
-        .bind(&saved.product)
-        .bind(&saved.customer_ref)
-        .bind(&saved.customer)
-        .bind(payload)
-        .bind(quick_template_key(&saved))
-        .execute(&self.pool)
-        .await
-        .map_err(|_| CalculateOrderError::StoreFailed)?;
-
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| CalculateOrderError::StoreFailed)?;
+        let saved = upsert_template_tx(&mut tx, owner_key, template).await?;
+        tx.commit()
+            .await
+            .map_err(|_| CalculateOrderError::StoreFailed)?;
         Ok(saved)
     }
 
@@ -224,8 +194,48 @@ impl CalculateOrderStorePort for PostgresCalculateOrderStore {
     }
 }
 
+pub(crate) async fn upsert_template_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    owner_key: &str,
+    mut template: CalculateOrderTemplate,
+) -> Result<CalculateOrderTemplate, CalculateOrderError> {
+    validate_template(&template)?;
+    if template.code.trim().is_empty() {
+        template.code = format!("Z-{}", new_id());
+    }
+    let existing = existing_id_by_code(tx, owner_key, &template.code).await?;
+    let saved = stamp_template(template, existing);
+    let payload = serde_json::to_value(&saved).map_err(|_| CalculateOrderError::StoreFailed)?;
+    sqlx::query(
+        "INSERT INTO mini_quick_order_templates
+            (id, owner_key, code, name, item_code, product_name, customer_ref,
+             customer_name, payload_json, quick_key, saved_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
+         ON CONFLICT (id) DO UPDATE SET
+            code = excluded.code, name = excluded.name,
+            item_code = excluded.item_code, product_name = excluded.product_name,
+            customer_ref = excluded.customer_ref, customer_name = excluded.customer_name,
+            payload_json = excluded.payload_json, quick_key = excluded.quick_key,
+            saved_at = excluded.saved_at",
+    )
+    .bind(&saved.id)
+    .bind(owner_key.trim())
+    .bind(&saved.code)
+    .bind(&saved.name)
+    .bind(&saved.item_code)
+    .bind(&saved.product)
+    .bind(&saved.customer_ref)
+    .bind(&saved.customer)
+    .bind(payload)
+    .bind(quick_template_key(&saved))
+    .execute(&mut **tx)
+    .await
+    .map_err(|_| CalculateOrderError::StoreFailed)?;
+    Ok(saved)
+}
+
 async fn existing_id_by_code(
-    pool: &PgPool,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     owner_key: &str,
     code: &str,
 ) -> Result<Option<String>, CalculateOrderError> {
@@ -238,7 +248,7 @@ async fn existing_id_by_code(
     )
     .bind(owner_key.trim())
     .bind(code.trim())
-    .fetch_optional(pool)
+    .fetch_optional(&mut **tx)
     .await
     .map_err(|_| CalculateOrderError::StoreFailed)
 }
