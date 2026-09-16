@@ -8,6 +8,8 @@ use super::progress::{
 };
 use crate::core::apparatus_standard::ApparatusId;
 
+#[path = "alternatives.rs"]
+mod alternatives;
 
 pub(super) fn compile_saved_maps(
     maps: impl IntoIterator<Item = ProductionMapDefinition>,
@@ -370,8 +372,9 @@ impl ProductionMapService {
         mut map: ProductionMapDefinition,
     ) -> Result<ProductionMapSaved, ProductionMapError> {
         normalize_map(&mut map);
+        compile_map(&map)?;
+        self.validate_and_normalize_map_apparatus(&mut map).await?;
         let program = compile_map(&map)?;
-        self.validate_map_apparatus_constraints(&map).await?;
         self.reject_started_stage_changes(&map).await?;
         Ok(ProductionMapSaved { map, program })
     }
@@ -386,8 +389,9 @@ impl ProductionMapService {
         let mut saved = Vec::with_capacity(maps.len());
         for mut map in maps {
             normalize_map(&mut map);
+            compile_map(&map)?;
+            self.validate_and_normalize_map_apparatus(&mut map).await?;
             let program = compile_map(&map)?;
-            self.validate_map_apparatus_constraints(&map).await?;
             self.reject_started_stage_changes(&map).await?;
             saved.push(ProductionMapSaved {
                 map: map.clone(),
@@ -400,9 +404,9 @@ impl ProductionMapService {
         Ok(saved)
     }
 
-    async fn validate_map_apparatus_constraints(
+    async fn validate_and_normalize_map_apparatus(
         &self,
-        map: &ProductionMapDefinition,
+        map: &mut ProductionMapDefinition,
     ) -> Result<(), ProductionMapError> {
         let apparatus_ids = map
             .nodes
@@ -450,6 +454,7 @@ impl ProductionMapService {
                 return Err(ProductionMapError::ApparatusWidthExceedsCapability);
             }
         }
+        alternatives::normalize_topology_alternatives(map, &configurations);
         Ok(())
     }
 
