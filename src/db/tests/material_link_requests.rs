@@ -184,6 +184,18 @@ async fn postgres_material_link_selection_shared_cards_and_stale_recovery() {
             .await,
         Err(LinkError::Selection)
     ));
+    // Even the admin may only approve rolls included in the worker's request.
+    assert!(matches!(
+        store
+            .decide(
+                &first.request_id,
+                &admin_actor,
+                true,
+                vec![assignment("R3", "order-link")],
+            )
+            .await,
+        Err(LinkError::Selection)
+    ));
 
     // A partial delivery must be durable and retry without duplicating the admin card.
     sqlx::raw_sql("CREATE FUNCTION reject_test_card() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -223,6 +235,22 @@ async fn postgres_material_link_selection_shared_cards_and_stale_recovery() {
     .await
     .unwrap();
     assert_eq!(card_count, 2);
+    let requested_rolls: Vec<serde_json::Value> = sqlx::query_scalar(
+        "SELECT metadata_json->'candidates' FROM mini_chat_messages
+         WHERE metadata_json->>'request_id'='subset'",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    for rolls in requested_rolls {
+        let barcodes: Vec<_> = rolls
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|roll| roll["barcode"].as_str().unwrap())
+            .collect();
+        assert_eq!(barcodes, ["R1", "R2"]);
+    }
     let recipients: Vec<(String, String)> = sqlx::query_as(
         "SELECT DISTINCT p.principal_role,p.principal_ref
         FROM mini_chat_conversation_members m JOIN mini_chat_principals p USING(principal_id)

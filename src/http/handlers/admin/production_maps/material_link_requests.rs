@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::raw_material_details::assigned_apparatus_contains;
 use super::*;
@@ -119,6 +119,32 @@ async fn eligible_candidates(
     Ok(result)
 }
 
+fn selected_candidate_groups(
+    candidates: Vec<LinkCandidate>,
+    barcodes: &[String],
+) -> Result<BTreeMap<String, Vec<LinkCandidate>>, AdminError> {
+    let selected: BTreeSet<_> = barcodes.iter().map(|b| b.trim().to_lowercase()).collect();
+    if selected.is_empty() || selected.contains("") || selected.len() != barcodes.len() {
+        return Err(bad_request("material_link_selection_required"));
+    }
+    let candidates: Vec<_> = candidates
+        .into_iter()
+        .filter(|c| selected.contains(&c.barcode.to_lowercase()))
+        .collect();
+    // Reject the whole submission if a selected roll moved or was linked since the picker loaded.
+    if candidates.len() != selected.len() {
+        return Err(bad_request("material_link_candidates_changed"));
+    }
+    let mut groups: BTreeMap<String, Vec<LinkCandidate>> = BTreeMap::new();
+    for candidate in candidates {
+        groups
+            .entry(candidate.mover_ref.clone())
+            .or_default()
+            .push(candidate);
+    }
+    Ok(groups)
+}
+
 pub async fn material_link_requests(
     State(state): State<AppState>,
     method: Method,
@@ -169,7 +195,7 @@ pub async fn material_link_requests(
                     Err(_) => Vec::new(),
                 };
             Ok(json_response(
-                serde_json::json!({"requests":requests,"available_count":candidates.len()}),
+                serde_json::json!({"requests":requests,"available_count":candidates.len(),"candidates":candidates}),
             ))
         }
         Method::POST => {
@@ -185,18 +211,10 @@ pub async fn material_link_requests(
                 let apparatus =
                     super::queue_actions::resolve_queue_apparatus(&state, &command.apparatus)
                         .await?;
-                let mut groups: BTreeMap<String, Vec<LinkCandidate>> = BTreeMap::new();
-                for candidate in
-                    eligible_candidates(&state, &command.order_id, &command.apparatus).await?
-                {
-                    groups
-                        .entry(candidate.mover_ref.clone())
-                        .or_default()
-                        .push(candidate);
-                }
-                if groups.is_empty() {
-                    return Err(bad_request("material_link_no_candidates"));
-                }
+                let groups = selected_candidate_groups(
+                    eligible_candidates(&state, &command.order_id, &command.apparatus).await?,
+                    &command.barcodes,
+                )?;
                 let mut requests = Vec::new();
                 for (mover_ref, candidates) in groups {
                     let now = time::OffsetDateTime::now_utc().unix_timestamp();
@@ -304,5 +322,58 @@ pub async fn material_link_requests(
             Ok(json_response(serde_json::json!({"request":request})))
         }
         _ => Err(method_not_allowed()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn candidate(barcode: &str, mover: &str) -> LinkCandidate {
+        LinkCandidate {
+            stock_id: format!("stock-{barcode}"),
+            barcode: barcode.into(),
+            item_name: "Film".into(),
+            qty: 10.0,
+            uom: "kg".into(),
+            location_id: "state".into(),
+            location_name: "State".into(),
+            placement_version: 1,
+            mover_ref: mover.into(),
+            mover_display_name: mover.into(),
+        }
+    }
+
+    #[test]
+    fn material_link_worker_selection_limits_rolls_and_recipients() {
+        let groups = selected_candidate_groups(
+            vec![
+                candidate("R1", "mover-a"),
+                candidate("R2", "mover-a"),
+                candidate("R3", "mover-b"),
+                candidate("R4", "mover-c"),
+            ],
+            &[" r2 ".into(), "R3".into()],
+        )
+        .unwrap();
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups["mover-a"].len(), 1);
+        assert_eq!(groups["mover-a"][0].barcode, "R2");
+        assert_eq!(groups["mover-b"][0].barcode, "R3");
+        assert!(!groups.contains_key("mover-c"));
+    }
+
+    #[test]
+    fn material_link_worker_selection_rejects_empty_duplicate_and_stale_rolls() {
+        for selection in [vec![], vec![" ".into()], vec!["R1".into(), "r1".into()]] {
+            let error =
+                selected_candidate_groups(vec![candidate("R1", "mover")], &selection).unwrap_err();
+            assert_eq!(error.1.error, "material_link_selection_required");
+        }
+        for selection in [vec!["R2".into()], vec!["R1".into(), "R2".into()]] {
+            let error =
+                selected_candidate_groups(vec![candidate("R1", "mover")], &selection).unwrap_err();
+            assert_eq!(error.1.error, "material_link_candidates_changed");
+        }
     }
 }
