@@ -108,7 +108,7 @@ pub(crate) fn canonical_factory_apparatus_id_for_legacy(value: &str) -> Option<A
     )
 }
 
-fn factory_default_specs() -> [FactoryDefaultSpec; 10] {
+fn factory_default_specs() -> [FactoryDefaultSpec; 14] {
     [
         FactoryDefaultSpec {
             apparatus_id: "apparatus:default:bosma_7",
@@ -205,6 +205,46 @@ fn factory_default_specs() -> [FactoryDefaultSpec; 10] {
             display_name: "Rezka",
             asset_key: "rezka",
             catalog_order: 9,
+            operation: ExecutionOperation::Cut,
+            technology: ProcessTechnology::Slitting,
+            color_station_count: None,
+            tooling_required: false,
+        },
+        FactoryDefaultSpec {
+            apparatus_id: "apparatus:default:asset-011",
+            display_name: "Rezka 2",
+            asset_key: "rezka-2",
+            catalog_order: 10,
+            operation: ExecutionOperation::Cut,
+            technology: ProcessTechnology::Slitting,
+            color_station_count: None,
+            tooling_required: false,
+        },
+        FactoryDefaultSpec {
+            apparatus_id: "apparatus:default:asset-012",
+            display_name: "Rezka 3",
+            asset_key: "rezka-3",
+            catalog_order: 11,
+            operation: ExecutionOperation::Cut,
+            technology: ProcessTechnology::Slitting,
+            color_station_count: None,
+            tooling_required: false,
+        },
+        FactoryDefaultSpec {
+            apparatus_id: "apparatus:default:asset-013",
+            display_name: "Rezka 4",
+            asset_key: "rezka-4",
+            catalog_order: 12,
+            operation: ExecutionOperation::Cut,
+            technology: ProcessTechnology::Slitting,
+            color_station_count: None,
+            tooling_required: false,
+        },
+        FactoryDefaultSpec {
+            apparatus_id: "apparatus:default:asset-014",
+            display_name: "Rezka 5",
+            asset_key: "rezka-5",
+            catalog_order: 13,
             operation: ExecutionOperation::Cut,
             technology: ProcessTechnology::Slitting,
             color_station_count: None,

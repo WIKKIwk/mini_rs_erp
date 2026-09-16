@@ -8,12 +8,16 @@ use crate::core::apparatus_standard::{
     test_support::{TestApparatusSpec, canonical_draft},
 };
 
-const EXPECTED_FACTORY_DEFAULTS: [(&str, &str); 10] = [
+const EXPECTED_FACTORY_DEFAULTS: [(&str, &str); 14] = [
     ("apparatus:default:asset-004", "Extruder laminatsiya"),
     ("apparatus:default:asset-005", "Flexo pechat"),
     ("apparatus:default:asset-007", "Laminatsiya 1"),
     ("apparatus:default:asset-008", "Laminatsiya 2"),
     ("apparatus:default:asset-010", "Rezka"),
+    ("apparatus:default:asset-011", "Rezka 2"),
+    ("apparatus:default:asset-012", "Rezka 3"),
+    ("apparatus:default:asset-013", "Rezka 4"),
+    ("apparatus:default:asset-014", "Rezka 5"),
     ("apparatus:default:bosma_7", "7 ta rangli bosma aparat"),
     ("apparatus:default:bosma_8", "8 ta rangli bosma aparat"),
     ("apparatus:default:bosma_9", "9 ta rangli bosma aparat"),
@@ -65,6 +69,22 @@ async fn factory_default_bootstrap_populates_an_empty_repository() {
         .map(|(id, name)| (id.to_string(), name.to_string()))
         .collect::<Vec<_>>();
     assert_eq!(actual, expected);
+
+    let rezka_ids = actual
+        .iter()
+        .filter(|(id, _)| {
+            matches!(
+                id.as_str(),
+                "apparatus:default:asset-010"
+                    | "apparatus:default:asset-011"
+                    | "apparatus:default:asset-012"
+                    | "apparatus:default:asset-013"
+                    | "apparatus:default:asset-014"
+            )
+        })
+        .map(|(id, _)| id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(rezka_ids.len(), 5);
 }
 
 #[tokio::test]
