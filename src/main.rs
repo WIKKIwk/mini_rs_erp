@@ -54,6 +54,9 @@ async fn main() -> Result<(), error::AppError> {
         error::AppError::Storage(format!("role store migration failed: {error}"))
     })?;
     state.telegram.start_bot_worker_if_configured().await;
+    if let Some(store) = &state.material_link_requests {
+        store.start_worker(state.chat.clone());
+    }
     let app = http::router::build_router(state);
 
     tracing::info!(%bind_addr, "starting mini rs erp");

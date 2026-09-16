@@ -4,6 +4,7 @@ mod calculate_order;
 mod customer;
 mod gscale_receipt;
 mod inventory_movements;
+mod material_link_requests;
 mod mini_order;
 mod opening_wip;
 mod production_map;

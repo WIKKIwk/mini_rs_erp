@@ -57,6 +57,7 @@ mod queue_helpers;
 #[path = "postgres_production_map/materials/stock.rs"]
 mod raw_material_stock_helpers;
 mod transaction_locks;
+pub mod material_link_requests;
 
 pub(crate) async fn save_edited_map_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,

@@ -461,7 +461,7 @@ impl ProductionMapService {
         Ok((assignment, warehouses))
     }
 
-    async fn prepare_raw_material_assignment(
+    pub(crate) async fn prepare_raw_material_assignment(
         &self,
         input: RawMaterialAssignmentInput,
         actor: &QueueActionActor,

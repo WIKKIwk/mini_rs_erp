@@ -24,6 +24,25 @@ impl PostgresChatStore {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
+
+    pub async fn upsert_material_link_card(
+        &self,
+        principal: &Principal,
+        conversation_id: &str,
+        request: &crate::db::postgres_production_map::material_link_requests::LinkRequest,
+    ) -> Result<ChatSendResult, ChatError> {
+        write::upsert_request_card(
+            &self.pool,
+            principal,
+            conversation_id,
+            &format!("material-link-request:{}", request.request_id),
+            "material_link_request",
+            &format!("{} orderga homashyo ulash so‘rovi", request.order_number),
+            serde_json::to_value(request).map_err(|_| ChatError::StoreFailed)?,
+            request.event_sequence,
+        )
+        .await
+    }
 }
 
 #[async_trait]

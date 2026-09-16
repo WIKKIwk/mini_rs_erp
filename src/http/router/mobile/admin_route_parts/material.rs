@@ -1,5 +1,6 @@
 fn material_routes() -> Router<AppState> {
     Router::new()
+        .route("/v1/mobile/material-link-requests", any(admin::material_link_requests))
         .route(
             "/v1/mobile/admin/raw-material-rules",
             any(admin::raw_material_rules),

@@ -5,14 +5,35 @@ pub(super) async fn upsert_order_freeze_card(
     conversation_id: &str,
     card_event: &OrderFreezeChatEvent,
 ) -> Result<ChatSendResult, ChatError> {
+    upsert_request_card(
+        pool,
+        principal,
+        conversation_id,
+        &format!("order-freeze-request:{}", card_event.request_id.trim()),
+        "order_freeze_request",
+        &card_event.message_body(),
+        card_event.metadata(),
+        card_event.event_sequence,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn upsert_request_card(
+    pool: &PgPool,
+    principal: &Principal,
+    conversation_id: &str,
+    client_message_id: &str,
+    message_type: &str,
+    body: &str,
+    metadata: serde_json::Value,
+    event_sequence: i64,
+) -> Result<ChatSendResult, ChatError> {
     let mut tx = pool.begin().await.map_err(|_| ChatError::StoreFailed)?;
     let sender = sender_for_conversation(&mut tx, principal, conversation_id).await?;
     // Serialize creation AND status updates before inspecting the existing card.
     // Concurrent retries must not insert twice or overwrite a newer transition.
     let last_sequence = lock_conversation_sequence(&mut tx, conversation_id).await?;
-    let client_message_id = format!("order-freeze-request:{}", card_event.request_id.trim());
-    let body = card_event.message_body();
-    let metadata = card_event.metadata();
     let existing = existing_message(
         &mut tx,
         conversation_id,
@@ -25,7 +46,7 @@ pub(super) async fn upsert_order_freeze_card(
         .and_then(|message| message.metadata.get("event_sequence"))
         .and_then(serde_json::Value::as_i64)
         .unwrap_or_default();
-    if existing_event_sequence >= card_event.event_sequence {
+    if existing_event_sequence >= event_sequence {
         tx.commit().await.map_err(|_| ChatError::StoreFailed)?;
         return Ok(ChatSendResult {
             message: existing.ok_or(ChatError::Conflict)?,
@@ -43,6 +64,7 @@ pub(super) async fn upsert_order_freeze_card(
             .bind(role_key(&sender.role))
             .bind(&sender.ref_)
             .bind(&sender.display_name)
+            .bind(message_type)
             .fetch_one(&mut *tx)
             .await
             .map_err(|_| ChatError::StoreFailed)?;
@@ -61,6 +83,7 @@ pub(super) async fn upsert_order_freeze_card(
             .bind(role_key(&sender.role))
             .bind(&sender.ref_)
             .bind(&sender.display_name)
+            .bind(message_type)
             .fetch_one(&mut *tx)
             .await
             .map_err(|_| ChatError::StoreFailed)?;

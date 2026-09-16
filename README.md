@@ -298,6 +298,22 @@ Some apparatus stages require material scans before start. The rule system is:
 The purpose is to prevent an operator from starting a production stage with the
 wrong input material.
 
+Workers can request assignment of unlinked raw-material rolls already in their
+apparatus `state` using `GET/POST /v1/mobile/material-link-requests` (migration
+`0114`). Candidates retain their placement version and actual mover identity.
+Each mover gets a separate request, delivered only to that material supplier
+and the administrator through their worker DM conversations. Only the named
+mover or an admin with `raw_material.assign` may decide; approval requires an
+explicit nonempty barcode selection and preserves existing assignment checks.
+The selected assignments and shared decision commit atomically. The first
+decision wins; durable, revision-ordered retries update both chat cards.
+
+Moved, unavailable, or externally assigned rolls invalidate the pending request;
+closed/frozen orders also invalidate it. Requests expire after 30 minutes and
+the requester may cancel. A subsequent request gets a new identity and freshly
+eligible candidates, leaving old cards terminal. Approval refreshes the worker's
+material list but does not bypass material scans, Qolip, queue, or start guards.
+
 #### Queue and WIP Flow
 
 Production queue flow is stateful:

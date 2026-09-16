@@ -1,6 +1,6 @@
 const ORDER_FREEZE_UPDATE_MESSAGE_SQL: &str = r#"UPDATE mini_chat_messages
    SET body = $4,
-       message_type = 'order_freeze_request',
+       message_type = $9,
        metadata_json = $5,
        edited_at = now()
    WHERE conversation_id = $1
@@ -33,7 +33,7 @@ const ORDER_FREEZE_UPDATE_MESSAGE_SQL: &str = r#"UPDATE mini_chat_messages
 const ORDER_FREEZE_INSERT_MESSAGE_SQL: &str = r#"INSERT INTO mini_chat_messages
      (message_id, conversation_id, sender_principal_id, client_message_id,
       message_sequence, message_type, body, metadata_json)
-   VALUES ($1, $2, $3, $4, $5, 'order_freeze_request', $6, $7)
+   VALUES ($1, $2, $3, $4, $5, $11, $6, $7)
    RETURNING
      message_id,
      conversation_id,

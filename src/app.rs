@@ -89,6 +89,7 @@ pub struct AppState {
     pub order_sheets: Arc<dyn OrderSheetSink>,
     pub production_orders: Arc<dyn MiniOrderSink>,
     pub pending_orders: Option<Arc<dyn crate::core::pending_orders::PendingOrderStore>>,
+    pub material_link_requests: Option<crate::db::postgres_production_map::material_link_requests::MaterialLinkStore>,
     pub order_reset: Option<PostgresOrderResetStore>,
     pub mobile_releases: MobileReleaseStore,
     pub calculate_order_image_dir: Arc<std::path::PathBuf>,
@@ -312,6 +313,8 @@ impl AppState {
             order_sheets,
             production_orders,
             pending_orders,
+            material_link_requests: postgres_pool::postgres_pool("material_link_requests")
+                .map(crate::db::postgres_production_map::material_link_requests::MaterialLinkStore::new),
             order_reset,
             mobile_releases,
             calculate_order_image_dir,
