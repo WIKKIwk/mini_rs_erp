@@ -154,6 +154,7 @@ async fn order_edit_route_authorization_stale_form_and_existing_order_update() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(json_body(response).await["error"], "Buyurtmada harakat bor");
     sink.blocked.store(false, Ordering::SeqCst);
     let response = app
         .clone()
@@ -180,6 +181,10 @@ async fn order_edit_route_authorization_stale_form_and_existing_order_update() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        json_body(response).await["error"],
+        OrderEditError::Conflict.to_string()
+    );
     assert_eq!(sink.saves.load(Ordering::SeqCst), 1);
     assert!(state.calculate_orders.list_all().await.unwrap().is_empty());
     let mut bypass = map.clone();

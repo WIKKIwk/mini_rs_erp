@@ -48,12 +48,7 @@ pub(super) async fn load_source(
             .bind(&map.order_number)
             .fetch_all(&mut **tx)
             .await?;
-            if values.len() != 1 {
-                return Err(Error::Locked(
-                    "Buyurtmaning asl Calculate ma’lumotlari saqlanmagan: tahrirlash mumkin emas",
-                ));
-            }
-            values.into_iter().next().ok_or(Error::Store)?
+            legacy_calculation(values)?
         }
     };
     let mut template: CalculateOrderTemplate =
@@ -69,7 +64,7 @@ pub(super) async fn load_source(
             serde_json::to_value(template.effective_layers()).map_err(|_| Error::Store)?;
         if layers.len() != 1 || layers[0] != expected {
             return Err(Error::Locked(
-                "Asl Calculate materiallari tezkor buyurtma bilan mos emas",
+                "Buyurtmada saqlangan material qatlamlari tezkor buyurtma shabloniga mos kelmaydi. Noto‘g‘ri hisob-kitobni yuklamaslik uchun tahrirlash bloklandi. Mas’ul administratorga buyurtma raqamini yuboring",
             ));
         }
     }
@@ -82,6 +77,18 @@ pub(super) async fn load_source(
         template,
         revision,
     })
+}
+
+fn legacy_calculation(values: Vec<serde_json::Value>) -> Result<serde_json::Value, Error> {
+    match values.len() {
+        0 => Err(Error::Locked(
+            "Bu buyurtmaning dastlabki Calculate hisob-kitobi bazada saqlanmagan va unga mos shablon topilmadi. Bu hozir kiritgan ma’lumotlaringizdagi xato emas. Hisob-kitobni taxmin qilib o‘zgartirmaslik uchun tahrirlash bloklandi. Mas’ul administratorga buyurtma raqamini yuboring",
+        )),
+        1 => values.into_iter().next().ok_or(Error::Store),
+        _ => Err(Error::Locked(
+            "Bu buyurtmaning dastlabki Calculate hisob-kitobi bazada saqlanmagan. Unga mos bir nechta shablon topildi, qaysi biri asl nusxa ekanini aniqlab bo‘lmadi. Tahrirlash uchun mas’ul administrator buyurtma va shablon bog‘lanishini tekshirishi kerak",
+        )),
+    }
 }
 
 // Historical rows intentionally count, even after detach/cancel/reset. A
@@ -110,6 +117,62 @@ const ACTIVITY_TABLES: &[&str] = &[
     "mini_returned_paint_requests",
 ];
 
+fn activity_reason(table: &str) -> &'static str {
+    match table {
+        "mini_queue_action_events" => {
+            "Buyurtma bo‘yicha apparat navbatida amal bajarilgan. Navbat amallari tarixini tekshiring. Harakat tarixi bor buyurtmani tahrirlash taqiqlangan"
+        }
+        "mini_order_run_sessions" => {
+            "Buyurtmada apparatdagi ish sessiyasi ochilgan. Ish keyin to‘xtatilgan yoki tugatilgan bo‘lsa ham tahrirlash taqiqlangan"
+        }
+        "mini_order_progress_events" | "mini_progress_batches" => {
+            "Buyurtmada ishlab chiqarish natijasi yoki WIP partiyasi qayd etilgan. Ishlab chiqarish tarixini tekshiring. Harakat boshlangan buyurtmani tahrirlash taqiqlangan"
+        }
+        "mini_raw_material_assignments" | "mini_raw_material_events" => {
+            "Buyurtmaga xomashyo biriktirilgan yoki xomashyo harakati qayd etilgan. Xomashyo tarixini tekshiring. Xomashyo keyin ajratilgan bo‘lsa ham tahrirlash taqiqlangan"
+        }
+        "mini_opening_wip_intakes" | "mini_opening_wip_batches" => {
+            "Buyurtmada boshlang‘ich yarim tayyor mahsulot (opening WIP) ochilgan. Opening WIP tarixini tekshiring. Keyin bekor qilingan bo‘lsa ham tahrirlash taqiqlangan"
+        }
+        "mini_order_control_states" | "mini_order_freeze_requests" => {
+            "Buyurtmada muzlatish yoki boshqaruv holati qayd etilgan. Buyurtma holati tarixini tekshiring. Holat keyin tiklangan bo‘lsa ham tahrirlash taqiqlangan"
+        }
+        "mini_apparatus_order_transfers" => {
+            "Buyurtmani boshqa apparatga ko‘chirish qayd etilgan. Ko‘chirish tarixini tekshiring. Harakat tarixi bor buyurtmani tahrirlash taqiqlangan"
+        }
+        "mini_production_order_lifecycle_events" => {
+            "Buyurtmaning ishlab chiqarish holati o‘zgartirilgan. Buyurtma tarixini tekshiring. Harakat tarixi bor buyurtmani tahrirlash taqiqlangan"
+        }
+        "mini_apparatus_schedule_reservations" => {
+            "Buyurtma uchun apparatda ishlab chiqarish vaqti band qilingan. Ish jadvalini tekshiring. Bandlov keyin bekor qilingan bo‘lsa ham uning tarixi tahrirlashni bloklaydi"
+        }
+        "mini_qolip_order_notes" => {
+            "Buyurtma bo‘yicha qolip bo‘limida yozuv kiritilgan. Qolip bo‘limidagi buyurtma yozuvini tekshiring. Harakat tarixi bor buyurtmani tahrirlash taqiqlangan"
+        }
+        "mini_finished_goods_stock" => {
+            "Buyurtma bo‘yicha tayyor mahsulot ombor yozuvi mavjud. Tayyor mahsulot tarixini tekshiring. Bunday buyurtmani tahrirlash taqiqlangan"
+        }
+        "mini_laminatsiya_astatka_reports" => {
+            "Buyurtmada laminatsiya qoldig‘i hisoboti kiritilgan. Laminatsiya tarixini tekshiring. Harakat tarixi bor buyurtmani tahrirlash taqiqlangan"
+        }
+        "mini_rezka_astatka_reports" => {
+            "Buyurtmada Rezka qoldig‘i hisoboti kiritilgan. Rezka tarixini tekshiring. Harakat tarixi bor buyurtmani tahrirlash taqiqlangan"
+        }
+        "mini_bosma_astatka_reports" => {
+            "Buyurtmada bosma qoldig‘i hisoboti kiritilgan. Bosma tarixini tekshiring. Harakat tarixi bor buyurtmani tahrirlash taqiqlangan"
+        }
+        "mini_preparation_operations" => {
+            "Buyurtmada tayyorlov amali qayd etilgan. Tayyorlov bo‘limidagi buyurtma tarixini tekshiring. Harakat boshlangan buyurtmani tahrirlash taqiqlangan"
+        }
+        "mini_returned_paint_images" | "mini_returned_paint_requests" => {
+            "Buyurtmada bo‘yoq qaytarish yozuvi mavjud. Bo‘yoq qaytarish tarixini tekshiring. Harakat tarixi bor buyurtmani tahrirlash taqiqlangan"
+        }
+        _ => {
+            "Buyurtmada harakat tarixi mavjud. Mas’ul administrator buyurtma tarixini tekshirishi kerak. Tahrirlash taqiqlangan"
+        }
+    }
+}
+
 pub(super) async fn check_eligible(
     tx: &mut Transaction<'_, Postgres>,
     id: &str,
@@ -124,7 +187,7 @@ pub(super) async fn check_eligible(
     .ok_or(Error::NotFound)?;
     if !pristine {
         return Err(Error::Locked(
-            "Buyurtmada ishlab chiqarish harakati boshlangan",
+            "Buyurtmaning ishlab chiqarish holati avval o‘zgartirilgan yoki hali chiqarilgan holatda emas. Buyurtma tarixini tekshiring. Faqat hech qanday harakat boshlanmagan buyurtmani tahrirlash mumkin",
         ));
     }
     for table in ACTIVITY_TABLES {
@@ -134,30 +197,24 @@ pub(super) async fn check_eligible(
             .fetch_one(&mut **tx)
             .await?
         {
-            return Err(Error::Locked(match *table {
-                "mini_raw_material_assignments" | "mini_raw_material_events" => {
-                    "Buyurtmaga xomashyo ulangan yoki xomashyo harakati bo‘lgan"
-                }
-                "mini_opening_wip_intakes" | "mini_opening_wip_batches" => {
-                    "Buyurtmada opening WIP ochilgan"
-                }
-                "mini_apparatus_schedule_reservations" => {
-                    "Buyurtma uchun ishlab chiqarish vaqti band qilingan"
-                }
-                _ => "Buyurtmada harakat tarixi mavjud: tahrirlash mumkin emas",
-            }));
+            return Err(Error::Locked(activity_reason(table)));
         }
     }
-    if sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS(SELECT 1 FROM mini_queue_states WHERE order_id = $1 AND state <> 'pending')
-         OR EXISTS(SELECT 1 FROM mini_raw_material_stock WHERE reserved_order_id = $1)",
+    let (work_started, material_reserved) = sqlx::query_as::<_, (bool, bool)>(
+        "SELECT EXISTS(SELECT 1 FROM mini_queue_states WHERE order_id = $1 AND state <> 'pending'),
+         EXISTS(SELECT 1 FROM mini_raw_material_stock WHERE reserved_order_id = $1)",
     )
     .bind(id)
     .fetch_one(&mut **tx)
-    .await?
-    {
+    .await?;
+    if work_started {
         return Err(Error::Locked(
-            "Buyurtmada ish boshlangan yoki xomashyo band qilingan",
+            "Buyurtma apparatda kutish holatida emas: ish boshlangan yoki holati o‘zgartirilgan. Apparatdagi buyurtma holatini tekshiring. Bunday buyurtmani tahrirlash taqiqlangan",
+        ));
+    }
+    if material_reserved {
+        return Err(Error::Locked(
+            "Buyurtma uchun omborda xomashyo band qilingan. Xomashyo bandlovini tekshiring. Xomashyo bog‘langan buyurtmani tahrirlash taqiqlangan",
         ));
     }
     check_queues(tx, id).await

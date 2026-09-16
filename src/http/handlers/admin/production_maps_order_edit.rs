@@ -60,7 +60,7 @@ pub async fn production_map_order_edit(
         || baseline.print_val_size_mm != current.map.print_val_size_mm
     {
         return Err(conflict(
-            "Asl Calculate qiymatlari mavjud mapga mos emas: tahrirlash mumkin emas",
+            "Buyurtmaning saqlangan Calculate hisob-kitobi hozirgi production mapdagi en, uzunlik, rang soni yoki val o‘lchamiga mos kelmaydi. Xato qiymatlar bilan tahrirlamaslik uchun amal bloklandi. Mas’ul administrator hisob-kitob va mapni tekshirishi kerak",
         ));
     }
     if method == Method::GET {
@@ -114,7 +114,9 @@ pub async fn production_map_order_edit(
                     .rezka_kadr_count
                     .is_some_and(|n| n != current.template.frame_count as i64)
             {
-                return Err(conflict("Kadr soni mavjud Rezka bo‘linishiga mos emas"));
+                return Err(conflict(
+                    "Kiritilgan kadr soni production mapdagi Rezka bo‘linishiga mos kelmaydi. Kadr sonini avvalgi qiymatiga qaytaring; mavjud bo‘linishni bu oynadan o‘zgartirib bo‘lmaydi",
+                ));
             }
             if node.rezka_kadr_count.is_none()
                 || node.rezka_kadr_count == Some(current.template.frame_count as i64)

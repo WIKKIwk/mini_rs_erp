@@ -1,4 +1,42 @@
 use super::*;
+
+#[test]
+fn order_edit_legacy_source_explains_missing_and_ambiguous_calculations() {
+    let missing = legacy_calculation(vec![]).unwrap_err().to_string();
+    assert!(missing.contains("shablon topilmadi"));
+    assert!(missing.contains("hozir kiritgan ma’lumotlaringizdagi xato emas"));
+    assert!(missing.contains("administrator"));
+    let value = serde_json::json!({"id": "original"});
+    assert_eq!(legacy_calculation(vec![value.clone()]).unwrap(), value);
+    let ambiguous = legacy_calculation(vec![value.clone(), value])
+        .unwrap_err()
+        .to_string();
+    assert!(ambiguous.contains("bir nechta shablon"));
+    assert!(ambiguous.contains("administrator"));
+    assert_ne!(missing, ambiguous);
+}
+
+#[test]
+fn order_edit_activity_reasons_identify_every_guarded_history() {
+    for table in ACTIVITY_TABLES {
+        assert_ne!(
+            activity_reason(table),
+            activity_reason("unknown"),
+            "{table}"
+        );
+    }
+    for (table, reason) in [
+        ("mini_order_run_sessions", "ish sessiyasi"),
+        ("mini_raw_material_events", "xomashyo"),
+        ("mini_opening_wip_intakes", "opening WIP"),
+        ("mini_apparatus_schedule_reservations", "vaqti band"),
+        ("mini_preparation_operations", "tayyorlov"),
+    ] {
+        assert!(activity_reason(table).contains(reason), "{table}");
+    }
+    assert!(activity_reason("mini_raw_material_events").contains("keyin ajratilgan"));
+    assert!(activity_reason("mini_opening_wip_intakes").contains("bekor qilingan"));
+}
 use crate::core::mini_orders::MiniOrderSink;
 use crate::core::production_map::ProductionMapStorePort;
 use crate::db::{

@@ -18,7 +18,11 @@ fn order_edit_blocks_first_on_any_apparatus_and_first_actionable() {
     )]);
     let mut states = BTreeMap::new();
     assert!(check_queue_position("edit", &sequences, &states).is_ok());
-    assert!(check_queue_position("first", &sequences, &states).is_err());
+    let reason = check_queue_position("first", &sequences, &states)
+        .unwrap_err()
+        .to_string();
+    assert!(reason.contains("navbatida birinchi"));
+    assert!(reason.contains("Barcha apparatlardagi navbatini tekshiring"));
     states.insert(
         "apparatus:test:a".into(),
         BTreeMap::from([("first".into(), State::Completed)]),
@@ -70,16 +74,33 @@ fn order_edit_route_accepts_kg_but_rejects_incompatible_dimensions_layers_and_sp
     updated.kg = 600.0;
     assert!(validate_route(&original, &updated, &map, &catalog).is_ok());
     updated.roll_count = Some(9);
-    assert!(validate_route(&original, &updated, &map, &catalog).is_err());
+    let reason = validate_route(&original, &updated, &map, &catalog)
+        .unwrap_err()
+        .to_string();
+    assert!(reason.contains("Print"));
+    assert!(reason.contains("rang soni"));
     updated = original.clone();
     updated.frame_product_size_mm = 600.0;
-    assert!(validate_route(&original, &updated, &map, &catalog).is_err());
+    let reason = validate_route(&original, &updated, &map, &catalog)
+        .unwrap_err()
+        .to_string();
+    assert!(reason.contains("en"));
     updated = original.clone();
     updated.layers.pop();
-    assert!(validate_route(&original, &updated, &map, &catalog).is_err());
+    assert!(
+        validate_route(&original, &updated, &map, &catalog)
+            .unwrap_err()
+            .to_string()
+            .contains("qatlam")
+    );
     updated = original.clone();
     updated.status = "paket".into();
-    assert!(validate_route(&original, &updated, &map, &catalog).is_err());
+    assert!(
+        validate_route(&original, &updated, &map, &catalog)
+            .unwrap_err()
+            .to_string()
+            .contains("Buyurtma turi")
+    );
     let mut split = map.clone();
     split
         .nodes
