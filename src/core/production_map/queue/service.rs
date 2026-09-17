@@ -1039,6 +1039,10 @@ impl ProductionMapService {
                         complete_requires_rezka_total_waste_only,
                         freeze_request: order_control
                             .and_then(|control| control.freeze_request.clone()),
+                        print_preflight_allowed: is_bosma
+                            && state == queue_state::ApparatusQueueOrderState::Pending
+                            && pending_actionable
+                            && !requeued_session,
                         print_preflight,
                     },
                 );

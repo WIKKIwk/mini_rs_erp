@@ -192,6 +192,7 @@ fn training_queue_action_controls(
                     }),
                     closing_output_batch_id: String::new(),
                     freeze_request: None,
+                    print_preflight_allowed: false,
                     print_preflight: None,
                 },
             )

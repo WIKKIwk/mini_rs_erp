@@ -150,11 +150,7 @@ impl ProductionMapService {
             .get(&canonical_id)
             .and_then(|items| items.get(order_id))
             .ok_or(ProductionMapError::QueueActionNotAllowed)?;
-        if control.state != queue_state::ApparatusQueueOrderState::Pending
-            || !control
-                .allowed_actions
-                .contains(&queue_state::ApparatusQueueAction::Start)
-        {
+        if !control.print_preflight_allowed {
             return Err(ProductionMapError::QueueActionNotAllowed);
         }
 

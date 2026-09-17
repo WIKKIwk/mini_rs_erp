@@ -151,9 +151,10 @@ pub struct ApparatusQueueOrderActionControl {
     pub complete_requires_rezka_total_waste_only: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub freeze_request: Option<OrderFreezeRequest>,
-    /// A print apparatus may be held for a colour preflight while the queue
-    /// state remains pending. The mobile client renders this as a separate
-    /// preflight phase and may not infer it from the official queue state.
+    /// Colour matching does not require production materials or tooling.
+    #[serde(default)]
+    pub print_preflight_allowed: bool,
+    /// Persisted colour-matching phase for this apparatus and order.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub print_preflight: Option<crate::core::production_map::PrintPreflightHold>,
 }
