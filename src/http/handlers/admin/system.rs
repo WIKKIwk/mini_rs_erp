@@ -29,5 +29,7 @@ pub use monitor::{
     system_monitor_live,
 };
 pub use roles::{capabilities, role_assignments, roles};
-pub use warehouses::{warehouse_assignments, warehouse_items, warehouse_summaries, warehouses};
+pub use warehouses::{
+    warehouse_assignments, warehouse_item_rolls, warehouse_items, warehouse_summaries, warehouses,
+};
 pub use werka::werka_code_regenerate;

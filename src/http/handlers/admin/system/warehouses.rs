@@ -136,26 +136,37 @@ pub async fn warehouse_summaries(
             Capability::CatalogItemRead,
             Capability::ApparatusQueueRead,
             Capability::RawMaterialAssign,
+            Capability::InventoryMovementManage,
         ],
     )
     .await?;
-    if principal.role == PrincipalRole::MaterialTaminotchi {
-        require_capability(&state, &principal, Capability::RawMaterialAssign).await?;
-    } else {
-        require_capability(&state, &principal, Capability::CatalogItemRead).await?;
+    match principal.role {
+        PrincipalRole::MaterialTaminotchi => {
+            require_capability(&state, &principal, Capability::RawMaterialAssign).await?;
+        }
+        PrincipalRole::Werka => {
+            require_capability(&state, &principal, Capability::InventoryMovementManage).await?;
+        }
+        _ => {
+            require_capability(&state, &principal, Capability::CatalogItemRead).await?;
+        }
     }
     if method != Method::GET {
         return Err(method_not_allowed());
     }
     let limit = optional_search_limit(query.limit.as_deref(), 30, 500);
-    let material_scope = material_warehouse_scope(&state, &principal).await?;
-    let fetch_limit = if material_scope.is_some() { 500 } else { limit };
+    let warehouse_scope = warehouse_list_scope(&state, &principal).await?;
+    let fetch_limit = if warehouse_scope.is_some() {
+        500
+    } else {
+        limit
+    };
     let mut summaries = state
         .warehouses
         .warehouse_summaries(query.q.as_deref().unwrap_or(""), fetch_limit)
         .await
         .map_err(warehouse_error)?;
-    if let Some(scope) = material_scope.as_ref() {
+    if let Some(scope) = warehouse_scope.as_ref() {
         summaries = scoped_summaries(summaries, scope);
     }
     summaries.truncate(limit);
@@ -175,23 +186,30 @@ pub async fn warehouse_items(
             Capability::AdminAccess,
             Capability::CatalogItemRead,
             Capability::RawMaterialAssign,
+            Capability::InventoryMovementManage,
         ],
     )
     .await?;
     if method != Method::GET {
         return Err(method_not_allowed());
     }
-    if principal.role == PrincipalRole::MaterialTaminotchi {
-        require_capability(&state, &principal, Capability::RawMaterialAssign).await?;
-    } else {
-        require_capability(&state, &principal, Capability::CatalogItemRead).await?;
+    match principal.role {
+        PrincipalRole::MaterialTaminotchi => {
+            require_capability(&state, &principal, Capability::RawMaterialAssign).await?;
+        }
+        PrincipalRole::Werka => {
+            require_capability(&state, &principal, Capability::InventoryMovementManage).await?;
+        }
+        _ => {
+            require_capability(&state, &principal, Capability::CatalogItemRead).await?;
+        }
     }
 
     let warehouse = query.warehouse.as_deref().unwrap_or("").trim();
     if warehouse.is_empty() {
         return Err(bad_request("warehouse is required"));
     }
-    if let Some(scope) = material_warehouse_scope(&state, &principal).await?
+    if let Some(scope) = warehouse_list_scope(&state, &principal).await?
         && !scope.contains_warehouse_name(warehouse)
     {
         return Err(forbidden());
@@ -210,6 +228,64 @@ pub async fn warehouse_items(
     Ok(json_response(items))
 }
 
+pub async fn warehouse_item_rolls(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    Query(query): Query<ItemQuery>,
+) -> Result<Response, AdminError> {
+    let principal = authorize_any_capability(
+        &state,
+        &headers,
+        &[
+            Capability::AdminAccess,
+            Capability::CatalogItemRead,
+            Capability::RawMaterialAssign,
+            Capability::InventoryMovementManage,
+        ],
+    )
+    .await?;
+    if method != Method::GET {
+        return Err(method_not_allowed());
+    }
+    match principal.role {
+        PrincipalRole::MaterialTaminotchi => {
+            require_capability(&state, &principal, Capability::RawMaterialAssign).await?;
+        }
+        PrincipalRole::Werka => {
+            require_capability(&state, &principal, Capability::InventoryMovementManage).await?;
+        }
+        _ => {
+            require_capability(&state, &principal, Capability::CatalogItemRead).await?;
+        }
+    }
+
+    let warehouse = query.warehouse.as_deref().unwrap_or("").trim();
+    let item_code = query.item_code.as_deref().unwrap_or("").trim();
+    let order_id = query.order_id.as_deref().unwrap_or("").trim();
+    if warehouse.is_empty() || item_code.is_empty() {
+        return Err(bad_request("warehouse and item_code are required"));
+    }
+    if let Some(scope) = warehouse_list_scope(&state, &principal).await?
+        && !scope.contains_warehouse_name(warehouse)
+    {
+        return Err(forbidden());
+    }
+
+    let rolls = state
+        .warehouses
+        .warehouse_stock_rolls(
+            warehouse,
+            item_code,
+            order_id,
+            optional_search_limit(query.limit.as_deref(), 200, 500),
+            optional_offset(query.offset.as_deref()),
+        )
+        .await
+        .map_err(warehouse_error)?;
+    Ok(json_response(rolls))
+}
+
 pub async fn warehouse_assignments(
     State(state): State<AppState>,
     method: Method,
@@ -224,6 +300,7 @@ pub async fn warehouse_assignments(
             Capability::AdminAccess,
             Capability::CatalogItemRead,
             Capability::RawMaterialAssign,
+            Capability::InventoryMovementManage,
         ],
     )
     .await?;
@@ -232,17 +309,27 @@ pub async fn warehouse_assignments(
     }
     match method {
         Method::GET => {
-            if principal.role == PrincipalRole::MaterialTaminotchi {
-                require_capability(&state, &principal, Capability::RawMaterialAssign).await?;
-            } else {
-                require_capability(&state, &principal, Capability::CatalogItemRead).await?;
+            match principal.role {
+                PrincipalRole::MaterialTaminotchi => {
+                    require_capability(&state, &principal, Capability::RawMaterialAssign).await?;
+                }
+                PrincipalRole::Werka => {
+                    require_capability(&state, &principal, Capability::InventoryMovementManage)
+                        .await?;
+                }
+                _ => {
+                    require_capability(&state, &principal, Capability::CatalogItemRead).await?;
+                }
             }
             let mut assignments = state
                 .warehouses
                 .warehouse_assignments(query.warehouse.as_deref().unwrap_or(""))
                 .await
                 .map_err(warehouse_error)?;
-            if principal.role == PrincipalRole::MaterialTaminotchi {
+            if matches!(
+                principal.role,
+                PrincipalRole::MaterialTaminotchi | PrincipalRole::Werka
+            ) {
                 assignments = scoped_assignments_for_principal(assignments, &principal);
             }
             Ok(json_response(assignments))
@@ -308,16 +395,6 @@ async fn validate_warehouse_assignee(
         }
         _ => Err(bad_request("warehouse_assignee_not_allowed")),
     }
-}
-
-async fn material_warehouse_scope(
-    state: &AppState,
-    principal: &Principal,
-) -> Result<Option<WarehouseListScope>, AdminError> {
-    if principal.role != PrincipalRole::MaterialTaminotchi {
-        return Ok(None);
-    }
-    Ok(Some(assigned_warehouse_scope(state, principal).await?))
 }
 
 async fn warehouse_list_scope(

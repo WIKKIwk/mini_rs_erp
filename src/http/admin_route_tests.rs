@@ -52,7 +52,7 @@ use crate::core::session::manager::SessionManager;
 use crate::core::system_users::{MemorySystemUserStore, SystemUserService};
 use crate::core::warehouses::{
     MemoryWarehouseStore, WarehouseAssignmentUpsert, WarehouseService, WarehouseStockItem,
-    WarehouseUpsert,
+    WarehouseStockRoll, WarehouseUpsert,
 };
 use crate::core::werka::models::{CustomerDirectoryEntry, DispatchRecord, SupplierItem};
 use crate::core::werka::ports::{WerkaHomeLookup, WerkaPortError};

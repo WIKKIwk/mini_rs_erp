@@ -41,9 +41,26 @@ pub struct WarehouseStockItem {
     pub uom: String,
     pub warehouse: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub order_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub item_group: String,
     pub on_hand_qty: f64,
     pub package_count: usize,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct WarehouseStockRoll {
+    pub stock_id: String,
+    pub warehouse: String,
+    pub item_code: String,
+    pub order_id: String,
+    pub paddon_code: String,
+    pub progress_batch_id: String,
+    pub barcode: String,
+    pub qty: f64,
+    pub uom: String,
+    pub accepted_by_display_name: String,
+    pub accepted_at_unix: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -156,6 +173,15 @@ pub trait WarehouseStorePort: Send + Sync {
         limit: usize,
         offset: usize,
     ) -> Result<Vec<WarehouseStockItem>, WarehouseError>;
+
+    async fn warehouse_stock_rolls(
+        &self,
+        warehouse: &str,
+        item_code: &str,
+        order_id: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<WarehouseStockRoll>, WarehouseError>;
 
     async fn put_warehouse_assignment(
         &self,
@@ -286,6 +312,24 @@ impl WarehouseService {
         }
         self.store
             .warehouse_stock_items(warehouse, query.trim(), limit, offset)
+            .await
+    }
+
+    pub async fn warehouse_stock_rolls(
+        &self,
+        warehouse: &str,
+        item_code: &str,
+        order_id: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<WarehouseStockRoll>, WarehouseError> {
+        let warehouse = warehouse.trim();
+        let item_code = item_code.trim();
+        if warehouse.is_empty() || item_code.is_empty() {
+            return Err(WarehouseError::MissingWarehouse);
+        }
+        self.store
+            .warehouse_stock_rolls(warehouse, item_code, order_id.trim(), limit, offset)
             .await
     }
 

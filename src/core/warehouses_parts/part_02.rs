@@ -78,6 +78,7 @@ pub struct MemoryWarehouseStore {
     warehouses: RwLock<Vec<AdminWarehouse>>,
     assignments: RwLock<Vec<WarehouseAssignment>>,
     stock_items: RwLock<Vec<WarehouseStockItem>>,
+    stock_rolls: RwLock<Vec<WarehouseStockRoll>>,
     summary_counts: RwLock<BTreeMap<String, (usize, usize)>>,
 }
 
@@ -102,6 +103,11 @@ impl MemoryWarehouseStore {
     #[cfg(test)]
     pub async fn set_stock_items(&self, items: Vec<WarehouseStockItem>) {
         *self.stock_items.write().await = items;
+    }
+
+    #[cfg(test)]
+    pub async fn set_stock_rolls(&self, rolls: Vec<WarehouseStockRoll>) {
+        *self.stock_rolls.write().await = rolls;
     }
 }
 

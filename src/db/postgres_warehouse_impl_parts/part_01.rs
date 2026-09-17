@@ -327,6 +327,7 @@ impl PostgresWarehouseStore {
                 ) AS name,
                 COALESCE(MAX(NULLIF(btrim(stock.uom), '')), MAX(NULLIF(btrim(items.uom), '')), '') AS uom,
                 MAX(stock.warehouse) AS warehouse,
+                MAX(stock.order_id) AS order_id,
                 COALESCE(MAX(NULLIF(btrim(items.item_group), '')), '') AS item_group,
                 SUM(stock.qty)::float8 AS on_hand_qty,
                 COUNT(*)::bigint AS package_count
@@ -356,7 +357,7 @@ impl PostgresWarehouseStore {
                     OR lower(COALESCE(items.name, '')) LIKE $2
                     OR lower(COALESCE(items.item_group, '')) LIKE $2
               )
-            GROUP BY lower(stock.item_code), lower(stock.uom), lower(stock.warehouse)
+            GROUP BY lower(stock.order_id), lower(stock.item_code), lower(stock.uom), lower(stock.warehouse)
             ORDER BY lower(COALESCE(MAX(NULLIF(btrim(stock.item_name), '')), MAX(NULLIF(btrim(items.name), '')), MAX(stock.item_code)))
             LIMIT $3 OFFSET $4
             "#,
@@ -370,5 +371,76 @@ impl PostgresWarehouseStore {
         .map_err(|_| WarehouseError::StoreFailed)?;
 
         Ok(rows.into_iter().map(row_to_stock_item).collect())
+    }
+
+    async fn warehouse_stock_rolls(
+        &self,
+        warehouse: &str,
+        item_code: &str,
+        order_id: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<WarehouseStockRoll>, WarehouseError> {
+        let warehouse = warehouse.trim();
+        let item_code = item_code.trim();
+        if warehouse.is_empty() || item_code.is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+        let rows = sqlx::query_as::<_, WarehouseStockRollRow>(
+            r#"
+            SELECT
+                receipt.stock_id,
+                stock.warehouse,
+                stock.item_code,
+                stock.order_id,
+                receipt.paddon_code,
+                receipt.progress_batch_id,
+                COALESCE(
+                    NULLIF(btrim(stock.payload_json ->> 'qr_payload'), ''),
+                    NULLIF(btrim(receipt.payload_json #>> '{stock,payload_json,qr_payload}'), ''),
+                    receipt.stock_id
+                ) AS barcode,
+                receipt.qty::float8 AS qty,
+                receipt.uom,
+                receipt.accepted_by_display_name,
+                EXTRACT(EPOCH FROM receipt.accepted_at)::bigint AS accepted_at_unix
+            FROM mini_paddon_receipt_lines receipt
+            JOIN mini_finished_goods_stock stock
+              ON stock.id = receipt.stock_id
+            LEFT JOIN mini_inventory_placements placement
+              ON placement.asset_kind = 'finished_goods'
+             AND lower(placement.asset_ref) = lower(stock.id)
+            LEFT JOIN mini_inventory_locations physical_location
+              ON physical_location.id = placement.physical_location_id
+            LEFT JOIN mini_warehouses physical_warehouse
+              ON physical_warehouse.id = physical_location.warehouse_id
+            WHERE lower(stock.warehouse) = lower($1)
+              AND lower(stock.item_code) = lower($2)
+              AND ($3 = '' OR lower(stock.order_id) = lower($3))
+              AND stock.status = 'available'
+              AND stock.qty > 0
+              AND (
+                    placement.asset_ref IS NULL
+                    OR (
+                        physical_location.kind = 'warehouse'
+                        AND lower(physical_warehouse.name) = lower(stock.warehouse)
+                    )
+              )
+            ORDER BY receipt.accepted_at DESC,
+                     lower(receipt.paddon_code),
+                     receipt.progress_batch_id
+            LIMIT $4 OFFSET $5
+            "#,
+        )
+        .bind(warehouse)
+        .bind(item_code)
+        .bind(order_id.trim())
+        .bind(limit.min(500) as i64)
+        .bind(offset as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|_| WarehouseError::StoreFailed)?;
+
+        Ok(rows.into_iter().map(row_to_stock_roll).collect())
     }
 }

@@ -5,7 +5,7 @@ use crate::core::admin::models::AdminWarehouse;
 use crate::core::auth::models::PrincipalRole;
 use crate::core::warehouses::{
     WarehouseAssignment, WarehouseAssignmentIdentity, WarehouseDeleteResult, WarehouseError,
-    WarehouseStockItem, WarehouseStorePort, WarehouseSummary,
+    WarehouseStockItem, WarehouseStockRoll, WarehouseStorePort, WarehouseSummary,
 };
 
 #[derive(Clone)]
@@ -170,9 +170,25 @@ struct WarehouseStockItemRow {
     name: String,
     uom: String,
     warehouse: String,
+    order_id: String,
     item_group: String,
     on_hand_qty: f64,
     package_count: i64,
+}
+
+#[derive(sqlx::FromRow)]
+struct WarehouseStockRollRow {
+    stock_id: String,
+    warehouse: String,
+    item_code: String,
+    order_id: String,
+    paddon_code: String,
+    progress_batch_id: String,
+    barcode: String,
+    qty: f64,
+    uom: String,
+    accepted_by_display_name: String,
+    accepted_at_unix: i64,
 }
 
 fn warehouse_id(name: &str) -> String {
@@ -244,8 +260,25 @@ fn row_to_stock_item(row: WarehouseStockItemRow) -> WarehouseStockItem {
         name: row.name,
         uom: row.uom,
         warehouse: row.warehouse,
+        order_id: row.order_id,
         item_group: row.item_group,
         on_hand_qty: row.on_hand_qty.max(0.0),
         package_count: row.package_count.max(0) as usize,
+    }
+}
+
+fn row_to_stock_roll(row: WarehouseStockRollRow) -> WarehouseStockRoll {
+    WarehouseStockRoll {
+        stock_id: row.stock_id,
+        warehouse: row.warehouse,
+        item_code: row.item_code,
+        order_id: row.order_id,
+        paddon_code: row.paddon_code,
+        progress_batch_id: row.progress_batch_id,
+        barcode: row.barcode,
+        qty: row.qty.max(0.0),
+        uom: row.uom,
+        accepted_by_display_name: row.accepted_by_display_name,
+        accepted_at_unix: row.accepted_at_unix,
     }
 }

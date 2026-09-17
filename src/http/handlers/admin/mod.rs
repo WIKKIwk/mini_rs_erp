@@ -68,7 +68,7 @@ pub use system::{
     inventory_transfer_action, inventory_transfers, items_bulk_move_group, reset_orders,
     role_assignments, roles, system_backup_create, system_backup_download, system_backup_import,
     system_monitor, system_monitor_live, warehouse_assignments, warehouse_items,
-    warehouse_summaries, warehouses, werka_code_regenerate,
+    warehouse_item_rolls, warehouse_summaries, warehouses, werka_code_regenerate,
 };
 use system::{authorize_any_capability, authorize_capability, require_capability};
 pub use system_users::{system_user_code_regenerate, system_user_detail, system_users};
@@ -514,6 +514,8 @@ pub struct AdminProfileAvatarQuery {
 pub struct ItemQuery {
     pub q: Option<String>,
     pub warehouse: Option<String>,
+    pub item_code: Option<String>,
+    pub order_id: Option<String>,
     pub parent: Option<String>,
     pub group: Option<String>,
     pub limit: Option<String>,

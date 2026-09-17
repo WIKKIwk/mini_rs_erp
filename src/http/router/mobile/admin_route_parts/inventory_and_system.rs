@@ -42,6 +42,10 @@ fn inventory_and_system_routes() -> Router<AppState> {
             any(admin::warehouse_items),
         )
         .route(
+            "/v1/mobile/admin/warehouses/items/rolls",
+            any(admin::warehouse_item_rolls),
+        )
+        .route(
             "/v1/mobile/admin/warehouses/assignments",
             any(admin::warehouse_assignments),
         )

@@ -49,6 +49,20 @@ impl WarehouseStorePort for PostgresWarehouseStore {
         PostgresWarehouseStore::warehouse_stock_items(self, warehouse, query, limit, offset).await
     }
 
+    async fn warehouse_stock_rolls(
+        &self,
+        warehouse: &str,
+        item_code: &str,
+        order_id: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<WarehouseStockRoll>, WarehouseError> {
+        PostgresWarehouseStore::warehouse_stock_rolls(
+            self, warehouse, item_code, order_id, limit, offset,
+        )
+        .await
+    }
+
     async fn put_warehouse_assignment(
         &self,
         assignment: WarehouseAssignment,

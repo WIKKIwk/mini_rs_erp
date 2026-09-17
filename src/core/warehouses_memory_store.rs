@@ -118,6 +118,36 @@ impl WarehouseStorePort for MemoryWarehouseStore {
         Ok(items.into_iter().skip(offset).take(limit).collect())
     }
 
+    async fn warehouse_stock_rolls(
+        &self,
+        warehouse: &str,
+        item_code: &str,
+        order_id: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<WarehouseStockRoll>, WarehouseError> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let warehouse = warehouse.trim().to_lowercase();
+        let item_code = item_code.trim().to_lowercase();
+        let order_id = order_id.trim().to_lowercase();
+        let rolls = self
+            .stock_rolls
+            .read()
+            .await
+            .iter()
+            .filter(|roll| {
+                roll.warehouse.trim().to_lowercase() == warehouse
+                    && roll.item_code.trim().to_lowercase() == item_code
+                    && (order_id.is_empty()
+                        || roll.order_id.trim().to_lowercase() == order_id)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        Ok(rolls.into_iter().skip(offset).take(limit).collect())
+    }
+
     async fn put_warehouse_assignment(
         &self,
         assignment: WarehouseAssignment,

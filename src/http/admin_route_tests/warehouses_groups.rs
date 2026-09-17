@@ -52,6 +52,7 @@ async fn warehouse_items_are_filtered_searched_and_paginated_on_the_backend() {
                 name: "Finished One".to_string(),
                 uom: "Dona".to_string(),
                 warehouse: "Stores - CH".to_string(),
+                order_id: "order-fg-001".to_string(),
                 item_group: "Finished Goods".to_string(),
                 on_hand_qty: 12.0,
                 package_count: 2,
@@ -61,6 +62,7 @@ async fn warehouse_items_are_filtered_searched_and_paginated_on_the_backend() {
                 name: "Black Finished Product".to_string(),
                 uom: "Kg".to_string(),
                 warehouse: "Stores - CH".to_string(),
+                order_id: "order-fg-black".to_string(),
                 item_group: "Finished Goods".to_string(),
                 on_hand_qty: 5.5,
                 package_count: 1,
@@ -1057,6 +1059,158 @@ async fn material_taminotchi_warehouse_summary_uses_assigned_warehouses_only() {
     assert_eq!(summaries.len(), 1, "{body}");
     assert_eq!(summaries[0]["warehouse"], "Kalidor");
     assert_eq!(summaries[0]["assignment_count"], 1);
+}
+
+#[tokio::test]
+async fn werka_warehouse_summary_and_items_use_assigned_warehouse_scope() {
+    let mut state = test_state();
+    let store = Arc::new(MemoryWarehouseStore::new());
+    state.warehouses = WarehouseService::new_for_test(store.clone());
+    assign_warehouse_to_principal(
+        &state,
+        PrincipalRole::Werka,
+        "werka-warehouse-scope",
+        "Kalidor",
+    )
+    .await;
+    store
+        .set_stock_items(vec![
+            WarehouseStockItem {
+                code: "FG-KALIDOR".to_string(),
+                name: "Kalidor product".to_string(),
+                uom: "Dona".to_string(),
+                warehouse: "Kalidor".to_string(),
+                order_id: "zakaz-kalidor".to_string(),
+                item_group: "Finished Goods".to_string(),
+                on_hand_qty: 4.0,
+                package_count: 1,
+            },
+            WarehouseStockItem {
+                code: "FG-OTHER".to_string(),
+                name: "Other product".to_string(),
+                uom: "Dona".to_string(),
+                warehouse: "Boshqa ombor".to_string(),
+                order_id: "zakaz-other".to_string(),
+                item_group: "Finished Goods".to_string(),
+                on_hand_qty: 9.0,
+                package_count: 2,
+            },
+        ])
+        .await;
+    store
+        .set_stock_rolls(vec![
+            WarehouseStockRoll {
+                stock_id: "stock-kalidor-1".to_string(),
+                warehouse: "Kalidor".to_string(),
+                item_code: "FG-KALIDOR".to_string(),
+                order_id: "zakaz-kalidor".to_string(),
+                paddon_code: "00001".to_string(),
+                progress_batch_id: "batch-kalidor-1".to_string(),
+                barcode: "QR-KALIDOR-1".to_string(),
+                qty: 4.0,
+                uom: "kg".to_string(),
+                accepted_by_display_name: "Werka".to_string(),
+                accepted_at_unix: 1_700_000_000,
+            },
+            WarehouseStockRoll {
+                stock_id: "stock-kalidor-other-order".to_string(),
+                warehouse: "Kalidor".to_string(),
+                item_code: "FG-KALIDOR".to_string(),
+                order_id: "zakaz-kalidor-other".to_string(),
+                paddon_code: "00003".to_string(),
+                progress_batch_id: "batch-kalidor-other-order".to_string(),
+                barcode: "QR-KALIDOR-OTHER".to_string(),
+                qty: 2.0,
+                uom: "kg".to_string(),
+                accepted_by_display_name: "Werka".to_string(),
+                accepted_at_unix: 1_700_000_002,
+            },
+            WarehouseStockRoll {
+                stock_id: "stock-other-1".to_string(),
+                warehouse: "Boshqa ombor".to_string(),
+                item_code: "FG-OTHER".to_string(),
+                order_id: "zakaz-other".to_string(),
+                paddon_code: "00002".to_string(),
+                progress_batch_id: "batch-other-1".to_string(),
+                barcode: "QR-OTHER-1".to_string(),
+                qty: 9.0,
+                uom: "kg".to_string(),
+                accepted_by_display_name: "Werka".to_string(),
+                accepted_at_unix: 1_700_000_001,
+            },
+        ])
+        .await;
+    let token = session_for(&state, PrincipalRole::Werka, "werka-warehouse-scope").await;
+
+    let summary = build_router(state.clone())
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/warehouses/summary?limit=50",
+            &token,
+        ))
+        .await
+        .expect("werka summary response");
+    assert_eq!(summary.status(), StatusCode::OK);
+    let summaries = json_body(summary).await;
+    assert_eq!(summaries.as_array().expect("summary array").len(), 1);
+    assert_eq!(summaries[0]["warehouse"], "Kalidor");
+
+    let items = build_router(state.clone())
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/warehouses/items?warehouse=Kalidor&limit=50",
+            &token,
+        ))
+        .await
+        .expect("werka items response");
+    assert_eq!(items.status(), StatusCode::OK);
+    assert_eq!(json_body(items).await[0]["code"], "FG-KALIDOR");
+
+    let rolls = build_router(state.clone())
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/warehouses/items/rolls?warehouse=Kalidor&item_code=FG-KALIDOR&order_id=zakaz-kalidor",
+            &token,
+        ))
+        .await
+        .expect("werka item rolls response");
+    assert_eq!(rolls.status(), StatusCode::OK);
+    let rolls = json_body(rolls).await;
+    assert_eq!(rolls.as_array().expect("roll array").len(), 1);
+    assert_eq!(rolls[0]["barcode"], "QR-KALIDOR-1");
+
+    let forbidden_rolls = build_router(state.clone())
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/warehouses/items/rolls?warehouse=Boshqa%20ombor&item_code=FG-OTHER&order_id=zakaz-other",
+            &token,
+        ))
+        .await
+        .expect("unassigned warehouse rolls response");
+    assert_eq!(forbidden_rolls.status(), StatusCode::FORBIDDEN);
+
+    let forbidden_items = build_router(state.clone())
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/warehouses/items?warehouse=Boshqa%20ombor&limit=50",
+            &token,
+        ))
+        .await
+        .expect("unassigned warehouse items response");
+    assert_eq!(forbidden_items.status(), StatusCode::FORBIDDEN);
+
+    let assignments = build_router(state)
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/warehouses/assignments",
+            &token,
+        ))
+        .await
+        .expect("werka assignments response");
+    assert_eq!(assignments.status(), StatusCode::OK);
+    let assignments = json_body(assignments).await;
+    assert_eq!(assignments.as_array().expect("assignment array").len(), 1);
+    assert_eq!(assignments[0]["warehouse"], "Kalidor");
 }
 
 #[tokio::test]
