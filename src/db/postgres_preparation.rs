@@ -122,20 +122,19 @@ impl PostgresPreparationStore {
                 WHERE child.is_group
             ),
             catalog AS (
-                SELECT i.code, i.name, i.item_group,
-                       EXISTS (
-                           SELECT 1 FROM mini_preparation_materials own
-                           WHERE own.item_code = i.code AND own.owner_ref = $2
-                             AND EXISTS (
-                                 SELECT 1 FROM seriyo_groups allowed
-                                 WHERE lower(btrim(allowed.name)) = lower(btrim(i.item_group))
-                             )
+                SELECT i.code, i.name, i.item_group, own.warehouse_name,
+                       own.item_code IS NOT NULL
+                       AND EXISTS (
+                           SELECT 1 FROM seriyo_groups allowed
+                           WHERE lower(btrim(allowed.name)) = lower(btrim(i.item_group))
                        ) AS can_receive
                 FROM mini_items i
                 JOIN raw_groups g
                   ON lower(btrim(g.name)) = lower(btrim(i.item_group))
+                LEFT JOIN mini_preparation_materials own
+                  ON own.item_code = i.code AND own.owner_ref = $2
                 UNION
-                SELECT i.code, i.name, i.item_group,
+                SELECT i.code, i.name, i.item_group, own.warehouse_name,
                        EXISTS (
                            SELECT 1 FROM seriyo_groups allowed
                            WHERE lower(btrim(allowed.name)) = lower(btrim(i.item_group))
@@ -148,6 +147,7 @@ impl PostgresPreparationStore {
                 'item_code', catalog_item.code,
                 'name', catalog_item.name,
                 'item_group', catalog_item.item_group,
+                'warehouse_name', catalog_item.warehouse_name,
                 'can_receive', catalog_item.can_receive,
                 'balances', COALESCE((SELECT jsonb_agg(b ORDER BY lower(b.warehouse), b.warehouse) FROM (
                     SELECT s.warehouse, sum(s.qty)::text AS kg
@@ -180,24 +180,33 @@ impl PostgresPreparationStore {
                         .get("can_receive")
                         .and_then(Value::as_bool)
                         .unwrap_or(false);
+                    let bound_warehouse = material
+                        .get("warehouse_name")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|warehouse| !warehouse.is_empty());
                     let visible_warehouses = scopes
                         .iter()
                         .filter_map(|(warehouse, scope)| {
-                            let visible = match scope {
+                            let in_scope = match scope {
                                 PreparationWarehouseMaterialScope::OwnSeriyo => can_receive,
                                 PreparationWarehouseMaterialScope::AssignedItemGroups(groups) => {
-                                    groups.iter().any(|group| {
-                                        group.trim().eq_ignore_ascii_case(&item_group)
-                                    })
+                                    groups
+                                        .iter()
+                                        .any(|group| group.trim().eq_ignore_ascii_case(&item_group))
                                 }
                             };
-                            visible.then(|| warehouse.clone())
+                            let matches_binding = bound_warehouse
+                                .map(|bound| warehouse.eq_ignore_ascii_case(bound))
+                                .unwrap_or(true);
+                            (in_scope && matches_binding).then(|| warehouse.clone())
                         })
                         .collect::<Vec<_>>();
                     material["visible_warehouses"] = json!(visible_warehouses);
                 }
                 if let Some(object) = material.as_object_mut() {
                     object.remove("item_group");
+                    object.remove("warehouse_name");
                 }
                 material
             })
@@ -334,8 +343,17 @@ impl PostgresPreparationStore {
             "item_group": item_group}))
         .execute(&mut *tx)
         .await?;
-        sqlx::query("INSERT INTO mini_preparation_materials(item_code, owner_ref, name_key) VALUES ($1,$2,lower($3))")
-            .bind(&code).bind(&actor.ref_).bind(&name).execute(&mut *tx).await?;
+        sqlx::query(
+            "INSERT INTO mini_preparation_materials
+                 (item_code, owner_ref, name_key, warehouse_name)
+             VALUES ($1,$2,lower($3),$4)",
+        )
+        .bind(&code)
+        .bind(&actor.ref_)
+        .bind(&name)
+        .bind(&warehouse)
+        .execute(&mut *tx)
+        .await?;
         let result = json!({"id": id, "kind": "material", "warehouse": warehouse,
             "item_group": item_group, "item_code": code, "name": name});
         record(
@@ -370,7 +388,8 @@ impl PostgresPreparationStore {
                 PreparationError::WarehouseNotExclusive => PreparationError::ReceiptRequiresQr,
                 other => other,
             })?;
-        let name = material_name(&mut tx, &actor.ref_, &input.item_code).await?;
+        let name =
+            material_name_in_warehouse(&mut tx, &actor.ref_, &input.item_code, &warehouse).await?;
         let id = new_id();
         let stock_id = format!("raw:prep:{id}");
         let barcode = format!("PREP-{id}");
@@ -571,7 +590,7 @@ impl PostgresPreparationStore {
         let mut lines = Vec::new();
         let mut allocations = Vec::new();
         for (code, percent, required) in quantities {
-            let name = material_name(&mut tx, &actor.ref_, &code).await?;
+            let name = material_name_in_warehouse(&mut tx, &actor.ref_, &code, &warehouse).await?;
             let lots = sqlx::query(&format!(
                 "SELECT r.id AS receipt_id, s.id, s.barcode, s.qty::text AS kg
                 FROM mini_preparation_receipts r JOIN mini_raw_material_stock s ON s.id = r.stock_id
@@ -1373,6 +1392,27 @@ async fn material_name(
     .fetch_optional(&mut **tx)
     .await?
     .ok_or(PreparationError::Forbidden)
+}
+
+async fn material_name_in_warehouse(
+    tx: &mut Transaction<'_, Postgres>,
+    owner: &str,
+    code: &str,
+    warehouse: &str,
+) -> Result<String, PreparationError> {
+    sqlx::query_scalar(
+        "SELECT i.name FROM mini_preparation_materials m
+         JOIN mini_items i ON i.code=m.item_code
+         WHERE m.owner_ref=$1 AND m.item_code=$2
+           AND (m.warehouse_name IS NULL OR lower(m.warehouse_name)=lower($3))
+         FOR SHARE OF i",
+    )
+    .bind(owner)
+    .bind(code)
+    .bind(warehouse.trim())
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or(PreparationError::MaterialNotInWarehouse)
 }
 
 async fn assigned_rulon_item_for_receipt(

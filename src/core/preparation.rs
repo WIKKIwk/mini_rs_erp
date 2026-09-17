@@ -16,6 +16,8 @@ pub enum PreparationError {
     Forbidden,
     #[error("Bu omborga yangi homashyo ulash huquqi yo‘q")]
     WarehouseNotExclusive,
+    #[error("Bu homashyo tanlangan omborga biriktirilmagan")]
+    MaterialNotInWarehouse,
     #[error("Bu omborga kirim uchun tarozi kirimidan foydalaning — QR majburiy")]
     ReceiptRequiresQr,
     #[error("Homashyo qoldig‘i yetarli emas")]

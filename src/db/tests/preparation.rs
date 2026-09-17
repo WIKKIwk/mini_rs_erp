@@ -673,6 +673,16 @@ async fn preparation_formula_material_scope_and_order_materials() {
         .unwrap();
     assert_eq!(material["item_group"], "seriyo");
     let code = material["item_code"].as_str().unwrap().to_string();
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT warehouse_name FROM mini_preparation_materials WHERE item_code=$1",
+        )
+        .bind(&code)
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        "Preparation W"
+    );
     sqlx::query(
         "INSERT INTO mini_item_groups(name,parent_item_group,is_group)
          VALUES ('Non Seriyo',$1,true)",
@@ -867,6 +877,61 @@ async fn preparation_child_warehouse_receipt_lands_in_child() {
         .unwrap();
     assert_eq!(material["warehouse"], "Preparation W-1");
     let code = material["item_code"].as_str().unwrap().to_string();
+    let scopes = BTreeMap::from([
+        (
+            "Preparation W".to_string(),
+            PreparationWarehouseMaterialScope::OwnSeriyo,
+        ),
+        (
+            "Preparation W-1".to_string(),
+            PreparationWarehouseMaterialScope::OwnSeriyo,
+        ),
+    ]);
+    let scoped_snapshot = store
+        .snapshot_with_warehouse_material_scopes("prep-1", &scopes)
+        .await
+        .unwrap();
+    let scoped_material = scoped_snapshot["materials"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["item_code"] == code)
+        .unwrap();
+    assert_eq!(
+        scoped_material["visible_warehouses"],
+        json!(["Preparation W-1"])
+    );
+    sqlx::raw_sql(
+        "INSERT INTO mini_warehouses(id,name,parent_warehouse)
+             VALUES ('warehouse:preparation w-2','Preparation W-2','Preparation W');
+         INSERT INTO mini_warehouse_assignments(
+             assignment_kind,warehouse,warehouse_name,principal_role,principal_ref
+         ) VALUES ('warehouse','Preparation W-2','Preparation W-2','tayyorlov_masteri','prep-1');",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(matches!(
+        store
+            .receive(
+                &actor,
+                ReceiptCreate {
+                    request_id: "receipt-wrong-child".into(),
+                    item_code: code.clone(),
+                    warehouse: "Preparation W-2".into(),
+                    kg: "1".into(),
+                }
+            )
+            .await,
+        Err(PreparationError::MaterialNotInWarehouse)
+    ));
+    sqlx::raw_sql(
+        "DELETE FROM mini_warehouse_assignments WHERE warehouse_name='Preparation W-2';
+         DELETE FROM mini_warehouses WHERE name='Preparation W-2';",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     // Kirim bola omborga yoziladi va snapshot da shu omborda ko'rinadi.
     let receipt = store
         .receive(
