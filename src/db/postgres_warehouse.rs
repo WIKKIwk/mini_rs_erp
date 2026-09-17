@@ -197,7 +197,7 @@ fn role_as_str(role: &PrincipalRole) -> &'static str {
 fn role_from_str(raw: &str) -> Result<PrincipalRole, WarehouseError> {
     match raw.trim().to_lowercase().as_str() {
         "supplier" => Ok(PrincipalRole::Supplier),
-        "werka" => Ok(PrincipalRole::Werka),
+        "werka" | "omborchi" => Ok(PrincipalRole::Werka),
         "customer" => Ok(PrincipalRole::Customer),
         "aparatchi" => Ok(PrincipalRole::Aparatchi),
         "qolipchi" => Ok(PrincipalRole::Qolipchi),

@@ -43,6 +43,7 @@ use crate::db::postgres_engine::PostgresEngineStore;
 use crate::db::postgres_order_reset::PostgresOrderResetStore;
 use crate::db::postgres_raw_material_events::PostgresRawMaterialEventStore;
 use crate::db::postgres_training_workspace::PostgresTrainingWorkspaceStore;
+use crate::db::postgres_werka::PostgresWerkaHomeLookup;
 use crate::fcm::discover_push_sender;
 use crate::google_sheets::{OrderSheetSink, discover_order_sheet_sink};
 use crate::rps::RpsDriverClient;
@@ -154,6 +155,7 @@ impl AppState {
                 ),
                 apparatus,
             },
+            None,
         )
     }
 
@@ -186,6 +188,7 @@ impl AppState {
                 ),
                 apparatus,
             },
+            None,
         )
     }
 
@@ -193,6 +196,7 @@ impl AppState {
         let apparatus = CanonicalApparatusService::new(Arc::new(
             PostgresCanonicalApparatusRepository::new(pool.clone()),
         ));
+        let werka_pool = pool.clone();
         Self::build(
             config,
             ApparatusRuntimeServices {
@@ -205,10 +209,15 @@ impl AppState {
                 warehouses: build_warehouse_service(apparatus.clone(), pool),
                 apparatus,
             },
+            Some(werka_pool),
         )
     }
 
-    fn build(config: AppConfig, runtime: ApparatusRuntimeServices) -> Self {
+    fn build(
+        config: AppConfig,
+        runtime: ApparatusRuntimeServices,
+        werka_pool: Option<sqlx::PgPool>,
+    ) -> Self {
         let ApparatusRuntimeServices {
             apparatus,
             production_maps,
@@ -276,7 +285,7 @@ impl AppState {
         let rezka = build_rezka_service(scale_driver);
         let qolip = build_qolip_service();
         let returned_paint = build_returned_paint_service();
-        let werka = build_werka_service(&config);
+        let werka = build_werka_service(&config, werka_pool);
         let worker_groups = build_worker_group_service();
         let sessions = build_session_manager(&config);
         let telegram = build_telegram_service()
@@ -411,10 +420,11 @@ fn build_rezka_service(scale_driver: Arc<RpsDriverClient>) -> RezkaService {
         .with_epc_source(Arc::new(crate::core::gscale::epc::GscaleEpcGenerator::new()))
 }
 
-fn build_werka_service(config: &AppConfig) -> WerkaService {
-    // Mini RS no longer has the legacy ERP receipt tables. Keep the mobile
-    // home contract available until the PostgreSQL Werka read model is wired.
-    let werka = WerkaService::new().with_lookup(Arc::new(EmptyWerkaHomeLookup));
+fn build_werka_service(config: &AppConfig, pool: Option<sqlx::PgPool>) -> WerkaService {
+    let werka = match pool {
+        Some(pool) => WerkaService::new().with_lookup(Arc::new(PostgresWerkaHomeLookup::new(pool))),
+        None => WerkaService::new().with_lookup(Arc::new(EmptyWerkaHomeLookup)),
+    };
     let ai_key = std::env::var("GEMINI_API_KEY").unwrap_or_default();
     if ai_key.trim().is_empty() {
         return werka;

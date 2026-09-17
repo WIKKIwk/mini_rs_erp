@@ -100,7 +100,10 @@ impl ProductionMapService {
         if warehouse.is_empty() {
             return Err(ProductionMapError::ProgressInputInvalid);
         }
-        if !actor.role.trim().eq_ignore_ascii_case("werka") {
+        if !matches!(
+            actor.role.trim().to_ascii_lowercase().as_str(),
+            "werka" | "omborchi"
+        ) {
             return Err(ProductionMapError::QueueActionNotAllowed);
         }
         let _guard = self.queue_action_guard().await;

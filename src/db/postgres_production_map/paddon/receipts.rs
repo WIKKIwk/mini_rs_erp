@@ -94,6 +94,7 @@ pub(super) async fn commit(
     for (batch, stock) in write.receipt.items.iter().zip(&write.receipt.stocks) {
         receive_finished_goods_batch_tx(&mut tx, batch, stock).await?;
     }
+    insert_paddon_inventory_events(&mut tx, &write.receipt).await?;
     sqlx::query("UPDATE mini_paddons SET location = $2, updated_at = now(), receipt_json = $3 WHERE id = $1")
         .bind(&id).bind(&write.receipt.warehouse).bind(serde_json::to_value(&write.receipt).map_err(|_| ProductionMapError::StoreFailed)?)
         .execute(&mut *tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
@@ -101,4 +102,82 @@ pub(super) async fn commit(
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
     Ok(write.receipt)
+}
+
+async fn insert_paddon_inventory_events(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    receipt: &PaddonReceipt,
+) -> Result<(), ProductionMapError> {
+    let warehouse = receipt.warehouse.trim();
+    let warehouse_id = format!("warehouse:{}", warehouse.to_lowercase());
+    let warehouse_location_id = format!("inventory_location:warehouse:{warehouse_id}");
+    for stock in &receipt.stocks {
+        let asset_ref = stock.id.trim();
+        if asset_ref.is_empty() || stock.qty <= 0.0 || stock.uom.trim().is_empty() {
+            return Err(ProductionMapError::StoreFailed);
+        }
+        let idempotency_key = format!("paddon_received:{}:{asset_ref}", receipt.paddon.code);
+        let actor_role = if stock.accepted_by_role.trim().is_empty() {
+            "werka"
+        } else {
+            stock.accepted_by_role.trim()
+        };
+        let actor_ref = if stock.accepted_by_ref.trim().is_empty() {
+            receipt.accepted_by_ref.trim()
+        } else {
+            stock.accepted_by_ref.trim()
+        };
+        let actor_name = if stock.accepted_by_display_name.trim().is_empty() {
+            receipt.accepted_by_display_name.trim()
+        } else {
+            stock.accepted_by_display_name.trim()
+        };
+        if actor_ref.is_empty() {
+            return Err(ProductionMapError::StoreFailed);
+        }
+        let payload = serde_json::json!({
+            "source": "paddon_receipt",
+            "paddon_id": receipt.paddon.id,
+            "paddon_code": receipt.paddon.code,
+            "warehouse": warehouse,
+            "stock": stock,
+        });
+        sqlx::query(
+            r#"
+            INSERT INTO mini_inventory_movement_events (
+                id, idempotency_key, event_type, transfer_id,
+                asset_kind, asset_ref,
+                from_warehouse_id, to_warehouse_id,
+                from_location_id, to_location_id,
+                qty, uom,
+                actor_role, actor_ref, actor_name,
+                note, payload_json
+            )
+            VALUES (
+                $1, $1, 'paddon_received', NULL,
+                'finished_goods', $2,
+                '', $3,
+                '', $4,
+                ($5::double precision)::numeric(18,6), $6,
+                $7, $8, $9, $10, $11
+            )
+            ON CONFLICT (idempotency_key) DO NOTHING
+            "#,
+        )
+        .bind(&idempotency_key)
+        .bind(asset_ref)
+        .bind(&warehouse_id)
+        .bind(&warehouse_location_id)
+        .bind(stock.qty)
+        .bind(stock.uom.trim())
+        .bind(actor_role)
+        .bind(actor_ref)
+        .bind(actor_name)
+        .bind(format!("Paddon {} qabul qilindi", receipt.paddon.code))
+        .bind(payload)
+        .execute(&mut **tx)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    }
+    Ok(())
 }

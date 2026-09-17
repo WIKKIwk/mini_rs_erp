@@ -25,6 +25,7 @@ pub mod postgres_training_workspace;
 pub mod postgres_warehouse;
 pub mod postgres_worker;
 pub mod postgres_worker_group;
+pub mod postgres_werka;
 
 #[cfg(test)]
 mod tests;

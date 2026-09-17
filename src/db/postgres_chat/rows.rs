@@ -365,7 +365,7 @@ pub(super) fn role_key(role: &PrincipalRole) -> &'static str {
 pub(super) fn parse_role(value: &str) -> Result<PrincipalRole, ChatError> {
     match value.trim() {
         "supplier" => Ok(PrincipalRole::Supplier),
-        "werka" => Ok(PrincipalRole::Werka),
+        "werka" | "omborchi" => Ok(PrincipalRole::Werka),
         "customer" => Ok(PrincipalRole::Customer),
         "aparatchi" => Ok(PrincipalRole::Aparatchi),
         "qolipchi" => Ok(PrincipalRole::Qolipchi),

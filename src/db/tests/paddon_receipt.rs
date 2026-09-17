@@ -1,5 +1,7 @@
 use super::*;
 use crate::core::production_map::{QueueActionActor, paddon_snapshot_token};
+use crate::core::werka::ports::WerkaHomeLookup;
+use crate::db::postgres_werka::PostgresWerkaHomeLookup;
 
 #[tokio::test]
 async fn postgres_werka_paddon_receipt_atomic_retry_and_locks() {
@@ -30,7 +32,7 @@ async fn postgres_werka_paddon_receipt_atomic_retry_and_locks() {
     map.nodes[1].title = station.clone();
     service.upsert_map(map).await.unwrap();
     let actor = QueueActionActor {
-        role: "werka".into(),
+        role: "omborchi".into(),
         ref_: "keeper-1".into(),
         display_name: "Omborchi".into(),
     };
@@ -151,6 +153,28 @@ async fn postgres_werka_paddon_receipt_atomic_retry_and_locks() {
         2
     );
     assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM mini_inventory_movement_events
+             WHERE event_type = 'paddon_received'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        2
+    );
+    let werka_lookup = PostgresWerkaHomeLookup::new(pool.clone());
+    let archive = werka_lookup
+        .werka_archive("received", "daily", None, None)
+        .await
+        .unwrap();
+    assert_eq!(archive.items.len(), 2);
+    assert!(
+        archive
+            .items
+            .iter()
+            .all(|item| item.event_type == "paddon_received" && item.highlight == "WH-1")
+    );
+    assert_eq!(
         service
             .paddon_scan_snapshot(&paddon.code)
             .await
@@ -197,6 +221,16 @@ async fn postgres_werka_paddon_receipt_atomic_retry_and_locks() {
     );
     assert_eq!(a.unwrap(), receipt);
     assert_eq!(b.unwrap(), receipt);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM mini_inventory_movement_events
+             WHERE event_type = 'paddon_received'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        2
+    );
     let restarted =
         ProductionMapService::new_for_test(Arc::new(PostgresProductionMapStore::new(pool.clone())));
     assert_eq!(

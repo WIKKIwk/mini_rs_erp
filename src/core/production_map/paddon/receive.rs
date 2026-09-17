@@ -55,7 +55,8 @@ impl ProductionMapService {
         snapshot_token: &str,
         actor: QueueActionActor,
     ) -> Result<PaddonReceipt, ProductionMapError> {
-        if actor.role != "werka" {
+        if !actor.role.eq_ignore_ascii_case("werka") && !actor.role.eq_ignore_ascii_case("omborchi")
+        {
             return Err(ProductionMapError::QueueActionNotAllowed);
         }
         if warehouse.trim().is_empty() || expected_batch_ids.is_empty() {

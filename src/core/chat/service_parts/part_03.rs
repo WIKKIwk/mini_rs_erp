@@ -34,7 +34,7 @@ fn ensure_chat_role(role: &PrincipalRole) -> Result<(), ChatError> {
 fn chat_role_from_code(value: &str) -> Result<PrincipalRole, ChatError> {
     match value.trim() {
         "supplier" => Ok(PrincipalRole::Supplier),
-        "werka" => Ok(PrincipalRole::Werka),
+        "werka" | "omborchi" => Ok(PrincipalRole::Werka),
         "aparatchi" => Ok(PrincipalRole::Aparatchi),
         "qolipchi" => Ok(PrincipalRole::Qolipchi),
         "boyoqchi" => Ok(PrincipalRole::Boyoqchi),

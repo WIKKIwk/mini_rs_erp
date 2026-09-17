@@ -6,6 +6,7 @@ use crate::core::werka::models::WerkaHomeData;
 #[serde(rename_all = "snake_case")]
 pub enum PrincipalRole {
     Supplier,
+    #[serde(alias = "omborchi")]
     Werka,
     Customer,
     Aparatchi,
@@ -160,5 +161,14 @@ mod tests {
         let value = serde_json::to_value(response).expect("serialize login response");
 
         assert_eq!(value["assigned_warehouses"], json!(["Xomashyo"]));
+    }
+
+    #[test]
+    fn omborchi_role_alias_uses_canonical_werka_contract() {
+        let role: PrincipalRole =
+            serde_json::from_str("\"omborchi\"").expect("legacy omborchi role alias");
+
+        assert_eq!(role, PrincipalRole::Werka);
+        assert_eq!(serde_json::to_string(&role).unwrap(), "\"werka\"");
     }
 }
