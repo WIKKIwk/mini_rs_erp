@@ -3,7 +3,7 @@ const DEFAULT_MAX_CONNECTIONS: u32 = 16;
 const DEFAULT_ACQUIRE_TIMEOUT_MS: u64 = 500;
 const MIGRATION_LOCK_KEY: i64 = 6_514_811_918_052_026_001;
 
-const POSTGRES_MIGRATIONS: [(&str, &str); 122] = [
+const POSTGRES_MIGRATIONS: [(&str, &str); 123] = [
     (
         "0001_mini_erp_foundation",
         include_str!("../../../migrations/postgres/0001_mini_erp_foundation.sql"),
@@ -493,6 +493,12 @@ const POSTGRES_MIGRATIONS: [(&str, &str); 122] = [
     (
         "0122_production_map_alternative_backfill",
         include_str!("../../../migrations/postgres/0122_production_map_alternative_backfill.sql"),
+    ),
+    (
+        "0123_repair_duplicate_laminate_alternatives",
+        include_str!(
+            "../../../migrations/postgres/0123_repair_duplicate_laminate_alternatives.sql"
+        ),
     ),
 ];
 
