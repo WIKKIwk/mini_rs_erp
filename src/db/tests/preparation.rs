@@ -9,6 +9,8 @@ use serde_json::{Value, json};
 use sqlx::postgres::PgConnectOptions;
 use std::collections::BTreeMap;
 
+use super::seed_standard_canonical_apparatus;
+
 fn consume(order: &str, code: &str, percent: &str) -> ConsumptionCreate {
     ConsumptionCreate {
         request_id: format!("consume-{order}"),
@@ -411,6 +413,7 @@ async fn preparation_receipt_reversal_is_append_only_and_guarded() {
     let options = url.parse::<PgConnectOptions>().unwrap().database(&db);
     let pool = sqlx::PgPool::connect_with(options).await.unwrap();
     apply_foundation_migration(&pool).await.unwrap();
+    seed_standard_canonical_apparatus(&pool).await;
     sqlx::raw_sql(
         "INSERT INTO mini_system_users(id, role, name, phone)
              VALUES ('prep-reversal', 'tayyorlov_masteri', 'Reversal master', '901234577');
