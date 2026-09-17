@@ -187,11 +187,18 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         &self,
         hold: PrintPreflightHold,
     ) -> Result<(), ProductionMapError> {
+        let order_id = hold.order_id.clone();
+        self.queue_states
+            .write()
+            .await
+            .entry(hold.apparatus.clone())
+            .or_default()
+            .insert(order_id.clone(), "print_preflight".to_string());
         self.print_preflight_holds
             .write()
             .await
             .insert(hold.hold_id.trim().to_string(), hold);
-        Ok(())
+        queue::refresh_production_order_lifecycles(self, &[order_id]).await
     }
 
     async fn update_print_preflight_hold(
@@ -202,8 +209,20 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         if !holds.contains_key(hold.hold_id.trim()) {
             return Err(ProductionMapError::PrintPreflightNotFound);
         }
+        let order_id = hold.order_id.clone();
+        let mut queue_states = self.queue_states.write().await;
+        let states = queue_states.entry(hold.apparatus.clone()).or_default();
+        if hold.status.reserves_apparatus() {
+            states.insert(order_id.clone(), "print_preflight".to_string());
+        } else if let Some(previous) = &hold.previous_queue_state {
+            states.insert(order_id.clone(), previous.clone());
+        } else {
+            states.remove(&order_id);
+        }
         holds.insert(hold.hold_id.trim().to_string(), hold);
-        Ok(())
+        drop(queue_states);
+        drop(holds);
+        queue::refresh_production_order_lifecycles(self, &[order_id]).await
     }
 
     async fn consume_print_preflight_hold(

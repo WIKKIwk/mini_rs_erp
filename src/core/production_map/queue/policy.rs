@@ -31,6 +31,11 @@ pub(crate) fn allowed_actions_for_control(
     input: QueueActionPolicyInput,
 ) -> Vec<ApparatusQueueAction> {
     use ApparatusQueueAction::*;
+    if input.state == ApparatusQueueOrderState::PrintPreflight
+        && matches!(input.profile, QueueActionPolicyProfile::Training { .. })
+    {
+        return Vec::new();
+    }
     let candidates: &[(ApparatusQueueAction, bool)] = match input.state {
         ApparatusQueueOrderState::Pending if input.requeued_session => {
             // Requeued work resumes from Pending without a normal Start transition.
@@ -40,7 +45,7 @@ pub(crate) fn allowed_actions_for_control(
                 Vec::new()
             };
         }
-        ApparatusQueueOrderState::Pending => {
+        ApparatusQueueOrderState::Pending | ApparatusQueueOrderState::PrintPreflight => {
             &[(Start, input.pending_actionable && input.start_ready)]
         }
         ApparatusQueueOrderState::InProgress => match input.profile {

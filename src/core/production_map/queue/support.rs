@@ -205,7 +205,7 @@ pub(super) fn bosma_startable_order_id<'a>(
         }
         match states.get(order_id).copied().unwrap_or(S::Pending) {
             S::Completed | S::Frozen => continue,
-            S::Pending => return Some(order_id),
+            S::Pending | S::PrintPreflight => return Some(order_id),
             S::Paused if detached_order_ids.contains(order_id) => {
                 let next = sequence[index + 1..]
                     .iter()
@@ -214,7 +214,7 @@ pub(super) fn bosma_startable_order_id<'a>(
                         !id.is_empty()
                             && states.get(*id).copied().unwrap_or(S::Pending) != S::Completed
                     })?;
-                return (states.get(next).copied().unwrap_or(S::Pending) == S::Pending)
+                return matches!(states.get(next).copied().unwrap_or(S::Pending), S::Pending | S::PrintPreflight)
                     .then_some(next);
             }
             _ => return None,

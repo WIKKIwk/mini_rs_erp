@@ -19,12 +19,13 @@ struct PrintPreflightHoldRow {
     actor_display_name: String,
     created_at_unix: i64,
     updated_at_unix: i64,
+    previous_queue_state: Option<String>,
     expires_at_unix: i64,
 }
 
 const HOLD_COLUMNS: &str = "hold_id, idempotency_key, order_id, canonical_apparatus_id,
     stage_node_id, status, actor_role, actor_ref, actor_display_name,
-    created_at_unix, updated_at_unix, expires_at_unix";
+    created_at_unix, updated_at_unix, expires_at_unix, previous_queue_state";
 
 pub(super) async fn load_active(
     pool: &PgPool,
@@ -32,7 +33,6 @@ pub(super) async fn load_active(
     let query = format!(
         "SELECT {HOLD_COLUMNS} FROM mini_print_preflight_holds
          WHERE status IN ('held', 'running', 'passed')
-           AND expires_at_unix > EXTRACT(EPOCH FROM now())::BIGINT
          ORDER BY created_at_unix, hold_id"
     );
     let rows = sqlx::query_as::<_, PrintPreflightHoldRow>(&query)
@@ -78,24 +78,30 @@ pub(super) async fn put(
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
     lock_order_and_apparatuses_tx(&mut tx, &hold.order_id, &[hold.apparatus.as_str()]).await?;
-    sqlx::query(
-        "UPDATE mini_print_preflight_holds
-         SET status = 'cancelled', updated_at_unix = $2
-         WHERE canonical_apparatus_id = $1
-           AND status IN ('held', 'running', 'passed')
-           AND expires_at_unix <= $2",
+    let current = sqlx::query_scalar::<_, String>(
+        "SELECT state FROM mini_queue_states WHERE canonical_apparatus_id = $1 AND order_id = $2 FOR UPDATE",
+    ).bind(&hold.apparatus).bind(&hold.order_id).fetch_optional(&mut *tx).await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    let busy = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM mini_queue_states
+         WHERE canonical_apparatus_id = $1 AND state IN ('in_progress', 'print_preflight'))",
     )
     .bind(&hold.apparatus)
-    .bind(hold.updated_at_unix)
-    .execute(&mut *tx)
+    .fetch_one(&mut *tx)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
+    if busy
+        || current != hold.previous_queue_state
+        || current.as_deref().is_some_and(|state| state != "pending")
+    {
+        return Err(ProductionMapError::QueueActionNotAllowed);
+    }
     sqlx::query(
         "INSERT INTO mini_print_preflight_holds (
             hold_id, idempotency_key, order_id, canonical_apparatus_id,
             stage_node_id, status, actor_role, actor_ref, actor_display_name,
-            created_at_unix, updated_at_unix, expires_at_unix
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+            created_at_unix, updated_at_unix, expires_at_unix, previous_queue_state
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
          ON CONFLICT (hold_id) DO UPDATE SET
             status = EXCLUDED.status,
             actor_role = EXCLUDED.actor_role,
@@ -116,9 +122,11 @@ pub(super) async fn put(
     .bind(hold.created_at_unix)
     .bind(hold.updated_at_unix)
     .bind(hold.expires_at_unix)
+    .bind(&hold.previous_queue_state)
     .execute(&mut *tx)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
+    persist_queue_status(&mut tx, hold).await?;
     tx.commit()
         .await
         .map_err(|_| ProductionMapError::StoreFailed)
@@ -138,7 +146,7 @@ pub(super) async fn update(
          SET status = $2, actor_role = $3, actor_ref = $4,
              actor_display_name = $5, updated_at_unix = $6,
              expires_at_unix = $7
-         WHERE hold_id = $1",
+         WHERE hold_id = $1 AND status IN ('held', 'running', 'passed')",
     )
     .bind(&hold.hold_id)
     .bind(hold.status.as_str())
@@ -153,6 +161,7 @@ pub(super) async fn update(
     if result.rows_affected() == 0 {
         return Err(ProductionMapError::PrintPreflightNotFound);
     }
+    persist_queue_status(&mut tx, hold).await?;
     tx.commit()
         .await
         .map_err(|_| ProductionMapError::StoreFailed)
@@ -172,8 +181,7 @@ pub(super) async fn consume_print_preflight_hold_tx(
              actor_display_name = $6,
              updated_at_unix = EXTRACT(EPOCH FROM now())::BIGINT
          WHERE hold_id = $1 AND order_id = $2 AND canonical_apparatus_id = $3
-           AND status = 'passed'
-           AND expires_at_unix > EXTRACT(EPOCH FROM now())::BIGINT",
+           AND status = 'passed'",
     )
     .bind(hold_id.trim())
     .bind(order_id.trim())
@@ -206,6 +214,47 @@ fn row_to_hold(row: PrintPreflightHoldRow) -> Result<PrintPreflightHold, Product
         },
         created_at_unix: row.created_at_unix,
         updated_at_unix: row.updated_at_unix,
+        previous_queue_state: row.previous_queue_state,
         expires_at_unix: row.expires_at_unix,
     })
+}
+
+// Write the same queue and persisted order projection used by ordinary actions.
+// Trial metadata is only used to validate the result and restore the prior state.
+async fn persist_queue_status(
+    tx: &mut Transaction<'_, Postgres>,
+    hold: &PrintPreflightHold,
+) -> Result<(), ProductionMapError> {
+    let state = if hold.status.reserves_apparatus() {
+        Some("print_preflight")
+    } else {
+        hold.previous_queue_state.as_deref()
+    };
+    if let Some(state) = state {
+        sqlx::query(
+            "INSERT INTO mini_queue_states
+                (apparatus, canonical_apparatus_id, order_id, state, updated_at)
+             VALUES (COALESCE((SELECT name FROM mini_apparatus WHERE id = $1), $1), $1, $2, $3, now())
+             ON CONFLICT (canonical_apparatus_id, order_id)
+             DO UPDATE SET state = EXCLUDED.state, updated_at = now()",
+        )
+        .bind(&hold.apparatus)
+        .bind(&hold.order_id)
+        .bind(state)
+        .execute(&mut **tx)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    } else {
+        sqlx::query("DELETE FROM mini_queue_states WHERE canonical_apparatus_id = $1 AND order_id = $2 AND state = 'print_preflight'")
+            .bind(&hold.apparatus).bind(&hold.order_id)
+            .execute(&mut **tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
+    }
+    super::lifecycle::refresh_production_order_lifecycle_tx(
+        tx,
+        &hold.order_id,
+        &hold.actor,
+        &hold.hold_id,
+        "print_preflight",
+    )
+    .await
 }

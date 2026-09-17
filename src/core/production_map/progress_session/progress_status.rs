@@ -81,7 +81,9 @@ pub fn derive_order_flow_and_stock_status(
     in_use_wip_count: usize,
     accepted_wip_count: usize,
 ) -> (&'static str, &'static str) {
-    if free_wip_count > 0 && waiting_next_stage_count == 0 {
+    if operational_status == "print_preflight" {
+        ("print_preflight", "")
+    } else if free_wip_count > 0 && waiting_next_stage_count == 0 {
         ("free_wip", "")
     } else if accepted_wip_count > 0
         && free_wip_count == 0
@@ -116,6 +118,7 @@ impl ProductionOrderStatusDetail {
 
 fn work_status_for_order(order_status: &str) -> &'static str {
     match order_status {
+        "print_preflight" => "print_preflight",
         "in_progress" => "in_progress",
         "paused" => "paused",
         "frozen" => "frozen",
@@ -128,6 +131,7 @@ fn work_status_for_order(order_status: &str) -> &'static str {
 
 pub(crate) fn flow_status_for_order(order_status: &str) -> &'static str {
     match order_status {
+        "print_preflight" => "print_preflight",
         "completed_with_issue" => "completed_with_issue",
         "completed" => "completed",
         "partially_completed" => "partially_completed",

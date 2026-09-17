@@ -3,7 +3,7 @@ const DEFAULT_MAX_CONNECTIONS: u32 = 16;
 const DEFAULT_ACQUIRE_TIMEOUT_MS: u64 = 500;
 const MIGRATION_LOCK_KEY: i64 = 6_514_811_918_052_026_001;
 
-const POSTGRES_MIGRATIONS: [(&str, &str); 120] = [
+const POSTGRES_MIGRATIONS: [(&str, &str); 121] = [
     (
         "0001_mini_erp_foundation",
         include_str!("../../../migrations/postgres/0001_mini_erp_foundation.sql"),
@@ -485,6 +485,10 @@ const POSTGRES_MIGRATIONS: [(&str, &str); 120] = [
     (
         "0120_print_preflight_holds",
         include_str!("../../../migrations/postgres/0120_print_preflight_holds.sql"),
+    ),
+    (
+        "0121_print_preflight_order_status",
+        include_str!("../../../migrations/postgres/0121_print_preflight_order_status.sql"),
     ),
 ];
 

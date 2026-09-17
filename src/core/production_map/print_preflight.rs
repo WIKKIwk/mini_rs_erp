@@ -6,8 +6,6 @@ use super::queue_state;
 use super::service::ProductionMapService;
 use super::types::{ProductionMapError, QueueActionActor};
 
-const PRINT_PREFLIGHT_HOLD_TTL_SECONDS: i64 = 15 * 60;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PrintPreflightStatus {
@@ -60,12 +58,15 @@ pub struct PrintPreflightHold {
     pub actor: QueueActionActor,
     pub created_at_unix: i64,
     pub updated_at_unix: i64,
+    /// Queue state to restore when the colour trial fails; absent means no row.
+    #[serde(default)]
+    pub previous_queue_state: Option<String>,
     pub expires_at_unix: i64,
 }
 
 impl PrintPreflightHold {
-    pub fn is_live_at(&self, now: i64) -> bool {
-        self.status.reserves_apparatus() && self.expires_at_unix > now
+    pub fn is_live_at(&self, _now: i64) -> bool {
+        self.status.reserves_apparatus()
     }
 }
 
@@ -157,6 +158,13 @@ impl ProductionMapService {
             return Err(ProductionMapError::QueueActionNotAllowed);
         }
 
+        let previous_queue_state = self
+            .store
+            .apparatus_queue_states()
+            .await?
+            .get(&canonical_id)
+            .and_then(|states| states.get(order_id))
+            .cloned();
         let hold = PrintPreflightHold {
             hold_id: hold_id.to_string(),
             idempotency_key: idempotency_key.to_string(),
@@ -170,7 +178,9 @@ impl ProductionMapService {
             actor,
             created_at_unix: now,
             updated_at_unix: now,
-            expires_at_unix: now + PRINT_PREFLIGHT_HOLD_TTL_SECONDS,
+            previous_queue_state,
+            // Retained for old API clients. The persisted queue status has no TTL.
+            expires_at_unix: 0,
         };
         self.store.put_print_preflight_hold(hold.clone()).await?;
         self.notify_live();

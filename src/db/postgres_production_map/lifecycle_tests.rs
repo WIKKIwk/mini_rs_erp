@@ -1,5 +1,75 @@
 use super::*;
 
+#[tokio::test]
+async fn postgres_print_preflight_persists_common_status_and_restores_without_expiry() {
+    use crate::core::production_map::{PrintPreflightHold, PrintPreflightStatus};
+    use super::super::print_preflight;
+    let pool = isolated_pool().await;
+    sqlx::raw_sql("
+        CREATE TEMP TABLE mini_apparatus (id TEXT PRIMARY KEY, name TEXT);
+        ALTER TABLE mini_queue_states ADD COLUMN apparatus TEXT, ADD COLUMN updated_at TIMESTAMPTZ;
+        ALTER TABLE mini_queue_states ADD PRIMARY KEY (canonical_apparatus_id, order_id);
+        ALTER TABLE mini_queue_states ADD CONSTRAINT mini_queue_states_state_allowed
+            CHECK (state IN ('pending', 'in_progress', 'paused', 'frozen', 'completed'));
+        ALTER TABLE mini_queue_action_events ADD COLUMN from_state TEXT;
+        ALTER TABLE mini_queue_action_events ADD CONSTRAINT mini_queue_action_events_from_state_allowed
+            CHECK (from_state IN ('pending', 'in_progress', 'paused', 'frozen', 'completed'));
+        ALTER TABLE mini_queue_action_events ADD CONSTRAINT mini_queue_action_events_to_state_allowed
+            CHECK (to_state IN ('pending', 'in_progress', 'paused', 'frozen', 'completed'));
+        ALTER TABLE mini_production_maps ADD CONSTRAINT mini_production_maps_operational_status_allowed
+            CHECK (operational_status IN ('not_started', 'ready', 'in_progress', 'paused', 'frozen',
+                'waiting_next_stage', 'partially_completed', 'completed', 'completed_with_issue'));
+        ALTER TABLE mini_production_maps ADD CONSTRAINT mini_production_maps_flow_status_allowed
+            CHECK (flow_status IN ('not_started', 'ready', 'in_progress', 'paused', 'frozen',
+                'waiting_next_stage', 'partially_completed', 'completed', 'completed_with_issue',
+                'free_wip', 'accepted_to_stock'));
+    ").execute(&pool).await.unwrap();
+    sqlx::raw_sql(&include_str!("../../../migrations/postgres/0120_print_preflight_holds.sql")
+        .replace("CREATE TABLE IF NOT EXISTS", "CREATE TEMP TABLE"))
+        .execute(&pool).await.unwrap();
+    sqlx::raw_sql(include_str!("../../../migrations/postgres/0121_print_preflight_order_status.sql"))
+        .execute(&pool).await.expect("migration accepts the new common status");
+    let map = serde_json::json!({
+        "id":"colour", "product_code":"COLOUR", "title":"Colour",
+        "nodes":[{"id":"start","kind":"start","title":"Start"},
+            {"id":"print","kind":"apparatus","title":"Print","apparatus_id":"apparatus:test:print"},
+            {"id":"end","kind":"end","title":"End"}],
+        "edges":[{"from":"start","to":"print"},{"from":"print","to":"end"}]
+    });
+    sqlx::query("INSERT INTO mini_production_maps (id, map_json, lifecycle_status, operational_status, flow_status)
+        VALUES ('colour', $1, 'released', 'not_started', 'not_started')")
+        .bind(map).execute(&pool).await.unwrap();
+    let original = load_production_order_lifecycles(&pool, &["colour".into()]).await.unwrap();
+    let mut hold = PrintPreflightHold {
+        hold_id: "colour-trial".into(), idempotency_key: "colour-trial".into(),
+        order_id: "colour".into(), apparatus: "apparatus:test:print".into(), stage_node_id: "print".into(),
+        status: PrintPreflightStatus::Running,
+        actor: QueueActionActor { role: "aparatchi".into(), ref_: "worker".into(), display_name: "Worker".into() },
+        created_at_unix: 1, updated_at_unix: 1, expires_at_unix: 2, previous_queue_state: None,
+    };
+    print_preflight::put(&pool, &hold).await.unwrap();
+    let restored = load_production_order_lifecycles(&pool, &["colour".into()]).await.unwrap();
+    assert_eq!(restored["colour"].operational_status, ProductionOrderOperationalStatus::PrintPreflight);
+    assert_eq!(restored["colour"].status, ProductionOrderLifecycleStatus::Released);
+    assert_eq!(restored["colour"].flow_status, "print_preflight");
+    assert_eq!(print_preflight::load_active(&pool).await.unwrap(), vec![hold.clone()],
+        "the old expiry timestamp must not end the status");
+    let queue: String = sqlx::query_scalar("SELECT state FROM mini_queue_states WHERE order_id = 'colour'")
+        .fetch_one(&pool).await.unwrap();
+    assert_eq!(queue, "print_preflight");
+    hold.status = PrintPreflightStatus::Failed;
+    print_preflight::update(&pool, &hold).await.unwrap();
+    let reset = load_production_order_lifecycles(&pool, &["colour".into()]).await.unwrap();
+    assert_eq!(reset["colour"].status, original["colour"].status);
+    assert_eq!(reset["colour"].operational_status, original["colour"].operational_status);
+    assert_eq!(reset["colour"].flow_status, original["colour"].flow_status);
+    assert!(print_preflight::load_active(&pool).await.unwrap().is_empty());
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM mini_queue_states WHERE order_id = 'colour'")
+        .fetch_one(&pool).await.unwrap();
+    assert_eq!(count, 0, "missing queue row is restored exactly");
+    pool.close().await;
+}
+
 // Connection-local tables exercise the real SQL/transaction path without
 // creating, resetting, or modifying any application database or shared tables.
 async fn isolated_pool() -> PgPool {

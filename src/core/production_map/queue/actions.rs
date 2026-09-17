@@ -38,7 +38,7 @@ pub fn apply_unordered_queue_action(
     }
     if matches!(action, ApparatusQueueAction::Start | ApparatusQueueAction::Resume)
         && states.iter().any(|(id, state)| {
-            id.trim() != order_id && *state == ApparatusQueueOrderState::InProgress
+            id.trim() != order_id && state.is_active()
         })
     {
         return Err(ProductionMapError::QueueActionNotAllowed);

@@ -66,6 +66,7 @@ pub enum ProductionOrderOperationalStatus {
     #[default]
     NotStarted,
     Ready,
+    PrintPreflight,
     InProgress,
     Paused,
     Frozen,
@@ -80,6 +81,7 @@ impl ProductionOrderOperationalStatus {
         match self {
             Self::NotStarted => "not_started",
             Self::Ready => "ready",
+            Self::PrintPreflight => "print_preflight",
             Self::InProgress => "in_progress",
             Self::Paused => "paused",
             Self::Frozen => "frozen",
@@ -96,6 +98,8 @@ impl ProductionOrderOperationalStatus {
             Ok(Self::NotStarted)
         } else if value.eq_ignore_ascii_case("ready") {
             Ok(Self::Ready)
+        } else if value.eq_ignore_ascii_case("print_preflight") {
+            Ok(Self::PrintPreflight)
         } else if value.eq_ignore_ascii_case("in_progress") {
             Ok(Self::InProgress)
         } else if value.eq_ignore_ascii_case("paused") {

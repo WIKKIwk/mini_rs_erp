@@ -72,6 +72,25 @@ fn first_actionable_prioritizes_in_progress_order() {
 }
 
 #[test]
+fn print_preflight_is_a_persisted_active_state_without_starting_work() {
+    use ApparatusQueueOrderState as S;
+    assert_eq!(S::parse("print_preflight"), Some(S::PrintPreflight));
+    assert_eq!(S::PrintPreflight.as_str(), "print_preflight");
+    assert_eq!(serde_json::to_value(S::PrintPreflight).unwrap(), "print_preflight");
+    assert!(S::PrintPreflight.is_active());
+    assert!(!S::PrintPreflight.allows_material_intake());
+    let sequence = vec!["a".to_string(), "b".to_string()];
+    let mut states = BTreeMap::from([("b".to_string(), S::PrintPreflight)]);
+    assert_eq!(first_actionable_order_id(&sequence, &states), Some("b"));
+    assert_eq!(
+        apply_queue_action(&sequence, &mut states, "a", ApparatusQueueAction::Start),
+        Err(ProductionMapError::QueueActionNotAllowed)
+    );
+    apply_queue_action(&sequence, &mut states, "b", ApparatusQueueAction::Start).unwrap();
+    assert_eq!(states["b"], S::InProgress);
+}
+
+#[test]
 fn paused_work_does_not_own_the_apparatus_queue() {
     let sequence = vec!["a".to_string(), "b".to_string()];
     let mut states = BTreeMap::from([("a".to_string(), ApparatusQueueOrderState::Paused)]);

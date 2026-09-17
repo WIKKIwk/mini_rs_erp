@@ -120,7 +120,9 @@ pub(crate) fn derive_production_order_lifecycle_with_stage_events(
     let has_started_operation = !latest_operation_events.is_empty()
         || queue_states.values().any(|states| {
             states.get(map.id.trim()).is_some_and(|state| {
-                !state.trim().is_empty() && !state.trim().eq_ignore_ascii_case("pending")
+                !state.trim().is_empty()
+                    && !state.trim().eq_ignore_ascii_case("pending")
+                    && !state.trim().eq_ignore_ascii_case("print_preflight")
             })
         });
     Some(if has_started_operation {
@@ -157,6 +159,8 @@ pub(crate) fn derive_production_order_operational_status(
         .collect::<Vec<_>>();
     if states.iter().any(|state| state == "frozen") {
         ProductionOrderOperationalStatus::Frozen
+    } else if states.iter().any(|state| state == "print_preflight") {
+        ProductionOrderOperationalStatus::PrintPreflight
     } else if has_roll_detached || states.iter().any(|state| state == "in_progress") {
         ProductionOrderOperationalStatus::InProgress
     } else if states.iter().any(|state| state == "paused") {

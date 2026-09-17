@@ -100,6 +100,12 @@ fn training_queue_action_controls(
                 start_ready: true,
             });
             let interaction = match state {
+                queue_state::ApparatusQueueOrderState::PrintPreflight => ApparatusQueueWorkerInteraction {
+                    mode: ApparatusQueueInteractionMode::FreshStartBlocked,
+                    assigned_materials_display_only: true,
+                    blocking_reason_code: "print_preflight_active".to_string(),
+                    ..ApparatusQueueWorkerInteraction::default()
+                },
                 queue_state::ApparatusQueueOrderState::Pending if !queue_actionable => {
                     ApparatusQueueWorkerInteraction {
                         mode: ApparatusQueueInteractionMode::FreshStartBlocked,

@@ -62,7 +62,7 @@ pub fn first_actionable_order_id<'a>(
             .copied()
             .unwrap_or(ApparatusQueueOrderState::Pending)
         {
-            ApparatusQueueOrderState::InProgress => {
+            ApparatusQueueOrderState::InProgress | ApparatusQueueOrderState::PrintPreflight => {
                 return Some(id);
             }
             ApparatusQueueOrderState::Pending => {

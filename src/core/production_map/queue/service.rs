@@ -613,8 +613,7 @@ impl ProductionMapService {
             }
             let policy = effective_apparatus_queue_policy(canonical);
             let active_order_id = effective_states.iter().find_map(|(order_id, state)| {
-                (*state == queue_state::ApparatusQueueOrderState::InProgress)
-                    .then_some(order_id.as_str())
+                state.is_active().then_some(order_id.as_str())
             });
             let is_bosma = pechat::is_pechat_apparatus(canonical);
             let detached_order_ids = order_inputs.iter().filter_map(|input| {
@@ -725,9 +724,11 @@ impl ProductionMapService {
                 let print_preflight = apparatus_preflight
                     .filter(|hold| hold.order_id.trim() == order_id.trim())
                     .cloned();
-                let preflight_blocks_this_order = print_preflight
-                    .as_ref()
-                    .is_some_and(|hold| hold.status != PrintPreflightStatus::Passed);
+                let preflight_blocks_this_order =
+                    state == queue_state::ApparatusQueueOrderState::PrintPreflight
+                        && !print_preflight
+                            .as_ref()
+                            .is_some_and(|hold| hold.status == PrintPreflightStatus::Passed);
                 let preflight_blocks_other_order = apparatus_preflight
                     .is_some_and(|hold| hold.order_id.trim() != order_id.trim());
                 let queue_actionable = active_order_is_this
@@ -781,7 +782,8 @@ impl ProductionMapService {
                             interaction.blocking_reason_code = queue_blocking_reason.to_string();
                         }
                     }
-                    queue_state::ApparatusQueueOrderState::Pending => {
+                    queue_state::ApparatusQueueOrderState::Pending
+                    | queue_state::ApparatusQueueOrderState::PrintPreflight => {
                         if preflight_blocks_this_order || preflight_blocks_other_order {
                             interaction.mode = ApparatusQueueInteractionMode::FreshStartBlocked;
                             interaction.blocking_reason_code =

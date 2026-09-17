@@ -6,6 +6,7 @@ use super::super::ProductionMapError;
 #[serde(rename_all = "snake_case")]
 pub enum ApparatusQueueOrderState {
     Pending,
+    PrintPreflight,
     InProgress,
     Paused,
     Frozen,
@@ -17,6 +18,8 @@ impl ApparatusQueueOrderState {
         let value = value.trim();
         if value.eq_ignore_ascii_case("pending") {
             Some(Self::Pending)
+        } else if value.eq_ignore_ascii_case("print_preflight") {
+            Some(Self::PrintPreflight)
         } else if value.eq_ignore_ascii_case("in_progress") {
             Some(Self::InProgress)
         } else if value.eq_ignore_ascii_case("paused") {
@@ -33,6 +36,7 @@ impl ApparatusQueueOrderState {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Pending => "pending",
+            Self::PrintPreflight => "print_preflight",
             Self::InProgress => "in_progress",
             Self::Paused => "paused",
             Self::Frozen => "frozen",
@@ -41,7 +45,7 @@ impl ApparatusQueueOrderState {
     }
 
     pub fn is_active(self) -> bool {
-        self == Self::InProgress
+        matches!(self, Self::InProgress | Self::PrintPreflight)
     }
 
     pub fn allows_material_intake(self) -> bool {
@@ -116,9 +120,10 @@ pub fn next_queue_state(
     action: ApparatusQueueAction,
 ) -> Result<ApparatusQueueOrderState, ProductionMapError> {
     match (current, action) {
-        (ApparatusQueueOrderState::Pending, ApparatusQueueAction::Start) => {
-            Ok(ApparatusQueueOrderState::InProgress)
-        }
+        (
+            ApparatusQueueOrderState::Pending | ApparatusQueueOrderState::PrintPreflight,
+            ApparatusQueueAction::Start,
+        ) => Ok(ApparatusQueueOrderState::InProgress),
         (ApparatusQueueOrderState::InProgress, ApparatusQueueAction::Pause) => {
             Ok(ApparatusQueueOrderState::Paused)
         }
