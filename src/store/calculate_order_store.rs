@@ -64,6 +64,7 @@ impl CalculateOrderStorePort for CalculateOrderStore {
                 "SELECT payload_json
                  FROM calculate_order_templates
                  WHERE owner_key = ?1
+                    OR (?1 LIKE 'admin:%' AND owner_key LIKE 'telegram:%')
                  ORDER BY saved_at DESC",
             )
             .map_err(|_| CalculateOrderError::StoreFailed)?;
@@ -157,7 +158,10 @@ impl CalculateOrderStorePort for CalculateOrderStore {
             .lock()
             .map_err(|_| CalculateOrderError::StoreFailed)?;
         conn.execute(
-            "DELETE FROM calculate_order_templates WHERE owner_key = ?1 AND id = ?2",
+            "DELETE FROM calculate_order_templates
+             WHERE id = ?2
+               AND (owner_key = ?1
+                    OR (?1 LIKE 'admin:%' AND owner_key LIKE 'telegram:%'))",
             params![owner_key.trim(), id.trim()],
         )
         .map_err(|_| CalculateOrderError::StoreFailed)?;
@@ -209,7 +213,11 @@ impl CalculateOrderStorePort for CalculateOrderStore {
         conn.query_row(
             "SELECT image_id, image_name, image_mime, image_size_bytes, body
              FROM calculate_order_images
-             WHERE owner_key = ?1 AND image_id = ?2",
+             WHERE image_id = ?2
+               AND (owner_key = ?1
+                    OR (?1 LIKE 'admin:%' AND owner_key LIKE 'telegram:%'))
+             ORDER BY created_at DESC
+             LIMIT 1",
             params![owner_key.trim(), image_id.trim()],
             |row| {
                 let size: i64 = row.get(3)?;

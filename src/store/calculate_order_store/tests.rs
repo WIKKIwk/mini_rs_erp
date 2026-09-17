@@ -96,6 +96,73 @@ async fn calculate_order_sqlite_store_round_trips_and_upserts_templates() {
 }
 
 #[tokio::test]
+async fn calculate_order_sqlite_store_exposes_telegram_orders_to_admins() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = CalculateOrderStore::new(dir.path().join("orders.sqlite"));
+    let telegram_order = store
+        .upsert("telegram:123", test_template("TG-1"))
+        .await
+        .expect("save telegram order");
+
+    let admin_rows = store.list("admin:admin").await.expect("admin list");
+    assert_eq!(admin_rows, vec![telegram_order.clone()]);
+    assert!(
+        store
+            .list("werka:werka")
+            .await
+            .expect("werka list")
+            .is_empty()
+    );
+
+    store
+        .delete("admin:admin", &telegram_order.id)
+        .await
+        .expect("delete telegram order");
+    assert!(
+        store
+            .list("admin:admin")
+            .await
+            .expect("admin list")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn calculate_order_sqlite_store_exposes_telegram_images_to_admins() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = CalculateOrderStore::new(dir.path().join("orders.sqlite"));
+    let saved = store
+        .save_image(
+            "telegram:123",
+            CalculateOrderImage {
+                image_id: "telegram-image".to_string(),
+                image_name: "rang.jpg".to_string(),
+                image_mime: "image/jpeg".to_string(),
+                image_size_bytes: 0,
+                body: b"telegram-image".to_vec(),
+            },
+        )
+        .await
+        .expect("save telegram image");
+
+    assert_eq!(
+        store
+            .get_image("admin:admin", "telegram-image")
+            .await
+            .expect("admin image")
+            .expect("image exists"),
+        saved
+    );
+    assert!(
+        store
+            .get_image("werka:werka", "telegram-image")
+            .await
+            .expect("werka image")
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn calculate_order_sqlite_store_dedupes_same_quick_template_across_order_codes() {
     let dir = tempfile::tempdir().expect("tempdir");
     let store = CalculateOrderStore::new(dir.path().join("orders.sqlite"));
@@ -376,4 +443,44 @@ async fn calculate_order_sqlite_store_hydrates_legacy_width_only_payload() {
     assert_eq!(rows[0].frame_product_size_mm, 750.0);
     assert_eq!(rows[0].frame_count, 1.0);
     assert_eq!(rows[0].width_mm, 765.0);
+}
+
+fn test_template(code: &str) -> CalculateOrderTemplate {
+    CalculateOrderTemplate {
+        production_options: None,
+        print_val_size_mm: None,
+        id: String::new(),
+        code: code.to_string(),
+        name: "Telegram order".to_string(),
+        saved_at: String::new(),
+        order_number: code.to_string(),
+        customer_ref: String::new(),
+        customer: String::new(),
+        item_code: "TG-ITEM".to_string(),
+        product: "Telegram product".to_string(),
+        status: String::new(),
+        material_display: String::new(),
+        color: String::new(),
+        image_id: String::new(),
+        image_name: String::new(),
+        image_mime: String::new(),
+        image_size_bytes: 0,
+        image_url: String::new(),
+        frame_product_size_mm: 515.0,
+        frame_count: 1.0,
+        edge_allowance_mm: 15.0,
+        width_mm: 530.0,
+        waste_percent: 5.0,
+        roll_count: Some(1),
+        layers: Vec::new(),
+        first_layer_material: "pet".to_string(),
+        first_layer_micron: "12".to_string(),
+        second_layer_material: String::new(),
+        second_layer_micron: String::new(),
+        third_layer_material: String::new(),
+        third_layer_micron: String::new(),
+        note: String::new(),
+        kg: 100.0,
+        source_map_id: String::new(),
+    }
 }

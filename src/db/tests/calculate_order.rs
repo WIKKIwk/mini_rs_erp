@@ -84,6 +84,34 @@ async fn postgres_calculate_order_store_round_trips_and_dedupes_quick_templates(
     assert_eq!(legacy_rows.len(), 1);
     assert_eq!(legacy_rows[0].roll_count, Some(7));
 
+    let mut telegram_template = test_template("TG-1", 530.0, 100.0);
+    telegram_template.name = "Telegram order".to_string();
+    telegram_template.item_code = "TG-ITEM".to_string();
+    telegram_template.product = "Telegram product".to_string();
+    let telegram_order = store
+        .upsert("telegram:123", telegram_template)
+        .await
+        .expect("save telegram order");
+    let admin_rows = store.list("admin:admin").await.expect("admin list");
+    assert!(admin_rows.iter().any(|row| row.id == telegram_order.id));
+    assert!(
+        store
+            .list("werka:werka")
+            .await
+            .expect("werka list")
+            .is_empty()
+    );
+    store
+        .delete("admin:admin", &telegram_order.id)
+        .await
+        .expect("delete telegram order");
+    assert!(!store
+        .list("admin:admin")
+        .await
+        .expect("admin list after delete")
+        .iter()
+        .any(|row| row.id == telegram_order.id));
+
     let saved_image = store
         .save_image(
             "admin:admin",
@@ -108,6 +136,34 @@ async fn postgres_calculate_order_store_round_trips_and_dedupes_quick_templates(
             .get_image("werka:werka", "img-1")
             .await
             .expect("other owner")
+            .is_none()
+    );
+    let telegram_image = store
+        .save_image(
+            "telegram:123",
+            CalculateOrderImage {
+                image_id: "telegram-image".to_string(),
+                image_name: "telegram.jpg".to_string(),
+                image_mime: "image/jpeg".to_string(),
+                image_size_bytes: 0,
+                body: b"telegram-image".to_vec(),
+            },
+        )
+        .await
+        .expect("save telegram image");
+    assert_eq!(
+        store
+            .get_image("admin:admin", "telegram-image")
+            .await
+            .expect("admin telegram image")
+            .expect("telegram image exists"),
+        telegram_image
+    );
+    assert!(
+        store
+            .get_image("werka:werka", "telegram-image")
+            .await
+            .expect("werka telegram image")
             .is_none()
     );
 

@@ -56,6 +56,7 @@ impl CalculateOrderStorePort for PostgresCalculateOrderStore {
             "SELECT payload_json
              FROM mini_quick_order_templates
              WHERE owner_key = $1
+                OR ($1 LIKE 'admin:%' AND owner_key LIKE 'telegram:%')
              ORDER BY saved_at DESC",
         )
         .bind(owner_key.trim())
@@ -99,7 +100,9 @@ impl CalculateOrderStorePort for PostgresCalculateOrderStore {
     async fn delete(&self, owner_key: &str, id: &str) -> Result<(), CalculateOrderError> {
         sqlx::query(
             "DELETE FROM mini_quick_order_templates
-             WHERE owner_key = $1 AND id = $2",
+             WHERE id = $2
+               AND (owner_key = $1
+                    OR ($1 LIKE 'admin:%' AND owner_key LIKE 'telegram:%'))",
         )
         .bind(owner_key.trim())
         .bind(id.trim())
@@ -147,7 +150,11 @@ impl CalculateOrderStorePort for PostgresCalculateOrderStore {
         let row = sqlx::query_as::<_, (String, String, String, i64, Vec<u8>)>(
             "SELECT image_id, image_name, image_mime, image_size_bytes, body
              FROM mini_quick_order_images
-             WHERE owner_key = $1 AND image_id = $2",
+             WHERE image_id = $2
+               AND (owner_key = $1
+                    OR ($1 LIKE 'admin:%' AND owner_key LIKE 'telegram:%'))
+             ORDER BY created_at DESC
+             LIMIT 1",
         )
         .bind(owner_key.trim())
         .bind(image_id.trim())
