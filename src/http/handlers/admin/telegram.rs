@@ -1,6 +1,9 @@
 use super::*;
 
-use crate::telegram::{TelegramBotSettingsUpdate, TelegramError, TelegramInviteRequest};
+use crate::telegram::{
+    TelegramBotSettingsUpdate, TelegramError, TelegramInviteRequest,
+    TelegramUserbotSettingsUpdate,
+};
 
 pub async fn settings(
     State(state): State<AppState>,
@@ -60,6 +63,25 @@ pub async fn invite(
         .map_err(telegram_error)
 }
 
+pub async fn userbot_settings(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AdminError> {
+    authorize_capability(&state, &headers, Capability::AdminSettingsManage).await?;
+    if method != Method::PUT {
+        return Err(method_not_allowed());
+    }
+    let input: TelegramUserbotSettingsUpdate = parse_json(&body)?;
+    state
+        .telegram
+        .update_userbot_settings(input)
+        .await
+        .map(json_response)
+        .map_err(telegram_error)
+}
+
 fn telegram_error(error: TelegramError) -> AdminError {
     match error {
         TelegramError::BotUsernameRequired => bad_request("telegram bot username is required"),
@@ -72,6 +94,15 @@ fn telegram_error(error: TelegramError) -> AdminError {
         TelegramError::Transport(_) => server_error("telegram transport failed"),
         TelegramError::UserAccountNotConfigured => {
             bad_request("telegram user account API credentials are not configured")
+        }
+        TelegramError::UserAccountApiIdInvalid => {
+            bad_request("telegram user account API id is invalid")
+        }
+        TelegramError::UserAccountApiHashRequired => {
+            bad_request("telegram user account API hash is required")
+        }
+        TelegramError::UserAccountApiHashInvalid => {
+            bad_request("telegram user account API hash is invalid")
         }
         TelegramError::UserAccountNotAuthorized => {
             bad_request("telegram user account is not connected")

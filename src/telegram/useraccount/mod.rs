@@ -4,7 +4,6 @@
 //! kept in `telegram::bot` and are never reused as user-account credentials.
 
 use std::collections::BTreeMap;
-use std::env;
 use std::io::Cursor;
 use std::sync::Arc;
 

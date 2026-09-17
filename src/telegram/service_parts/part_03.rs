@@ -67,6 +67,7 @@ mod tests {
     use super::{TelegramService, normalize_bot_username};
     use crate::telegram::{
         TelegramAccountRole, TelegramBotSettingsUpdate, TelegramInviteRequest, TelegramStartRequest,
+        TelegramUserbotSettingsUpdate,
     };
 
     #[test]
@@ -74,6 +75,33 @@ mod tests {
         assert_eq!(
             normalize_bot_username("https://t.me/@accord_bot/"),
             "accord_bot"
+        );
+    }
+
+    #[tokio::test]
+    async fn userbot_settings_are_encrypted_and_reloadable() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("telegram.json");
+        let service = TelegramService::new(path.clone());
+        let api_hash = "0123456789abcdef0123456789abcdef";
+
+        let overview = service
+            .update_userbot_settings(TelegramUserbotSettingsUpdate {
+                api_id: 39726827,
+                api_hash: api_hash.to_string(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(overview.userbot.api_id, Some(39726827));
+        assert!(overview.userbot.api_hash_configured);
+
+        let persisted = std::fs::read_to_string(&path).unwrap();
+        assert!(!persisted.contains(api_hash));
+
+        let reloaded = TelegramService::new(path);
+        assert_eq!(
+            reloaded.store.user_api_credentials().await.unwrap(),
+            Some((39726827, api_hash.to_string()))
         );
     }
 

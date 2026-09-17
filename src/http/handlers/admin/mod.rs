@@ -74,6 +74,7 @@ use system::{authorize_any_capability, authorize_capability, require_capability}
 pub use system_users::{system_user_code_regenerate, system_user_detail, system_users};
 pub use telegram::{
     invite as telegram_invite, settings as telegram_settings,
+    userbot_settings as telegram_userbot_settings,
     qr_start as telegram_qr_start, qr_login as telegram_qr_login,
     user as telegram_user,
 };

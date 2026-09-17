@@ -99,7 +99,7 @@ impl TelegramUserAccountService {
                 "telefon raqami noto‘g‘ri".to_string(),
             ));
         }
-        let (api_id, api_hash) = api_credentials()?;
+        let (api_id, api_hash) = api_credentials(&self.store).await?;
         let existing_session = self
             .store
             .user_session(telegram_user_id)
@@ -389,7 +389,7 @@ impl TelegramUserAccountService {
             .await
             .map_err(map_store)?
             .ok_or(UserAccountError::NotAuthorized)?;
-        let (api_id, api_hash) = api_credentials()?;
+        let (api_id, api_hash) = api_credentials(&self.store).await?;
         let (client, shutdown) = connect_client(api_id, &api_hash, Some(&session)).await?;
         if !client.is_authorized().await.map_err(map_transport)? {
             shutdown.cancel();
@@ -485,18 +485,14 @@ async fn connect_client(
         .map_err(|error| UserAccountError::Transport(error.to_string()))
 }
 
-fn api_credentials() -> Result<(i32, String), UserAccountError> {
-    let api_id = env::var("TELEGRAM_API_ID")
-        .ok()
-        .and_then(|value| value.trim().parse::<i32>().ok())
-        .filter(|value| *value > 0)
-        .ok_or(UserAccountError::NotConfigured)?;
-    let api_hash = env::var("TELEGRAM_API_HASH")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .ok_or(UserAccountError::NotConfigured)?;
-    Ok((api_id, api_hash))
+async fn api_credentials(
+    store: &TelegramStore,
+) -> Result<(i32, String), UserAccountError> {
+    store
+        .user_api_credentials()
+        .await
+        .map_err(|error| UserAccountError::Store(error.to_string()))?
+        .ok_or(UserAccountError::NotConfigured)
 }
 
 async fn list_writable_groups(client: &Client) -> Result<Vec<TelegramUserGroup>, UserAccountError> {

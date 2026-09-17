@@ -14,7 +14,7 @@ use crate::core::production_map::ProductionMapDefinition;
 use super::models::{
     TelegramAdminOverview, TelegramBotSettings, TelegramBotSettingsUpdate, TelegramChat,
     TelegramDeliveryMode, TelegramInviteRequest, TelegramInviteResponse, TelegramStartRequest,
-    TelegramUserAccount, TelegramUserGroup,
+    TelegramUserAccount, TelegramUserbotSettings, TelegramUserbotSettingsUpdate, TelegramUserGroup,
 };
 use super::order::{TelegramOrderAttachment, TelegramOrderDraft};
 use super::order_catalog::TelegramOrderCatalog;

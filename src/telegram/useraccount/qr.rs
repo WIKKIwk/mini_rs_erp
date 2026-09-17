@@ -37,8 +37,12 @@ impl Drop for Connection {
 }
 
 impl Connection {
-    async fn connect(dc: Option<i32>) -> Result<Self, &'static str> {
-        let (api_id, api_hash) = api_credentials().map_err(|_| "not_configured")?;
+    async fn connect(store: &TelegramStore, dc: Option<i32>) -> Result<Self, &'static str> {
+        let (api_id, api_hash) = store
+            .user_api_credentials()
+            .await
+            .map_err(|_| "store_failed")?
+            .ok_or("not_configured")?;
         let mut builder = Client::builder()
             .api_id(api_id)
             .api_hash(&api_hash)
@@ -113,7 +117,11 @@ impl QrLoginService {
         owner: String,
         role: TelegramAccountRole,
     ) -> Result<QrLoginStatus, &'static str> {
-        api_credentials().map_err(|_| "not_configured")?;
+        self.store
+            .user_api_credentials()
+            .await
+            .map_err(|_| "store_failed")?
+            .ok_or("not_configured")?;
         let mut entries = self.entries.lock().await;
         if entries.len() >= 32 {
             return Err("too_many_logins");
@@ -217,7 +225,7 @@ impl Pending {
         password: Option<String>,
     ) -> Result<(), &'static str> {
         if self.connection.is_none() {
-            self.connection = Some(Connection::connect(None).await?);
+            self.connection = Some(Connection::connect(store, None).await?);
         }
         if self.status.status == "password_required" {
             let Some(password) = password else {
@@ -279,7 +287,7 @@ impl Pending {
                 Ok(tl::enums::auth::LoginToken::MigrateTo(migration)) => {
                     // A fresh unauthenticated connection on the target DC owns the
                     // imported authorization and is the session we must persist.
-                    self.connection = Some(Connection::connect(Some(migration.dc_id)).await?);
+                    self.connection = Some(Connection::connect(store, Some(migration.dc_id)).await?);
                     result = self
                         .connection
                         .as_ref()

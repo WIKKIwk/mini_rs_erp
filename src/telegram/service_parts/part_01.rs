@@ -19,6 +19,12 @@ pub enum TelegramError {
     Transport(String),
     #[error("telegram user account API credentials are not configured")]
     UserAccountNotConfigured,
+    #[error("telegram user account API id is invalid")]
+    UserAccountApiIdInvalid,
+    #[error("telegram user account API hash is required")]
+    UserAccountApiHashRequired,
+    #[error("telegram user account API hash is invalid")]
+    UserAccountApiHashInvalid,
     #[error("telegram user account is not connected")]
     UserAccountNotAuthorized,
     #[error("telegram login code is invalid or expired")]

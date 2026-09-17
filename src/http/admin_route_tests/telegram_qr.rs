@@ -6,6 +6,7 @@ async fn telegram_qr_routes_require_settings_management() {
     let worker = session(&state, PrincipalRole::Werka).await;
     for (method, url) in [
         ("POST", "/v1/mobile/admin/telegram/qr-logins"),
+        ("PUT", "/v1/mobile/admin/telegram/userbot-settings"),
         ("GET", "/v1/mobile/admin/telegram/qr-logins/challenge"),
         ("POST", "/v1/mobile/admin/telegram/qr-logins/challenge"),
         ("DELETE", "/v1/mobile/admin/telegram/qr-logins/challenge"),

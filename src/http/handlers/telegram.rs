@@ -54,6 +54,9 @@ fn start_error(error: TelegramError) -> (StatusCode, Json<ErrorResponse>) {
         TelegramError::UserAccountNotConfigured => {
             "telegram user account API credentials are not configured"
         }
+        TelegramError::UserAccountApiIdInvalid => "telegram user account API id is invalid",
+        TelegramError::UserAccountApiHashRequired => "telegram user account API hash is required",
+        TelegramError::UserAccountApiHashInvalid => "telegram user account API hash is invalid",
         TelegramError::UserAccountNotAuthorized => "telegram user account is not connected",
         TelegramError::UserAccountInvalidCode => "telegram login code is invalid",
         TelegramError::UserAccountFloodWait { .. } => "telegram is rate limiting login codes",

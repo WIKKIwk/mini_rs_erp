@@ -40,6 +40,12 @@ pub struct TelegramBotSettings {
     pub token_hint: String,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct TelegramUserbotSettings {
+    pub api_id: Option<i32>,
+    pub api_hash_configured: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TelegramUserAccount {
     pub telegram_user_id: String,
@@ -89,6 +95,7 @@ pub struct TelegramChat {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct TelegramAdminOverview {
     pub bot: TelegramBotSettings,
+    pub userbot: TelegramUserbotSettings,
     pub users: Vec<TelegramUserAccount>,
     pub chats: Vec<TelegramChat>,
 }
@@ -98,6 +105,13 @@ pub struct TelegramBotSettingsUpdate {
     pub bot_username: String,
     #[serde(default)]
     pub bot_token: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct TelegramUserbotSettingsUpdate {
+    pub api_id: i32,
+    #[serde(default)]
+    pub api_hash: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]

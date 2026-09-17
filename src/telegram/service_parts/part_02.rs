@@ -133,6 +133,16 @@ impl TelegramService {
 
     pub async fn admin_overview(&self) -> Result<TelegramAdminOverview, TelegramError> {
         let (bot_username, bot_token) = self.store.bot_settings().await.map_err(map_store)?;
+        let userbot = self
+            .store
+            .user_api_credentials()
+            .await
+            .map_err(map_store)?
+            .map(|(api_id, _)| TelegramUserbotSettings {
+                api_id: Some(api_id),
+                api_hash_configured: true,
+            })
+            .unwrap_or_default();
         let mut users = self.store.users().await.map_err(map_store)?;
         let mut chats = self.store.chats().await.map_err(map_store)?;
         users.sort_by(|left, right| {
@@ -153,9 +163,45 @@ impl TelegramService {
                 token_configured: !bot_token.trim().is_empty(),
                 token_hint: token_hint(&bot_token),
             },
+            userbot,
             users,
             chats,
         })
+    }
+
+    pub async fn update_userbot_settings(
+        &self,
+        input: TelegramUserbotSettingsUpdate,
+    ) -> Result<TelegramAdminOverview, TelegramError> {
+        if input.api_id <= 0 {
+            return Err(TelegramError::UserAccountApiIdInvalid);
+        }
+
+        let current = self
+            .store
+            .user_api_credentials()
+            .await
+            .map_err(map_store)?;
+        let api_hash = if input.api_hash.trim().is_empty() {
+            let Some((current_api_id, current_api_hash)) = current else {
+                return Err(TelegramError::UserAccountApiHashRequired);
+            };
+            if current_api_id != input.api_id {
+                return Err(TelegramError::UserAccountApiHashRequired);
+            }
+            current_api_hash
+        } else {
+            input.api_hash.trim().to_string()
+        };
+        if api_hash.len() != 32 || !api_hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(TelegramError::UserAccountApiHashInvalid);
+        }
+
+        self.store
+            .set_user_api_credentials(input.api_id, api_hash)
+            .await
+            .map_err(map_store)?;
+        self.admin_overview().await
     }
 
     pub async fn update_bot_settings(

@@ -38,6 +38,10 @@ struct TelegramStoreData {
     #[serde(default)]
     bot_token: String,
     #[serde(default)]
+    user_api_id: Option<i32>,
+    #[serde(default)]
+    user_api_hash: Option<String>,
+    #[serde(default)]
     invites: BTreeMap<String, TelegramInviteRecord>,
     #[serde(default)]
     users: BTreeMap<String, TelegramUserAccount>,
@@ -118,6 +122,35 @@ impl TelegramStore {
     pub async fn bot_settings(&self) -> Result<(String, String), TelegramStoreError> {
         let data = self.data.lock().await;
         Ok((data.bot_username.clone(), data.bot_token.clone()))
+    }
+
+    pub async fn user_api_credentials(
+        &self,
+    ) -> Result<Option<(i32, String)>, TelegramStoreError> {
+        let (stored_api_id, stored_api_hash) = {
+            let data = self.data.lock().await;
+            (data.user_api_id, data.user_api_hash.clone())
+        };
+        if let (Some(api_id), Some(encrypted_hash)) = (stored_api_id, stored_api_hash) {
+            let api_hash = decrypt_session(&encrypted_hash, &self.session_key()?)?;
+            if api_id > 0 && !api_hash.trim().is_empty() {
+                return Ok(Some((api_id, api_hash)));
+            }
+        }
+
+        Ok(env_user_api_credentials())
+    }
+
+    pub async fn set_user_api_credentials(
+        &self,
+        api_id: i32,
+        api_hash: String,
+    ) -> Result<(), TelegramStoreError> {
+        let encrypted_hash = encrypt_session(api_hash.trim(), &self.session_key()?)?;
+        let mut data = self.data.lock().await;
+        data.user_api_id = Some(api_id);
+        data.user_api_hash = Some(encrypted_hash);
+        self.persist(&data).await
     }
 
     pub async fn users(&self) -> Result<Vec<TelegramUserAccount>, TelegramStoreError> {
@@ -511,6 +544,18 @@ impl TelegramStore {
 
 fn normalize_phone(value: &str) -> String {
     value.chars().filter(char::is_ascii_digit).collect()
+}
+
+fn env_user_api_credentials() -> Option<(i32, String)> {
+    let api_id = std::env::var("TELEGRAM_API_ID")
+        .ok()
+        .and_then(|value| value.trim().parse::<i32>().ok())
+        .filter(|value| *value > 0)?;
+    let api_hash = std::env::var("TELEGRAM_API_HASH")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())?;
+    Some((api_id, api_hash))
 }
 
 type SessionEncryptor = cbc::Encryptor<Aes256>;

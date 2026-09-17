@@ -6,6 +6,10 @@ fn identity_routes() -> Router<AppState> {
             any(admin::telegram_settings),
         )
         .route(
+            "/v1/mobile/admin/telegram/userbot-settings",
+            any(admin::telegram_userbot_settings),
+        )
+        .route(
             "/v1/mobile/admin/telegram/invites",
             any(admin::telegram_invite),
         )
