@@ -98,6 +98,14 @@ pub struct ReceiptCreate {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ReceiptReversalCreate {
+    pub request_id: String,
+    pub receipt_id: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConsumptionLine {
     pub item_code: String,
     pub percent: String,

@@ -236,6 +236,23 @@ pub async fn receipt(
     Ok(Json(result))
 }
 
+pub async fn receipt_reversal(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<ReceiptReversalCreate>,
+) -> Result<Json<Value>, ApiError> {
+    let actor = authorize(&state, &headers).await?;
+    let result = store(&state)?
+        .reverse_receipt(&actor, input)
+        .await
+        .map_err(error)?;
+    state.warehouse_events.notify_updated(
+        result["warehouse"].as_str().unwrap_or_default(),
+        "raw_material_stock",
+    );
+    Ok(Json(result))
+}
+
 /// GScale/Tarozi sahifasidagi Tayyorlov masteri uchun QR'siz sodda kirim.
 /// Oddiy preparation/receipts oqimi Seriyo materiallari uchun o'z qoidasi bilan
 /// qoladi; bu endpoint faqat Tarozi sahifasining Rulon scope'ini ishlatadi.

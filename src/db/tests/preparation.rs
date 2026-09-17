@@ -396,6 +396,208 @@ async fn preparation_postgres_partial_fifo_atomic_retry_concurrency_and_scope() 
 }
 
 #[tokio::test]
+async fn preparation_receipt_reversal_is_append_only_and_guarded() {
+    let url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
+        .unwrap_or_else(|_| "postgres:///postgres".into());
+    let admin = sqlx::PgPool::connect(&url).await.unwrap();
+    let db = format!(
+        "mini_rs_erp_test_prep_reversal_{:016x}",
+        rand::random::<u64>()
+    );
+    sqlx::query(&format!("CREATE DATABASE {db}"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    let options = url.parse::<PgConnectOptions>().unwrap().database(&db);
+    let pool = sqlx::PgPool::connect_with(options).await.unwrap();
+    apply_foundation_migration(&pool).await.unwrap();
+    sqlx::raw_sql(
+        "INSERT INTO mini_system_users(id, role, name, phone)
+             VALUES ('prep-reversal', 'tayyorlov_masteri', 'Reversal master', '901234577');
+         INSERT INTO mini_warehouses(id, name)
+             VALUES ('prep-reversal-w', 'Reversal W');
+         INSERT INTO mini_warehouse_assignments(
+             assignment_kind, warehouse, warehouse_name, principal_role, principal_ref
+         ) VALUES ('warehouse', 'Reversal W', 'Reversal W',
+                   'tayyorlov_masteri', 'prep-reversal');",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let actor = Principal {
+        role: PrincipalRole::TayyorlovMasteri,
+        display_name: "Reversal master".into(),
+        legal_name: String::new(),
+        ref_: "prep-reversal".into(),
+        phone: String::new(),
+        avatar_url: String::new(),
+    };
+    let store = PostgresPreparationStore::new(pool.clone());
+    let material = store
+        .create_material(
+            &actor,
+            MaterialCreate {
+                request_id: "reversal-material".into(),
+                name: "Reversal Kley".into(),
+                warehouse: "Reversal W".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let item_code = material["item_code"].as_str().unwrap().to_string();
+    let receipt = store
+        .receive(
+            &actor,
+            ReceiptCreate {
+                request_id: "reversal-receipt".into(),
+                item_code: item_code.clone(),
+                warehouse: "Reversal W".into(),
+                kg: "12.500000".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let before = store.snapshot("prep-reversal").await.unwrap();
+    let original_before = before["history"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["id"] == receipt["id"])
+        .unwrap();
+    assert_eq!(original_before["can_reverse"], true);
+    assert_eq!(original_before["reversed"], false);
+
+    let reversal_input = ReceiptReversalCreate {
+        request_id: "reversal-operation".into(),
+        receipt_id: receipt["id"].as_str().unwrap().into(),
+        reason: "  Xato  miqdor  kiritildi  ".into(),
+    };
+    let reversed = store
+        .reverse_receipt(&actor, reversal_input.clone())
+        .await
+        .unwrap();
+    assert_eq!(reversed["kind"], "receipt_reversal");
+    assert_eq!(reversed["status"], "cancelled");
+    assert_eq!(reversed["kg"], "12.500000");
+    assert_eq!(reversed["reason"], "Xato miqdor kiritildi");
+    assert_eq!(
+        reversed,
+        store
+            .reverse_receipt(&actor, reversal_input)
+            .await
+            .unwrap()
+    );
+
+    let stock_status: String = sqlx::query_scalar(
+        "SELECT status FROM mini_raw_material_stock WHERE source_receipt_id = $1",
+    )
+    .bind(receipt["id"].as_str().unwrap())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(stock_status, "deleted");
+    let event: (String, String, String) = sqlx::query_as(
+        "SELECT event_type, source_type, qty_delta::text
+         FROM mini_raw_material_events
+         WHERE source_type = 'stock_delete' AND source_id = $1",
+    )
+    .bind(reversed["id"].as_str().unwrap())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(event, ("stock_deleted".into(), "stock_delete".into(), "-12.500".into()));
+
+    let after = store.snapshot("prep-reversal").await.unwrap();
+    assert!(after["materials"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|material| material["item_code"] == item_code)
+        .unwrap()["balances"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    let history = after["history"].as_array().unwrap();
+    let original_after = history
+        .iter()
+        .find(|entry| entry["id"] == receipt["id"])
+        .unwrap();
+    assert_eq!(original_after["can_reverse"], false);
+    assert_eq!(original_after["reversed"], true);
+    assert!(history
+        .iter()
+        .any(|entry| entry["id"] == reversed["id"] && entry["kind"] == "receipt_reversal"));
+
+    let blocked_receipt = store
+        .receive(
+            &actor,
+            ReceiptCreate {
+                request_id: "blocked-receipt".into(),
+                item_code: item_code.clone(),
+                warehouse: "Reversal W".into(),
+                kg: "4".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let blocked_stock: (String, String) = sqlx::query_as(
+        "SELECT barcode, id FROM mini_raw_material_stock WHERE source_receipt_id = $1",
+    )
+    .bind(blocked_receipt["id"].as_str().unwrap())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO mini_production_maps(id, product_code, title, code, map_json)
+         VALUES ('reversal-order', 'P', 'Reversal order', 'reversal-order', $1)",
+    )
+    .bind(json!({"order_kg": 100}))
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO mini_raw_material_assignments(
+             barcode, order_id, apparatus, canonical_apparatus_id,
+             item_code, item_group, payload_json
+         ) VALUES ($1, 'reversal-order', 'apparatus:default:bosma_7',
+                   'apparatus:default:bosma_7', $2, 'seriyo', '{}'::jsonb)",
+    )
+    .bind(&blocked_stock.0)
+    .bind(&item_code)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(matches!(
+        store
+            .reverse_receipt(
+                &actor,
+                ReceiptReversalCreate {
+                    request_id: "blocked-reversal".into(),
+                    receipt_id: blocked_receipt["id"].as_str().unwrap().into(),
+                    reason: "Adashib kiritilgan".into(),
+                },
+            )
+            .await,
+        Err(PreparationError::Conflict(_))
+    ));
+    let blocked_status: String = sqlx::query_scalar(
+        "SELECT status FROM mini_raw_material_stock WHERE id = $1",
+    )
+    .bind(&blocked_stock.1)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(blocked_status, "available");
+
+    pool.close().await;
+    sqlx::query(&format!("DROP DATABASE {db}"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    admin.close().await;
+}
+
+#[tokio::test]
 async fn preparation_snapshot_lists_shared_raw_catalog_and_balances() {
     let url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
         .unwrap_or_else(|_| "postgres:///postgres".into());
