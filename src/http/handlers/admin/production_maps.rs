@@ -33,6 +33,7 @@ mod opening_wip;
 mod order_control;
 mod order_image;
 mod paddons;
+mod print_preflight;
 mod progress_qr;
 mod qolip_validation;
 mod queue_actions;
@@ -76,6 +77,7 @@ pub use self::progress_qr::{
 };
 pub use self::qolip_validation::production_map_qolip_validate;
 pub use self::queue_actions::production_map_queue_action;
+pub use self::print_preflight::production_map_print_preflight;
 pub use self::raw_material_reprint::{
     raw_material_stock_reprint_confirm, raw_material_stock_reprint_prepare,
 };

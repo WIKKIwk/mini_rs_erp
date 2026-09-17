@@ -29,9 +29,17 @@ pub struct PreparedApparatusQueueAction {
     pub(super) material_scan_skipped: bool,
     pub(super) claimed_alternative_map: Option<ProductionMapDefinition>,
     pub(super) order_control_update: Option<OrderControlRecord>,
+    pub(super) print_preflight_hold_id: Option<String>,
 }
 
 impl PreparedApparatusQueueAction {
+    pub(crate) fn attach_print_preflight_hold_id(&mut self, hold_id: &str) {
+        let hold_id = hold_id.trim();
+        if !hold_id.is_empty() {
+            self.print_preflight_hold_id = Some(hold_id.to_string());
+        }
+    }
+
     /// Only newly produced batches are assigned. Replays, issues, and updates
     /// to previously printed rolls must never change pallet membership.
     pub(crate) fn attach_output_paddon(&mut self, code: &str) {

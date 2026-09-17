@@ -149,6 +149,88 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         .await
     }
 
+    async fn active_print_preflight_holds(
+        &self,
+    ) -> Result<Vec<PrintPreflightHold>, ProductionMapError> {
+        let now = super::progress::unix_seconds();
+        Ok(self
+            .print_preflight_holds
+            .read()
+            .await
+            .values()
+            .filter(|hold| hold.is_live_at(now))
+            .cloned()
+            .collect())
+    }
+
+    async fn print_preflight_hold_by_id(
+        &self,
+        hold_id: &str,
+    ) -> Result<Option<PrintPreflightHold>, ProductionMapError> {
+        Ok(self.print_preflight_holds.read().await.get(hold_id.trim()).cloned())
+    }
+
+    async fn print_preflight_hold_by_idempotency_key(
+        &self,
+        idempotency_key: &str,
+    ) -> Result<Option<PrintPreflightHold>, ProductionMapError> {
+        Ok(self
+            .print_preflight_holds
+            .read()
+            .await
+            .values()
+            .find(|hold| hold.idempotency_key.trim() == idempotency_key.trim())
+            .cloned())
+    }
+
+    async fn put_print_preflight_hold(
+        &self,
+        hold: PrintPreflightHold,
+    ) -> Result<(), ProductionMapError> {
+        self.print_preflight_holds
+            .write()
+            .await
+            .insert(hold.hold_id.trim().to_string(), hold);
+        Ok(())
+    }
+
+    async fn update_print_preflight_hold(
+        &self,
+        hold: PrintPreflightHold,
+    ) -> Result<(), ProductionMapError> {
+        let mut holds = self.print_preflight_holds.write().await;
+        if !holds.contains_key(hold.hold_id.trim()) {
+            return Err(ProductionMapError::PrintPreflightNotFound);
+        }
+        holds.insert(hold.hold_id.trim().to_string(), hold);
+        Ok(())
+    }
+
+    async fn consume_print_preflight_hold(
+        &self,
+        hold_id: &str,
+        order_id: &str,
+        apparatus: &str,
+        actor: &QueueActionActor,
+    ) -> Result<(), ProductionMapError> {
+        let now = super::progress::unix_seconds();
+        let mut holds = self.print_preflight_holds.write().await;
+        let hold = holds
+            .get_mut(hold_id.trim())
+            .ok_or(ProductionMapError::PrintPreflightNotFound)?;
+        if hold.order_id.trim() != order_id.trim()
+            || !queue_state::apparatus_ids_match(&hold.apparatus, apparatus)
+            || hold.status != PrintPreflightStatus::Passed
+            || !hold.is_live_at(now)
+        {
+            return Err(ProductionMapError::PrintPreflightNotReady);
+        }
+        hold.status = PrintPreflightStatus::Consumed;
+        hold.actor = actor.clone();
+        hold.updated_at_unix = now;
+        Ok(())
+    }
+
     async fn apparatus_queue_states(
         &self,
     ) -> Result<BTreeMap<String, BTreeMap<String, String>>, ProductionMapError> {

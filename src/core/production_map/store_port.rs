@@ -11,6 +11,7 @@ use super::materials::RawMaterialAssignment;
 use super::opening_wip::*;
 use super::types::*;
 use super::BosmaAstatkaReport;
+use super::print_preflight::PrintPreflightHold;
 
 
 pub type StoreResult<T> = Result<T, ProductionMapError>;
@@ -87,6 +88,9 @@ pub struct QueueActionProgressWrite {
     pub returned_paint_report: Option<ReturnedPaintRequest>,
     pub order_control_update: Option<OrderControlRecord>,
     pub schedule_reservation_status: Option<ApparatusScheduleStatus>,
+    /// A passed print-preflight reservation is consumed in the same commit as
+    /// the official Start transition.
+    pub print_preflight_hold_id: Option<String>,
 }
 
 pub struct ProductionMapApparatusTransferWrite {
@@ -334,6 +338,42 @@ pub trait ProductionMapStorePort: Send + Sync {
     }
 
     // Queue state, policy, log, and completion-request persistence.
+    async fn active_print_preflight_holds(&self) -> StoreResult<Vec<PrintPreflightHold>> {
+        Ok(Vec::new())
+    }
+    async fn print_preflight_hold_by_id(
+        &self,
+        _hold_id: &str,
+    ) -> StoreResult<Option<PrintPreflightHold>> {
+        Ok(None)
+    }
+    async fn print_preflight_hold_by_idempotency_key(
+        &self,
+        _idempotency_key: &str,
+    ) -> StoreResult<Option<PrintPreflightHold>> {
+        Ok(None)
+    }
+    async fn put_print_preflight_hold(
+        &self,
+        _hold: PrintPreflightHold,
+    ) -> StoreResult<()> {
+        Err(ProductionMapError::StoreFailed)
+    }
+    async fn update_print_preflight_hold(
+        &self,
+        _hold: PrintPreflightHold,
+    ) -> StoreResult<()> {
+        Err(ProductionMapError::StoreFailed)
+    }
+    async fn consume_print_preflight_hold(
+        &self,
+        _hold_id: &str,
+        _order_id: &str,
+        _apparatus: &str,
+        _actor: &QueueActionActor,
+    ) -> StoreResult<()> {
+        Err(ProductionMapError::PrintPreflightNotReady)
+    }
     async fn apparatus_queue_states(&self) -> StoreResult<ApparatusQueueStateMap>;
     async fn put_apparatus_queue_states(
         &self,
@@ -691,6 +731,15 @@ pub trait ProductionMapStorePort: Send + Sync {
     ) -> StoreResult<QueueActionProgressWriteResult> {
         validate_queue_progress_write(write)?;
         let write = write.clone();
+        if let Some(hold_id) = write.print_preflight_hold_id.as_deref() {
+            self.consume_print_preflight_hold(
+                hold_id,
+                &write.event.order_id,
+                &write.apparatus,
+                &write.event.actor,
+            )
+            .await?;
+        }
         if let Some(map) = write.map_update.clone() {
             self.put_map(map).await?;
         }

@@ -559,6 +559,7 @@ async fn prepare_direct_freeze_queue_write(
         returned_paint_report: None,
         order_control_update: Some(record.clone()),
         schedule_reservation_status: Some(ApparatusScheduleStatus::Paused),
+        print_preflight_hold_id: None,
     }))
 }
 
@@ -711,6 +712,7 @@ async fn restore_frozen_queue_after_unfreeze(
         returned_paint_report: None,
         order_control_update: Some(record.clone()),
         schedule_reservation_status: Some(ApparatusScheduleStatus::Paused),
+        print_preflight_hold_id: None,
     };
     service
         .store

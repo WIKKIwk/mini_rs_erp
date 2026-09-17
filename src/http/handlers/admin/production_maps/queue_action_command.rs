@@ -8,6 +8,7 @@ struct QueueActionCommand {
     completion: QueueActionCompletionInput,
     print: QueueActionPrintInput,
     output_paddon_code: String,
+    print_preflight_hold_id: String,
 }
 
 #[derive(Debug, Clone)]
@@ -49,6 +50,11 @@ impl QueueActionCommand {
             request.freeze_with_issue,
             principal,
         );
+        if !request.print_preflight_hold_id.trim().is_empty()
+            && action != queue_state::ApparatusQueueAction::Start
+        {
+            return Err(bad_request("print_preflight_hold_only_on_start"));
+        }
         let explicit_worker_freeze = action == queue_state::ApparatusQueueAction::Freeze
             && request.freeze_request_id.trim().is_empty();
         if request.complete_without_output
@@ -165,6 +171,7 @@ impl QueueActionCommand {
         Ok(Self {
             apparatus: apparatus.id.to_string(),
             output_paddon_code: request.output_paddon_code.trim().to_string(),
+            print_preflight_hold_id: request.print_preflight_hold_id.trim().to_string(),
             order_id: request.order_id,
             action,
             materials: QueueActionMaterialInput {

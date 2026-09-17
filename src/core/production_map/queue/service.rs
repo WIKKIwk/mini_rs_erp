@@ -131,6 +131,20 @@ impl ProductionMapService {
             .filter(|id| !id.is_empty())
             .collect::<BTreeSet<_>>();
         let canonical = self.resolve_canonical_apparatus_text(apparatus).await?;
+        let canonical_id = canonical.runtime.apparatus_id.to_string();
+        let now = super::super::progress::unix_seconds();
+        if self
+            .store
+            .active_print_preflight_holds()
+            .await?
+            .into_iter()
+            .any(|hold| {
+                hold.is_live_at(now)
+                    && queue_state::apparatus_ids_match(&hold.apparatus, &canonical_id)
+            })
+        {
+            return Err(ProductionMapError::PrintPreflightActive);
+        }
         let visible_order_ids = apparatus::selected_order_ids_for_apparatus(&maps, &canonical)
             .into_iter()
             .collect::<BTreeSet<_>>();
@@ -433,16 +447,24 @@ impl ProductionMapService {
             active_sessions_by_order,
             progress_batches_by_order,
             opening_wip_records,
+            active_print_preflight_holds,
         ) = tokio::join!(
             self.store.raw_material_assignments(),
             self.store.order_run_sessions_for_orders(&order_ids),
             self.store.progress_batches_for_orders(&order_ids),
             self.store.opening_wip_records(opening_wip_query),
+            self.store.active_print_preflight_holds(),
         );
         let material_assignments = material_assignments?;
         let active_sessions_by_order = active_sessions_by_order?;
         let progress_batches_by_order = progress_batches_by_order?;
         let opening_wip_records = opening_wip_records?;
+        let now = super::super::progress::unix_seconds();
+        let print_preflight_by_apparatus = active_print_preflight_holds?
+            .into_iter()
+            .filter(|hold| hold.is_live_at(now))
+            .map(|hold| (hold.apparatus.trim().to_string(), hold))
+            .collect::<HashMap<_, _>>();
         let stage_work_by_order = maps.iter().map(|map| {
             let sessions = active_sessions_by_order.get(&map.id).map(Vec::as_slice).unwrap_or_default();
             let batches = progress_batches_by_order.get(&map.id).map(Vec::as_slice).unwrap_or_default();
@@ -528,6 +550,7 @@ impl ProductionMapService {
             };
             let is_rezka = apparatus::is_rezka_apparatus(canonical);
             let is_laminatsiya = apparatus::is_laminatsiya_apparatus(canonical);
+            let apparatus_preflight = print_preflight_by_apparatus.get(&storage_key);
             let stored_sequence = sequences
                 .get(&storage_key)
                 .or_else(|| sequences.get(apparatus))
@@ -699,6 +722,14 @@ impl ProductionMapService {
                 let active_order_is_this = active_order_id
                     .is_none_or(|active_order_id| active_order_id == order_id.trim());
                 let requeued_session = active_session.is_some_and(order_run_session_was_requeued);
+                let print_preflight = apparatus_preflight
+                    .filter(|hold| hold.order_id.trim() == order_id.trim())
+                    .cloned();
+                let preflight_blocks_this_order = print_preflight
+                    .as_ref()
+                    .is_some_and(|hold| hold.status != PrintPreflightStatus::Passed);
+                let preflight_blocks_other_order = apparatus_preflight
+                    .is_some_and(|hold| hold.order_id.trim() != order_id.trim());
                 let queue_actionable = active_order_is_this
                     && (state.is_active()
                         || state == queue_state::ApparatusQueueOrderState::Paused
@@ -725,9 +756,18 @@ impl ProductionMapService {
                     ..ApparatusQueueWorkerInteraction::default()
                 };
                 let pending_actionable =
-                    queue_actionable && control == OrderControlState::Active;
+                    queue_actionable
+                        && control == OrderControlState::Active
+                        && !preflight_blocks_this_order
+                        && !preflight_blocks_other_order;
                 let queue_blocking_reason = if active_order_is_this {
-                    "waiting_sequence"
+                    if preflight_blocks_this_order || preflight_blocks_other_order {
+                        "print_preflight_active"
+                    } else {
+                        "waiting_sequence"
+                    }
+                } else if preflight_blocks_this_order || preflight_blocks_other_order {
+                    "print_preflight_active"
                 } else {
                     "apparatus_busy"
                 };
@@ -742,7 +782,11 @@ impl ProductionMapService {
                         }
                     }
                     queue_state::ApparatusQueueOrderState::Pending => {
-                        if previous_stage_not_configured {
+                        if preflight_blocks_this_order || preflight_blocks_other_order {
+                            interaction.mode = ApparatusQueueInteractionMode::FreshStartBlocked;
+                            interaction.blocking_reason_code =
+                                "print_preflight_active".to_string();
+                        } else if previous_stage_not_configured {
                             interaction.mode = ApparatusQueueInteractionMode::FreshStartBlocked;
                             interaction.blocking_reason_code =
                                 "previous_stage_not_configured".to_string();
@@ -993,6 +1037,7 @@ impl ProductionMapService {
                         complete_requires_rezka_total_waste_only,
                         freeze_request: order_control
                             .and_then(|control| control.freeze_request.clone()),
+                        print_preflight,
                     },
                 );
             }

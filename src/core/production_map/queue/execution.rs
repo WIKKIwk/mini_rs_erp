@@ -538,6 +538,7 @@ impl ProductionMapService {
             material_scan_skipped: false,
             claimed_alternative_map,
             order_control_update,
+            print_preflight_hold_id: None,
         })
     }
 
@@ -755,6 +756,7 @@ impl ProductionMapService {
             qolip_checkouts,
             returned_paint_report,
             order_control_update: prepared.order_control_update,
+            print_preflight_hold_id: prepared.print_preflight_hold_id,
         };
         let write_result = self
             .store

@@ -17,7 +17,7 @@ pub(super) struct QueueApparatusMetadata {
 }
 
 impl QueueApparatusMetadata {
-    fn is_pechat(&self) -> bool {
+    pub(super) fn is_pechat(&self) -> bool {
         self.operation == ExecutionOperation::Print
     }
 
@@ -121,6 +121,17 @@ pub async fn production_map_queue_action(
     .map_err(super::super::training::training_workspace_error)?
     {
         return Ok(json_response(training_result));
+    }
+    if input.action == queue_state::ApparatusQueueAction::Start {
+        state
+            .production_maps
+            .validate_print_preflight_start(
+                &input.apparatus,
+                &input.order_id,
+                &input.print_preflight_hold_id,
+            )
+            .await
+            .map_err(production_map_error)?;
     }
     let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
     let _queue_action_guard = state.production_maps.queue_action_guard().await;

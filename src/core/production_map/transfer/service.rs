@@ -305,6 +305,19 @@ impl ProductionMapService {
         apparatus: &str,
     ) -> Result<(), ProductionMapError> {
         let order_id = order_id.trim();
+        let now = super::progress::unix_seconds();
+        if self
+            .store
+            .active_print_preflight_holds()
+            .await?
+            .into_iter()
+            .any(|hold| {
+                hold.is_live_at(now)
+                    && queue_state::apparatus_ids_match(&hold.apparatus, apparatus)
+            })
+        {
+            return Err(ProductionMapError::PrintPreflightActive);
+        }
         let states = self.store.apparatus_queue_states().await?;
         if states.iter().any(|(stored_apparatus, values)| {
             apparatus_ids_match(stored_apparatus, apparatus)

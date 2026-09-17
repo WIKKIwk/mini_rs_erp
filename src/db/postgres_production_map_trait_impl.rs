@@ -169,6 +169,53 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         PostgresProductionMapStore::update_apparatus_schedule_reservation_status(self, order_id, apparatus_id, status, actor).await
     }
 
+    async fn active_print_preflight_holds(
+        &self,
+    ) -> Result<Vec<crate::core::production_map::PrintPreflightHold>, ProductionMapError> {
+        PostgresProductionMapStore::active_print_preflight_holds(self).await
+    }
+
+    async fn print_preflight_hold_by_id(
+        &self,
+        hold_id: &str,
+    ) -> Result<Option<crate::core::production_map::PrintPreflightHold>, ProductionMapError> {
+        PostgresProductionMapStore::print_preflight_hold_by_id(self, hold_id).await
+    }
+
+    async fn print_preflight_hold_by_idempotency_key(
+        &self,
+        idempotency_key: &str,
+    ) -> Result<Option<crate::core::production_map::PrintPreflightHold>, ProductionMapError> {
+        PostgresProductionMapStore::print_preflight_hold_by_idempotency_key(self, idempotency_key).await
+    }
+
+    async fn put_print_preflight_hold(
+        &self,
+        hold: crate::core::production_map::PrintPreflightHold,
+    ) -> Result<(), ProductionMapError> {
+        PostgresProductionMapStore::put_print_preflight_hold(self, hold).await
+    }
+
+    async fn update_print_preflight_hold(
+        &self,
+        hold: crate::core::production_map::PrintPreflightHold,
+    ) -> Result<(), ProductionMapError> {
+        PostgresProductionMapStore::update_print_preflight_hold(self, hold).await
+    }
+
+    async fn consume_print_preflight_hold(
+        &self,
+        hold_id: &str,
+        order_id: &str,
+        apparatus: &str,
+        actor: &QueueActionActor,
+    ) -> Result<(), ProductionMapError> {
+        PostgresProductionMapStore::consume_print_preflight_hold(
+            self, hold_id, order_id, apparatus, actor,
+        )
+        .await
+    }
+
     async fn apparatus_queue_states(
         &self,
     ) -> Result<BTreeMap<String, BTreeMap<String, String>>, ProductionMapError> {

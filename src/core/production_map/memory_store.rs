@@ -742,6 +742,15 @@ impl MemoryProductionMapStore {
         {
             return Err(ProductionMapError::StoreFailed);
         }
+        if let Some(hold_id) = write.print_preflight_hold_id.as_deref() {
+            self.consume_print_preflight_hold(
+                hold_id,
+                &write.event.order_id,
+                &write.apparatus,
+                &write.event.actor,
+            )
+            .await?;
+        }
         if let Some(session) = &write.session
             && matches!(
                 session.status,

@@ -20,6 +20,7 @@ mod opening_wip;
 #[path = "pechat/implementation.rs"]
 pub mod pechat;
 mod prepared_queue_action;
+mod print_preflight;
 #[path = "progress_session/mod.rs"]
 mod progress;
 mod queue;
@@ -94,6 +95,7 @@ pub(crate) use queue::{
     QueueActionPolicyInput, QueueActionPolicyProfile, allowed_actions_for_control,
 };
 pub use service::{PreparedApparatusQueueAction, ProductionMapLiveSnapshot, ProductionMapService};
+pub use print_preflight::{PrintPreflightHold, PrintPreflightStatus};
 pub(crate) use service_progress_metrics::{
     bosma_completion_metrics_are_complete, laminatsiya_completion_metrics_are_complete,
 };

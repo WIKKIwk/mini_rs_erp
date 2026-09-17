@@ -92,5 +92,7 @@ struct ApparatusQueueActionRequest {
     rezka_output_cycle: String,
     #[serde(default)]
     output_paddon_code: String,
+    #[serde(default)]
+    print_preflight_hold_id: String,
     action: queue_state::ApparatusQueueAction,
 }

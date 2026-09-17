@@ -151,6 +151,11 @@ pub struct ApparatusQueueOrderActionControl {
     pub complete_requires_rezka_total_waste_only: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub freeze_request: Option<OrderFreezeRequest>,
+    /// A print apparatus may be held for a colour preflight while the queue
+    /// state remains pending. The mobile client renders this as a separate
+    /// preflight phase and may not infer it from the official queue state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub print_preflight: Option<crate::core::production_map::PrintPreflightHold>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

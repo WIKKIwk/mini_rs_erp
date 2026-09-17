@@ -287,6 +287,12 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         ProductionMapError::OpenedOrderCalculationLocked => conflict(error.to_string()),
         ProductionMapError::StoreFailed => server_error("store_failed"),
         ProductionMapError::QueueActionNotAllowed => bad_request("queue_action_not_allowed"),
+        ProductionMapError::PrintPreflightActive => conflict("print_preflight_active"),
+        ProductionMapError::PrintPreflightNotFound => not_found("print_preflight_not_found"),
+        ProductionMapError::PrintPreflightNotReady => conflict("print_preflight_not_ready"),
+        ProductionMapError::PrintPreflightActionNotAllowed => {
+            bad_request("print_preflight_action_not_allowed")
+        }
         ProductionMapError::QueueSequenceOrderNotFound(_) => {
             bad_request("queue_sequence_order_not_found")
         }

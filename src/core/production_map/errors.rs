@@ -78,6 +78,14 @@ pub enum ProductionMapError {
     StoreFailed,
     #[error("queue action is not allowed")]
     QueueActionNotAllowed,
+    #[error("print preflight is active on the apparatus")]
+    PrintPreflightActive,
+    #[error("print preflight was not found")]
+    PrintPreflightNotFound,
+    #[error("print preflight is not ready for this action")]
+    PrintPreflightNotReady,
+    #[error("print preflight action is not allowed")]
+    PrintPreflightActionNotAllowed,
     #[error("queue sequence order was not found: {0}")]
     QueueSequenceOrderNotFound(String),
     #[error("queue sequence order is not assigned to the apparatus: {0}")]

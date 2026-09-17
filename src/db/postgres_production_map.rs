@@ -46,6 +46,8 @@ mod order_query_helpers;
 mod paddon_helpers;
 #[path = "postgres_production_map/paddon/receipts.rs"]
 mod paddon_receipts;
+#[path = "postgres_production_map/print_preflight.rs"]
+mod print_preflight;
 #[path = "postgres_production_map/progress/helpers.rs"]
 mod progress_helpers;
 #[path = "postgres_production_map/paddon/output_assignment.rs"]
@@ -153,6 +155,12 @@ use self::paddon_helpers::{
     add_paddon_item, add_paddon_items, create_paddon, load_paddon_scan_snapshot,
     load_paddon_snapshot, load_paddon_summary, load_paddons, remove_paddon_item,
     remove_paddon_items,
+};
+use self::print_preflight::{
+    consume_print_preflight_hold_tx, load_active as load_active_print_preflight_holds,
+    load_by_id as load_print_preflight_hold_by_id,
+    load_by_idempotency_key as load_print_preflight_hold_by_idempotency_key,
+    put as put_print_preflight_hold, update as update_print_preflight_hold,
 };
 use self::progress_helpers::{
     correct_progress_batch, load_progress_batch_corrections_for_order, put_order_progress_batch,
@@ -353,6 +361,58 @@ impl PostgresProductionMapStore {
             actor,
         )
         .await?;
+        tx.commit()
+            .await
+            .map_err(|_| ProductionMapError::StoreFailed)
+    }
+
+    async fn active_print_preflight_holds(
+        &self,
+    ) -> Result<Vec<crate::core::production_map::PrintPreflightHold>, ProductionMapError> {
+        load_active_print_preflight_holds(&self.pool).await
+    }
+
+    async fn print_preflight_hold_by_id(
+        &self,
+        hold_id: &str,
+    ) -> Result<Option<crate::core::production_map::PrintPreflightHold>, ProductionMapError> {
+        load_print_preflight_hold_by_id(&self.pool, hold_id).await
+    }
+
+    async fn print_preflight_hold_by_idempotency_key(
+        &self,
+        idempotency_key: &str,
+    ) -> Result<Option<crate::core::production_map::PrintPreflightHold>, ProductionMapError> {
+        load_print_preflight_hold_by_idempotency_key(&self.pool, idempotency_key).await
+    }
+
+    async fn put_print_preflight_hold(
+        &self,
+        hold: crate::core::production_map::PrintPreflightHold,
+    ) -> Result<(), ProductionMapError> {
+        put_print_preflight_hold(&self.pool, &hold).await
+    }
+
+    async fn update_print_preflight_hold(
+        &self,
+        hold: crate::core::production_map::PrintPreflightHold,
+    ) -> Result<(), ProductionMapError> {
+        update_print_preflight_hold(&self.pool, &hold).await
+    }
+
+    async fn consume_print_preflight_hold(
+        &self,
+        hold_id: &str,
+        order_id: &str,
+        apparatus: &str,
+        actor: &QueueActionActor,
+    ) -> Result<(), ProductionMapError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        consume_print_preflight_hold_tx(&mut tx, hold_id, order_id, apparatus, actor).await?;
         tx.commit()
             .await
             .map_err(|_| ProductionMapError::StoreFailed)
@@ -938,6 +998,16 @@ impl PostgresProductionMapStore {
                 raw_material_stock_committed,
                 ..QueueActionProgressWriteResult::default()
             });
+        }
+        if let Some(hold_id) = write.print_preflight_hold_id.as_deref() {
+            consume_print_preflight_hold_tx(
+                &mut tx,
+                hold_id,
+                &write.event.order_id,
+                &write.apparatus,
+                &write.event.actor,
+            )
+            .await?;
         }
         validate_queue_action_event_transition_tx(&mut tx, &write.event).await?;
         stage_execution::validate_input_claims_tx(&mut tx, write).await?;

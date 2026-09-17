@@ -148,6 +148,10 @@ fn production_routes() -> Router<AppState> {
             any(admin::production_map_queue_action),
         )
         .route(
+            "/v1/mobile/admin/production-maps/print-preflight",
+            any(admin::production_map_print_preflight),
+        )
+        .route(
             "/v1/mobile/admin/production-maps/bosma-astatka",
             any(admin::production_map_bosma_astatka),
         )

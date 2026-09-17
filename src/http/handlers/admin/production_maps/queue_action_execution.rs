@@ -30,6 +30,7 @@ async fn execute_queue_action(
         completion: _,
         print,
         output_paddon_code,
+        print_preflight_hold_id,
     } = input;
     let mut prepared = state
         .production_maps
@@ -48,6 +49,7 @@ async fn execute_queue_action(
         )
         .await
         .map_err(production_map_error)?;
+    prepared.attach_print_preflight_hold_id(&print_preflight_hold_id);
     prepared.attach_output_paddon(&output_paddon_code);
     if !qolip_preparations.is_empty() {
         prepared.attach_qolip_codes(
