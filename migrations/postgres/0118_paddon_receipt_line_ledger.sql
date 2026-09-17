@@ -55,21 +55,8 @@ CREATE INDEX IF NOT EXISTS idx_mini_paddon_receipt_lines_warehouse
 CREATE INDEX IF NOT EXISTS idx_mini_paddon_receipt_lines_batch
     ON mini_paddon_receipt_lines (progress_batch_id);
 
--- Preserve source links for events created by 0116 before this normalized
--- ledger existed.
-UPDATE mini_inventory_movement_events
-SET source_document_type = 'paddon_receipt',
-    source_document_id = COALESCE(
-        NULLIF(btrim(payload_json->>'paddon_id'), ''),
-        NULLIF(btrim(payload_json->>'paddon_code'), '')
-    ),
-    source_line_id = COALESCE(
-        NULLIF(btrim(payload_json->'stock'->>'source_progress_batch_id'), ''),
-        NULLIF(btrim(payload_json->'stock'->>'id'), '')
-    )
-WHERE event_type = 'paddon_received'
-  AND btrim(source_document_id) = '';
-
+-- Historical movement events are append-only and retain their source links in
+-- payload_json; source_document_* is populated for new events by the runtime.
 -- Backfill the relational line ledger from the retained receipt snapshot.
 INSERT INTO mini_paddon_receipt_lines (
     id, paddon_id, paddon_code, progress_batch_id, stock_id,
