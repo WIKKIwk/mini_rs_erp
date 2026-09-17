@@ -162,6 +162,32 @@ async fn postgres_werka_paddon_receipt_atomic_retry_and_locks() {
         .unwrap(),
         2
     );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM mini_paddon_receipt_lines
+             WHERE paddon_code = $1",
+        )
+        .bind(&paddon.code)
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        2
+    );
+    let source_links = sqlx::query_as::<_, (String, String, String)>(
+        "SELECT source_document_type, source_document_id, source_line_id
+         FROM mini_inventory_movement_events
+         WHERE event_type = 'paddon_received'
+         ORDER BY source_line_id",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(source_links.len(), 2);
+    assert!(source_links.iter().all(|(kind, document, line)| {
+        kind == "paddon_receipt"
+            && document == &paddon.id
+            && ids.iter().any(|batch_id| batch_id == line)
+    }));
     let werka_lookup = PostgresWerkaHomeLookup::new(pool.clone());
     let archive = werka_lookup
         .werka_archive("received", "daily", None, None)

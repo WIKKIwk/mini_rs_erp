@@ -125,6 +125,7 @@ impl ProductionMapService {
                 receipt.accepted_at_unix,
             );
             stock.payload_json["paddon_code"] = serde_json::json!(code.trim());
+            stock.payload_json["paddon_id"] = serde_json::json!(receipt.paddon.id.trim());
             let mut batch = original.clone();
             mark_finished_goods_batch_received(
                 &mut batch,

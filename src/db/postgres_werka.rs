@@ -1,11 +1,9 @@
 use std::collections::BTreeMap;
 
 use async_trait::async_trait;
-use serde_json::Value;
 use sqlx::PgPool;
 use time::{Date, OffsetDateTime, UtcOffset};
 
-use crate::core::production_map::PaddonReceipt;
 use crate::core::werka::models::{
     ArchiveTotalByUom, DispatchRecord, WerkaArchiveResponse, WerkaArchiveSummary, WerkaHomeData,
     WerkaHomeSummary,
@@ -22,31 +20,45 @@ impl PostgresWerkaHomeLookup {
         Self { pool }
     }
 
-    async fn receipts(&self) -> Result<Vec<PaddonReceipt>, WerkaPortError> {
-        let rows = sqlx::query_scalar::<_, Option<Value>>(
-            "SELECT receipt_json FROM mini_paddons WHERE receipt_json IS NOT NULL ORDER BY updated_at DESC, code ASC",
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|error| WerkaPortError::Database(error.to_string()))?;
-
-        rows.into_iter()
-            .flatten()
-            .map(|value| {
-                serde_json::from_value(value)
-                    .map_err(|error| WerkaPortError::Database(error.to_string()))
-            })
-            .collect()
-    }
-
     async fn paddon_records(
         &self,
         from: Option<Date>,
         to: Option<Date>,
     ) -> Result<Vec<DispatchRecord>, WerkaPortError> {
-        let receipts = self.receipts().await?;
-        Ok(records_from_receipts(&receipts, from, to))
+        let rows = sqlx::query_as::<_, PaddonReceiptLineRow>(
+            r#"
+            SELECT
+                paddon_code,
+                stock_id,
+                progress_batch_id,
+                warehouse,
+                item_code,
+                item_name,
+                qty::double precision AS qty,
+                uom,
+                EXTRACT(EPOCH FROM accepted_at)::bigint AS accepted_at_unix
+            FROM mini_paddon_receipt_lines
+            ORDER BY accepted_at DESC, paddon_code ASC, progress_batch_id ASC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|error| WerkaPortError::Database(error.to_string()))?;
+        Ok(records_from_receipt_lines(&rows, from, to))
     }
+}
+
+#[derive(sqlx::FromRow)]
+struct PaddonReceiptLineRow {
+    paddon_code: String,
+    stock_id: String,
+    progress_batch_id: String,
+    warehouse: String,
+    item_code: String,
+    item_name: String,
+    qty: f64,
+    uom: String,
+    accepted_at_unix: i64,
 }
 
 #[async_trait]
@@ -120,73 +132,65 @@ impl WerkaHomeLookup for PostgresWerkaHomeLookup {
     }
 }
 
-fn records_from_receipts(
-    receipts: &[PaddonReceipt],
+fn records_from_receipt_lines(
+    lines: &[PaddonReceiptLineRow],
     from: Option<Date>,
     to: Option<Date>,
 ) -> Vec<DispatchRecord> {
     let tashkent_offset = UtcOffset::from_hms(5, 0, 0).expect("valid Tashkent UTC offset");
-    let mut records = receipts
+    let mut records = lines
         .iter()
-        .flat_map(|receipt| {
-            receipt.stocks.iter().filter_map(|stock| {
-                let timestamp = if stock.accepted_at_unix > 0 {
-                    stock.accepted_at_unix
-                } else {
-                    receipt.accepted_at_unix
-                };
-                let date = OffsetDateTime::from_unix_timestamp(timestamp)
-                    .ok()
-                    .map(|value| value.to_offset(tashkent_offset).date())?;
-                if from.is_some_and(|value| date < value) || to.is_some_and(|value| date > value) {
-                    return None;
-                }
-                let item_code = if stock.item_code.trim().is_empty() {
-                    stock.id.clone()
-                } else {
-                    stock.item_code.trim().to_string()
-                };
-                let item_name = if stock.item_name.trim().is_empty() {
-                    item_code.clone()
-                } else {
-                    stock.item_name.trim().to_string()
-                };
-                let warehouse = if stock.warehouse.trim().is_empty() {
-                    receipt.warehouse.trim()
-                } else {
-                    stock.warehouse.trim()
-                };
-                let created_label = OffsetDateTime::from_unix_timestamp(timestamp)
-                    .ok()
-                    .map(|value| {
-                        value
-                            .to_offset(tashkent_offset)
-                            .format(&time::format_description::well_known::Rfc3339)
-                            .unwrap_or_default()
-                    })
-                    .unwrap_or_default();
-                Some((
-                    timestamp,
-                    DispatchRecord {
-                        id: format!("paddon:{}:{}", receipt.paddon.code, stock.id),
-                        record_type: "paddon_receipt".to_string(),
-                        supplier_ref: format!("paddon:{}", receipt.paddon.code),
-                        supplier_name: format!("Paddon {} • {}", receipt.paddon.code, warehouse),
-                        item_code,
-                        item_name,
-                        uom: stock.uom.trim().to_string(),
-                        sent_qty: stock.qty,
-                        accepted_qty: stock.qty,
-                        amount: 0.0,
-                        currency: String::new(),
-                        note: format!("{} omboriga paddon qabul qilindi", warehouse),
-                        event_type: "paddon_received".to_string(),
-                        highlight: warehouse.to_string(),
-                        status: "accepted".to_string(),
-                        created_label,
-                    },
-                ))
-            })
+        .filter_map(|line| {
+            let timestamp = line.accepted_at_unix;
+            let date = OffsetDateTime::from_unix_timestamp(timestamp)
+                .ok()
+                .map(|value| value.to_offset(tashkent_offset).date())?;
+            if from.is_some_and(|value| date < value) || to.is_some_and(|value| date > value) {
+                return None;
+            }
+            let item_code = if line.item_code.trim().is_empty() {
+                line.stock_id.clone()
+            } else {
+                line.item_code.trim().to_string()
+            };
+            let item_name = if line.item_name.trim().is_empty() {
+                item_code.clone()
+            } else {
+                line.item_name.trim().to_string()
+            };
+            let created_label = OffsetDateTime::from_unix_timestamp(timestamp)
+                .ok()
+                .map(|value| {
+                    value
+                        .to_offset(tashkent_offset)
+                        .format(&time::format_description::well_known::Rfc3339)
+                        .unwrap_or_default()
+                })
+                .unwrap_or_default();
+            Some((
+                timestamp,
+                DispatchRecord {
+                    id: format!("paddon:{}:{}", line.paddon_code, line.stock_id),
+                    record_type: "paddon_receipt".to_string(),
+                    supplier_ref: format!("paddon:{}", line.paddon_code),
+                    supplier_name: format!("Paddon {} • {}", line.paddon_code, line.warehouse),
+                    item_code,
+                    item_name,
+                    uom: line.uom.trim().to_string(),
+                    sent_qty: line.qty,
+                    accepted_qty: line.qty,
+                    amount: 0.0,
+                    currency: String::new(),
+                    note: format!(
+                        "{} omboriga paddon qabul qilindi; rulon {}",
+                        line.warehouse, line.progress_batch_id
+                    ),
+                    event_type: "paddon_received".to_string(),
+                    highlight: line.warehouse.trim().to_string(),
+                    status: "accepted".to_string(),
+                    created_label,
+                },
+            ))
         })
         .collect::<Vec<_>>();
     records.sort_by(|left, right| {
