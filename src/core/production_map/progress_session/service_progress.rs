@@ -283,6 +283,25 @@ impl ProductionMapService {
         Ok(batch)
     }
 
+    /// Read-only scan validation uses the same stage and ownership rules as
+    /// Start. A limited/stale WIP list is not an authority for rejecting a QR.
+    pub async fn start_input_for_qr(
+        &self,
+        apparatus: &str,
+        order_id: &str,
+        batch_id: &str,
+        qr_payload: &str,
+    ) -> Result<OrderProgressBatch, ProductionMapError> {
+        let map = self.raw_map(order_id).await?.ok_or(ProductionMapError::MapNotFound)?;
+        self.previous_stage_start_progress_batch(
+            order_id.trim(), &map, apparatus.trim(), &QueueProgressInput {
+                progress_batch_id: batch_id.trim().to_string(),
+                qr_payload: qr_payload.trim().to_string(),
+                ..Default::default()
+            },
+        ).await?.ok_or(ProductionMapError::ProgressBatchNotAccepted)
+    }
+
     pub(in crate::core::production_map) async fn previous_stage_start_progress_batch(
         &self,
         order_id: &str,
@@ -310,6 +329,12 @@ impl ProductionMapService {
         };
         let previous = chain::previous_work_stage_for_node(order_map, &stage.node_id)
             .ok_or(ProductionMapError::ProgressBatchNotAccepted)?;
+        let source_node_id = json_string_field(&batch.payload_json, "stage_node_id");
+        if !source_node_id.is_empty()
+            && !chain::stage_node_ids_match_for_map(order_map, &source_node_id, &previous.node_id)
+        {
+            return Err(ProductionMapError::ProgressBatchNotAccepted);
+        }
         let previous_apparatus = previous
             .apparatus_id
             .ok_or(ProductionMapError::ProgressBatchNotAccepted)?;

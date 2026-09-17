@@ -10,6 +10,10 @@ struct ProgressQrLookupRequest {
     progress_qr: String,
     #[serde(default)]
     qr_payload: String,
+    #[serde(default)]
+    apparatus: String,
+    #[serde(default)]
+    order_id: String,
 }
 
 pub async fn production_map_progress_qr_lookup(
@@ -33,6 +37,26 @@ pub async fn production_map_progress_qr_lookup(
     }
     let input: ProgressQrLookupRequest = parse_json(&body)?;
     let qr_payload = effective_progress_qr_payload(&input.qr_payload, &input.progress_qr);
+    let scoped = !input.apparatus.trim().is_empty() || !input.order_id.trim().is_empty();
+    if scoped {
+        if input.apparatus.trim().is_empty() || input.order_id.trim().is_empty() {
+            return Err(bad_request("progress_input_invalid"));
+        }
+        let can_manage = state
+            .admin
+            .principal_has_capability(&principal, Capability::AdminAccess)
+            .await
+            || state
+                .admin
+                .principal_has_capability(&principal, Capability::ProductionMapManage)
+                .await;
+        if !can_manage {
+            let assigned = state.admin.principal_assigned_apparatus(&principal).await;
+            if !queue_state::apparatus_matches_assigned(&input.apparatus, &assigned) {
+                return Err(forbidden());
+            }
+        }
+    }
     if let Some(batch) = super::super::training::training_progress_batch_for_qr(
         &state,
         &principal,
@@ -42,19 +66,42 @@ pub async fn production_map_progress_qr_lookup(
     .await
     .map_err(super::super::training::training_workspace_error)?
     {
+        if scoped
+            && (batch.order_id.trim() != input.order_id.trim()
+                || batch.next_apparatus.trim() != input.apparatus.trim()
+                || batch.wip_status != OrderProgressBatchWipStatus::Waiting)
+        {
+            return Err(bad_request("progress_batch_not_accepted"));
+        }
         return Ok(json_response(serde_json::json!({
             "ok": true,
+            "validated_apparatus": input.apparatus.trim(),
+            "validated_order_id": input.order_id.trim(),
             "can_resume": batch.status.is_resumable(),
             "batch": batch,
         })));
     }
-    let batch = state
-        .production_maps
-        .progress_batch_for_qr(&input.progress_batch_id, qr_payload)
-        .await
-        .map_err(production_map_error)?;
+    let batch = if scoped {
+        state
+            .production_maps
+            .start_input_for_qr(
+                &input.apparatus,
+                &input.order_id,
+                &input.progress_batch_id,
+                qr_payload,
+            )
+            .await
+    } else {
+        state
+            .production_maps
+            .progress_batch_for_qr(&input.progress_batch_id, qr_payload)
+            .await
+    }
+    .map_err(production_map_error)?;
     Ok(json_response(serde_json::json!({
         "ok": true,
+        "validated_apparatus": input.apparatus.trim(),
+        "validated_order_id": input.order_id.trim(),
         "can_resume": batch.status.is_resumable(),
         "batch": batch,
     })))

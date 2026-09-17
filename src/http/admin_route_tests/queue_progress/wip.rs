@@ -1,6 +1,127 @@
 use super::*;
 
 #[tokio::test]
+async fn scoped_progress_qr_lookup_accepts_assigned_alternative_without_claiming() {
+    let mut state = test_state();
+    state.gscale = GscaleService::new().with_driver(Arc::new(FakeProgressDriver {
+        requests: Arc::new(Mutex::new(Vec::new())),
+        fail: false,
+    }));
+    let lam1 = "apparatus:default:asset-007";
+    let lam2 = "apparatus:default:asset-008";
+    let print = "apparatus:default:bosma_7";
+    let order = "zakaz-scoped-qr";
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::Aparatchi,
+            principal_ref: "lam1-qr-worker".into(),
+            role_id: "aparatchi".into(),
+            assigned_apparatus: vec![lam1.into()],
+            assigned_item_groups: vec![],
+        })
+        .await
+        .unwrap();
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::Aparatchi,
+            principal_ref: "print-qr-worker".into(),
+            role_id: "aparatchi".into(),
+            assigned_apparatus: vec![print.into()],
+            assigned_item_groups: vec![],
+        })
+        .await
+        .unwrap();
+    let admin = session(&state, PrincipalRole::Admin).await;
+    let worker = session_for(&state, PrincipalRole::Aparatchi, "lam1-qr-worker").await;
+    let printer = session_for(&state, PrincipalRole::Aparatchi, "print-qr-worker").await;
+    let router = build_router(state);
+    let mut map: serde_json::Value = serde_json::from_str(&two_apparatus_order_map_json(
+        order,
+        "Alternative QR",
+        "9409",
+        print,
+        lam2,
+    ))
+    .unwrap();
+    map["nodes"][2]["alternative_group_id"] = serde_json::json!("lam-stage");
+    map["nodes"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "id":"peer", "kind":"apparatus", "title":"Lam1", "apparatus_id":lam1,
+            "alternative_group_id":"lam-stage"
+        }));
+    map["edges"].as_array_mut().unwrap().extend([
+        serde_json::json!({"from":"first", "to":"peer"}),
+        serde_json::json!({"from":"peer", "to":"end"}),
+    ]);
+    let saved = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &admin,
+            &map.to_string(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(saved.status(), StatusCode::OK, "{}", json_body(saved).await);
+    provision_test_qolip(&router, &admin, order).await;
+    let started = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &printer,
+            &with_test_qolip(
+                &serde_json::json!({"apparatus":print,"order_id":order,"action":"start"})
+                    .to_string(),
+                order,
+            ),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        started.status(),
+        StatusCode::OK,
+        "{}",
+        json_body(started).await
+    );
+    let detached = router.clone().oneshot(request_with_body("POST", "/v1/mobile/admin/production-maps/queue-action", &printer,
+        &serde_json::json!({"apparatus":print,"order_id":order,"action":"pause","produced_qty":9900,"uom":"m"}).to_string())).await.unwrap();
+    assert_eq!(detached.status(), StatusCode::OK);
+    let batch = json_body(detached).await["progress_batch"].clone();
+    assert_eq!(batch["next_apparatus"], lam2);
+    for (machine, target_order, expected) in [
+        (lam1, order, StatusCode::OK),
+        (lam2, order, StatusCode::FORBIDDEN),
+        (lam1, "", StatusCode::BAD_REQUEST),
+        (lam1, "other-order", StatusCode::NOT_FOUND),
+        (lam1, order, StatusCode::OK),
+    ] {
+        let response = router.clone().oneshot(request_with_body("POST", "/v1/mobile/admin/production-maps/progress-qr/lookup", &worker,
+            &serde_json::json!({"qr_payload":batch["qr_payload"], "apparatus":machine, "order_id":target_order}).to_string())).await.unwrap();
+        let status = response.status();
+        let body = json_body(response).await;
+        assert_eq!(status, expected, "{machine} {target_order}: {body}");
+        if status == StatusCode::OK {
+            assert_eq!(body["validated_apparatus"], lam1);
+            assert_eq!(body["validated_order_id"], order);
+            assert_eq!(body["batch"]["wip_status"], "waiting");
+            assert_eq!(body["batch"]["next_apparatus"], lam2);
+        }
+    }
+    let start = router.clone().oneshot(request_with_body("POST", "/v1/mobile/admin/production-maps/queue-action", &worker,
+        &serde_json::json!({"apparatus":lam1,"order_id":order,"action":"start","qr_payload":batch["qr_payload"]}).to_string())).await.unwrap();
+    assert_eq!(start.status(), StatusCode::OK, "{}", json_body(start).await);
+    let claimed = router.oneshot(request_with_body("POST", "/v1/mobile/admin/production-maps/progress-qr/lookup", &admin,
+        &serde_json::json!({"qr_payload":batch["qr_payload"],"apparatus":lam2,"order_id":order}).to_string())).await.unwrap();
+    assert_eq!(claimed.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn wip_batches_endpoint_lists_waiting_and_in_use_batches() {
     let print_requests = Arc::new(Mutex::new(Vec::<ScaleDriverPrintRequest>::new()));
     let mut state = test_state();
