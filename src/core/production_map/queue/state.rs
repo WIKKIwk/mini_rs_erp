@@ -124,6 +124,10 @@ pub fn next_queue_state(
             ApparatusQueueOrderState::Pending | ApparatusQueueOrderState::PrintPreflight,
             ApparatusQueueAction::Start,
         ) => Ok(ApparatusQueueOrderState::InProgress),
+        (
+            ApparatusQueueOrderState::PrintPreflight,
+            ApparatusQueueAction::Freeze,
+        ) => Ok(ApparatusQueueOrderState::Frozen),
         (ApparatusQueueOrderState::InProgress, ApparatusQueueAction::Pause) => {
             Ok(ApparatusQueueOrderState::Paused)
         }

@@ -198,6 +198,37 @@ pub(super) async fn consume_print_preflight_hold_tx(
     Ok(())
 }
 
+pub(super) async fn cancel_print_preflight_hold_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    hold_id: &str,
+    order_id: &str,
+    apparatus: &str,
+    actor: &QueueActionActor,
+) -> Result<(), ProductionMapError> {
+    lock_order_and_apparatuses_tx(tx, order_id, &[apparatus]).await?;
+    let result = sqlx::query(
+        "UPDATE mini_print_preflight_holds
+         SET status = 'cancelled', actor_role = $4, actor_ref = $5,
+             actor_display_name = $6,
+             updated_at_unix = EXTRACT(EPOCH FROM now())::BIGINT
+         WHERE hold_id = $1 AND order_id = $2 AND canonical_apparatus_id = $3
+           AND status IN ('held', 'running', 'passed')",
+    )
+    .bind(hold_id.trim())
+    .bind(order_id.trim())
+    .bind(apparatus.trim())
+    .bind(&actor.role)
+    .bind(&actor.ref_)
+    .bind(&actor.display_name)
+    .execute(&mut **tx)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    if result.rows_affected() == 0 {
+        return Err(ProductionMapError::PrintPreflightNotReady);
+    }
+    Ok(())
+}
+
 fn row_to_hold(row: PrintPreflightHoldRow) -> Result<PrintPreflightHold, ProductionMapError> {
     let status = PrintPreflightStatus::parse(&row.status).ok_or(ProductionMapError::StoreFailed)?;
     Ok(PrintPreflightHold {

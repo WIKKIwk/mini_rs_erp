@@ -4,7 +4,7 @@ use super::pechat;
 use super::progress;
 use super::queue_state;
 use super::service::ProductionMapService;
-use super::types::{ProductionMapError, QueueActionActor};
+use super::types::{OrderControlState, ProductionMapError, QueueActionActor};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -206,6 +206,9 @@ impl ProductionMapService {
             || !hold.is_live_at(now)
         {
             return Err(ProductionMapError::PrintPreflightNotReady);
+        }
+        if self.order_control_state(order_id).await?.state == OrderControlState::FreezeRequested {
+            return Err(ProductionMapError::OrderFreezeRequested);
         }
         let next_status = match (action.trim().to_ascii_lowercase().as_str(), hold.status) {
             ("start", PrintPreflightStatus::Held) => PrintPreflightStatus::Running,

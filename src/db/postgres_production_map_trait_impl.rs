@@ -216,6 +216,19 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         .await
     }
 
+    async fn cancel_print_preflight_hold(
+        &self,
+        hold_id: &str,
+        order_id: &str,
+        apparatus: &str,
+        actor: &QueueActionActor,
+    ) -> Result<(), ProductionMapError> {
+        PostgresProductionMapStore::cancel_print_preflight_hold(
+            self, hold_id, order_id, apparatus, actor,
+        )
+        .await
+    }
+
     async fn apparatus_queue_states(
         &self,
     ) -> Result<BTreeMap<String, BTreeMap<String, String>>, ProductionMapError> {

@@ -157,7 +157,8 @@ use self::paddon_helpers::{
     remove_paddon_items,
 };
 use self::print_preflight::{
-    consume_print_preflight_hold_tx, load_active as load_active_print_preflight_holds,
+    cancel_print_preflight_hold_tx, consume_print_preflight_hold_tx,
+    load_active as load_active_print_preflight_holds,
     load_by_id as load_print_preflight_hold_by_id,
     load_by_idempotency_key as load_print_preflight_hold_by_idempotency_key,
     put as put_print_preflight_hold, update as update_print_preflight_hold,
@@ -413,6 +414,24 @@ impl PostgresProductionMapStore {
             .await
             .map_err(|_| ProductionMapError::StoreFailed)?;
         consume_print_preflight_hold_tx(&mut tx, hold_id, order_id, apparatus, actor).await?;
+        tx.commit()
+            .await
+            .map_err(|_| ProductionMapError::StoreFailed)
+    }
+
+    async fn cancel_print_preflight_hold(
+        &self,
+        hold_id: &str,
+        order_id: &str,
+        apparatus: &str,
+        actor: &QueueActionActor,
+    ) -> Result<(), ProductionMapError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        cancel_print_preflight_hold_tx(&mut tx, hold_id, order_id, apparatus, actor).await?;
         tx.commit()
             .await
             .map_err(|_| ProductionMapError::StoreFailed)
@@ -1001,6 +1020,16 @@ impl PostgresProductionMapStore {
         }
         if let Some(hold_id) = write.print_preflight_hold_id.as_deref() {
             consume_print_preflight_hold_tx(
+                &mut tx,
+                hold_id,
+                &write.event.order_id,
+                &write.apparatus,
+                &write.event.actor,
+            )
+            .await?;
+        }
+        if let Some(hold_id) = write.print_preflight_cancel_hold_id.as_deref() {
+            cancel_print_preflight_hold_tx(
                 &mut tx,
                 hold_id,
                 &write.event.order_id,

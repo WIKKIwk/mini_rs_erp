@@ -45,9 +45,19 @@ pub(crate) fn allowed_actions_for_control(
                 Vec::new()
             };
         }
-        ApparatusQueueOrderState::Pending | ApparatusQueueOrderState::PrintPreflight => {
+        ApparatusQueueOrderState::Pending => {
             &[(Start, input.pending_actionable && input.start_ready)]
         }
+        ApparatusQueueOrderState::PrintPreflight => match input.profile {
+            QueueActionPolicyProfile::Live {
+                order_control: OrderControlState::FreezeRequested,
+                ..
+            } => &[(Freeze, input.queue_actionable)],
+            QueueActionPolicyProfile::Live { .. } => {
+                &[(Start, input.pending_actionable && input.start_ready)]
+            }
+            QueueActionPolicyProfile::Training { .. } => &[],
+        },
         ApparatusQueueOrderState::InProgress => match input.profile {
             QueueActionPolicyProfile::Live {
                 order_control, is_rezka, merge_ready,

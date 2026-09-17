@@ -782,6 +782,17 @@ impl ProductionMapService {
                             interaction.blocking_reason_code = queue_blocking_reason.to_string();
                         }
                     }
+                    queue_state::ApparatusQueueOrderState::PrintPreflight
+                        if control == OrderControlState::FreezeRequested
+                            && print_preflight.as_ref().is_some_and(|hold| {
+                                matches!(
+                                    hold.status,
+                                    PrintPreflightStatus::Held | PrintPreflightStatus::Running
+                                )
+                            }) => {
+                        interaction.mode = ApparatusQueueInteractionMode::FreezeRequested;
+                        interaction.blocking_reason_code = "order_freeze_requested".to_string();
+                    }
                     queue_state::ApparatusQueueOrderState::Pending
                     | queue_state::ApparatusQueueOrderState::PrintPreflight => {
                         if preflight_blocks_this_order || preflight_blocks_other_order {

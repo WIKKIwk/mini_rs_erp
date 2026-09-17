@@ -162,6 +162,33 @@ impl ProductionMapService {
             .store
             .active_order_run_session(&storage_key, order_id)
             .await?;
+        let print_preflight_hold = if control.state == OrderControlState::FreezeRequested
+            && queue_action == queue_state::ApparatusQueueAction::Freeze
+            && from_state == queue_state::ApparatusQueueOrderState::PrintPreflight
+        {
+            self.store
+                .active_print_preflight_holds()
+                .await?
+                .into_iter()
+                .find(|hold| {
+                    hold.order_id.trim() == order_id
+                        && queue_state::apparatus_ids_match(&hold.apparatus, &storage_key)
+                        && matches!(
+                            hold.status,
+                            PrintPreflightStatus::Held | PrintPreflightStatus::Running
+                        )
+                })
+        } else {
+            None
+        };
+        let print_preflight_freeze = print_preflight_hold.is_some();
+        if control.state == OrderControlState::FreezeRequested
+            && queue_action == queue_state::ApparatusQueueAction::Freeze
+            && from_state == queue_state::ApparatusQueueOrderState::PrintPreflight
+            && !print_preflight_freeze
+        {
+            return Err(ProductionMapError::OrderFreezeRequestMismatch);
+        }
         let active_stage_node_id = active_session
             .as_ref()
             .map(|session| session.stage_node_id.trim().to_string())
@@ -202,7 +229,9 @@ impl ProductionMapService {
             None
         };
         if freeze_request_finalization {
-            validate_freeze_request_target_session(&control, active_session.as_ref())?;
+            if !print_preflight_freeze {
+                validate_freeze_request_target_session(&control, active_session.as_ref())?;
+            }
         }
         if freeze_request_safe_stop
             && !freeze_request_safe_stop_has_output
@@ -333,6 +362,9 @@ impl ProductionMapService {
         if freeze_request_finalization {
             event.payload_json["admin_freeze_finalization"] = serde_json::json!(true);
         }
+        if print_preflight_freeze {
+            event.payload_json["print_preflight_freeze"] = serde_json::json!(true);
+        }
         if freeze_request_safe_stop {
             event.payload_json["freeze_request_safe_stop"] = serde_json::json!(true);
             event.payload_json["freeze_request_id"] =
@@ -373,8 +405,17 @@ impl ProductionMapService {
         }
         let local_report_submitted = queue_action == queue_state::ApparatusQueueAction::Complete
             && !progress.allow_partial_station_completion;
-        let mut progress = self
-            .build_progress_records_with_snapshot(
+        let mut progress = if print_preflight_freeze {
+            QueueProgressRecords {
+                session: None,
+                progress_event: None,
+                progress_batch: None,
+                progress_batches: Vec::new(),
+                progress_batch_updates: Vec::new(),
+                opening_wip_batch_updates: Vec::new(),
+            }
+        } else {
+            self.build_progress_records_with_snapshot(
                 &storage_key,
                 order_id,
                 order_map,
@@ -384,7 +425,8 @@ impl ProductionMapService {
                 canonical.as_ref(),
                 completion_read_snapshot.as_ref(),
             )
-            .await?;
+            .await?
+        };
         if let Some(session) = &mut progress.session {
             session.payload_json[super::super::stage_execution::WORK_PROTOCOL] = serde_json::json!(1);
             // This intent is assigned a durable, order-scoped sequence in the
@@ -429,7 +471,7 @@ impl ProductionMapService {
                 freeze_request_safe_stop_with_issue,
             );
         }
-        if freeze_request_finalization || freeze_with_issue {
+        if (freeze_request_finalization || freeze_with_issue) && !print_preflight_freeze {
             let original = active_session.as_ref()
                 .ok_or(ProductionMapError::OrderFreezeTargetNotFound)?;
             // Safe stopping another shift's work is not a worker handoff.
@@ -539,6 +581,8 @@ impl ProductionMapService {
             claimed_alternative_map,
             order_control_update,
             print_preflight_hold_id: None,
+            print_preflight_cancel_hold_id: print_preflight_hold
+                .map(|hold| hold.hold_id.trim().to_string()),
         })
     }
 
@@ -757,6 +801,7 @@ impl ProductionMapService {
             returned_paint_report,
             order_control_update: prepared.order_control_update,
             print_preflight_hold_id: prepared.print_preflight_hold_id,
+            print_preflight_cancel_hold_id: prepared.print_preflight_cancel_hold_id,
         };
         let write_result = self
             .store

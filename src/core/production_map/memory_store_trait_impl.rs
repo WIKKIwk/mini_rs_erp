@@ -250,6 +250,35 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         Ok(())
     }
 
+    async fn cancel_print_preflight_hold(
+        &self,
+        hold_id: &str,
+        order_id: &str,
+        apparatus: &str,
+        actor: &QueueActionActor,
+    ) -> Result<(), ProductionMapError> {
+        let now = super::progress::unix_seconds();
+        let mut holds = self.print_preflight_holds.write().await;
+        let hold = holds
+            .get_mut(hold_id.trim())
+            .ok_or(ProductionMapError::PrintPreflightNotFound)?;
+        if hold.order_id.trim() != order_id.trim()
+            || !queue_state::apparatus_ids_match(&hold.apparatus, apparatus)
+            || !matches!(
+                hold.status,
+                PrintPreflightStatus::Held
+                    | PrintPreflightStatus::Running
+                    | PrintPreflightStatus::Passed
+            )
+        {
+            return Err(ProductionMapError::PrintPreflightNotReady);
+        }
+        hold.status = PrintPreflightStatus::Cancelled;
+        hold.actor = actor.clone();
+        hold.updated_at_unix = now;
+        Ok(())
+    }
+
     async fn apparatus_queue_states(
         &self,
     ) -> Result<BTreeMap<String, BTreeMap<String, String>>, ProductionMapError> {

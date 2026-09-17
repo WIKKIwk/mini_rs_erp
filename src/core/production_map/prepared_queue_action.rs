@@ -30,6 +30,7 @@ pub struct PreparedApparatusQueueAction {
     pub(super) claimed_alternative_map: Option<ProductionMapDefinition>,
     pub(super) order_control_update: Option<OrderControlRecord>,
     pub(super) print_preflight_hold_id: Option<String>,
+    pub(super) print_preflight_cancel_hold_id: Option<String>,
 }
 
 impl PreparedApparatusQueueAction {

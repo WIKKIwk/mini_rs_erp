@@ -91,6 +91,10 @@ pub struct QueueActionProgressWrite {
     /// A passed print-preflight reservation is consumed in the same commit as
     /// the official Start transition.
     pub print_preflight_hold_id: Option<String>,
+    /// An active colour trial is cancelled in the same commit as the freeze
+    /// transition. Its queue row is written as `frozen`, so cancellation must
+    /// not restore the hold's previous queue state.
+    pub print_preflight_cancel_hold_id: Option<String>,
 }
 
 pub struct ProductionMapApparatusTransferWrite {
@@ -366,6 +370,15 @@ pub trait ProductionMapStorePort: Send + Sync {
         Err(ProductionMapError::StoreFailed)
     }
     async fn consume_print_preflight_hold(
+        &self,
+        _hold_id: &str,
+        _order_id: &str,
+        _apparatus: &str,
+        _actor: &QueueActionActor,
+    ) -> StoreResult<()> {
+        Err(ProductionMapError::PrintPreflightNotReady)
+    }
+    async fn cancel_print_preflight_hold(
         &self,
         _hold_id: &str,
         _order_id: &str,
@@ -733,6 +746,15 @@ pub trait ProductionMapStorePort: Send + Sync {
         let write = write.clone();
         if let Some(hold_id) = write.print_preflight_hold_id.as_deref() {
             self.consume_print_preflight_hold(
+                hold_id,
+                &write.event.order_id,
+                &write.apparatus,
+                &write.event.actor,
+            )
+            .await?;
+        }
+        if let Some(hold_id) = write.print_preflight_cancel_hold_id.as_deref() {
+            self.cancel_print_preflight_hold(
                 hold_id,
                 &write.event.order_id,
                 &write.apparatus,
