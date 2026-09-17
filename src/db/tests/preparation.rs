@@ -505,7 +505,14 @@ async fn preparation_receipt_reversal_is_append_only_and_guarded() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(event, ("stock_deleted".into(), "stock_delete".into(), "-12.500".into()));
+    assert_eq!(
+        event,
+        (
+            "stock_deleted".into(),
+            "stock_delete".into(),
+            "-12.500000".into()
+        )
+    );
 
     let after = store.snapshot("prep-reversal").await.unwrap();
     assert!(after["materials"]
