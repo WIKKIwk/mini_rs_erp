@@ -202,12 +202,28 @@ impl ProductionMapService {
     ) -> Result<OrderDeleteResult, ProductionMapError> {
         let _guard = self.queue_action_guard().await;
         let order_id = required_existing_order_id(self, order_id).await?;
+        let map = self
+            .store
+            .map_by_id(&order_id)
+            .await?
+            .ok_or(ProductionMapError::MapNotFound)?;
+        // A downstream queue head still waits for preceding work. Only the
+        // initial physical stage (including its alternatives) locks deletion
+        // by queue position; work history and material guards remain global.
+        let initial_apparatuses = super::chain::linear_work_stages(&map)
+            .into_iter()
+            .filter(|stage| {
+                super::chain::previous_work_stages_for_node(&map, &stage.node_id).is_empty()
+            })
+            .filter_map(|stage| stage.apparatus_id)
+            .collect::<BTreeSet<_>>();
         let mut blockers = Vec::new();
 
         for (apparatus, sequence) in self.effective_apparatus_sequences().await? {
-            if sequence
-                .first()
-                .is_some_and(|first| first.trim() == order_id)
+            if initial_apparatuses.contains(&apparatus)
+                && sequence
+                    .first()
+                    .is_some_and(|first| first.trim() == order_id)
             {
                 blockers.push(OrderDeleteBlocker::new(
                     "first_in_sequence",
@@ -238,6 +254,22 @@ impl ProductionMapService {
             blockers.push(OrderDeleteBlocker::new(
                 "raw_material_attached",
                 format!("Buyurtmaga {} ta homashyo biriktirilgan", assignments.len()),
+            ));
+        }
+
+        if !self
+            .store
+            .opening_wip_records(OpeningWipQuery {
+                order_id: order_id.clone(),
+                limit: 1,
+                ..OpeningWipQuery::default()
+            })
+            .await?
+            .is_empty()
+        {
+            blockers.push(OrderDeleteBlocker::new(
+                "opening_wip_exists",
+                "Buyurtmaga Opening WIP ochilgan",
             ));
         }
 

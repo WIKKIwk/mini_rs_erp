@@ -1507,3 +1507,299 @@ async fn delete_uses_current_three_conditions_and_returns_all_blockers() {
             .is_none()
     );
 }
+
+// Regression for order 0153: fifth on its assigned press, but first on
+// downstream alternatives. Array order must not determine the initial stage.
+async fn deletion_queue_fixture() -> (
+    ProductionMapService,
+    std::sync::Arc<MemoryProductionMapStore>,
+) {
+    use crate::core::apparatus_standard::test_support::{
+        TestApparatusSpec, runtime_configuration, standard_runtime_configurations,
+    };
+    let mut configurations = standard_runtime_configurations();
+    for index in 11..=14 {
+        configurations.push(runtime_configuration(TestApparatusSpec::cut(
+            &format!("apparatus:default:asset-{index:03}"),
+            "Rezka alternative",
+        )));
+    }
+    let store = std::sync::Arc::new(MemoryProductionMapStore::new());
+    let service = ProductionMapService::new(
+        store.clone(),
+        std::sync::Arc::new(TestCanonicalApparatusResolver::new(configurations)),
+    );
+    let press = "apparatus:default:bosma_8";
+    let mut nodes = vec![
+        serde_json::json!({"id":"start", "kind":"start", "title":"Start"}),
+        serde_json::json!({"id":"prepare", "kind":"task", "title":"Prepare"}),
+        serde_json::json!({"id":"end", "kind":"end", "title":"End"}),
+    ];
+    let mut edges = vec![serde_json::json!({"from":"start", "to":"prepare"})];
+    for index in 10..=14 {
+        let id = format!("cut-{index}");
+        nodes.push(serde_json::json!({
+            "id":id, "kind":"apparatus", "title":id,
+            "apparatus_id":format!("apparatus:default:asset-{index:03}"),
+            "rezka_kadr_count":1, "alternative_group_id":"cut"
+        }));
+        edges.push(serde_json::json!({"from":"lam", "to":id}));
+        edges.push(serde_json::json!({"from":id, "to":"end"}));
+    }
+    nodes.push(serde_json::json!({
+        "id":"lam", "kind":"apparatus", "title":"Lamination", "apparatus_id":LAMINATION_ID
+    }));
+    for (id, apparatus) in [("print-7", PECHAT_ID), ("print-8", press)] {
+        nodes.push(serde_json::json!({
+            "id":id, "kind":"apparatus", "title":id, "apparatus_id":apparatus,
+            "alternative_group_id":"print", "alternative_assigned_apparatus_id":press
+        }));
+        edges.push(serde_json::json!({"from":"prepare", "to":id}));
+        edges.push(serde_json::json!({"from":id, "to":"lam"}));
+    }
+    service
+        .upsert_map(
+            serde_json::from_value(serde_json::json!({
+                "id":"zakaz-0153", "product_code":"P", "title":"Deletion regression",
+                "nodes":nodes, "edges":edges
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let mut sequence = Vec::new();
+    for index in 1..=4 {
+        let id = format!("zakaz-ahead-{index}");
+        service
+            .upsert_map(canonical_apparatus_stage_map(&id, press, "Press"))
+            .await
+            .unwrap();
+        sequence.push(id);
+    }
+    sequence.push("zakaz-0153".to_string());
+    store.put_apparatus_sequence(press, sequence).await.unwrap();
+    for apparatus in std::iter::once(LAMINATION_ID.to_string())
+        .chain((10..=14).map(|index| format!("apparatus:default:asset-{index:03}")))
+        // An unselected print alternative must not introduce a queue lock.
+        .chain(std::iter::once(PECHAT_ID.to_string()))
+    {
+        store
+            .put_apparatus_sequence(&apparatus, vec!["zakaz-0153".into()])
+            .await
+            .unwrap();
+    }
+    (service, store)
+}
+
+fn deletion_blocker_codes(result: Result<OrderDeleteResult, ProductionMapError>) -> Vec<String> {
+    match result {
+        Err(ProductionMapError::OrderDeleteBlocked(blockers)) => {
+            blockers.into_iter().map(|blocker| blocker.code).collect()
+        }
+        other => panic!("expected deletion blockers, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn delete_ignores_downstream_alternative_queue_heads() {
+    let (service, store) = deletion_queue_fixture().await;
+    let sequences = service.effective_apparatus_sequences().await.unwrap();
+    assert_eq!(sequences["apparatus:default:bosma_8"][4], "zakaz-0153");
+    for index in 10..=14 {
+        assert_eq!(
+            sequences[&format!("apparatus:default:asset-{index:03}")][0],
+            "zakaz-0153"
+        );
+    }
+    assert!(service.delete_order("zakaz-0153").await.unwrap().deleted);
+    assert!(service.raw_map("zakaz-0153").await.unwrap().is_none());
+    let remaining = store.apparatus_sequences().await.unwrap();
+    assert!(
+        remaining
+            .values()
+            .all(|ids| !ids.iter().any(|id| id == "zakaz-0153"))
+    );
+    assert_eq!(remaining["apparatus:default:bosma_8"].len(), 4);
+    assert!(service.raw_map("zakaz-ahead-1").await.unwrap().is_some());
+}
+
+#[tokio::test]
+async fn delete_blocks_initial_queue_head_even_without_started_work() {
+    let (service, store) = deletion_queue_fixture().await;
+    store
+        .put_apparatus_sequence("apparatus:default:bosma_8", vec!["zakaz-0153".into()])
+        .await
+        .unwrap();
+    assert_eq!(
+        deletion_blocker_codes(service.delete_order("zakaz-0153").await),
+        vec!["first_in_sequence"]
+    );
+    assert!(service.raw_map("zakaz-0153").await.unwrap().is_some());
+}
+
+#[tokio::test]
+async fn delete_checks_every_candidate_of_the_initial_alternative_stage() {
+    let store = std::sync::Arc::new(MemoryProductionMapStore::new());
+    let service = service_with_default_apparatus(store.clone()).await;
+    let alternative = "apparatus:default:asset-008";
+    for id in ["zakaz-ahead", "zakaz-alternative"] {
+        let mut map = super::fixtures::canonical_two_stage_map(
+            id,
+            LAMINATION_ID,
+            "Lamination",
+            REZKA_ID,
+            "Rezka",
+        );
+        let first = map
+            .nodes
+            .iter_mut()
+            .find(|node| node.id == "apparatus")
+            .unwrap();
+        first.alternative_group_id = "initial".into();
+        let mut candidate = first.clone();
+        candidate.id = "alternative".into();
+        candidate.apparatus_id = alternative.into();
+        map.nodes.push(candidate);
+        map.edges.extend([
+            ProductionMapEdge {
+                from: "start".into(),
+                to: "alternative".into(),
+                branch: String::new(),
+            },
+            ProductionMapEdge {
+                from: "alternative".into(),
+                to: "second".into(),
+                branch: String::new(),
+            },
+        ]);
+        service.upsert_map(map).await.unwrap();
+    }
+    store
+        .put_apparatus_sequence(
+            LAMINATION_ID,
+            vec!["zakaz-ahead".into(), "zakaz-alternative".into()],
+        )
+        .await
+        .unwrap();
+    store
+        .put_apparatus_sequence(
+            alternative,
+            vec!["zakaz-alternative".into(), "zakaz-ahead".into()],
+        )
+        .await
+        .unwrap();
+    store
+        .put_apparatus_sequence(
+            REZKA_ID,
+            vec!["zakaz-alternative".into(), "zakaz-ahead".into()],
+        )
+        .await
+        .unwrap();
+    let Err(ProductionMapError::OrderDeleteBlocked(blockers)) =
+        service.delete_order("zakaz-alternative").await
+    else {
+        panic!("initial alternative queue head must block deletion");
+    };
+    assert_eq!(blockers.len(), 1);
+    assert_eq!(blockers[0].code, "first_in_sequence");
+    assert!(blockers[0].message.contains(alternative));
+}
+
+#[tokio::test]
+async fn delete_retains_raw_material_block_and_never_unlinks_automatically() {
+    let (service, store) = deletion_queue_fixture().await;
+    let assignment = RawMaterialAssignment {
+        order_id: "zakaz-0153".into(),
+        apparatus_id: crate::core::apparatus_standard::ApparatusId::new(LAMINATION_ID).unwrap(),
+        apparatus: LAMINATION_ID.into(),
+        barcode: "RAW-DELETE-KEEP".into(),
+        item_code: "RAW".into(),
+        item_name: "Raw".into(),
+        item_group: "Raw".into(),
+        assigned_by_role: "admin".into(),
+        assigned_by_ref: "admin-1".into(),
+        assigned_by_display_name: "Admin".into(),
+        assigned_at: "now".into(),
+    };
+    store
+        .put_raw_material_assignment(assignment.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        deletion_blocker_codes(service.delete_order("zakaz-0153").await),
+        vec!["raw_material_attached"]
+    );
+    assert_eq!(
+        store.raw_material_assignments().await.unwrap(),
+        vec![assignment]
+    );
+    assert!(service.raw_map("zakaz-0153").await.unwrap().is_some());
+    // Another order's material must not block this otherwise removable peer.
+    assert!(service.delete_order("zakaz-ahead-4").await.unwrap().deleted);
+}
+
+#[tokio::test]
+async fn delete_retains_work_history_block_on_downstream_apparatus() {
+    let (service, store) = deletion_queue_fixture().await;
+    for state in ["in_progress", "paused", "completed"] {
+        store
+            .put_apparatus_queue_states(
+                LAMINATION_ID,
+                BTreeMap::from([("zakaz-0153".into(), state.into())]),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            deletion_blocker_codes(service.delete_order("zakaz-0153").await),
+            vec!["work_started"],
+            "state {state}"
+        );
+        assert!(service.raw_map("zakaz-0153").await.unwrap().is_some());
+    }
+}
+
+#[tokio::test]
+async fn delete_blocks_opening_wip_without_work_or_material() {
+    let (service, store) = deletion_queue_fixture().await;
+    let opening = service
+        .create_opening_wip(
+            OpeningWipCreateInput {
+                idempotency_key: "opening-delete-protection".into(),
+                order_id: "zakaz-0153".into(),
+                entry_apparatus: String::new(),
+                source_operation: String::new(),
+                source_apparatus: "apparatus:default:bosma_8".into(),
+                source_stage_node_id: "print-8".into(),
+                current_location: String::new(),
+                note: String::new(),
+                batches: vec![OpeningWipBatchInput {
+                    quantity_basis: OpeningWipQuantityBasis::Measured,
+                    finished_goods_meter: Some(100.0),
+                    finished_goods_kg: Some(12.0),
+                    bobina_kg: Some(1.0),
+                    diameter: None,
+                }],
+            },
+            actor("admin"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        deletion_blocker_codes(service.delete_order("zakaz-0153").await),
+        vec!["opening_wip_exists"]
+    );
+    assert_eq!(
+        store
+            .opening_wip_records(OpeningWipQuery {
+                order_id: "zakaz-0153".into(),
+                limit: 10,
+                ..OpeningWipQuery::default()
+            })
+            .await
+            .unwrap(),
+        vec![opening]
+    );
+    assert!(service.raw_map("zakaz-0153").await.unwrap().is_some());
+    // Another order's Opening WIP must not block this otherwise removable peer.
+    assert!(service.delete_order("zakaz-ahead-4").await.unwrap().deleted);
+}
