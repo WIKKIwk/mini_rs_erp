@@ -101,6 +101,17 @@ impl ProductionMapService {
             if existing.order_id.trim() == order_id
                 && queue_state::apparatus_ids_match(&existing.apparatus, apparatus)
             {
+                if existing.status == PrintPreflightStatus::Held {
+                    let now = progress::unix_seconds();
+                    let mut running = existing;
+                    running.status = PrintPreflightStatus::Running;
+                    running.updated_at_unix = now;
+                    self.store
+                        .update_print_preflight_hold(running.clone())
+                        .await?;
+                    self.notify_live();
+                    return Ok(running);
+                }
                 return Ok(existing);
             }
             return Err(ProductionMapError::PrintPreflightActive);
@@ -117,6 +128,17 @@ impl ProductionMapService {
             hold.is_live_at(now) && queue_state::apparatus_ids_match(&hold.apparatus, &canonical_id)
         }) {
             if existing.order_id.trim() == order_id {
+                if existing.status == PrintPreflightStatus::Held {
+                    let now = progress::unix_seconds();
+                    let mut running = existing.clone();
+                    running.status = PrintPreflightStatus::Running;
+                    running.updated_at_unix = now;
+                    self.store
+                        .update_print_preflight_hold(running.clone())
+                        .await?;
+                    self.notify_live();
+                    return Ok(running);
+                }
                 return Ok(existing.clone());
             }
             return Err(ProductionMapError::PrintPreflightActive);
@@ -141,7 +163,10 @@ impl ProductionMapService {
             order_id: order_id.to_string(),
             apparatus: canonical_id,
             stage_node_id: control.stage_node_id.clone(),
-            status: PrintPreflightStatus::Held,
+            // The colour button is the actual start of the preflight. Keep
+            // the reservation and the running state in one server write so
+            // the client never exposes a second Start button.
+            status: PrintPreflightStatus::Running,
             actor,
             created_at_unix: now,
             updated_at_unix: now,

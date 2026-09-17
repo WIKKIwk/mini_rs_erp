@@ -219,6 +219,19 @@ impl ProductionMapService {
             .collect::<BTreeSet<_>>();
         let mut blockers = Vec::new();
 
+        if self
+            .store
+            .active_print_preflight_holds()
+            .await?
+            .into_iter()
+            .any(|hold| hold.order_id.trim() == order_id)
+        {
+            blockers.push(OrderDeleteBlocker::new(
+                "print_preflight_active",
+                "Buyurtmada rang chiqarish davom etmoqda; avval rang sinovi natijasini belgilang",
+            ));
+        }
+
         for (apparatus, sequence) in self.effective_apparatus_sequences().await? {
             if initial_apparatuses.contains(&apparatus)
                 && sequence
