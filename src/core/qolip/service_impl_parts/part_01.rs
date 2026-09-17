@@ -108,6 +108,13 @@ impl QolipService {
             .await
     }
 
+    pub async fn order_image_order_ids(
+        &self,
+        item_codes: &[String],
+    ) -> Result<Vec<(String, String)>, QolipError> {
+        self.store.order_image_order_ids(item_codes).await
+    }
+
     /// Qoliplar joylashtirilganidan qat'i nazar, saqlangan egasi bo'yicha ajratiladi.
     pub async fn products_for_principal(
         &self,

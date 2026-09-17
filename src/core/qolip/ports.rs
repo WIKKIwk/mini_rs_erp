@@ -28,6 +28,13 @@ pub trait QolipStorePort: Send + Sync {
         with_qolip_only: bool,
         allowed_warehouses: Option<&[String]>,
     ) -> Result<Vec<QolipProduct>, QolipError>;
+    async fn order_image_order_ids(
+        &self,
+        item_codes: &[String],
+    ) -> Result<Vec<(String, String)>, QolipError> {
+        let _ = item_codes;
+        Ok(Vec::new())
+    }
     async fn product_spec(&self, item_code: &str) -> Result<Option<QolipProductSpec>, QolipError>;
     async fn product_specs(&self, item_code: &str) -> Result<Vec<QolipProductSpec>, QolipError> {
         Ok(self.product_spec(item_code).await?.into_iter().collect())

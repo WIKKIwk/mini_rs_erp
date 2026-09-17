@@ -205,6 +205,30 @@ pub async fn products(
         )
         .await
         .map_err(qolip_error)?;
+    let order_image_ids = state
+        .qolip
+        .order_image_order_ids(
+            &products
+                .iter()
+                .map(|product| product.code.clone())
+                .collect::<Vec<_>>(),
+        )
+        .await
+        .map_err(qolip_error)?;
+    let order_image_ids = order_image_ids
+        .into_iter()
+        .map(|(code, order_id)| (code.trim().to_lowercase(), order_id))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let products = products
+        .into_iter()
+        .map(|product| QolipProductResponse {
+            order_image_order_id: order_image_ids
+                .get(&product.code.trim().to_lowercase())
+                .cloned()
+                .unwrap_or_default(),
+            product,
+        })
+        .collect::<Vec<_>>();
     Ok(Json(serde_json::json!({
         "ok": true,
         "products": products,

@@ -257,6 +257,42 @@ pub(super) async fn load_products(
         .collect())
 }
 
+pub(super) async fn load_order_image_order_ids(
+    pool: &PgPool,
+    item_codes: &[String],
+) -> Result<Vec<(String, String)>, QolipError> {
+    let item_codes = item_codes
+        .iter()
+        .map(|code| code.trim().to_lowercase())
+        .filter(|code| !code.is_empty())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    if item_codes.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    sqlx::query_as::<_, (String, String)>(
+        r#"
+        SELECT DISTINCT ON (lower(btrim(product_code)))
+            lower(btrim(product_code)) AS item_code,
+            btrim(id) AS order_image_order_id
+        FROM mini_production_maps
+        WHERE btrim(id) <> ''
+          AND lower(btrim(product_code)) = ANY($1)
+        ORDER BY
+            lower(btrim(product_code)),
+            (NULLIF(btrim(map_json->>'image_id'), '') IS NOT NULL) DESC,
+            updated_at DESC,
+            id DESC
+        "#,
+    )
+    .bind(item_codes)
+    .fetch_all(pool)
+    .await
+    .map_err(|_| QolipError::StoreFailed)
+}
+
 pub(super) async fn load_product_spec(
     pool: &PgPool,
     item_code: &str,
