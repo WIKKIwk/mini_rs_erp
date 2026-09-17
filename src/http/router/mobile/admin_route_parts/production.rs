@@ -36,6 +36,10 @@ fn production_routes() -> Router<AppState> {
             any(admin::production_map_save_with_order),
         )
         .route(
+            "/v1/mobile/admin/production-maps/auto-open",
+            any(admin::production_map_auto_open),
+        )
+        .route(
             "/v1/mobile/admin/production-maps/opening-wip",
             any(admin::production_map_opening_wip),
         )

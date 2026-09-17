@@ -20,7 +20,8 @@ use crate::core::production_map::{
     ProductionMapError, ProductionMapMoveRequest, ProductionMapNodeKind, ProductionMapRunRequest,
     QueueActionActor, QueueProgressInput, RawMaterialAssignment, RawMaterialAssignmentDeleteInput,
     RawMaterialAssignmentInput, RawMaterialStockTransition, RawMaterialStockTransitionKind,
-    RezkaFrameProgressInput, TrustedQolipStartValidation, WipProgressBatchQuery, queue_state,
+    RezkaFrameProgressInput, TrustedQolipStartValidation, WipProgressBatchQuery, automatic,
+    queue_state,
 };
 use crate::google_sheets::is_sheet_order_map;
 

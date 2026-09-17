@@ -120,6 +120,74 @@ async fn production_map_save_with_order_saves_map_and_template() {
 }
 
 #[tokio::test]
+async fn production_map_auto_open_reuses_automatic_routing_and_saves_order() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+    let body = serde_json::json!({
+        "template": {
+            "id": "reusable-template",
+            "code": "Z-1234",
+            "name": "automatic mahsulot",
+            "product": "automatic mahsulot",
+            "customer": "555 kukuruz",
+            "item_code": "AUTO-1",
+            "status": "Rulon",
+            "frame_product_size_mm": 635,
+            "frame_count": 1,
+            "waste_percent": 5,
+            "roll_count": 7,
+            "kg": 120,
+            "production_options": {
+                "print_method": "metal",
+                "cold_glue": false
+            },
+            "first_layer_material": "pet",
+            "first_layer_micron": "12"
+        }
+    });
+
+    let response = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/auto-open",
+            &token,
+            &body.to_string(),
+        ))
+        .await
+        .expect("automatic open");
+    let status = response.status();
+    let value = json_body(response).await;
+    assert_eq!(status, StatusCode::OK, "{value}");
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["saved"]["map"]["id"], "zakaz-0001");
+    assert_eq!(value["saved"]["map"]["order_number"], "0001");
+    assert_eq!(value["template"]["order_number"], "0001");
+    assert_eq!(
+        value["template"]["source_map_id"],
+        "template-zakaz-0001"
+    );
+
+    let nodes = value["saved"]["map"]["nodes"]
+        .as_array()
+        .expect("automatic map nodes");
+    let print_nodes: Vec<_> = nodes
+        .iter()
+        .filter(|node| node["id"].as_str().unwrap_or("").starts_with("print_"))
+        .collect();
+    assert!(print_nodes.len() >= 2);
+    assert!(print_nodes.iter().all(|node| {
+        matches!(
+            node["apparatus_id"].as_str(),
+            Some("apparatus:default:bosma_7")
+                | Some("apparatus:default:bosma_8")
+                | Some("apparatus:default:bosma_9")
+        )
+    }));
+    assert!(nodes.iter().any(|node| node["id"] == "final_cut_0"));
+    assert!(!nodes.iter().any(|node| node["id"] == "laminate_0"));
+}
+
+#[tokio::test]
 async fn production_map_save_with_order_accepts_mobile_decimal_roll_count() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;

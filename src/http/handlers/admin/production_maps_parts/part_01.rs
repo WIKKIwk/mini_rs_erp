@@ -285,6 +285,11 @@ struct ProductionMapSaveWithOrderRequest {
     template: Option<CalculateOrderTemplate>,
 }
 
+#[derive(serde::Deserialize)]
+struct ProductionMapAutoOpenRequest {
+    template: CalculateOrderTemplate,
+}
+
 /// Saves a production map and (optionally) its calculate order template in one
 /// server-side operation, so the client never has to coordinate two writes.
 pub async fn production_map_save_with_order(
@@ -302,9 +307,76 @@ pub async fn production_map_save_with_order(
     if method != Method::PUT {
         return Err(method_not_allowed());
     }
-    let mut input: ProductionMapSaveWithOrderRequest = parse_json(&body)?;
+    let input: ProductionMapSaveWithOrderRequest = parse_json(&body)?;
+    save_production_map_with_order(&state, &principal, input).await
+}
+
+/// Generates and saves an order-specific production map using the same
+/// deterministic routing used by Telegram automatic order intake.
+pub async fn production_map_auto_open(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AdminError> {
+    let principal = authorize_any_capability(
+        &state,
+        &headers,
+        &[Capability::AdminAccess, Capability::ProductionMapManage],
+    )
+    .await?;
+    if method != Method::POST {
+        return Err(method_not_allowed());
+    }
+    let ProductionMapAutoOpenRequest { mut template } = parse_json(&body)?;
+    // Automatic opening always creates a new order from the current Calculate
+    // fields; never mutate or clone the reusable template identity supplied by
+    // the client.
+    template.id.clear();
+    template.code.clear();
+    template.order_number.clear();
+    template.source_map_id.clear();
+    validate_template(&template).map_err(calculate_order_error)?;
+    template.order_number = state
+        .production_maps
+        .next_order_number()
+        .await
+        .map_err(production_map_error)?;
+    let apparatus = state
+        .apparatus
+        .list_runtime_configurations()
+        .await
+        .map_err(canonical_apparatus_error)?;
+    let materials = state
+        .calculate_materials
+        .list()
+        .await
+        .map_err(|_| server_error("material catalog failed"))?;
+    let map = automatic::generate(&template, &apparatus, &materials)
+        .map_err(|error| bad_request(&error))?;
+    template.order_number = map.order_number.clone();
+    template.code = map.code.clone();
+    template.width_mm = map.width_mm.unwrap_or_default();
+    template.image_url.clear();
+    save_production_map_with_order(
+        &state,
+        &principal,
+        ProductionMapSaveWithOrderRequest {
+            pending_order_id: String::new(),
+            map,
+            template: Some(template),
+        },
+    )
+    .await
+}
+
+async fn save_production_map_with_order(
+    state: &AppState,
+    principal: &Principal,
+    mut input: ProductionMapSaveWithOrderRequest,
+) -> Result<Response, AdminError> {
     if !input.pending_order_id.is_empty() {
-        return complete_pending_order(&state, &principal, input).await;
+        return complete_pending_order(state, principal, input).await;
     }
     if let Some(template) = &input.template {
         validate_template(template).map_err(calculate_order_error)?;
@@ -319,7 +391,7 @@ pub async fn production_map_save_with_order(
             apply_authoritative_calculation(&mut input.map, template, &material_catalog)?;
         }
     }
-    let order_number_was_generated = assign_order_number_if_missing(&state, &mut input.map)
+    let order_number_was_generated = assign_order_number_if_missing(state, &mut input.map)
         .await
         .map_err(production_map_error)?;
     // Link the calculate-page photo to the map itself (not only to the
@@ -341,7 +413,7 @@ pub async fn production_map_save_with_order(
         .template
         .as_ref()
         .is_some_and(|template| is_quick_template_order_clone(&input.map, template));
-    let owner_key = principal_owner_key(&principal);
+    let owner_key = principal_owner_key(principal);
     let map_id = input.map.id.trim().to_string();
     let previous = state
         .production_maps
@@ -352,7 +424,7 @@ pub async fn production_map_save_with_order(
         && is_sheet_order_map(&input.map)
         && let Some(template) = input.template.as_ref()
     {
-        let cut_apparatus_ids = canonical_cut_apparatus_ids(&state).await?;
+        let cut_apparatus_ids = canonical_cut_apparatus_ids(state).await?;
         apply_order_rezka_kadr_count(&mut input.map, template, &cut_apparatus_ids);
     }
     let template_map = input
