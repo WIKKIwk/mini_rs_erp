@@ -11,6 +11,7 @@ impl TelegramService {
             pending_orders: None,
             automatic_orders: None,
             order_choices: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
+            order_attachments: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
         }
     }
 
@@ -282,10 +283,15 @@ impl TelegramService {
         &self,
         telegram_user_id: &str,
     ) -> Result<TelegramUserAccount, TelegramError> {
-        self.useraccount
+        let result = self
+            .useraccount
             .delete_account(telegram_user_id.trim())
             .await
-            .map_err(map_user_account)
+            .map_err(map_user_account);
+        if result.is_ok() {
+            self.clear_order_attachment(telegram_user_id).await;
+        }
+        result
     }
 
     pub(crate) async fn user_by_phone(
@@ -436,10 +442,54 @@ impl TelegramService {
         &self,
         telegram_user_id: &str,
     ) -> Result<(), TelegramError> {
+        self.clear_order_attachment(telegram_user_id).await;
         self.store
             .clear_order_draft(telegram_user_id)
             .await
             .map_err(map_store)
+    }
+
+    pub(crate) async fn save_order_attachment(
+        &self,
+        telegram_user_id: &str,
+        attachment: TelegramOrderAttachment,
+    ) {
+        self.order_attachments
+            .lock()
+            .await
+            .insert(telegram_user_id.to_string(), attachment);
+    }
+
+    pub(crate) async fn order_attachment(
+        &self,
+        telegram_user_id: &str,
+    ) -> Option<TelegramOrderAttachment> {
+        self.order_attachments
+            .lock()
+            .await
+            .get(telegram_user_id)
+            .cloned()
+    }
+
+    pub(crate) async fn clear_order_attachment(&self, telegram_user_id: &str) {
+        self.order_attachments
+            .lock()
+            .await
+            .remove(telegram_user_id);
+    }
+
+    pub(crate) async fn pending_order_image(
+        &self,
+        order_id: &str,
+    ) -> Result<Option<CalculateOrderImage>, TelegramError> {
+        let Some(store) = self.pending_orders.as_ref() else {
+            return Ok(None);
+        };
+        store
+            .image(order_id)
+            .await
+            .map(Some)
+            .map_err(|error| TelegramError::OrderCatalog(error.to_string()))
     }
 
     pub(crate) async fn remember_order_choice(

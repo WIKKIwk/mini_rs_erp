@@ -15,6 +15,18 @@ mod tests {
         assert_eq!(super::print_method_keyboard()["inline_keyboard"][0][0]["callback_data"], "order:print:flexo");
         assert_eq!(super::print_method_keyboard()["inline_keyboard"][0][1]["callback_data"], "order:print:metal");
         assert_eq!(super::cold_glue_keyboard()["inline_keyboard"][0][0]["callback_data"], "order:cold:yes");
+        assert_eq!(
+            super::order_review_keyboard()["inline_keyboard"][0][0]["callback_data"],
+            "order:confirm"
+        );
+        assert_eq!(
+            super::order_review_keyboard()["inline_keyboard"][1][0]["callback_data"],
+            "order:edit"
+        );
+        assert_eq!(
+            super::order_edit_keyboard()["inline_keyboard"][0][0]["callback_data"],
+            "order:edit:basics"
+        );
         assert_eq!(super::parse_edge_allowance("0"), Some(0.0));
         assert_eq!(super::parse_edge_allowance(" 40,5 "), Some(40.5));
         for value in ["", "-1", "NaN", "inf", "abc"] {

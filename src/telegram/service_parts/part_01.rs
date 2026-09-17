@@ -56,4 +56,5 @@ pub struct TelegramService {
     pending_orders: Option<Arc<dyn crate::core::pending_orders::PendingOrderStore>>,
     automatic_orders: Option<super::automatic_orders::AutomaticOrders>,
     order_choices: Arc<tokio::sync::Mutex<BTreeMap<String, String>>>,
+    order_attachments: Arc<tokio::sync::Mutex<BTreeMap<String, TelegramOrderAttachment>>>,
 }

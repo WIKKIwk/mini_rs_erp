@@ -16,7 +16,7 @@ use super::models::{
     TelegramDeliveryMode, TelegramInviteRequest, TelegramInviteResponse, TelegramStartRequest,
     TelegramUserAccount, TelegramUserGroup,
 };
-use super::order::TelegramOrderDraft;
+use super::order::{TelegramOrderAttachment, TelegramOrderDraft};
 use super::order_catalog::TelegramOrderCatalog;
 use super::store::{TelegramStore, TelegramStoreError};
 use super::useraccount::{

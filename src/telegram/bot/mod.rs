@@ -14,7 +14,10 @@ use super::models::{
     TelegramAccountRole, TelegramChat, TelegramDeliveryMode, TelegramStartRequest,
     TelegramUserAccount, TelegramUserGroup,
 };
-use super::order::{TelegramOrderDraft, TelegramOrderLayer, TelegramOrderStep, order_caption};
+use super::order::{
+    TelegramOrderAttachment, TelegramOrderDraft, TelegramOrderEditSection, TelegramOrderLayer,
+    TelegramOrderStep, order_caption, order_review,
+};
 use super::service::{TelegramError, TelegramService};
 use super::useraccount::{CodeOutcome, LoginOutcome, ResendOutcome};
 

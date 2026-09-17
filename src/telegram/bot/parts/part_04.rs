@@ -337,6 +337,21 @@ async fn start_new_order(
         .await?;
         return Ok(());
     }
+    if service
+        .order_draft(telegram_user_id)
+        .await?
+        .is_some_and(|draft| draft.pending_order_saved)
+    {
+        send_order_text(
+            service,
+            token,
+            chat_id,
+            "Oldingi order saqlangan, lekin hali guruhga yuborilmagan. Avval uni tasdiqlab yuboring.",
+        )
+        .await?;
+        return Ok(());
+    }
+    service.clear_order_attachment(telegram_user_id).await;
     service
         .save_order_draft(telegram_user_id, TelegramOrderDraft::default())
         .await?;
@@ -394,9 +409,60 @@ async fn send_status_step(
         service,
         token,
         chat_id,
-        "Holatni tanlang:",
+        "📦 Buyurtma turini tanlang:",
         None,
         Some(status_keyboard()),
+    )
+    .await
+}
+
+async fn send_print_method_step(
+    service: &TelegramService,
+    token: &str,
+    chat_id: &str,
+) -> Result<(), TelegramError> {
+    send_message_with_markup(
+        service,
+        token,
+        chat_id,
+        "🖨 Bosma turini tanlang:",
+        None,
+        Some(print_method_keyboard()),
+    )
+    .await
+}
+
+async fn send_order_review(
+    service: &TelegramService,
+    token: &str,
+    chat_id: &str,
+    telegram_user_id: &str,
+    draft: &TelegramOrderDraft,
+) -> Result<(), TelegramError> {
+    let has_image = service.order_attachment(telegram_user_id).await.is_some();
+    send_message_with_markup(
+        service,
+        token,
+        chat_id,
+        &order_review(&draft.order_number, draft, has_image),
+        None,
+        Some(order_review_keyboard()),
+    )
+    .await
+}
+
+async fn send_order_edit_menu(
+    service: &TelegramService,
+    token: &str,
+    chat_id: &str,
+) -> Result<(), TelegramError> {
+    send_message_with_markup(
+        service,
+        token,
+        chat_id,
+        "✏️ Qaysi bo‘limni tahrirlamoqchisiz?",
+        None,
+        Some(order_edit_keyboard()),
     )
     .await
 }

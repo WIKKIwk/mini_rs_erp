@@ -1,5 +1,12 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone)]
+pub(crate) struct TelegramOrderAttachment {
+    pub file_name: String,
+    pub mime_type: String,
+    pub body: Vec<u8>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct TelegramOrderLayer {
     pub material_id: String,
@@ -16,18 +23,29 @@ pub(crate) enum TelegramOrderStep {
     Product,
     ProductName,
     Status,
-    PrintMethod,
-    ColdGlue,
-    EdgeAllowance,
-    Material,
-    Micron,
-    LayerOptions,
     Tiraj,
     FrameSize,
     FrameCount,
     Diameter,
+    Material,
+    Micron,
+    LayerOptions,
+    PrintMethod,
     ValCount,
+    EdgeAllowance,
+    ColdGlue,
     Attachment,
+    Review,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum TelegramOrderEditSection {
+    Basics,
+    Dimensions,
+    Layers,
+    Print,
+    Image,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -50,6 +68,10 @@ pub(crate) struct TelegramOrderDraft {
     pub frame_count: Option<f64>,
     pub diameter_mm: Option<f64>,
     pub roll_count: Option<i64>,
+    #[serde(default)]
+    pub edit_section: Option<TelegramOrderEditSection>,
+    #[serde(default)]
+    pub pending_order_saved: bool,
     pub step: TelegramOrderStep,
 }
 
@@ -192,6 +214,105 @@ Holodniy kley: {cold}\n\n\
     )
 }
 
+pub(crate) fn order_review(
+    order_number: &str,
+    draft: &TelegramOrderDraft,
+    has_image: bool,
+) -> String {
+    let status = match draft.status.as_str() {
+        "rulon" => "Rulon",
+        "paket" => "Paket",
+        value if !value.trim().is_empty() => value.trim(),
+        _ => "—",
+    };
+    let method = match draft.print_method {
+        Some(crate::core::production_map::automatic::PrintMethod::Flexo) => "Flexo",
+        Some(crate::core::production_map::automatic::PrintMethod::Metal) => "Temir",
+        None => "—",
+    };
+    let cold_glue = match draft.cold_glue {
+        Some(true) => "Ha",
+        Some(false) => "Yo‘q",
+        None => "—",
+    };
+    let edge_allowance = match draft.print_method {
+        Some(crate::core::production_map::automatic::PrintMethod::Flexo) => draft
+            .edge_allowance_mm
+            .map(|value| format!("{} mm", format_number(value)))
+            .unwrap_or_else(|| "—".to_string()),
+        Some(crate::core::production_map::automatic::PrintMethod::Metal) => {
+            "Qo‘llanmaydi".to_string()
+        }
+        None => "—".to_string(),
+    };
+    let layers = if draft.layers.is_empty() {
+        "—".to_string()
+    } else {
+        draft
+            .layers
+            .iter()
+            .enumerate()
+            .map(|(index, layer)| {
+                format!(
+                    "{}. {} — {} mikron",
+                    index + 1,
+                    dash(&layer.material),
+                    dash(&layer.micron)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let image = if has_image { "✅ Yuklandi" } else { "❌ Kutilmoqda" };
+    let tiraj = draft
+        .tiraj_kg
+        .map(format_number)
+        .unwrap_or_else(|| "—".to_string());
+    let frame_size = draft
+        .frame_product_size_mm
+        .map(format_number)
+        .unwrap_or_else(|| "—".to_string());
+    let frame_count = draft
+        .frame_count
+        .map(format_number)
+        .unwrap_or_else(|| "—".to_string());
+    let diameter = draft
+        .diameter_mm
+        .map(format_number)
+        .unwrap_or_else(|| "—".to_string());
+    let roll_count = draft
+        .roll_count
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "—".to_string());
+    format!(
+        "🧾 Buyurtmani tekshiring\n\n\
+№T{}\n\n\
+📌 Buyurtma asoslari\n\
+Mijoz: {}\n\
+Mahsulot: {}\n\
+Turi: {status}\n\
+Tiraj: {tiraj} kg\n\n\
+📐 O‘lchamlar\n\
+Bitta kadrdagi mahsulot o‘lchami: {frame_size} mm\n\
+Kadr soni: {frame_count} ta\n\
+Diametr: {diameter} mm\n\n\
+🧱 Material qatlamlari\n{layers}\n\n\
+🖨 Bosma parametrlari\n\
+Bosma turi: {method}\n\
+Val/rang soni: {roll_count}\n\
+Edge allowance: {edge_allowance}\n\
+Cold glue: {cold_glue}\n\n\
+🖼 Order rasmi: {image}",
+        if order_number.trim().is_empty() {
+            "—"
+        } else {
+            order_number.trim()
+        },
+        dash(&draft.customer_name),
+        dash(&draft.product_name),
+    )
+}
+
 fn dash(value: &str) -> &str {
     if value.trim().is_empty() {
         "—"
@@ -213,7 +334,10 @@ fn format_number(value: f64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{TelegramOrderDraft, normalize_order_text, order_caption};
+    use super::{
+        TelegramOrderDraft, TelegramOrderLayer, TelegramOrderStep, normalize_order_text,
+        order_caption, order_review,
+    };
 
     #[test]
     fn flexo_draft_retains_allowance_and_older_drafts_still_load() {
@@ -269,5 +393,44 @@ mod tests {
         assert!(!caption.contains("Kadr soni"));
         assert!(!caption.contains("Chala buyurtma"));
         assert!(!caption.contains("Eslatma:"));
+    }
+
+    #[test]
+    fn order_review_lists_every_layer_and_confirmation_fields() {
+        let draft = TelegramOrderDraft {
+            customer_name: "Freshboll".into(),
+            product_name: "Jolly Molly".into(),
+            status: "rulon".into(),
+            print_method: Some(crate::core::production_map::automatic::PrintMethod::Flexo),
+            cold_glue: Some(true),
+            edge_allowance_mm: Some(15.0),
+            layers: vec![
+                TelegramOrderLayer {
+                    material_id: "pet".into(),
+                    material: "PET".into(),
+                    micron: "12".into(),
+                },
+                TelegramOrderLayer {
+                    material_id: "pe".into(),
+                    material: "PE".into(),
+                    micron: "50".into(),
+                },
+            ],
+            tiraj_kg: Some(500.0),
+            frame_product_size_mm: Some(300.0),
+            frame_count: Some(2.0),
+            diameter_mm: Some(45.5),
+            roll_count: Some(6),
+            step: TelegramOrderStep::Review,
+            ..Default::default()
+        };
+        let review = order_review("2730", &draft, true);
+        assert!(review.contains("Freshboll"));
+        assert!(review.contains("Tiraj: 500 kg"));
+        assert!(review.contains("1. PET — 12 mikron"));
+        assert!(review.contains("2. PE — 50 mikron"));
+        assert!(review.contains("Edge allowance: 15 mm"));
+        assert!(review.contains("Cold glue: Ha"));
+        assert!(review.contains("Order rasmi: ✅ Yuklandi"));
     }
 }

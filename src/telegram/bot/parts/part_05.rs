@@ -84,17 +84,28 @@ async fn handle_order_text(
                     )
                 }
             };
-            draft.step = TelegramOrderStep::Status;
-            service.save_order_draft(telegram_user_id, draft).await?;
-            send_message_with_markup(
-                service,
-                token,
-                chat_id,
-                &format!("{prefix}\n\nHolatni tanlang:"),
-                None,
-                Some(status_keyboard()),
-            )
-            .await?;
+            let editing_basics =
+                draft.edit_section == Some(TelegramOrderEditSection::Basics);
+            if editing_basics {
+                draft.edit_section = None;
+                draft.step = TelegramOrderStep::Review;
+                service
+                    .save_order_draft(telegram_user_id, draft.clone())
+                    .await?;
+                send_order_review(service, token, chat_id, telegram_user_id, &draft).await?;
+            } else {
+                draft.step = TelegramOrderStep::Status;
+                service.save_order_draft(telegram_user_id, draft).await?;
+                send_message_with_markup(
+                    service,
+                    token,
+                    chat_id,
+                    &format!("{prefix}\n\nHolatni tanlang:"),
+                    None,
+                    Some(status_keyboard()),
+                )
+                .await?;
+            }
         }
         TelegramOrderStep::EdgeAllowance => {
             let Some(allowance) = parse_edge_allowance(value) else {
@@ -105,9 +116,17 @@ async fn handle_order_text(
                 return Ok(true);
             };
             draft.edge_allowance_mm = Some(allowance);
-            draft.step = TelegramOrderStep::Material;
+            draft.step = TelegramOrderStep::ColdGlue;
             service.save_order_draft(telegram_user_id, draft).await?;
-            send_material_step(service, token, chat_id, 1).await?;
+            send_message_with_markup(
+                service,
+                token,
+                chat_id,
+                "Holodniy kley bo‘ladimi?",
+                None,
+                Some(cold_glue_keyboard()),
+            )
+            .await?;
         }
         TelegramOrderStep::Micron => {
             let Some(micron) = parse_micron(value) else {
@@ -201,15 +220,20 @@ async fn handle_order_text(
                 return Ok(true);
             };
             draft.diameter_mm = Some(diameter);
-            draft.step = TelegramOrderStep::ValCount;
-            service.save_order_draft(telegram_user_id, draft).await?;
-            send_order_text(
-                service,
-                token,
-                chat_id,
-                "Val sonini kiriting (musbat butun son):",
-            )
-            .await?;
+            let editing_dimensions =
+                draft.edit_section == Some(TelegramOrderEditSection::Dimensions);
+            if editing_dimensions {
+                draft.edit_section = None;
+                draft.step = TelegramOrderStep::Review;
+                service
+                    .save_order_draft(telegram_user_id, draft.clone())
+                    .await?;
+                send_order_review(service, token, chat_id, telegram_user_id, &draft).await?;
+            } else {
+                draft.step = TelegramOrderStep::Material;
+                service.save_order_draft(telegram_user_id, draft).await?;
+                send_material_step(service, token, chat_id, 1).await?;
+            }
         }
         TelegramOrderStep::ValCount => {
             let Some(roll_count) = parse_roll_count(value) else {
@@ -217,7 +241,7 @@ async fn handle_order_text(
                     service,
                     token,
                     chat_id,
-                    "Val soni musbat butun son bo‘lishi kerak (masalan: 6).",
+                    "Val/rang soni musbat butun son bo‘lishi kerak (masalan: 6).",
                 )
                 .await?;
                 return Ok(true);
@@ -232,15 +256,35 @@ async fn handle_order_text(
                 draft.order_number.clone()
             };
             draft.order_number = order_number.clone();
-            draft.step = TelegramOrderStep::Attachment;
+            let flexo = matches!(
+                draft.print_method,
+                Some(crate::core::production_map::automatic::PrintMethod::Flexo)
+            );
+            draft.step = if flexo {
+                TelegramOrderStep::EdgeAllowance
+            } else {
+                TelegramOrderStep::ColdGlue
+            };
             service.save_order_draft(telegram_user_id, draft).await?;
-            send_order_text(
-                service,
-                token,
-                chat_id,
-                "Endi order rasmini photo yoki file ko‘rinishida yuboring.",
-            )
-            .await?;
+            if flexo {
+                send_order_text(
+                    service,
+                    token,
+                    chat_id,
+                    "Flexo uchun edge allowance qiymatini mm da kiriting (0 mumkin):",
+                )
+                .await?;
+            } else {
+                send_message_with_markup(
+                    service,
+                    token,
+                    chat_id,
+                    "Holodniy kley bo‘ladimi?",
+                    None,
+                    Some(cold_glue_keyboard()),
+                )
+                .await?;
+            }
         }
         TelegramOrderStep::Attachment => {
             send_order_text(
@@ -248,6 +292,15 @@ async fn handle_order_text(
                 token,
                 chat_id,
                 "Orderni yuborish uchun rasm yoki rasm faylini yuboring.",
+            )
+            .await?;
+        }
+        TelegramOrderStep::Review => {
+            send_order_text(
+                service,
+                token,
+                chat_id,
+                "Orderni yuborish uchun «✅ Tasdiqlash va yuborish» tugmasini bosing yoki kerakli bo‘limni tahrirlang.",
             )
             .await?;
         }
@@ -284,6 +337,16 @@ async fn handle_order_callback(
     let payload = data.trim_start_matches("order:");
     let (action, value) = payload.split_once(':').unwrap_or((payload, ""));
     if action == "cancel" {
+        if draft.pending_order_saved {
+            send_order_text(
+                service,
+                token,
+                chat_id,
+                "Order allaqachon saqlangan. Uni bekor qilib bo‘lmaydi; guruhni tanlab qayta tasdiqlang.",
+            )
+            .await?;
+            return Ok(());
+        }
         service.clear_order_draft(telegram_user_id).await?;
         send_order_text(
             service,
@@ -292,6 +355,108 @@ async fn handle_order_callback(
             "Order ochish jarayoni bekor qilindi.",
         )
         .await?;
+        return Ok(());
+    }
+    if action == "confirm" {
+        if draft.step == TelegramOrderStep::Review {
+            confirm_order(service, token, chat_id, telegram_user_id).await?;
+        } else {
+            send_order_text(
+                service,
+                token,
+                chat_id,
+                "Avval order ma’lumotlarini to‘liq kiriting va rasm yuboring.",
+            )
+            .await?;
+        }
+        return Ok(());
+    }
+    if action == "review" {
+        if draft.step == TelegramOrderStep::Review {
+            send_order_review(service, token, chat_id, telegram_user_id, &draft).await?;
+        }
+        return Ok(());
+    }
+    if action == "edit" {
+        if draft.step != TelegramOrderStep::Review {
+            send_order_text(
+                service,
+                token,
+                chat_id,
+                "Tahrirlash faqat yakuniy tekshiruv bosqichida ishlaydi.",
+            )
+            .await?;
+            return Ok(());
+        }
+        if draft.pending_order_saved {
+            send_order_text(
+                service,
+                token,
+                chat_id,
+                "Order allaqachon saqlangan. Endi faqat guruhga qayta yuborish mumkin.",
+            )
+            .await?;
+            return Ok(());
+        }
+        if value.is_empty() {
+            send_order_edit_menu(service, token, chat_id).await?;
+            return Ok(());
+        }
+        match value {
+            "basics" => {
+                draft.edit_section = Some(TelegramOrderEditSection::Basics);
+                draft.customer_ref.clear();
+                draft.customer_name.clear();
+                draft.product_code.clear();
+                draft.product_name.clear();
+                draft.step = TelegramOrderStep::Customer;
+                service.save_order_draft(telegram_user_id, draft).await?;
+                send_customer_step(service, token, chat_id).await?;
+            }
+            "dimensions" => {
+                draft.edit_section = Some(TelegramOrderEditSection::Dimensions);
+                draft.tiraj_kg = None;
+                draft.frame_product_size_mm = None;
+                draft.frame_count = None;
+                draft.diameter_mm = None;
+                draft.step = TelegramOrderStep::Tiraj;
+                service.save_order_draft(telegram_user_id, draft).await?;
+                send_order_text(service, token, chat_id, "Tirajni kg da raqam bilan yuboring:").await?;
+            }
+            "layers" => {
+                draft.edit_section = Some(TelegramOrderEditSection::Layers);
+                draft.layers.clear();
+                draft.pending_material_id.clear();
+                draft.pending_material_name.clear();
+                draft.step = TelegramOrderStep::Material;
+                service.save_order_draft(telegram_user_id, draft).await?;
+                send_material_step(service, token, chat_id, 1).await?;
+            }
+            "print" => {
+                draft.edit_section = Some(TelegramOrderEditSection::Print);
+                draft.print_method = None;
+                draft.roll_count = None;
+                draft.edge_allowance_mm = None;
+                draft.cold_glue = None;
+                draft.step = TelegramOrderStep::PrintMethod;
+                service.save_order_draft(telegram_user_id, draft).await?;
+                send_print_method_step(service, token, chat_id).await?;
+            }
+            "image" => {
+                draft.edit_section = Some(TelegramOrderEditSection::Image);
+                draft.step = TelegramOrderStep::Attachment;
+                service.clear_order_attachment(telegram_user_id).await;
+                service.save_order_draft(telegram_user_id, draft).await?;
+                send_order_text(
+                    service,
+                    token,
+                    chat_id,
+                    "Yangi order rasmini photo yoki file ko‘rinishida yuboring.",
+                )
+                .await?;
+            }
+            _ => send_order_edit_menu(service, token, chat_id).await?,
+        }
         return Ok(());
     }
     let catalog = service.order_catalog().await?;
@@ -355,9 +520,20 @@ async fn handle_order_callback(
             };
             draft.product_code = item.code;
             draft.product_name = item.name;
-            draft.step = TelegramOrderStep::Status;
-            service.save_order_draft(telegram_user_id, draft).await?;
-            send_status_step(service, token, chat_id).await?;
+            let editing_basics =
+                draft.edit_section == Some(TelegramOrderEditSection::Basics);
+            if editing_basics {
+                draft.edit_section = None;
+                draft.step = TelegramOrderStep::Review;
+                service
+                    .save_order_draft(telegram_user_id, draft.clone())
+                    .await?;
+                send_order_review(service, token, chat_id, telegram_user_id, &draft).await?;
+            } else {
+                draft.step = TelegramOrderStep::Status;
+                service.save_order_draft(telegram_user_id, draft).await?;
+                send_status_step(service, token, chat_id).await?;
+            }
         }
         "status" if draft.step == TelegramOrderStep::Status => {
             draft.status = match value {
@@ -365,13 +541,9 @@ async fn handle_order_callback(
                 "package" => "paket".to_string(),
                 _ => return Ok(()),
             };
-            draft.print_method = None;
-            draft.step = TelegramOrderStep::PrintMethod;
+            draft.step = TelegramOrderStep::Tiraj;
             service.save_order_draft(telegram_user_id, draft).await?;
-            send_message_with_markup(
-                service, token, chat_id, "Bosma usulini tanlang:", None,
-                Some(print_method_keyboard()),
-            ).await?;
+            send_order_text(service, token, chat_id, "Tirajni kg da raqam bilan yuboring:").await?;
         }
         "print" if draft.step == TelegramOrderStep::PrintMethod => {
             use crate::core::production_map::automatic::PrintMethod;
@@ -381,22 +553,17 @@ async fn handle_order_callback(
                 _ => return Ok(()),
             };
             draft.print_method = Some(method);
-            let flexo = method == PrintMethod::Flexo;
             draft.edge_allowance_mm = None;
-            draft.step = if flexo {
-                TelegramOrderStep::EdgeAllowance
-            } else {
-                TelegramOrderStep::Material
-            };
+            draft.cold_glue = None;
+            draft.step = TelegramOrderStep::ValCount;
             service.save_order_draft(telegram_user_id, draft).await?;
-            if flexo {
-                send_order_text(
-                    service, token, chat_id,
-                    "Flexo uchun qo‘shimcha uzunlikni mm da kiriting (0 mumkin):",
-                ).await?;
-            } else {
-                send_material_step(service, token, chat_id, 1).await?;
-            }
+            send_order_text(
+                service,
+                token,
+                chat_id,
+                "Val/rang sonini kiriting (musbat butun son):",
+            )
+            .await?;
         }
         "material" if draft.step == TelegramOrderStep::Material => {
             let Some(material_id) = service.take_order_choice(telegram_user_id, value).await else {
@@ -436,12 +603,20 @@ async fn handle_order_callback(
             send_material_step(service, token, chat_id, layer_number).await?;
         }
         "next_layers" if draft.step == TelegramOrderStep::LayerOptions => {
-            draft.step = TelegramOrderStep::ColdGlue;
-            service.save_order_draft(telegram_user_id, draft).await?;
-            send_message_with_markup(
-                service, token, chat_id, "Holodniy kley bo‘ladimi?", None,
-                Some(cold_glue_keyboard()),
-            ).await?;
+            let editing_layers =
+                draft.edit_section == Some(TelegramOrderEditSection::Layers);
+            if editing_layers {
+                draft.edit_section = None;
+                draft.step = TelegramOrderStep::Review;
+                service
+                    .save_order_draft(telegram_user_id, draft.clone())
+                    .await?;
+                send_order_review(service, token, chat_id, telegram_user_id, &draft).await?;
+            } else {
+                draft.step = TelegramOrderStep::PrintMethod;
+                service.save_order_draft(telegram_user_id, draft).await?;
+                send_print_method_step(service, token, chat_id).await?;
+            }
         }
         "cold" if draft.step == TelegramOrderStep::ColdGlue => {
             draft.cold_glue = Some(match value {
@@ -449,15 +624,26 @@ async fn handle_order_callback(
                 "no" => false,
                 _ => return Ok(()),
             });
-            draft.step = TelegramOrderStep::Tiraj;
-            service.save_order_draft(telegram_user_id, draft).await?;
-            send_order_text(
-                service,
-                token,
-                chat_id,
-                "Tirajni kg da raqam bilan yuboring:",
-            )
-            .await?;
+            let editing_print =
+                draft.edit_section == Some(TelegramOrderEditSection::Print);
+            if editing_print {
+                draft.edit_section = None;
+                draft.step = TelegramOrderStep::Review;
+                service
+                    .save_order_draft(telegram_user_id, draft.clone())
+                    .await?;
+                send_order_review(service, token, chat_id, telegram_user_id, &draft).await?;
+            } else {
+                draft.step = TelegramOrderStep::Attachment;
+                service.save_order_draft(telegram_user_id, draft).await?;
+                send_order_text(
+                    service,
+                    token,
+                    chat_id,
+                    "Endi order rasmini photo yoki file ko‘rinishida yuboring.",
+                )
+                .await?;
+            }
         }
         _ => {}
     }

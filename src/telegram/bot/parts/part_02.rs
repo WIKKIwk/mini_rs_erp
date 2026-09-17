@@ -290,54 +290,22 @@ async fn handle_private_media(
     let Some(mut draft) = service.order_draft(&telegram_user_id).await? else {
         return Ok(());
     };
-    if draft.step != TelegramOrderStep::Attachment {
+    if !matches!(draft.step, TelegramOrderStep::Attachment | TelegramOrderStep::Review) {
         send_order_text(
             service,
             token,
             &chat_id,
-            "Rasm faqat tirajdan keyin yuboriladi. Order jarayonini davom ettiring.",
+            "Rasm faqat orderni yakunlash bosqichida yuboriladi. Order jarayonini davom ettiring.",
         )
         .await?;
         return Ok(());
     }
-    if draft.print_method.is_none() || draft.cold_glue.is_none() || draft.status == "flexo" {
-        draft.step = TelegramOrderStep::Status;
-        draft.layers.clear();
-        draft.print_method = None;
-        draft.cold_glue = None;
-        service.save_order_draft(&telegram_user_id, draft).await?;
-        send_message_with_markup(service, token, &chat_id,
-            "Avtomatik map uchun buyurtma turini qayta tanlang. Keyin bosma usuli va qavatlarni kiriting:",
-            None, Some(status_keyboard())).await?;
-        return Ok(());
-    }
-    // Resume drafts created before the dimensional fields were added.
-    if draft.frame_product_size_mm.is_none() || draft.frame_count.is_none() {
-        draft.step = TelegramOrderStep::FrameSize;
-        service.save_order_draft(&telegram_user_id, draft).await?;
-        send_order_text(service, token, &chat_id, "1 ta kadrdagi mahsulot o‘lchamini mm da kiriting:").await?;
-        return Ok(());
-    }
-    if draft.diameter_mm.is_none() {
-        draft.step = TelegramOrderStep::Diameter;
-        service.save_order_draft(&telegram_user_id, draft).await?;
+    if draft.pending_order_saved {
         send_order_text(
             service,
             token,
             &chat_id,
-            "Diametrni mm da kiriting (masalan: 45.5):",
-        )
-        .await?;
-        return Ok(());
-    }
-    if draft.roll_count.is_none() {
-        draft.step = TelegramOrderStep::ValCount;
-        service.save_order_draft(&telegram_user_id, draft).await?;
-        send_order_text(
-            service,
-            token,
-            &chat_id,
-            "Val sonini kiriting (musbat butun son):",
+            "Order allaqachon saqlangan. Uni yuborish uchun quyidagi tasdiqlash tugmasini bosing.",
         )
         .await?;
         return Ok(());
@@ -387,69 +355,181 @@ async fn handle_private_media(
         .await?;
         return Ok(());
     }
-    // Yangi mijoz/mahsulot faqat shu yerda (zakaz rostdan yuborilayotganda)
-    // bazaga yaratiladi. Bekor qilingan draftlar hech qanday axlat qoldirmaydi.
-    // Avvalgi qadamda topilgan mavjud yozuvlar qayta ishlatiladi (dublikat yo'q).
-    let catalog = service.order_catalog().await?;
-    if draft.customer_ref.trim().is_empty() {
-        if draft.customer_name.trim().is_empty() {
-            send_order_text(
-                service,
-                token,
-                &chat_id,
-                "Mijoz nomi topilmadi. /cancel qilib /new_order dan qayta boshlang.",
-            )
-            .await?;
-            return Ok(());
-        }
-        match catalog.find_customer_by_name(&draft.customer_name).await {
-            Ok(Some(customer)) => {
-                draft.customer_ref = customer.ref_.clone();
-                draft.customer_name = customer.name.clone();
+    if draft.order_number.trim().is_empty() {
+        draft.order_number = service
+            .order_catalog()
+            .await?
+            .next_order_number()
+            .await
+            .map_err(TelegramError::OrderCatalog)?;
+    }
+    service
+        .save_order_attachment(
+            &telegram_user_id,
+            TelegramOrderAttachment {
+                file_name: media.file_name,
+                mime_type: media.mime_type,
+                body,
+            },
+        )
+        .await;
+    draft.edit_section = None;
+    draft.step = TelegramOrderStep::Review;
+    service
+        .save_order_draft(&telegram_user_id, draft.clone())
+        .await?;
+    send_order_review(service, token, &chat_id, &telegram_user_id, &draft).await?;
+    Ok(())
+}
+
+async fn confirm_order(
+    service: &TelegramService,
+    token: &str,
+    chat_id: &str,
+    telegram_user_id: &str,
+) -> Result<(), TelegramError> {
+    let Some(account) = service.user_by_telegram_id(telegram_user_id).await? else {
+        return Ok(());
+    };
+    if account.role != TelegramAccountRole::SalesManager {
+        return Ok(());
+    }
+    let Some(mut draft) = service.order_draft(telegram_user_id).await? else {
+        send_order_text(service, token, chat_id, "Joriy order jarayoni topilmadi.").await?;
+        return Ok(());
+    };
+    if draft.step != TelegramOrderStep::Review {
+        send_order_text(
+            service,
+            token,
+            chat_id,
+            "Avval order ma’lumotlarini to‘liq kiriting va rasm yuboring.",
+        )
+        .await?;
+        return Ok(());
+    }
+
+    let (delivery_image, saved_message) = if draft.pending_order_saved {
+        let image = if let Some(attachment) = service.order_attachment(telegram_user_id).await {
+            CalculateOrderImage {
+                image_id: format!(
+                    "telegram-order-{}-{:032x}",
+                    draft.order_number,
+                    rand::random::<u128>()
+                ),
+                image_name: attachment.file_name,
+                image_mime: attachment.mime_type,
+                image_size_bytes: attachment.body.len() as u64,
+                body: attachment.body,
             }
-            Ok(None) => match catalog.create_customer(&draft.customer_name).await {
-                Ok(customer) => {
-                    draft.customer_ref = customer.ref_.clone();
-                    draft.customer_name = customer.name.clone();
+        } else {
+            match service
+                .pending_order_image(&format!("zakaz-{}", draft.order_number))
+                .await
+            {
+                Ok(Some(image)) => image,
+                Ok(None) => {
+                    draft.pending_order_saved = false;
+                    draft.step = TelegramOrderStep::Attachment;
+                    service
+                        .save_order_draft(telegram_user_id, draft)
+                        .await?;
+                    send_order_text(
+                        service,
+                        token,
+                        chat_id,
+                        "Order rasmi topilmadi. Rasmni qayta yuboring.",
+                    )
+                    .await?;
+                    return Ok(());
                 }
                 Err(error) => {
                     send_order_text(
                         service,
                         token,
-                        &chat_id,
-                        &format!("Mijoz yaratilmadi: {error}. Rasmni qayta yuboring."),
+                        chat_id,
+                        &format!("Order rasmi olinmadi: {error}. Rasmni qayta yuboring."),
                     )
                     .await?;
                     return Ok(());
                 }
-            },
-            Err(error) => return Err(TelegramError::OrderCatalog(error)),
-        }
-        service
-            .save_order_draft(&telegram_user_id, draft.clone())
-            .await?;
-    }
-    if draft.product_code.trim().is_empty() {
-        if draft.product_name.trim().is_empty() {
+            }
+        };
+        (
+            image,
+            format!("✅ Order №T{} avval saqlangan.", draft.order_number),
+        )
+    } else {
+        let Some(attachment) = service.order_attachment(telegram_user_id).await else {
+            draft.step = TelegramOrderStep::Attachment;
+            service
+                .save_order_draft(telegram_user_id, draft)
+                .await?;
             send_order_text(
                 service,
                 token,
-                &chat_id,
-                "Mahsulot nomi topilmadi. /cancel qilib /new_order dan qayta boshlang.",
+                chat_id,
+                "Order rasmi topilmadi. Iltimos, rasmni qayta yuboring.",
             )
             .await?;
             return Ok(());
-        }
-        match catalog
-            .find_customer_item_by_name(&draft.customer_ref, &draft.product_name)
-            .await
-        {
-            Ok(Some(item)) => {
-                draft.product_code = item.code;
-                draft.product_name = item.name;
+        };
+        let catalog = service.order_catalog().await?;
+        if draft.customer_ref.trim().is_empty() {
+            if draft.customer_name.trim().is_empty() {
+                send_order_text(
+                    service,
+                    token,
+                    chat_id,
+                    "Mijoz nomi topilmadi. Tahrirlash orqali mijozni kiriting.",
+                )
+                .await?;
+                return Ok(());
             }
-            Ok(None) => {
-                match catalog
+            match catalog.find_customer_by_name(&draft.customer_name).await {
+                Ok(Some(customer)) => {
+                    draft.customer_ref = customer.ref_.clone();
+                    draft.customer_name = customer.name.clone();
+                }
+                Ok(None) => match catalog.create_customer(&draft.customer_name).await {
+                    Ok(customer) => {
+                        draft.customer_ref = customer.ref_.clone();
+                        draft.customer_name = customer.name.clone();
+                    }
+                    Err(error) => {
+                        send_order_text(
+                            service,
+                            token,
+                            chat_id,
+                            &format!("Mijoz yaratilmadi: {error}. Qayta urinib ko‘ring."),
+                        )
+                        .await?;
+                        return Ok(());
+                    }
+                },
+                Err(error) => return Err(TelegramError::OrderCatalog(error)),
+            }
+        }
+        if draft.product_code.trim().is_empty() {
+            if draft.product_name.trim().is_empty() {
+                send_order_text(
+                    service,
+                    token,
+                    chat_id,
+                    "Mahsulot nomi topilmadi. Tahrirlash orqali mahsulotni kiriting.",
+                )
+                .await?;
+                return Ok(());
+            }
+            match catalog
+                .find_customer_item_by_name(&draft.customer_ref, &draft.product_name)
+                .await
+            {
+                Ok(Some(item)) => {
+                    draft.product_code = item.code;
+                    draft.product_name = item.name;
+                }
+                Ok(None) => match catalog
                     .create_product(&draft.customer_ref, &draft.product_name)
                     .await
                 {
@@ -461,103 +541,147 @@ async fn handle_private_media(
                         send_order_text(
                             service,
                             token,
-                            &chat_id,
-                            &format!("Mahsulot yaratilmadi: {error}. Rasmni qayta yuboring."),
+                            chat_id,
+                            &format!("Mahsulot yaratilmadi: {error}. Qayta urinib ko‘ring."),
                         )
                         .await?;
                         return Ok(());
                     }
-                }
+                },
+                Err(error) => return Err(TelegramError::OrderCatalog(error)),
             }
-            Err(error) => return Err(TelegramError::OrderCatalog(error)),
+        }
+        if draft.customer_name.trim().is_empty()
+            || draft.product_name.trim().is_empty()
+            || draft.status != "rulon" && draft.status != "paket"
+            || draft.print_method.is_none()
+            || draft.cold_glue.is_none()
+            || draft.layers.is_empty()
+            || draft
+                .layers
+                .iter()
+                .any(|layer| layer.material_id.trim().is_empty() || layer.micron.trim().is_empty())
+            || draft.tiraj_kg.is_none_or(|value| !value.is_finite() || value <= 0.0)
+            || draft
+                .frame_product_size_mm
+                .is_none_or(|value| !value.is_finite() || value <= 0.0)
+            || draft
+                .frame_count
+                .is_none_or(|value| !value.is_finite() || value <= 0.0 || value.fract() != 0.0)
+            || draft.diameter_mm.is_none_or(|value| !value.is_finite() || value <= 0.0)
+            || draft.roll_count.is_none_or(|value| value <= 0)
+            || (matches!(
+                draft.print_method,
+                Some(crate::core::production_map::automatic::PrintMethod::Flexo)
+            ) && draft.edge_allowance_mm.is_none_or(|value| {
+                !value.is_finite() || value < 0.0
+            }))
+        {
+            send_order_text(
+                service,
+                token,
+                chat_id,
+                "Order ma’lumotlari to‘liq emas. Tahrirlash orqali yetishmayotgan bo‘limni to‘ldiring.",
+            )
+            .await?;
+            return Ok(());
         }
         service
-            .save_order_draft(&telegram_user_id, draft.clone())
+            .save_order_draft(telegram_user_id, draft.clone())
             .await?;
-    }
-    let caption = order_caption(&draft.order_number, &draft, &account.display_name);
-    let original_body = body.clone();
-    let original_file_name = media.file_name.clone();
-    let original_mime_type = media.mime_type.clone();
-    tracing::debug!(mime = %original_mime_type, "optimizing Telegram order image for ERP storage");
-    let optimized = match tokio::task::spawn_blocking(move || {
-        crate::http::handlers::calculate_image::optimize_order_image_for_store(
-            &body,
-            &original_file_name,
-        )
-    })
-    .await
-    {
-        Ok(Ok(image)) => image,
-        _ => {
-            send_order_text(
-                service,
-                token,
-                &chat_id,
-                "Rasmni ochib bo‘lmadi. Boshqa JPG yoki PNG rasm yuboring.",
+
+        let original_body = attachment.body.clone();
+        let original_file_name = attachment.file_name.clone();
+        let original_mime_type = attachment.mime_type.clone();
+        tracing::debug!(mime = %original_mime_type, "optimizing Telegram order image for ERP storage");
+        let optimized = match tokio::task::spawn_blocking(move || {
+            crate::http::handlers::calculate_image::optimize_order_image_for_store(
+                &original_body,
+                &original_file_name,
             )
-            .await?;
-            return Ok(());
-        }
-    };
-    let image_id = format!(
-        "telegram-order-{}-{:032x}",
-        draft.order_number,
-        rand::random::<u128>()
-    );
-    let delivery_image = CalculateOrderImage {
-        image_id: image_id.clone(),
-        image_name: media.file_name.clone(),
-        image_mime: original_mime_type,
-        image_size_bytes: original_body.len() as u64,
-        body: original_body,
-    };
-    let storage_image = CalculateOrderImage {
-        image_id,
-        image_name: optimized.file_name,
-        image_mime: "image/webp".into(),
-        image_size_bytes: optimized.body.len() as u64,
-        body: optimized.body,
-    };
-    let intake = match service
-        .persist_pending_order(&account, &draft, storage_image)
+        })
         .await
-    {
-        Ok(intake) => intake,
-        Err(error) => {
-            send_order_text(
-                service,
-                token,
-                &chat_id,
-                &format!("Order saqlanmadi: {error}. Ma’lumotlar saqlandi, qayta urinib ko‘ring."),
-            )
+        {
+            Ok(Ok(image)) => image,
+            _ => {
+                send_order_text(
+                    service,
+                    token,
+                    chat_id,
+                    "Rasmni ochib bo‘lmadi. Boshqa JPG yoki PNG rasm yuboring.",
+                )
+                .await?;
+                return Ok(());
+            }
+        };
+        let image_id = format!(
+            "telegram-order-{}-{:032x}",
+            draft.order_number,
+            rand::random::<u128>()
+        );
+        let delivery_image = CalculateOrderImage {
+            image_id: image_id.clone(),
+            image_name: attachment.file_name,
+            image_mime: attachment.mime_type,
+            image_size_bytes: attachment.body.len() as u64,
+            body: attachment.body,
+        };
+        let storage_image = CalculateOrderImage {
+            image_id,
+            image_name: optimized.file_name,
+            image_mime: "image/webp".into(),
+            image_size_bytes: optimized.body.len() as u64,
+            body: optimized.body,
+        };
+        let intake = match service
+            .persist_pending_order(&account, &draft, storage_image)
+            .await
+        {
+            Ok(intake) => intake,
+            Err(error) => {
+                send_order_text(
+                    service,
+                    token,
+                    chat_id,
+                    &format!("Order saqlanmadi: {error}. Qayta urinib ko‘ring."),
+                )
+                .await?;
+                return Ok(());
+            }
+        };
+        draft.pending_order_saved = true;
+        service
+            .save_order_draft(telegram_user_id, draft.clone())
             .await?;
-            return Ok(());
-        }
+        (
+            delivery_image,
+            intake.message(&draft.order_number),
+        )
     };
-    let saved_message = intake.message(&draft.order_number);
+
+    let caption = order_caption(&draft.order_number, &draft, &account.display_name);
     match service
-        .deliver_order(&telegram_user_id, &caption, Some(delivery_image))
+        .deliver_order(telegram_user_id, &caption, Some(delivery_image))
         .await
     {
         Ok(0) => {
             send_order_text(
                 service,
                 token,
-                &chat_id,
-                &format!("{saved_message}\nGuruhga yuborish uchun guruhni ulang yoki tanlang."),
+                chat_id,
+                &format!(
+                    "{saved_message}\nGuruh tanlanmagan. /groups orqali guruhni tanlang va qayta tasdiqlang."
+                ),
             )
             .await?;
         }
         Ok(count) => {
-            service.clear_order_draft(&telegram_user_id).await?;
+            service.clear_order_draft(telegram_user_id).await?;
             send_order_text(
                 service,
                 token,
-                &chat_id,
-                &format!(
-                    "{saved_message}\nRasm bilan {count} ta guruhga yuborildi."
-                ),
+                chat_id,
+                &format!("{saved_message}\nRasm bilan {count} ta guruhga yuborildi."),
             )
             .await?;
         }
@@ -565,8 +689,10 @@ async fn handle_private_media(
             send_order_text(
                 service,
                 token,
-                &chat_id,
-                &format!("{saved_message}\nGuruhga yuborilmadi: {error}. Rasmni qayta yuborishingiz mumkin."),
+                chat_id,
+                &format!(
+                    "{saved_message}\nGuruhga yuborilmadi: {error}. Guruhni tekshirib, qayta tasdiqlang."
+                ),
             )
             .await?;
         }

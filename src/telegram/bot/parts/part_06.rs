@@ -180,6 +180,33 @@ fn layer_options_keyboard() -> serde_json::Value {
     })
 }
 
+fn order_review_keyboard() -> serde_json::Value {
+    serde_json::json!({
+        "inline_keyboard": [
+            [{"text": "✅ Tasdiqlash va yuborish", "callback_data": "order:confirm"}],
+            [{"text": "✏️ Tahrirlash", "callback_data": "order:edit"}],
+            [{"text": "❌ Bekor qilish", "callback_data": "order:cancel"}]
+        ]
+    })
+}
+
+fn order_edit_keyboard() -> serde_json::Value {
+    serde_json::json!({
+        "inline_keyboard": [
+            [
+                {"text": "📌 Buyurtma asoslari", "callback_data": "order:edit:basics"},
+                {"text": "📐 O‘lchamlar", "callback_data": "order:edit:dimensions"}
+            ],
+            [
+                {"text": "🧱 Material qatlamlari", "callback_data": "order:edit:layers"},
+                {"text": "🖨 Bosma parametrlari", "callback_data": "order:edit:print"}
+            ],
+            [{"text": "🖼 Order rasmi", "callback_data": "order:edit:image"}],
+            [{"text": "↩️ Tekshiruvga qaytish", "callback_data": "order:review"}]
+        ]
+    })
+}
+
 fn parse_tiraj(value: &str) -> Option<f64> {
     let value = value.trim().replace(',', ".");
     let tiraj = value.parse::<f64>().ok()?;
