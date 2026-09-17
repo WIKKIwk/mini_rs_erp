@@ -98,6 +98,9 @@ impl PostgresPreparationStore {
         // The warehouse view uses the shared ERP raw-material catalog and its
         // shared stock. Legacy preparation-owned items outside that catalog
         // remain visible so existing preparation lots stay addressable.
+        let balance_warehouses = warehouse_scopes
+            .map(|scopes| scopes.keys().cloned().collect::<Vec<_>>())
+            .unwrap_or_else(|| warehouses.clone());
         let materials: Vec<Value> = sqlx::query_scalar(&format!(
             "WITH RECURSIVE raw_groups AS (
                 SELECT g.name
@@ -123,6 +126,18 @@ impl PostgresPreparationStore {
             ),
             catalog AS (
                 SELECT i.code, i.name, i.item_group, own.warehouse_name,
+                       COALESCE((
+                           SELECT array_agg(scope_warehouse.name ORDER BY lower(scope_warehouse.name))
+                           FROM mini_preparation_material_warehouse_scopes scope
+                           JOIN mini_warehouses scope_warehouse
+                             ON scope_warehouse.id = scope.warehouse_id
+                           WHERE scope.item_code = i.code AND scope.active
+                       ), ARRAY[]::text[]) AS bound_warehouses,
+                       EXISTS (
+                           SELECT 1
+                           FROM mini_preparation_material_warehouse_scopes scope
+                           WHERE scope.item_code = i.code
+                       ) AS has_warehouse_scope,
                        own.item_code IS NOT NULL
                        AND EXISTS (
                            SELECT 1 FROM seriyo_groups allowed
@@ -135,6 +150,18 @@ impl PostgresPreparationStore {
                   ON own.item_code = i.code AND own.owner_ref = $2
                 UNION
                 SELECT i.code, i.name, i.item_group, own.warehouse_name,
+                       COALESCE((
+                           SELECT array_agg(scope_warehouse.name ORDER BY lower(scope_warehouse.name))
+                           FROM mini_preparation_material_warehouse_scopes scope
+                           JOIN mini_warehouses scope_warehouse
+                             ON scope_warehouse.id = scope.warehouse_id
+                           WHERE scope.item_code = i.code AND scope.active
+                       ), ARRAY[]::text[]) AS bound_warehouses,
+                       EXISTS (
+                           SELECT 1
+                           FROM mini_preparation_material_warehouse_scopes scope
+                           WHERE scope.item_code = i.code
+                       ) AS has_warehouse_scope,
                        EXISTS (
                            SELECT 1 FROM seriyo_groups allowed
                            WHERE lower(btrim(allowed.name)) = lower(btrim(i.item_group))
@@ -148,12 +175,32 @@ impl PostgresPreparationStore {
                 'name', catalog_item.name,
                 'item_group', catalog_item.item_group,
                 'warehouse_name', catalog_item.warehouse_name,
+                'bound_warehouses', to_jsonb(catalog_item.bound_warehouses),
+                'has_warehouse_scope', catalog_item.has_warehouse_scope,
                 'can_receive', catalog_item.can_receive,
                 'balances', COALESCE((SELECT jsonb_agg(b ORDER BY lower(b.warehouse), b.warehouse) FROM (
                     SELECT s.warehouse, sum(s.qty)::text AS kg
                     FROM mini_raw_material_stock s
                     WHERE lower(s.item_code) = lower(catalog_item.code)
-                      AND s.warehouse = ANY($3) AND {AVAILABLE_STOCK}
+                      AND s.warehouse = ANY($3)
+                      AND (
+                          (
+                              catalog_item.has_warehouse_scope
+                              AND EXISTS (
+                                  SELECT 1
+                                  FROM unnest(catalog_item.bound_warehouses) AS scoped(warehouse_name)
+                                  WHERE lower(scoped.warehouse_name) = lower(s.warehouse)
+                              )
+                          )
+                          OR (
+                              NOT catalog_item.has_warehouse_scope
+                              AND (
+                                  catalog_item.warehouse_name IS NULL
+                                  OR lower(catalog_item.warehouse_name) = lower(s.warehouse)
+                              )
+                          )
+                      )
+                      AND {AVAILABLE_STOCK}
                     GROUP BY s.warehouse
                 ) b), '[]'::jsonb)
             )
@@ -162,7 +209,7 @@ impl PostgresPreparationStore {
         ))
         .bind(PREPARATION_ITEM_GROUP)
         .bind(owner)
-        .bind(&warehouses)
+        .bind(&balance_warehouses)
         .bind(PREPARATION_MATERIAL_CHILD_GROUP)
         .fetch_all(&mut *tx)
         .await?;
@@ -185,6 +232,22 @@ impl PostgresPreparationStore {
                         .and_then(Value::as_str)
                         .map(str::trim)
                         .filter(|warehouse| !warehouse.is_empty());
+                    let bound_warehouses = material
+                        .get("bound_warehouses")
+                        .and_then(Value::as_array)
+                        .map(|warehouses| {
+                            warehouses
+                                .iter()
+                                .filter_map(Value::as_str)
+                                .map(str::trim)
+                                .filter(|warehouse| !warehouse.is_empty())
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    let has_warehouse_scope = material
+                        .get("has_warehouse_scope")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
                     let visible_warehouses = scopes
                         .iter()
                         .filter_map(|(warehouse, scope)| {
@@ -196,9 +259,15 @@ impl PostgresPreparationStore {
                                         .any(|group| group.trim().eq_ignore_ascii_case(&item_group))
                                 }
                             };
-                            let matches_binding = bound_warehouse
-                                .map(|bound| warehouse.eq_ignore_ascii_case(bound))
-                                .unwrap_or(true);
+                            let matches_binding = if has_warehouse_scope {
+                                bound_warehouses
+                                    .iter()
+                                    .any(|bound| warehouse.eq_ignore_ascii_case(bound))
+                            } else {
+                                bound_warehouse
+                                    .map(|bound| warehouse.eq_ignore_ascii_case(bound))
+                                    .unwrap_or(true)
+                            };
                             (in_scope && matches_binding).then(|| warehouse.clone())
                         })
                         .collect::<Vec<_>>();
@@ -207,6 +276,8 @@ impl PostgresPreparationStore {
                 if let Some(object) = material.as_object_mut() {
                     object.remove("item_group");
                     object.remove("warehouse_name");
+                    object.remove("bound_warehouses");
+                    object.remove("has_warehouse_scope");
                 }
                 material
             })
@@ -324,6 +395,12 @@ impl PostgresPreparationStore {
             return Ok(result);
         }
         let warehouse = exclusive_warehouse(&mut tx, &actor.ref_, &input.warehouse).await?;
+        let warehouse_id: String = sqlx::query_scalar(
+            "SELECT id FROM mini_warehouses WHERE lower(name) = lower($1) FOR SHARE",
+        )
+        .bind(&warehouse)
+        .fetch_one(&mut *tx)
+        .await?;
         let duplicate: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM mini_preparation_materials WHERE owner_ref = $1 AND name_key = lower($2))")
             .bind(&actor.ref_).bind(&name).fetch_one(&mut *tx).await?;
         if duplicate {
@@ -352,6 +429,16 @@ impl PostgresPreparationStore {
         .bind(&actor.ref_)
         .bind(&name)
         .bind(&warehouse)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO mini_preparation_material_warehouse_scopes
+                 (item_code, warehouse_id, scope_kind, created_by_role, created_by_ref)
+             VALUES ($1, $2, 'exclusive', 'tayyorlov_masteri', $3)",
+        )
+        .bind(&code)
+        .bind(&warehouse_id)
+        .bind(&actor.ref_)
         .execute(&mut *tx)
         .await?;
         let result = json!({"id": id, "kind": "material", "warehouse": warehouse,
@@ -1404,7 +1491,27 @@ async fn material_name_in_warehouse(
         "SELECT i.name FROM mini_preparation_materials m
          JOIN mini_items i ON i.code=m.item_code
          WHERE m.owner_ref=$1 AND m.item_code=$2
-           AND (m.warehouse_name IS NULL OR lower(m.warehouse_name)=lower($3))
+           AND (
+               EXISTS (
+                   SELECT 1
+                   FROM mini_preparation_material_warehouse_scopes scope
+                   JOIN mini_warehouses warehouse ON warehouse.id = scope.warehouse_id
+                   WHERE scope.item_code = m.item_code
+                     AND scope.active
+                     AND lower(warehouse.name) = lower($3)
+               )
+               OR (
+                   NOT EXISTS (
+                       SELECT 1
+                       FROM mini_preparation_material_warehouse_scopes scope
+                       WHERE scope.item_code = m.item_code
+                   )
+                   AND (
+                       m.warehouse_name IS NULL
+                       OR lower(m.warehouse_name) = lower($3)
+                   )
+               )
+           )
          FOR SHARE OF i",
     )
     .bind(owner)

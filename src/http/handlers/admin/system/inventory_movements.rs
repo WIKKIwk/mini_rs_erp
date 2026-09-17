@@ -226,6 +226,9 @@ fn inventory_error(error: InventoryMovementError) -> AdminError {
         InventoryMovementError::DestinationWarehouseUnassigned => {
             conflict("inventory_destination_warehouse_unassigned")
         }
+        InventoryMovementError::MaterialWarehouseScopeMissing => {
+            conflict("inventory_material_warehouse_scope_missing")
+        }
         InventoryMovementError::SameWarehouse => bad_request("inventory_transfer_same_warehouse"),
         InventoryMovementError::MissingAssets => bad_request("inventory_transfer_assets_required"),
         InventoryMovementError::DuplicateAsset => bad_request("inventory_transfer_asset_duplicate"),

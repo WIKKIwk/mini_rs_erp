@@ -365,6 +365,8 @@ pub enum InventoryMovementError {
     WarehouseNotFound,
     #[error("destination warehouse has no assignee")]
     DestinationWarehouseUnassigned,
+    #[error("preparation material is not linked to the destination warehouse")]
+    MaterialWarehouseScopeMissing,
     #[error("source and destination warehouses must differ")]
     SameWarehouse,
     #[error("at least one asset is required")]

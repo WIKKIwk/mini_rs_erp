@@ -1,8 +1,8 @@
 use crate::core::apparatus_standard::test_support::TestApparatusSpec;
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::inventory_movements::{
-    InventoryActor, InventoryAssetKind, InventoryAssetSelector, InventoryMovementStorePort,
-    InventoryTransferCreate, InventoryTransferStatus,
+    InventoryActor, InventoryAssetKind, InventoryAssetSelector, InventoryMovementError,
+    InventoryMovementStorePort, InventoryTransferCreate, InventoryTransferStatus,
 };
 use crate::db::postgres::{apply_foundation_migration, postgres_test_database_options};
 use crate::db::postgres_inventory_movements::PostgresInventoryMovementStore;
@@ -88,6 +88,19 @@ async fn postgres_inventory_transfer_preserves_six_decimal_quantity_end_to_end()
             ('Sklad Destination', 'apparatus', NULL, 'apparatus:precision:press',
                 'admin', 'ADMIN-APPARATUS', 'Apparatus Admin');
 
+        INSERT INTO mini_system_users (id, role, name, phone)
+        VALUES ('prep-transfer', 'tayyorlov_masteri', 'Preparation Transfer', '901234590');
+        INSERT INTO mini_item_groups (name, parent_item_group, is_group)
+        VALUES ('Transfer Raw', 'All Item Groups', true);
+        INSERT INTO mini_items (code, name, uom, item_group)
+        VALUES ('PREP-TRANSFER', 'Preparation Transfer Material', 'kg', 'Transfer Raw');
+        INSERT INTO mini_preparation_materials (item_code, owner_ref, name_key, warehouse_name)
+        VALUES ('PREP-TRANSFER', 'prep-transfer', 'preparation transfer material', 'Sklad Source');
+        INSERT INTO mini_preparation_material_warehouse_scopes (
+            item_code, warehouse_id, scope_kind, created_by_role, created_by_ref
+        ) VALUES ('PREP-TRANSFER', 'warehouse-source', 'exclusive',
+                  'tayyorlov_masteri', 'prep-transfer');
+
         INSERT INTO mini_raw_material_stock (
             id, warehouse, item_code, item_name, barcode,
             qty, uom, status, payload_json
@@ -96,6 +109,10 @@ async fn postgres_inventory_transfer_preserves_six_decimal_quantity_end_to_end()
             'raw:precision-0001', 'Sklad Source', 'ITEM-PRECISION',
             'Precision material', 'PRECISION-0001',
             13.000030, 'kg', 'available', '{}'::jsonb
+        ), (
+            'raw:precision-prep-0001', 'Sklad Source', 'PREP-TRANSFER',
+            'Preparation Transfer Material', 'PREP-TRANSFER-0001',
+            2.000000, 'kg', 'available', '{}'::jsonb
         );
         "#,
     )
@@ -188,6 +205,37 @@ async fn postgres_inventory_transfer_preserves_six_decimal_quantity_end_to_end()
     .await
     .expect("raw material transfer ledger");
     assert_eq!(raw_material_deltas, vec!["13.000030", "-13.000030"]);
+
+    let blocked = store
+        .create_transfer(
+            &actor,
+            "transfer-precision-prep-blocked",
+            &InventoryTransferCreate {
+                source_warehouse_id: "warehouse-source".to_string(),
+                destination_warehouse_id: "warehouse-destination".to_string(),
+                assets: vec![InventoryAssetSelector {
+                    asset_kind: InventoryAssetKind::RawMaterial,
+                    asset_ref: "raw:precision-prep-0001".to_string(),
+                }],
+                note: "preparation material must stay scoped".to_string(),
+                idempotency_key: "transfer-precision-prep-blocked-key".to_string(),
+            },
+        )
+        .await;
+    assert!(matches!(
+        blocked,
+        Err(InventoryMovementError::MaterialWarehouseScopeMissing)
+    ));
+    assert_eq!(
+        sqlx::query_as::<_, (String, String)>(
+            "SELECT warehouse, status FROM mini_raw_material_stock
+             WHERE id = 'raw:precision-prep-0001'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        ("Sklad Source".to_string(), "available".to_string())
+    );
 
     pool.close().await;
     let admin_pool = sqlx::PgPool::connect(&admin_url)

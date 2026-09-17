@@ -20,6 +20,53 @@ async fn ensure_transfer_assets_tx(
     Ok(())
 }
 
+async fn ensure_raw_material_destination_scope_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    item_code: &str,
+    destination_warehouse_id: &str,
+    destination_warehouse_name: &str,
+) -> Result<(), InventoryMovementError> {
+    let row = sqlx::query_as::<_, (Option<String>, bool, bool)>(
+        r#"
+        SELECT
+            material.warehouse_name,
+            EXISTS (
+                SELECT 1
+                FROM mini_preparation_material_warehouse_scopes scope
+                WHERE scope.item_code = material.item_code
+                  AND scope.warehouse_id = $2
+                  AND scope.active
+            ) AS destination_scoped,
+            EXISTS (
+                SELECT 1
+                FROM mini_preparation_material_warehouse_scopes scope
+                WHERE scope.item_code = material.item_code
+            ) AS has_any_scope
+        FROM mini_preparation_materials material
+        WHERE material.item_code = $1
+        FOR SHARE OF material
+        "#,
+    )
+    .bind(item_code.trim())
+    .bind(destination_warehouse_id.trim())
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(store_error)?;
+
+    let Some((legacy_warehouse, destination_scoped, has_any_scope)) = row else {
+        return Ok(());
+    };
+    let legacy_matches = legacy_warehouse
+        .as_deref()
+        .map(|warehouse| warehouse.eq_ignore_ascii_case(destination_warehouse_name.trim()))
+        .unwrap_or(true);
+    if destination_scoped || (!has_any_scope && legacy_matches) {
+        Ok(())
+    } else {
+        Err(InventoryMovementError::MaterialWarehouseScopeMissing)
+    }
+}
+
 async fn reserve_asset_tx(
     tx: &mut Transaction<'_, Postgres>,
     asset: &AssetLockRow,

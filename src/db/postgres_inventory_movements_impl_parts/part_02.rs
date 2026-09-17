@@ -189,6 +189,15 @@ impl PostgresInventoryMovementStore {
             if asset.physical_location_id != source_location_id {
                 return Err(InventoryMovementError::AssetNotInSourceWarehouse);
             }
+            if asset_kind == InventoryAssetKind::RawMaterial {
+                ensure_raw_material_destination_scope_tx(
+                    &mut tx,
+                    &asset.item_code,
+                    &destination.id,
+                    &destination.name,
+                )
+                .await?;
+            }
             reserve_asset_tx(&mut tx, &asset, transfer_id).await?;
             sqlx::query(
                 r#"

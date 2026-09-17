@@ -877,6 +877,23 @@ async fn preparation_child_warehouse_receipt_lands_in_child() {
         .unwrap();
     assert_eq!(material["warehouse"], "Preparation W-1");
     let code = material["item_code"].as_str().unwrap().to_string();
+    assert_eq!(
+        sqlx::query_as::<_, (String, String, bool)>(
+            "SELECT warehouse.id, scope.scope_kind, scope.active
+             FROM mini_preparation_material_warehouse_scopes scope
+             JOIN mini_warehouses warehouse ON warehouse.id = scope.warehouse_id
+             WHERE scope.item_code = $1",
+        )
+        .bind(&code)
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        (
+            "warehouse:preparation w-1".to_string(),
+            "exclusive".to_string(),
+            true,
+        )
+    );
     let scopes = BTreeMap::from([
         (
             "Preparation W".to_string(),
@@ -946,6 +963,16 @@ async fn preparation_child_warehouse_receipt_lands_in_child() {
         .await
         .unwrap();
     assert_eq!(receipt["warehouse"], "Preparation W-1");
+    sqlx::query(
+        "INSERT INTO mini_raw_material_stock
+             (id, warehouse, item_code, item_name, barcode, qty)
+         VALUES ('raw:prepchild-parent-leak', 'Preparation W', $1, 'Kley',
+                 'PREP-CHILD-PARENT-LEAK', 7)",
+    )
+    .bind(&code)
+    .execute(&pool)
+    .await
+    .unwrap();
     let snapshot: Value = store.snapshot("prep-1").await.unwrap();
     assert!(
         snapshot["warehouses"]
