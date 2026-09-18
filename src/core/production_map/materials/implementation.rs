@@ -638,6 +638,22 @@ impl ProductionMapService {
             let Some(stage_apparatus_id) = stage.apparatus_id.as_deref() else {
                 continue;
             };
+            // The shared chain retains every alternative for WIP topology.
+            // New material assignments must follow this occurrence's selection.
+            let Some(node) = map.nodes.iter().find(|node| node.id == stage.node_id) else {
+                continue;
+            };
+            let group = node.alternative_group_id.trim();
+            if !group.is_empty()
+                && map.nodes.iter().any(|candidate| {
+                    candidate.kind == super::ProductionMapNodeKind::Apparatus
+                        && candidate.alternative_group_id.trim() == group
+                        && !candidate.alternative_assigned_apparatus_id.trim().is_empty()
+                        && candidate.alternative_assigned_apparatus_id.trim() != stage_apparatus_id
+                })
+            {
+                continue;
+            }
             let stage_apparatus_id = parse_apparatus_id(stage_apparatus_id)?;
             if self
                 .material_rule_for_apparatus(&stage_apparatus_id)

@@ -25,6 +25,8 @@ use super::fixtures::{apparatus_stage_map, canonical_apparatus_stage_map, sample
 mod map_extension;
 #[path = "topology_alternatives.rs"]
 mod topology_alternatives;
+#[path = "material_assignment_alternatives.rs"]
+mod material_assignment_alternatives;
 
 const FLOW_REZKA_ID: &str = "apparatus:test:flow-rezka";
 const FLOW_PECHAT_ID: &str = "apparatus:test:flow-pechat";

@@ -295,6 +295,12 @@ Some apparatus stages require material scans before start. The rule system is:
 - alternative material groups can satisfy a requirement when configured;
 - duplicate or mismatched scans are rejected.
 
+Material assignment options (including order-linked GScale receipts) respect
+`alternative_assigned_apparatus_id` within each alternative group. A selected
+group offers only that apparatus if its material rule permits the item; missing
+permission does not fall back to another candidate. Unassigned groups and
+independent production stages retain their existing material choices.
+
 The purpose is to prevent an operator from starting a production stage with the
 wrong input material.
 
