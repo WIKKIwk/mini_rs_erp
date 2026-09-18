@@ -1027,6 +1027,13 @@ impl ProductionMapService {
                         work_activity: ApparatusQueueWorkActivity::from_session(
                             active_session, state, &stage_node_id,
                         ),
+                        last_worked_at_unix: active_sessions_by_order.get(order_id)
+                            .into_iter().flatten()
+                            .filter(|session| session.apparatus == storage_key
+                                && (session.stage_node_id.trim().is_empty()
+                                    || session.stage_node_id.trim() == stage_node_id.trim()))
+                            .map(|session| session.updated_at_unix.max(session.started_at_unix))
+                            .max().unwrap_or(0).max(0),
                         state,
                         allowed_actions,
                         interaction,

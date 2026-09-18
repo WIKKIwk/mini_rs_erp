@@ -167,6 +167,7 @@ fn training_queue_action_controls(
                 ApparatusQueueOrderActionControl {
                     stage_work: None,
                     work_activity: None,
+                    last_worked_at_unix: 0,
                     rezka_output_report: serde_json::Value::Null,
                     state,
                     allowed_actions,

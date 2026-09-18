@@ -27,6 +27,8 @@ mod map_extension;
 mod topology_alternatives;
 #[path = "material_assignment_alternatives.rs"]
 mod material_assignment_alternatives;
+#[path = "queue_display_recency.rs"]
+mod queue_display_recency;
 
 const FLOW_REZKA_ID: &str = "apparatus:test:flow-rezka";
 const FLOW_PECHAT_ID: &str = "apparatus:test:flow-pechat";
