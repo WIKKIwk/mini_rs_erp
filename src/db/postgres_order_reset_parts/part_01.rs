@@ -83,7 +83,7 @@ impl PostgresOrderResetStore {
         let mut report = report;
         report.raw_material_rows_restored = tx
             .execute(sqlx::query(
-                "UPDATE mini_raw_material_stock
+                "UPDATE mini_raw_material_stock stock
                  SET status = 'available',
                      reserved_order_id = '',
                      payload_json = payload_json - ARRAY[
@@ -92,10 +92,38 @@ impl PostgresOrderResetStore {
                          'reserved_order_id'
                      ]::text[],
                      updated_at = now()
-                 WHERE lower(barcode) IN (SELECT barcode FROM reset_raw_barcodes)
-                    OR lower(reserved_order_id) IN (
+                 WHERE (lower(stock.barcode) IN (SELECT barcode FROM reset_raw_barcodes)
+                    OR lower(stock.reserved_order_id) IN (
                         SELECT lower(id) FROM reset_order_ids
-                    )",
+                    ))
+                   AND NOT EXISTS (
+                       SELECT 1
+                       FROM mini_raw_material_splits split
+                       WHERE split.parent_stock_id = stock.id
+                   )",
+            ))
+            .await
+            .map_err(OrderResetError::StoreFailed)?
+            .rows_affected();
+        report.raw_material_rows_restored += tx
+            .execute(sqlx::query(
+                "UPDATE mini_raw_material_stock stock
+                 SET reserved_order_id = '',
+                     payload_json = payload_json - ARRAY[
+                         'in_use_order_id',
+                         'consumed_order_id',
+                         'reserved_order_id'
+                     ]::text[],
+                     updated_at = now()
+                 WHERE (lower(stock.barcode) IN (SELECT barcode FROM reset_raw_barcodes)
+                    OR lower(stock.reserved_order_id) IN (
+                        SELECT lower(id) FROM reset_order_ids
+                    ))
+                   AND EXISTS (
+                       SELECT 1
+                       FROM mini_raw_material_splits split
+                       WHERE split.parent_stock_id = stock.id
+                   )",
             ))
             .await
             .map_err(OrderResetError::StoreFailed)?
