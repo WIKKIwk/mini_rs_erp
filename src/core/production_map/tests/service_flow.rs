@@ -29,6 +29,8 @@ mod topology_alternatives;
 mod material_assignment_alternatives;
 #[path = "queue_display_recency.rs"]
 mod queue_display_recency;
+#[path = "resume_work_session.rs"]
+mod resume_work_session;
 
 const FLOW_REZKA_ID: &str = "apparatus:test:flow-rezka";
 const FLOW_PECHAT_ID: &str = "apparatus:test:flow-pechat";
@@ -3581,19 +3583,16 @@ async fn downstream_pause_resume_preserves_original_input_until_complete() {
         )
         .await
         .expect("resume without QR");
-    let resumed_batch = resumed.progress_batch.as_ref().expect("resumed WIP");
     let resumed_session = resumed.session.as_ref().expect("resumed session");
     assert_eq!(
         resumed.states.get(order_id),
         Some(&"in_progress".to_string())
     );
-    assert_eq!(resumed_batch.batch_id, pause_batch.batch_id);
-    assert_eq!(resumed_batch.status, OrderProgressBatchStatus::Resumed);
+    assert!(resumed.progress_batch.is_none());
     assert_eq!(
-        resumed_batch.wip_status,
-        OrderProgressBatchWipStatus::Waiting
+        store.progress_batch(&pause_batch.batch_id).await.unwrap().unwrap(),
+        pause_batch
     );
-    assert!(resumed_batch.used_by_session_id.is_empty());
     assert_eq!(
         resumed_session.payload_json["input_progress_batch_id"].as_str(),
         Some(source_batch.batch_id.as_str())
@@ -3647,7 +3646,7 @@ async fn downstream_pause_resume_preserves_original_input_until_complete() {
 }
 
 #[tokio::test]
-async fn rezka_resume_reopens_all_frames_from_the_scanned_input_wip() {
+async fn rezka_resume_preserves_output_frames_and_the_scanned_input_wip() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
     let service = default_service_with_store(store.clone()).await;
     let actor = QueueActionActor {
@@ -3762,11 +3761,8 @@ async fn rezka_resume_reopens_all_frames_from_the_scanned_input_wip() {
         resumed.states.get(order_id),
         Some(&"in_progress".to_string())
     );
-    assert_eq!(resumed.progress_batches.len(), 3);
-    assert!(resumed.progress_batches.iter().all(|batch| {
-        batch.status == OrderProgressBatchStatus::Resumed
-            && batch.wip_status == OrderProgressBatchWipStatus::Waiting
-    }));
+    assert!(resumed.progress_batches.is_empty());
+    assert!(resumed.progress_batch.is_none());
     assert_eq!(
         store
             .progress_batch(&laminatsiya_pause.batch_id)
@@ -3776,14 +3772,13 @@ async fn rezka_resume_reopens_all_frames_from_the_scanned_input_wip() {
             .wip_status,
         OrderProgressBatchWipStatus::InUse
     );
-    for frame in &resumed.progress_batches {
+    for frame in &paused.progress_batches {
         let persisted = store
             .progress_batch(&frame.batch_id)
             .await
             .expect("frame lookup")
             .expect("persisted frame");
-        assert_eq!(persisted.status, OrderProgressBatchStatus::Resumed);
-        assert_eq!(persisted.wip_status, OrderProgressBatchWipStatus::Waiting);
+        assert_eq!(&persisted, frame);
     }
 }
 
