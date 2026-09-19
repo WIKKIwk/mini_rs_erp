@@ -15,6 +15,65 @@ fn actor() -> QueueActionActor {
 }
 
 #[tokio::test]
+async fn another_orders_preflight_blocks_start_with_a_distinct_reason() {
+    let store = Arc::new(MemoryProductionMapStore::new());
+    let service = service_with_default_apparatus(store.clone()).await;
+    let first = "zakaz-preflight-first";
+    let second = "zakaz-preflight-second";
+    for order_id in [first, second] {
+        service
+            .upsert_map(canonical_apparatus_stage_map(
+                order_id,
+                PRINT_ID,
+                "7 ta rangli bosma aparat",
+            ))
+            .await
+            .unwrap();
+    }
+    service
+        .set_apparatus_sequence(PRINT_ID, vec![first.into(), second.into()])
+        .await
+        .unwrap();
+    let hold = service
+        .begin_print_preflight(
+            PRINT_ID,
+            first,
+            "other-order-hold",
+            "other-order-hold",
+            actor(),
+        )
+        .await
+        .unwrap();
+    for status in ["running", "passed"] {
+        if status == "passed" {
+            service
+                .advance_print_preflight(PRINT_ID, first, &hold.hold_id, "passed", actor())
+                .await
+                .unwrap();
+        }
+        let snapshot = service.live_snapshot().await.unwrap();
+        let controls = &snapshot.queue_action_controls[PRINT_ID];
+        assert_eq!(
+            controls[first].print_preflight.as_ref().unwrap().status.as_str(),
+            status
+        );
+        assert_eq!(
+            controls[second].interaction.blocking_reason_code,
+            "print_preflight_other_order_active"
+        );
+        assert!(!controls[second].print_preflight_allowed);
+        assert!(controls[second].print_preflight.is_none());
+        assert!(controls[second].allowed_actions.is_empty());
+        assert!(matches!(
+            service
+                .begin_print_preflight(PRINT_ID, second, "blocked", "blocked", actor())
+                .await,
+            Err(ProductionMapError::PrintPreflightActive)
+        ));
+    }
+}
+
+#[tokio::test]
 async fn color_button_starts_preflight_and_locks_order_operations() {
     let store = Arc::new(MemoryProductionMapStore::new());
     let service = service_with_default_apparatus(store.clone()).await;

@@ -15,6 +15,7 @@ pub struct OrderResetReport {
     pub order_products_deleted: u64,
     pub queue_states_deleted: u64,
     pub queue_events_deleted: u64,
+    pub print_preflight_holds_deleted: u64,
     pub run_sessions_deleted: u64,
     pub progress_events_deleted: u64,
     pub progress_batches_deleted: u64,
@@ -250,6 +251,14 @@ impl PostgresOrderResetStore {
              WHERE lower(order_id) IN (SELECT lower(id) FROM reset_order_ids)",
         )
         .await?;
+        // A colour trial reserves its apparatus independently of queue state.
+        // Remove both active holds and idempotency history before reusing order IDs.
+        report.print_preflight_holds_deleted = delete_rows(
+            &mut tx,
+            "DELETE FROM mini_print_preflight_holds
+             WHERE lower(order_id) IN (SELECT lower(id) FROM reset_order_ids)",
+        )
+        .await?;
         tx.execute(sqlx::query(
             "UPDATE mini_queue_sequences
              SET order_ids = '[]'::jsonb,
@@ -345,6 +354,8 @@ impl PostgresOrderResetStore {
                + (SELECT COUNT(*) FROM mini_queue_states
                   WHERE lower(order_id) IN (SELECT lower(id) FROM reset_order_ids))
                + (SELECT COUNT(*) FROM mini_queue_action_events
+                  WHERE lower(order_id) IN (SELECT lower(id) FROM reset_order_ids))
+               + (SELECT COUNT(*) FROM mini_print_preflight_holds
                   WHERE lower(order_id) IN (SELECT lower(id) FROM reset_order_ids))
                + (SELECT COUNT(*) FROM mini_order_run_sessions
                   WHERE lower(order_id) IN (SELECT lower(id) FROM reset_order_ids))

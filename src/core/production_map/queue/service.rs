@@ -761,13 +761,15 @@ impl ProductionMapService {
                         && control == OrderControlState::Active
                         && !preflight_blocks_this_order
                         && !preflight_blocks_other_order;
-                let queue_blocking_reason = if active_order_is_this {
-                    if preflight_blocks_this_order || preflight_blocks_other_order {
+                let queue_blocking_reason = if preflight_blocks_other_order {
+                    "print_preflight_other_order_active"
+                } else if active_order_is_this {
+                    if preflight_blocks_this_order {
                         "print_preflight_active"
                     } else {
                         "waiting_sequence"
                     }
-                } else if preflight_blocks_this_order || preflight_blocks_other_order {
+                } else if preflight_blocks_this_order {
                     "print_preflight_active"
                 } else {
                     "apparatus_busy"
@@ -798,7 +800,7 @@ impl ProductionMapService {
                         if preflight_blocks_this_order || preflight_blocks_other_order {
                             interaction.mode = ApparatusQueueInteractionMode::FreshStartBlocked;
                             interaction.blocking_reason_code =
-                                "print_preflight_active".to_string();
+                                queue_blocking_reason.to_string();
                         } else if previous_stage_not_configured {
                             interaction.mode = ApparatusQueueInteractionMode::FreshStartBlocked;
                             interaction.blocking_reason_code =

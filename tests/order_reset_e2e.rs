@@ -15,7 +15,9 @@ use mini_rs_erp::core::apparatus_standard::{
 use mini_rs_erp::core::auth::models::{Principal, PrincipalRole};
 use mini_rs_erp::core::backup_doctor::{BackupDoctor, BackupDoctorConfig};
 use mini_rs_erp::core::session::manager::SessionManager;
-use mini_rs_erp::db::postgres::apply_foundation_migration;
+use mini_rs_erp::db::postgres::{
+    apply_foundation_migration, apply_postgres_migrations_through_version,
+};
 use mini_rs_erp::db::postgres_order_reset::PostgresOrderResetStore;
 use mini_rs_erp::http::router::build_router;
 use serde_json::{Value, json};
@@ -39,6 +41,7 @@ async fn order_reset_restores_a_real_database_to_the_pre_order_snapshot() {
     let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
         .unwrap_or_else(|_| "postgres://wikki@127.0.0.1:5432/postgres".to_string());
     let database_name = format!("mini_rs_erp_order_reset_e2e_{}", std::process::id());
+    eprintln!("isolated reset test database: {database_name}");
     let admin_pool = PgPool::connect(&admin_url).await.expect("admin database");
 
     sqlx::query(&format!(
@@ -62,6 +65,16 @@ async fn order_reset_restores_a_real_database_to_the_pre_order_snapshot() {
     let pool = PgPool::connect_with(test_options)
         .await
         .expect("e2e database");
+    // The alternative backfill requires the canonical factory catalog that a
+    // running installation already has; seed it before testing the full reset.
+    apply_postgres_migrations_through_version(&pool, "0121_print_preflight_order_status")
+        .await
+        .expect("migrate before factory-dependent backfill");
+    test_state(pool.clone())
+        .apparatus
+        .bootstrap_factory_defaults()
+        .await
+        .expect("factory catalog for alternative backfill");
     apply_foundation_migration(&pool)
         .await
         .expect("apply full migration set");
@@ -198,6 +211,7 @@ async fn order_reset_restores_a_real_database_to_the_pre_order_snapshot() {
     assert_eq!(body["result"]["production_maps_deleted"], 1);
     assert_eq!(body["result"]["opening_wip_batches_deleted"], 1);
     assert_eq!(body["result"]["opening_wip_intakes_deleted"], 1);
+    assert_eq!(body["result"]["print_preflight_holds_deleted"], 7);
 
     let after = snapshot(&pool).await;
     assert_eq!(after, before);
@@ -621,6 +635,35 @@ async fn seed_order_lifecycle(pool: &PgPool, apparatus_id: &str, transfer_appara
     .execute(&mut *tx)
     .await
     .expect("queue state");
+    // Include every status and an orphan with no order/map/queue row. Reset must
+    // clear reservations as well as old idempotency keys, even for orphan holds.
+    for (index, (order_id, status)) in [
+        (ORDER_ID, "held"),
+        (ORDER_ID, "running"),
+        (ORDER_ID, "passed"),
+        (ORDER_ID, "failed"),
+        (ORDER_ID, "cancelled"),
+        (ORDER_ID, "consumed"),
+        ("zakaz-orphan-preflight", "running"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        sqlx::query(
+            "INSERT INTO mini_print_preflight_holds
+                (hold_id, idempotency_key, order_id, canonical_apparatus_id,
+                 stage_node_id, status, actor_role, actor_ref,
+                 created_at_unix, updated_at_unix, expires_at_unix)
+             VALUES ($1, $1, $2, $3, 'print-stage', $4, 'aparatchi', 'e2e-worker', 1, 1, 0)",
+        )
+        .bind(format!("e2e-preflight-{index}"))
+        .bind(order_id)
+        .bind(format!("apparatus:e2e:preflight-{index}"))
+        .bind(status)
+        .execute(&mut *tx)
+        .await
+        .expect("preflight hold");
+    }
     sqlx::query(
         "INSERT INTO mini_queue_action_events
             (event_id, apparatus, canonical_apparatus_id, order_id, action, from_state, to_state, policy,
@@ -943,6 +986,7 @@ async fn snapshot(pool: &PgPool) -> Value {
         ("order_products", "mini_order_products"),
         ("queue_states", "mini_queue_states"),
         ("queue_events", "mini_queue_action_events"),
+        ("print_preflight_holds", "mini_print_preflight_holds"),
         ("sessions", "mini_order_run_sessions"),
         ("progress_events", "mini_order_progress_events"),
         ("progress_batches", "mini_progress_batches"),
