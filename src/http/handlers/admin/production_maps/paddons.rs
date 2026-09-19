@@ -2,6 +2,48 @@ use super::*;
 
 use crate::core::gscale::GscaleServiceError;
 
+#[derive(serde::Deserialize)]
+pub struct ActivePaddonQuery { apparatus: String }
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ActivePaddonRequest { apparatus: String, code: String }
+
+pub async fn production_map_active_paddon(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    uri: axum::http::Uri,
+    body: Bytes,
+) -> Result<Response, AdminError> {
+    if method != Method::GET && method != Method::PUT { return Err(method_not_allowed()); }
+    let principal = authorize_any_capability(&state, &headers, &[
+        Capability::AdminAccess, Capability::ProductionMapManage, Capability::ApparatusQueueManage,
+    ]).await?;
+    let (apparatus, code) = if method == Method::PUT {
+        let input: ActivePaddonRequest = parse_json(&body)?;
+        (input.apparatus, Some(input.code))
+    } else {
+        let Query(input) = Query::<ActivePaddonQuery>::try_from_uri(&uri)
+            .map_err(|_| bad_request("apparatus is required"))?;
+        (input.apparatus, None)
+    };
+    let apparatus = super::queue_actions::resolve_queue_apparatus(&state, &apparatus).await?;
+    let apparatus_id = apparatus.id.to_string();
+    let admin = state.admin.principal_has_capability(&principal, Capability::AdminAccess).await;
+    let assigned = state.admin.principal_assigned_apparatus(&principal).await;
+    if !admin && !queue_state::apparatus_matches_assigned(&apparatus_id, &assigned) {
+        return Err(bad_request("apparatus_not_assigned"));
+    }
+    let actor = queue_action_actor(&principal);
+    let code = if let Some(code) = code {
+        state.production_maps.set_active_rezka_paddon(&apparatus_id, &actor, &code).await
+    } else {
+        state.production_maps.active_rezka_paddon(&apparatus_id, &actor).await
+    }.map_err(production_map_error)?;
+    Ok(json_response(serde_json::json!({"ok":true, "apparatus":apparatus_id, "code":code})))
+}
+
 #[derive(Default, serde::Deserialize)]
 pub struct PaddonsQuery {
     #[serde(default)]

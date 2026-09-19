@@ -16,18 +16,9 @@ pub(super) async fn lock_for_output(
     tx: &mut Transaction<'_, Postgres>,
     write: &QueueActionProgressWrite,
 ) -> Result<Option<String>, ProductionMapError> {
-    let Some(code) = write
-        .event
-        .payload_json
-        .get("output_paddon_code")
-        .and_then(serde_json::Value::as_str)
-        .filter(|code| !code.trim().is_empty())
-    else {
-        return Ok(None);
-    };
-    if outputs(write).is_empty() {
-        return Ok(None);
-    }
+    if outputs(write).is_empty() { return Ok(None); }
+    let code = selection_for_output(tx, &write.apparatus, &write.event.actor, &write.event.payload_json).await?;
+    let Some(code) = code else { return Ok(None); };
     // Pallets have no lifecycle column. A warehouse receipt, when supported
     // by this database, seals the package. Row JSON also supports databases
     // that have not introduced receipt metadata yet.
@@ -43,6 +34,17 @@ pub(super) async fn lock_for_output(
         return Err(ProductionMapError::PaddonInvalidInput);
     }
     Ok(Some(id))
+}
+
+pub(super) async fn selection_for_output(
+    tx: &mut Transaction<'_, Postgres>, apparatus: &str,
+    actor: &crate::core::production_map::QueueActionActor, payload: &serde_json::Value,
+) -> Result<Option<String>, ProductionMapError> {
+    if payload.get("use_active_paddon").and_then(serde_json::Value::as_bool) == Some(true) {
+        return super::active_paddon::load_for_output(tx, apparatus, actor).await;
+    }
+    Ok(payload.get("output_paddon_code").and_then(serde_json::Value::as_str)
+        .filter(|code| !code.trim().is_empty()).map(str::to_string))
 }
 
 pub(super) async fn assign_outputs(

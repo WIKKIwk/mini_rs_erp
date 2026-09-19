@@ -2348,12 +2348,20 @@ async fn raw_material_requirement_groups_need_distinct_scanned_materials() {
 }
 
 #[tokio::test]
-async fn laminatsiya_pause_switch_keeps_wip_and_blocks_only_running_work() {
+async fn free_pick_laminatsiya_pause_switch_keeps_wip_and_blocks_only_running_work() {
     use queue_state::ApparatusQueueAction as A;
     let store = Arc::new(MemoryProductionMapStore::new());
-    let service = default_service_with_store(store.clone()).await;
+    let (service, apparatus_service) =
+        service_with_apparatus_store(store.clone(), &[(FLOW_PECHAT_ID, "Flow pechat test")]).await;
     let first = FLOW_PECHAT_ID;
     let second = LAMINATION_2_ID;
+    // Starting past a pending order is permitted only by an explicit free-pick policy.
+    set_test_queue_policy(
+        &apparatus_service,
+        &ApparatusId::new(second).expect("lamination apparatus id"),
+        ApparatusQueuePolicy::FreePick,
+    )
+    .await;
     let actor = QueueActionActor {
         role: "aparatchi".to_string(),
         ref_: "worker-pause-switch".to_string(),
@@ -4237,7 +4245,7 @@ async fn downstream_start_accepts_previous_stage_output_after_producer_resumes()
 }
 
 #[tokio::test]
-async fn downstream_start_with_previous_qr_can_skip_pending_sequence_head() {
+async fn strict_downstream_start_with_previous_qr_cannot_skip_pending_sequence_head() {
     let service = default_service_with_store(Arc::new(MemoryProductionMapStore::new())).await;
     let actor = QueueActionActor {
         role: "aparatchi".to_string(),
@@ -4304,6 +4312,41 @@ async fn downstream_start_with_previous_qr_can_skip_pending_sequence_head() {
         .qr_payload
         .clone();
 
+    let states_before = service.apparatus_queue_states().await.expect("states");
+    let rejected = service
+        .apply_apparatus_queue_action_with_progress(
+            second,
+            ready_order,
+            queue_state::ApparatusQueueAction::Start,
+            &[second.to_string()],
+            actor.clone(),
+            QueueProgressInput {
+                qr_payload: qr_payload.clone(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await;
+    assert_eq!(rejected, Err(ProductionMapError::QueueActionNotAllowed));
+    assert_eq!(
+        service.apparatus_queue_states().await.expect("states"),
+        states_before
+    );
+    assert_eq!(
+        service
+            .progress_batch_for_qr("", &qr_payload)
+            .await
+            .expect("WIP")
+            .wip_status,
+        OrderProgressBatchWipStatus::Waiting
+    );
+
+    service
+        .set_apparatus_sequence(
+            second,
+            vec![ready_order.to_string(), waiting_order.to_string()],
+        )
+        .await
+        .expect("move ready order to queue head");
     let second_started = service
         .apply_apparatus_queue_action_with_progress(
             second,
@@ -4317,7 +4360,7 @@ async fn downstream_start_with_previous_qr_can_skip_pending_sequence_head() {
             },
         )
         .await
-        .expect("second start skips waiting order with previous qr");
+        .expect("strict start at queue head with previous qr");
     assert_eq!(
         second_started.states.get(ready_order),
         Some(&"in_progress".to_string())

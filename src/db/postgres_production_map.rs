@@ -44,6 +44,8 @@ mod order_control_helpers;
 mod order_query_helpers;
 #[path = "postgres_production_map/paddon/helpers.rs"]
 mod paddon_helpers;
+#[path = "postgres_production_map/paddon/active.rs"]
+mod active_paddon;
 #[path = "postgres_production_map/paddon/receipts.rs"]
 mod paddon_receipts;
 #[path = "postgres_production_map/print_preflight.rs"]

@@ -7,7 +7,6 @@ struct QueueActionCommand {
     progress: QueueProgressInput,
     completion: QueueActionCompletionInput,
     print: QueueActionPrintInput,
-    output_paddon_code: String,
     print_preflight_hold_id: String,
 }
 
@@ -170,7 +169,6 @@ impl QueueActionCommand {
 
         Ok(Self {
             apparatus: apparatus.id.to_string(),
-            output_paddon_code: request.output_paddon_code.trim().to_string(),
             print_preflight_hold_id: request.print_preflight_hold_id.trim().to_string(),
             order_id: request.order_id,
             action,

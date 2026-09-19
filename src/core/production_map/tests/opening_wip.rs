@@ -123,6 +123,90 @@ fn source_opening_input(
 }
 
 #[tokio::test]
+async fn strict_queue_rejects_opening_wip_outside_sequence_head() {
+    let service = ProductionMapService::new_for_test(Arc::new(MemoryProductionMapStore::new()));
+    let head = "zakaz-opening-head";
+    let target = "zakaz-opening-second";
+    for order in [head, target] {
+        service
+            .upsert_map(apparatus_stage_map(order, LAMINATION_ID))
+            .await
+            .expect("map");
+    }
+    let opening = service
+        .create_opening_wip(opening_input(target, "strict-opening-queue"), admin_actor())
+        .await
+        .expect("opening WIP");
+    let qr_payload = opening.batches[0].qr_payload.clone();
+    service
+        .set_apparatus_sequence(LAMINATION_ID, vec![head.to_string(), target.to_string()])
+        .await
+        .expect("sequence");
+    let states_before = service.apparatus_queue_states().await.expect("states");
+    let controls = service.queue_action_controls().await.expect("controls");
+    let control = &controls[LAMINATION_ID][target];
+    assert_eq!(
+        control.interaction.opening_wip_mode,
+        ApparatusQueuePreviousWipMode::ScanRequired
+    );
+    assert_eq!(control.interaction.blocking_reason_code, "waiting_sequence");
+    assert!(
+        !control.allowed_actions.contains(&queue_state::ApparatusQueueAction::Start)
+    );
+
+    let rejected = service
+        .apply_apparatus_queue_action_with_progress(
+            LAMINATION_ID,
+            target,
+            queue_state::ApparatusQueueAction::Start,
+            &[LAMINATION_ID.to_string()],
+            worker_actor(),
+            QueueProgressInput {
+                qr_payload: qr_payload.clone(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await;
+    assert_eq!(rejected, Err(ProductionMapError::QueueActionNotAllowed));
+    assert_eq!(
+        service.apparatus_queue_states().await.expect("states"),
+        states_before
+    );
+    assert_eq!(
+        service
+            .opening_wip_batch("", &qr_payload)
+            .await
+            .expect("opening WIP")
+            .batch
+            .wip_status,
+        OpeningWipBatchStatus::Waiting
+    );
+
+    service
+        .set_apparatus_sequence(LAMINATION_ID, vec![target.to_string(), head.to_string()])
+        .await
+        .expect("move to queue head");
+    let started = service
+        .apply_apparatus_queue_action_with_progress(
+            LAMINATION_ID,
+            target,
+            queue_state::ApparatusQueueAction::Start,
+            &[LAMINATION_ID.to_string()],
+            worker_actor(),
+            QueueProgressInput {
+                qr_payload,
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("opening WIP starts at queue head");
+    assert_eq!(
+        started.states.get(target).map(String::as_str),
+        Some("in_progress")
+    );
+}
+
+#[tokio::test]
 async fn opening_wip_creates_unique_batches_and_replays_idempotently() {
     let store = Arc::new(MemoryProductionMapStore::new());
     let service = ProductionMapService::new_for_test(store.clone());

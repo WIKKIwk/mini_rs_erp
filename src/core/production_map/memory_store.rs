@@ -679,7 +679,9 @@ impl MemoryProductionMapStore {
         validate_queue_progress_write(write)?;
         // This store has no pallet persistence. Never report an assigned
         // output as successful when the production PostgreSQL path is absent.
-        if write.event.payload_json.get("output_paddon_code").is_some() {
+        if write.event.payload_json.get("output_paddon_code").is_some()
+            || (write.event.payload_json.get("use_active_paddon").and_then(serde_json::Value::as_bool) == Some(true)
+                && self.active_rezka_paddon(&write.apparatus, &write.event.actor).await?.is_some()) {
             return Err(ProductionMapError::StoreFailed);
         }
         if let Some(expected) = write.event.payload_json.get("bosma_expected_sequence") {

@@ -26,6 +26,32 @@ fn normalize_paddon_batch_ids(
 }
 
 impl ProductionMapService {
+    async fn validate_active_paddon_scope(&self, apparatus: &str, actor: &QueueActionActor) -> Result<(), ProductionMapError> {
+        if actor.ref_.trim().is_empty() || actor.role.trim().is_empty() {
+            return Err(ProductionMapError::PaddonInvalidInput);
+        }
+        let canonical = self.resolve_canonical_apparatus_text(apparatus).await?;
+        if canonical.runtime.execution_profile.operation != crate::core::apparatus_standard::ExecutionOperation::Cut {
+            return Err(ProductionMapError::PaddonInvalidInput);
+        }
+        Ok(())
+    }
+
+    pub async fn active_rezka_paddon(&self, apparatus: &str, actor: &QueueActionActor) -> Result<Option<String>, ProductionMapError> {
+        self.validate_active_paddon_scope(apparatus, actor).await?;
+        self.store.active_rezka_paddon(apparatus.trim(), actor).await
+    }
+
+    pub async fn set_active_rezka_paddon(&self, apparatus: &str, actor: &QueueActionActor, code: &str) -> Result<Option<String>, ProductionMapError> {
+        self.validate_active_paddon_scope(apparatus, actor).await?;
+        let code = code.trim();
+        if code.len() > 128 { return Err(ProductionMapError::PaddonInvalidInput); }
+        let code = (!code.is_empty()).then_some(code);
+        self.store.set_active_rezka_paddon(apparatus.trim(), actor, code).await?;
+        self.notify_live();
+        Ok(code.map(str::to_string))
+    }
+
     pub async fn paddons(&self, limit: usize) -> Result<Vec<PaddonSummary>, ProductionMapError> {
         self.store.paddons(limit.clamp(1, 200)).await
     }

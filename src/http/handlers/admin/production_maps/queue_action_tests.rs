@@ -84,13 +84,13 @@ mod tests {
     }
 
     #[test]
-    fn output_paddon_requires_rezka_output_and_preserves_the_selected_code() {
+    fn legacy_output_paddon_is_validated_but_not_used_as_selection() {
         for action in ["pause", "detach_roll", "roll_complete", "complete"] {
             let (command, _) = command_from_json(serde_json::json!({
                 "apparatus":"apparatus:catalog:test-001", "order_id":"zakaz-paddon",
                 "action":action, "output_paddon_code":" 00001 ",
             }), ExecutionOperation::Cut);
-            assert_eq!(command.output_paddon_code, "00001");
+            assert!(command.action.records_progress_output());
         }
         for (operation, action, order) in [
             (ExecutionOperation::Print, "complete", "zakaz-paddon"),

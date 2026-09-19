@@ -1,6 +1,29 @@
 #[async_trait]
 #[cfg(any(test, feature = "verification"))]
 impl ProductionMapStorePort for MemoryProductionMapStore {
+    async fn active_rezka_paddon(&self, apparatus: &str, actor: &QueueActionActor) -> Result<Option<String>, ProductionMapError> {
+        Ok(self.active_paddons.read().await.get(&(actor.role.clone(), actor.ref_.clone(), apparatus.to_string())).cloned())
+    }
+    async fn set_active_rezka_paddon(&self, apparatus: &str, actor: &QueueActionActor, code: Option<&str>) -> Result<(), ProductionMapError> {
+        if let Some(code) = code {
+            if !self.paddons.read().await.contains_key(code) { return Err(ProductionMapError::PaddonNotFound); }
+        }
+        let key = (actor.role.clone(), actor.ref_.clone(), apparatus.to_string());
+        let mut selections = self.active_paddons.write().await;
+        if let Some(code) = code { selections.insert(key, code.to_string()); } else { selections.remove(&key); }
+        Ok(())
+    }
+    async fn create_paddon(&self, input: PaddonCreateInput) -> Result<PaddonSummary, ProductionMapError> {
+        let mut paddons = self.paddons.write().await;
+        let code = format!("{:05}", paddons.len() + 1);
+        let paddon = PaddonSummary {
+            id: code.clone(), code: code.clone(), location: input.location, note: input.note,
+            created_by_ref: input.actor_ref, created_by_display_name: input.actor_display_name,
+            created_at_unix: 0, updated_at_unix: 0, item_count: 0,
+        };
+        paddons.insert(code, paddon.clone());
+        Ok(paddon)
+    }
     async fn commit_stage_astatka_report(&self, report: StageAstatkaReport,
         expected: Option<OrderRunSession>, actor: QueueActionActor) -> Result<(), ProductionMapError> {
         let (order_id, apparatus, report_id) = report.identity();

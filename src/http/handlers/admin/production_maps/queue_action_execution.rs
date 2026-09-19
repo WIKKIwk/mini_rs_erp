@@ -29,7 +29,6 @@ async fn execute_queue_action(
         progress,
         completion: _,
         print,
-        output_paddon_code,
         print_preflight_hold_id,
     } = input;
     let mut prepared = state
@@ -50,7 +49,11 @@ async fn execute_queue_action(
         .await
         .map_err(production_map_error)?;
     prepared.attach_print_preflight_hold_id(&print_preflight_hold_id);
-    prepared.attach_output_paddon(&output_paddon_code);
+    if apparatus.is_rezka() {
+        // Never trust an old device's output_paddon_code. Resolve the user's
+        // current server selection inside the output commit transaction.
+        prepared.attach_active_paddon();
+    }
     if !qolip_preparations.is_empty() {
         prepared.attach_qolip_codes(
             &qolip_preparations

@@ -225,17 +225,16 @@ pub(super) fn bosma_startable_order_id<'a>(
 
 pub(super) fn apply_queue_policy(
     policy: ApparatusQueuePolicy,
-    previous_progress_ready: bool,
     sequence: &[String],
     parsed: &mut BTreeMap<String, queue_state::ApparatusQueueOrderState>,
     order_id: &str,
     action: queue_state::ApparatusQueueAction,
 ) -> Result<(), ProductionMapError> {
     match policy {
-        ApparatusQueuePolicy::StrictSequence if !previous_progress_ready => {
+        ApparatusQueuePolicy::StrictSequence => {
             queue_state::apply_queue_action(sequence, parsed, order_id, action)
         }
-        ApparatusQueuePolicy::StrictSequence | ApparatusQueuePolicy::FreePick => {
+        ApparatusQueuePolicy::FreePick => {
             queue_state::apply_unordered_queue_action(parsed, order_id, action)
         }
     }
@@ -519,6 +518,53 @@ pub(super) fn queue_states_for_order(
         .collect()
 }
 
+pub(super) fn nearest_allowed_sequence(
+    current_sequence: &[String],
+    requested_sequence: &[String],
+    moved_order_id: &str,
+    states: &BTreeMap<String, String>,
+    frozen_order_ids: &BTreeSet<String>,
+) -> Result<Vec<String>, ProductionMapError> {
+    let Some(requested_index) = requested_sequence.iter().position(|id| id == moved_order_id)
+    else {
+        return Err(ProductionMapError::QueueActionNotAllowed);
+    };
+    let Some(original_index) = current_sequence.iter().position(|id| id == moved_order_id)
+    else {
+        return Err(ProductionMapError::QueueActionNotAllowed);
+    };
+    if requested_sequence.iter().collect::<BTreeSet<_>>().len() != requested_sequence.len()
+        || requested_sequence.iter().any(|id| !current_sequence.contains(id))
+    {
+        return Err(ProductionMapError::QueueActionNotAllowed);
+    }
+    // Only move the dragged order. Preserve orders hidden by search as well
+    // as orders added/reordered by another client while this one was dragging.
+    let mut remaining = current_sequence.to_vec();
+    remaining.remove(original_index);
+    let target_index = if let Some(next_id) = requested_sequence.get(requested_index + 1) {
+        remaining.iter().position(|id| id == next_id).unwrap()
+    } else if requested_index > 0 {
+        remaining.iter()
+            .position(|id| id == &requested_sequence[requested_index - 1])
+            .unwrap() + 1
+    } else {
+        original_index
+    };
+    let mut slots = (0..=remaining.len()).collect::<Vec<_>>();
+    slots.sort_by_key(|&index| (index.abs_diff(target_index), index.abs_diff(original_index)));
+    for index in slots {
+        let mut candidate = remaining.clone();
+        candidate.insert(index, moved_order_id.to_string());
+        if validate_active_sequence_barrier(
+            current_sequence, &candidate, states, frozen_order_ids,
+        ).is_ok() {
+            return Ok(candidate);
+        }
+    }
+    Err(ProductionMapError::QueueActionNotAllowed)
+}
+
 pub(super) fn validate_active_sequence_barrier(
     current_sequence: &[String],
     next_sequence: &[String],
@@ -595,6 +641,36 @@ mod active_sequence_barrier_tests {
                 .as_str()
                 .to_string(),
         )])
+    }
+
+    #[test]
+    fn nearest_slot_is_legal_and_minimal_for_every_drag_and_active_barrier_combination() {
+        let current = ids(&["a", "b", "c", "d", "e"]);
+        for mask in 0..32 {
+            let states = current.iter().enumerate()
+                .filter(|(index, _)| mask & (1 << index) != 0)
+                .map(|(_, id)| (id.clone(), "in_progress".to_string()))
+                .collect::<BTreeMap<_, _>>();
+            for old_index in 0..current.len() {
+                for requested_index in 0..current.len() {
+                    let mut requested = current.clone();
+                    let moved = requested.remove(old_index);
+                    requested.insert(requested_index, moved.clone());
+                    let saved = nearest_allowed_sequence(&current, &requested, &moved, &states, &BTreeSet::new()).unwrap();
+                    validate_active_sequence_barrier(&current, &saved, &states, &BTreeSet::new()).unwrap();
+                    let saved_index = saved.iter().position(|id| id == &moved).unwrap();
+                    let remaining = current.iter().filter(|id| *id != &moved).cloned().collect::<Vec<_>>();
+                    assert_eq!(saved.iter().filter(|id| *id != &moved).cloned().collect::<Vec<_>>(), remaining);
+                    for index in 0..current.len() {
+                        let mut candidate = remaining.clone();
+                        candidate.insert(index, moved.clone());
+                        if validate_active_sequence_barrier(&current, &candidate, &states, &BTreeSet::new()).is_ok() {
+                            assert!(saved_index.abs_diff(requested_index) <= index.abs_diff(requested_index));
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]

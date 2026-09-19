@@ -100,12 +100,21 @@ pub async fn production_map_sequence(
             if input.apparatus.trim().is_empty() {
                 return Err(bad_request("apparatus is required"));
             }
-            state
-                .production_maps
-                .set_apparatus_sequence(&input.apparatus, input.order_ids)
-                .await
-                .map_err(production_map_error)?;
-            Ok(json_response(serde_json::json!({"ok": true})))
+            let order_ids = if let Some(moved_order_id) = input.moved_order_id {
+                state
+                    .production_maps
+                    .reorder_apparatus_sequence(&input.apparatus, input.order_ids, &moved_order_id)
+                    .await
+                    .map_err(production_map_error)?
+            } else {
+                state
+                    .production_maps
+                    .set_apparatus_sequence(&input.apparatus, input.order_ids.clone())
+                    .await
+                    .map_err(production_map_error)?;
+                input.order_ids
+            };
+            Ok(json_response(serde_json::json!({"ok": true, "order_ids": order_ids})))
         }
         _ => Err(method_not_allowed()),
     }

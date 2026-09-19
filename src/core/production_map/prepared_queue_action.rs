@@ -34,6 +34,11 @@ pub struct PreparedApparatusQueueAction {
 }
 
 impl PreparedApparatusQueueAction {
+    pub(crate) fn attach_active_paddon(&mut self) {
+        if !self.progress_output_batches().is_empty() {
+            self.event.payload_json["use_active_paddon"] = serde_json::json!(true);
+        }
+    }
     pub(crate) fn attach_print_preflight_hold_id(&mut self, hold_id: &str) {
         let hold_id = hold_id.trim();
         if !hold_id.is_empty() {
@@ -43,6 +48,7 @@ impl PreparedApparatusQueueAction {
 
     /// Only newly produced batches are assigned. Replays, issues, and updates
     /// to previously printed rolls must never change pallet membership.
+    #[cfg(test)]
     pub(crate) fn attach_output_paddon(&mut self, code: &str) {
         let code = code.trim();
         if code.is_empty() || self.progress_output_batches().is_empty() {

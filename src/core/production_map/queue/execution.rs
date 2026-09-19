@@ -291,7 +291,6 @@ impl ProductionMapService {
             } else {
                 apply_queue_policy(
                     policy,
-                    previous_progress_ready,
                     &sequence,
                     &mut parsed,
                     order_id,

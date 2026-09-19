@@ -11,11 +11,20 @@ const REZKA_ID: &str = "apparatus:default:asset-010";
 
 #[tokio::test]
 async fn free_pick_rezka_exposes_start_for_waiting_lamination_wip_outside_queue_head() {
+    assert_rezka_start_with_waiting_wip(QueueDiscipline::FreePick).await;
+}
+
+#[tokio::test]
+async fn strict_rezka_rejects_waiting_lamination_wip_outside_queue_head() {
+    assert_rezka_start_with_waiting_wip(QueueDiscipline::StrictSequence).await;
+}
+
+async fn assert_rezka_start_with_waiting_wip(discipline: QueueDiscipline) {
     let store = Arc::new(MemoryProductionMapStore::new());
     let lamination =
         runtime_configuration(TestApparatusSpec::laminate(LAMINATION_ID, "Laminatsiya 1"));
     let mut rezka = runtime_configuration(TestApparatusSpec::cut(REZKA_ID, "Rezka"));
-    rezka.queue.discipline = QueueDiscipline::FreePick;
+    rezka.queue.discipline = discipline;
     let service = ProductionMapService::new(
         store,
         Arc::new(TestCanonicalApparatusResolver::new([lamination, rezka])),
@@ -76,13 +85,13 @@ async fn free_pick_rezka_exposes_start_for_waiting_lamination_wip_outside_queue_
         )
         .await
         .expect("lamination start");
-    service
+    let paused = service
         .apply_apparatus_queue_action_with_progress(
             LAMINATION_ID,
             target_order,
             queue_state::ApparatusQueueAction::Pause,
             &[LAMINATION_ID.to_string()],
-            actor,
+            actor.clone(),
             QueueProgressInput {
                 produced_qty: Some(100.0),
                 uom: "m".to_string(),
@@ -91,6 +100,8 @@ async fn free_pick_rezka_exposes_start_for_waiting_lamination_wip_outside_queue_
         )
         .await
         .expect("lamination waiting WIP");
+    let qr_payload = paused.progress_batch.expect("lamination WIP").qr_payload;
+    let states_before = service.apparatus_queue_states().await.expect("states");
 
     let controls = service
         .queue_action_controls()
@@ -102,18 +113,66 @@ async fn free_pick_rezka_exposes_start_for_waiting_lamination_wip_outside_queue_
         .expect("target Rezka control");
 
     assert!(!rezka_control.previous_stage_ready);
+    let free_pick = discipline == QueueDiscipline::FreePick;
     assert_eq!(
-        rezka_control.interaction.previous_wip_mode,
-        ApparatusQueuePreviousWipMode::ScanRequired
+        rezka_control.interaction.blocking_reason_code,
+        if free_pick { "" } else { "waiting_sequence" }
     );
     assert_eq!(
-        rezka_control.interaction.mode,
-        ApparatusQueueInteractionMode::FreshStart
-    );
-    assert_eq!(rezka_control.interaction.blocking_reason_code, "");
-    assert!(
         rezka_control
             .allowed_actions
-            .contains(&queue_state::ApparatusQueueAction::Start)
+            .contains(&queue_state::ApparatusQueueAction::Start),
+        free_pick
+    );
+
+    let start = service
+        .apply_apparatus_queue_action_with_progress(
+            REZKA_ID,
+            target_order,
+            queue_state::ApparatusQueueAction::Start,
+            &[REZKA_ID.to_string()],
+            actor,
+            QueueProgressInput {
+                qr_payload: qr_payload.clone(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await;
+    if free_pick {
+        assert_eq!(
+            rezka_control.interaction.previous_wip_mode,
+            ApparatusQueuePreviousWipMode::ScanRequired
+        );
+        assert_eq!(
+            rezka_control.interaction.mode,
+            ApparatusQueueInteractionMode::FreshStart
+        );
+        let started = start.expect("free-pick start outside queue head");
+        assert_eq!(
+            started.states.get(target_order).map(String::as_str),
+            Some("in_progress")
+        );
+    } else {
+        assert_eq!(
+            rezka_control.interaction.mode,
+            ApparatusQueueInteractionMode::FreshStartBlocked
+        );
+        assert_eq!(start, Err(ProductionMapError::QueueActionNotAllowed));
+        assert_eq!(
+            service.apparatus_queue_states().await.expect("states"),
+            states_before
+        );
+    }
+    let batch = service
+        .progress_batch_for_qr("", &qr_payload)
+        .await
+        .expect("WIP");
+    assert_eq!(
+        batch.wip_status,
+        if free_pick {
+            OrderProgressBatchWipStatus::InUse
+        } else {
+            OrderProgressBatchWipStatus::Waiting
+        }
     );
 }

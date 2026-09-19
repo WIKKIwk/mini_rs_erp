@@ -660,6 +660,12 @@ pub trait ProductionMapStorePort: Send + Sync {
     async fn paddons(&self, _limit: usize) -> StoreResult<Vec<PaddonSummary>> {
         Ok(Vec::new())
     }
+    async fn active_rezka_paddon(&self, _apparatus: &str, _actor: &QueueActionActor) -> StoreResult<Option<String>> {
+        Err(ProductionMapError::StoreFailed)
+    }
+    async fn set_active_rezka_paddon(&self, _apparatus: &str, _actor: &QueueActionActor, _code: Option<&str>) -> StoreResult<()> {
+        Err(ProductionMapError::StoreFailed)
+    }
     async fn paddon_summary(&self, _code: &str) -> StoreResult<Option<PaddonSummary>> {
         Ok(None)
     }

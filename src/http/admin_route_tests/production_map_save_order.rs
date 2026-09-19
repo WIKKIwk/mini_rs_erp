@@ -901,7 +901,7 @@ async fn production_map_sequence_blocks_reorder_before_active_order() {
         session_for(&state, PrincipalRole::Aparatchi, "worker-sequence-active").await;
     let router = build_router(state.clone());
 
-    for (id, order_number) in [("zakaz-active-a", "9101"), ("zakaz-active-b", "9102")] {
+    for (id, order_number) in [("zakaz-active-a", "9101"), ("zakaz-active-b", "9102"), ("zakaz-active-c", "9103")] {
         let saved = router
             .clone()
             .oneshot(request_with_body(
@@ -925,7 +925,7 @@ async fn production_map_sequence_blocks_reorder_before_active_order() {
             &token,
             r#"{
                 "apparatus":"apparatus:default:bosma_7",
-                "order_ids":["zakaz-active-a","zakaz-active-b"]
+                "order_ids":["zakaz-active-a","zakaz-active-b","zakaz-active-c"]
             }"#,
         ))
         .await
@@ -952,13 +952,14 @@ async fn production_map_sequence_blocks_reorder_before_active_order() {
     assert_eq!(started.status(), StatusCode::OK);
 
     let blocked = router
+        .clone()
         .oneshot(request_with_body(
             "PUT",
             "/v1/mobile/admin/production-maps/sequence",
             &token,
             r#"{
                 "apparatus":"apparatus:default:bosma_7",
-                "order_ids":["zakaz-active-b","zakaz-active-a"]
+                "order_ids":["zakaz-active-b","zakaz-active-a","zakaz-active-c"]
             }"#,
         ))
         .await
@@ -968,6 +969,18 @@ async fn production_map_sequence_blocks_reorder_before_active_order() {
         json_body(blocked).await["error"],
         "queue_action_not_allowed"
     );
+    let adjusted = router.clone().oneshot(request_with_body(
+        "PUT", "/v1/mobile/admin/production-maps/sequence", &token,
+        r#"{"apparatus":"apparatus:default:bosma_7",
+            "order_ids":["zakaz-active-c","zakaz-active-a","zakaz-active-b"],
+            "moved_order_id":"zakaz-active-c"}"#,
+    )).await.unwrap();
+    assert_eq!(adjusted.status(), StatusCode::OK);
+    let applied = serde_json::json!(["zakaz-active-a", "zakaz-active-c", "zakaz-active-b"]);
+    assert_eq!(json_body(adjusted).await["order_ids"], applied);
+    let snapshot = router.oneshot(request("GET", "/v1/mobile/admin/production-maps/sequence", &token))
+        .await.unwrap();
+    assert_eq!(json_body(snapshot).await["sequences"]["apparatus:default:bosma_7"], applied);
 }
 
 #[tokio::test]

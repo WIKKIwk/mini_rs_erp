@@ -596,4 +596,6 @@ struct ApparatusSequencePutRequest {
     apparatus: String,
     #[serde(default)]
     order_ids: Vec<String>,
+    #[serde(default)]
+    moved_order_id: Option<String>,
 }

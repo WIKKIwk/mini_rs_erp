@@ -10,4 +10,5 @@ mod order_control;
 mod print_dispatch;
 mod print_preflight;
 mod queue_controls;
+mod queue_reorder;
 mod service_flow;

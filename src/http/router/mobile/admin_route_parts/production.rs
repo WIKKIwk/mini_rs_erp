@@ -196,6 +196,10 @@ fn production_routes() -> Router<AppState> {
             any(admin::production_map_paddons),
         )
         .route(
+            "/v1/mobile/admin/production-maps/paddons/active",
+            any(admin::production_map_active_paddon),
+        )
+        .route(
             "/v1/mobile/admin/production-maps/paddons/detail",
             any(admin::production_map_paddon_detail),
         )

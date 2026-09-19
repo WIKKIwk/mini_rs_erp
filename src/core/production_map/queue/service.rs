@@ -114,6 +114,29 @@ impl ProductionMapService {
         apparatus: &str,
         order_ids: Vec<String>,
     ) -> Result<(), ProductionMapError> {
+        self.save_apparatus_sequence(apparatus, order_ids, None)
+            .await?;
+        Ok(())
+    }
+
+    /// Move one order to the closest legal slot, using the current server
+    /// queue and the same barriers as a strict sequence update.
+    pub async fn reorder_apparatus_sequence(
+        &self,
+        apparatus: &str,
+        order_ids: Vec<String>,
+        moved_order_id: &str,
+    ) -> Result<Vec<String>, ProductionMapError> {
+        self.save_apparatus_sequence(apparatus, order_ids, Some(moved_order_id.trim()))
+            .await
+    }
+
+    async fn save_apparatus_sequence(
+        &self,
+        apparatus: &str,
+        order_ids: Vec<String>,
+        moved_order_id: Option<&str>,
+    ) -> Result<Vec<String>, ProductionMapError> {
         let _guard = self.queue_action_guard().await;
         let apparatus = apparatus.trim();
         if !queue_state::is_canonical_apparatus_id(apparatus) {
@@ -133,21 +156,22 @@ impl ProductionMapService {
         let canonical = self.resolve_canonical_apparatus_text(apparatus).await?;
         let canonical_id = canonical.runtime.apparatus_id.to_string();
         let now = super::super::progress::unix_seconds();
-        if self
+        let preflight_order_ids = self
             .store
             .active_print_preflight_holds()
             .await?
             .into_iter()
-            .any(|hold| {
+            .filter(|hold| {
                 hold.is_live_at(now)
                     && queue_state::apparatus_ids_match(&hold.apparatus, &canonical_id)
             })
-        {
+            .map(|hold| hold.order_id)
+            .collect::<Vec<_>>();
+        if moved_order_id.is_none() && !preflight_order_ids.is_empty() {
             return Err(ProductionMapError::PrintPreflightActive);
         }
-        let visible_order_ids = apparatus::selected_order_ids_for_apparatus(&maps, &canonical)
-            .into_iter()
-            .collect::<BTreeSet<_>>();
+        let visible_sequence = apparatus::selected_order_ids_for_apparatus(&maps, &canonical);
+        let visible_order_ids = visible_sequence.iter().cloned().collect::<BTreeSet<_>>();
         for order_id in &order_ids {
             if !known_order_ids.contains(order_id.as_str()) {
                 return Err(ProductionMapError::QueueSequenceOrderNotFound(
@@ -189,6 +213,33 @@ impl ProductionMapService {
                 }
             }
         }
+        // Running and passed color trials reserve their order, not the entire
+        // waiting queue. Never let a moved order cross that reservation.
+        for order_id in preflight_order_ids {
+            barrier_states.insert(order_id, "print_preflight".to_string());
+        }
+        let effective_sequence;
+        let current_sequence = if moved_order_id.is_some() {
+            effective_sequence = queue_state::effective_apparatus_sequence_excluding(
+                current_sequence,
+                &visible_sequence,
+                &frozen_order_ids,
+            );
+            effective_sequence.as_slice()
+        } else {
+            current_sequence
+        };
+        let order_ids = if let Some(moved_order_id) = moved_order_id {
+            nearest_allowed_sequence(
+                current_sequence,
+                &order_ids,
+                moved_order_id,
+                &barrier_states,
+                &frozen_order_ids,
+            )?
+        } else {
+            order_ids
+        };
         validate_active_sequence_barrier(
             current_sequence,
             &order_ids,
@@ -196,10 +247,10 @@ impl ProductionMapService {
             &frozen_order_ids,
         )?;
         self.store
-            .put_apparatus_sequence(apparatus, order_ids)
+            .put_apparatus_sequence(apparatus, order_ids.clone())
             .await?;
         self.notify_live();
-        Ok(())
+        Ok(order_ids)
     }
 
     pub async fn apparatus_queue_states(
@@ -735,14 +786,7 @@ impl ProductionMapService {
                     && (state.is_active()
                         || state == queue_state::ApparatusQueueOrderState::Paused
                         || (!is_bosma && policy == ApparatusQueuePolicy::FreePick)
-                        || actionable_order_id == Some(order_id.trim())
-                        || (!is_bosma && state == queue_state::ApparatusQueueOrderState::Pending
-                            && !previous_stage_not_configured
-                            && (opening_wip_mode == ApparatusQueuePreviousWipMode::ScanRequired
-                                || (previous_stage.is_some()
-                                    && (previous_stage_ready
-                                        || previous_wip_mode
-                                            == ApparatusQueuePreviousWipMode::ScanRequired)))));
+                        || actionable_order_id == Some(order_id.trim()));
                 let mut complete_requires_full_report = false;
                 let mut complete_requires_rezka_total_waste_only = false;
                 let mut start_ready = false;
