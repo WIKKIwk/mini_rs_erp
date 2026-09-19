@@ -131,6 +131,62 @@ async fn assert_visibility(service: &ProductionMapService, selected: Option<&str
 }
 
 #[tokio::test]
+async fn print_dispatch_single_unassigned_candidate_is_visible_and_can_start() {
+    let (service, _) = fixture();
+    let mut single = map();
+    single
+        .nodes
+        .retain(|node| node.alternative_group_id != "print" || node.apparatus_id == PRINT[0]);
+    service.upsert_map(single).await.unwrap();
+
+    // Existing maps may keep their alternative group after all peers are removed.
+    assert_visibility(&service, Some(PRINT[0])).await;
+    service
+        .set_apparatus_sequence(PRINT[0], vec![ORDER.into()])
+        .await
+        .expect("the sole print candidate can be queued without dispatch");
+    let started = service
+        .apply_apparatus_queue_action_with_progress(
+            PRINT[0],
+            ORDER,
+            queue_state::ApparatusQueueAction::Start,
+            &[PRINT[0].into()],
+            QueueActionActor::default(),
+            QueueProgressInput::default(),
+        )
+        .await
+        .expect("the sole print candidate can start without dispatch");
+    assert_eq!(started.session.unwrap().apparatus, PRINT[0]);
+}
+
+#[test]
+fn print_dispatch_single_candidate_does_not_override_an_explicit_assignment() {
+    let mut single = map();
+    single
+        .nodes
+        .retain(|node| node.alternative_group_id != "print" || node.apparatus_id == PRINT[0]);
+    for technology in [
+        ProcessTechnology::Rotogravure,
+        ProcessTechnology::Flexographic,
+    ] {
+        let apparatus = runtime_configuration(TestApparatusSpec::print(
+            PRINT[0],
+            "Display only",
+            technology,
+            Some(8),
+        ));
+        for (assigned, expected) in [("", true), (PRINT[0], true), (PRINT[1], false)] {
+            assign(&mut single, "print", assigned);
+            assert_eq!(
+                apparatus::print_assignment_allows_order(&single, &apparatus),
+                expected,
+                "singleton assignment {assigned:?}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn print_dispatch_assignment_move_and_return_preserve_downstream_cooperation() {
     let (service, store) = fixture();
     service.upsert_map(map()).await.unwrap();

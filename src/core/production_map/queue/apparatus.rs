@@ -78,8 +78,8 @@ fn is_template_map(map: &ProductionMapDefinition) -> bool {
     map.id.trim().starts_with("template-")
 }
 
-/// Print alternatives are an exclusive dispatch choice. Other operations keep
-/// their cooperative candidate queues, including historical assignments.
+/// Multiple print alternatives are an exclusive dispatch choice. Other operations
+/// keep their cooperative candidate queues, including historical assignments.
 /// Classify by canonical runtime operation, never by an ID or display label.
 pub(super) fn print_assignment_allows_order(
     map: &ProductionMapDefinition,
@@ -95,14 +95,22 @@ pub(super) fn print_assignment_allows_order(
             return false;
         }
         let group = node.alternative_group_id.trim();
-        group.is_empty()
-            || map
-                .nodes
+        if group.is_empty() {
+            return true;
+        }
+        let candidates = map
+            .nodes
+            .iter()
+            .filter(|candidate| {
+                candidate.kind == ProductionMapNodeKind::Apparatus
+                    && candidate.alternative_group_id.trim() == group
+            })
+            .collect::<Vec<_>>();
+        // A remaining single candidate needs no choice, but never override an
+        // explicit assignment to another apparatus.
+        (candidates.len() == 1 && node.alternative_assigned_apparatus_id.trim().is_empty())
+            || candidates
                 .iter()
-                .filter(|candidate| {
-                    candidate.kind == ProductionMapNodeKind::Apparatus
-                        && candidate.alternative_group_id.trim() == group
-                })
                 .all(|candidate| candidate.alternative_assigned_apparatus_id.trim() == apparatus_id)
     })
 }
