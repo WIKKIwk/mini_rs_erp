@@ -312,6 +312,8 @@ impl PostgresPreparationStore {
         let orders: Vec<Value> = if assigned_ids.is_empty() {
             Vec::new()
         } else {
+            // Current order products are authoritative. Templates are only a
+            // fallback by exact map identity, never by reusable code/number.
             sqlx::query_scalar(
                 "SELECT jsonb_build_object('id', m.id, 'code', m.code, 'title', m.title,
                      'order_kg', round((m.map_json->>'order_kg')::numeric, 6)::text,
@@ -338,10 +340,11 @@ impl PostgresPreparationStore {
                      OR EXISTS (
                        SELECT 1 FROM mini_quick_order_templates t
                        LEFT JOIN LATERAL jsonb_array_elements(COALESCE(t.payload_json->'layers', '[]'::jsonb)) l ON true
-                       WHERE (btrim(COALESCE(t.payload_json->>'source_map_id','')) = m.id
-                              OR (btrim(COALESCE(t.payload_json->>'order_number','')) <> ''
-                                  AND btrim(COALESCE(t.payload_json->>'order_number','')) = m.order_number)
-                              OR (btrim(COALESCE(t.code,'')) <> '' AND btrim(COALESCE(t.code,'')) = m.code))
+                       WHERE btrim(COALESCE(t.payload_json->>'source_map_id','')) = m.id
+                         AND NOT EXISTS (
+                           SELECT 1 FROM mini_order_products current_product
+                           WHERE current_product.order_id = m.id
+                         )
                          AND (
                            lower(COALESCE(l->>'material_id','')) = ANY($2)
                            OR lower(COALESCE(l->>'material','')) = ANY($3)
@@ -1199,7 +1202,12 @@ impl PostgresPreparationStore {
             return Err(PreparationError::Invalid("Order topilmadi"));
         }
         let pairs: Vec<(String, String)> = sqlx::query_as(
-            "SELECT lower(COALESCE(l->>'material_id','')) AS mid,
+            "WITH source_templates AS (
+               SELECT payload_json FROM mini_quick_order_templates
+               WHERE btrim(COALESCE(payload_json->>'source_map_id','')) = $1
+                 AND NOT EXISTS (SELECT 1 FROM mini_order_products WHERE order_id = $1)
+             )
+             SELECT lower(COALESCE(l->>'material_id','')) AS mid,
                     COALESCE(l->>'material','') AS mname
              FROM mini_order_products p,
                   jsonb_array_elements(COALESCE(p.layers_json, '[]'::jsonb)) l
@@ -1207,9 +1215,8 @@ impl PostgresPreparationStore {
              UNION
              SELECT lower(COALESCE(l->>'material_id','')),
                     COALESCE(l->>'material','')
-             FROM mini_quick_order_templates t,
+             FROM source_templates t,
                   jsonb_array_elements(COALESCE(t.payload_json->'layers', '[]'::jsonb)) l
-             WHERE btrim(COALESCE(t.payload_json->>'source_map_id','')) = $1
              UNION
              SELECT '', COALESCE(p.first_layer_material,'') FROM mini_order_products p
              WHERE p.order_id = $1 AND btrim(COALESCE(p.first_layer_material,'')) <> ''
@@ -1221,19 +1228,16 @@ impl PostgresPreparationStore {
              WHERE p.order_id = $1 AND btrim(COALESCE(p.third_layer_material,'')) <> ''
              UNION
              SELECT '', COALESCE(t.payload_json->>'first_layer_material','')
-             FROM mini_quick_order_templates t
-             WHERE btrim(COALESCE(t.payload_json->>'source_map_id','')) = $1
-               AND btrim(COALESCE(t.payload_json->>'first_layer_material','')) <> ''
+             FROM source_templates t
+             WHERE btrim(COALESCE(t.payload_json->>'first_layer_material','')) <> ''
              UNION
              SELECT '', COALESCE(t.payload_json->>'second_layer_material','')
-             FROM mini_quick_order_templates t
-             WHERE btrim(COALESCE(t.payload_json->>'source_map_id','')) = $1
-               AND btrim(COALESCE(t.payload_json->>'second_layer_material','')) <> ''
+             FROM source_templates t
+             WHERE btrim(COALESCE(t.payload_json->>'second_layer_material','')) <> ''
              UNION
              SELECT '', COALESCE(t.payload_json->>'third_layer_material','')
-             FROM mini_quick_order_templates t
-             WHERE btrim(COALESCE(t.payload_json->>'source_map_id','')) = $1
-               AND btrim(COALESCE(t.payload_json->>'third_layer_material','')) <> ''",
+             FROM source_templates t
+             WHERE btrim(COALESCE(t.payload_json->>'third_layer_material','')) <> ''",
         )
         .bind(id)
         .fetch_all(&self.pool)
@@ -1958,11 +1962,11 @@ async fn order_matches_responsibility(
                OR EXISTS (
                  SELECT 1 FROM mini_quick_order_templates t
                  LEFT JOIN LATERAL jsonb_array_elements(COALESCE(t.payload_json->'layers', '[]'::jsonb)) l ON true
-                 WHERE (btrim(COALESCE(t.payload_json->>'source_map_id','')) = $2
-                        OR EXISTS (SELECT 1 FROM mini_production_maps m WHERE m.id = $2
-                                    AND ((btrim(COALESCE(t.payload_json->>'order_number','')) <> ''
-                                          AND btrim(COALESCE(t.payload_json->>'order_number','')) = m.order_number)
-                                         OR (btrim(COALESCE(t.code,'')) <> '' AND btrim(COALESCE(t.code,'')) = m.code))))
+                 WHERE btrim(COALESCE(t.payload_json->>'source_map_id','')) = $2
+                   AND NOT EXISTS (
+                     SELECT 1 FROM mini_order_products current_product
+                     WHERE current_product.order_id = $2
+                   )
                    AND (
                      lower(COALESCE(l->>'material_id','')) = lower(r.material_id)
                      OR lower(COALESCE(l->>'material','')) = lower(r.material_name)

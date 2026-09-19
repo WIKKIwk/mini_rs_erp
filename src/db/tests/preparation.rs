@@ -819,6 +819,94 @@ async fn preparation_snapshot_lists_shared_raw_catalog_and_balances() {
 }
 
 #[tokio::test]
+async fn preparation_order_scope_ignores_stale_and_unrelated_templates() {
+    let url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
+        .unwrap_or_else(|_| "postgres:///postgres".into());
+    let admin = sqlx::PgPool::connect(&url).await.unwrap();
+    let db = format!("mini_rs_erp_test_prep_scope_{:016x}", rand::random::<u64>());
+    sqlx::query(&format!("CREATE DATABASE {db}"))
+        .execute(&admin).await.unwrap();
+    let pool = sqlx::PgPool::connect_with(
+        url.parse::<PgConnectOptions>().unwrap().database(&db),
+    ).await.unwrap();
+    crate::db::postgres::apply_postgres_migrations_through(&pool, 121)
+        .await.unwrap();
+    seed_standard_canonical_apparatus(&pool).await;
+    apply_foundation_migration(&pool).await.unwrap();
+    sqlx::raw_sql(r#"
+        INSERT INTO mini_system_users(id,role,name,phone)
+            VALUES ('prep-scope','tayyorlov_masteri','Master','901234567');
+        INSERT INTO mini_calculate_materials(id,lower_name,payload_json) VALUES
+            ('assigned','assigned','{"id":"assigned","name":"Assigned","active":true}'),
+            ('other','other','{"id":"other","name":"Other","active":true}');
+    "#).execute(&pool).await.unwrap();
+    let store = PostgresPreparationStore::new(pool.clone());
+    store.assign_responsibility(MaterialResponsibilityAssign {
+        principal_ref: "prep-scope".into(), material_id: "assigned".into(),
+    }).await.unwrap();
+    for id in ["allowed", "legacy", "stale", "same-number", "same-code", "template-only"] {
+        sqlx::query("INSERT INTO mini_production_maps
+            (id,product_code,title,code,order_number,map_json,lifecycle_status)
+            VALUES ($1,'P',$1,$1,$1,$2,'released')")
+            .bind(id).bind(json!({"id": id, "order_kg": 100}))
+            .execute(&pool).await.unwrap();
+        if id != "template-only" {
+            sqlx::query("INSERT INTO mini_orders(id,code,order_number,product_name)
+                VALUES ($1,$1,$1,'P')")
+                .bind(id).execute(&pool).await.unwrap();
+            let material = if id == "allowed" { "assigned" } else { "other" };
+            let layers = if id == "legacy" { json!([]) } else {
+                json!([{"material_id": material, "material": if material == "assigned" {
+                    "Assigned"
+                } else { "Other" }}])
+            };
+            sqlx::query("INSERT INTO mini_order_products
+                (id,order_id,product_name,layers_json,first_layer_material)
+                VALUES ($1,$1,'P',$2,$3)")
+                .bind(id).bind(layers)
+                .bind(if id == "legacy" { "Assigned" } else { "" })
+                .execute(&pool).await.unwrap();
+        }
+    }
+    for (id, code, source, number) in [
+        ("stale", "old-stale", "stale", "stale"),
+        ("same-number", "old-number", "another-map", "same-number"),
+        ("same-code", "same-code", "another-map", "another-number"),
+        ("template-only", "template-only", "template-only", "template-only"),
+    ] {
+        sqlx::query("INSERT INTO mini_quick_order_templates
+            (id,owner_key,code,name,product_name,quick_key,payload_json)
+            VALUES ($1,'owner',$2,'Template','P',$1,$3)")
+            .bind(id).bind(code).bind(json!({
+                "source_map_id": source, "order_number": number,
+                "layers": [{"material_id": "assigned", "material": "Assigned"}]
+            })).execute(&pool).await.unwrap();
+    }
+    let allowed: std::collections::BTreeSet<String> = store.snapshot("prep-scope")
+        .await.unwrap()["orders"].as_array().unwrap().iter()
+        .map(|order| order["id"].as_str().unwrap().to_owned()).collect();
+    assert_eq!(allowed, ["allowed", "legacy", "template-only"]
+        .into_iter().map(str::to_owned).collect());
+    for id in ["allowed", "legacy", "template-only", "stale", "same-number", "same-code"] {
+        let expected = allowed.contains(id);
+        assert_eq!(store.order_in_scope("prep-scope", id).await.unwrap(), expected, "{id}");
+        let materials = store.order_materials(id).await.unwrap();
+        let has_assigned = materials["materials"].as_array().unwrap().iter()
+            .any(|material| material["material_id"] == "assigned");
+        assert_eq!(has_assigned, expected, "{id}");
+    }
+    store.unassign_responsibility(MaterialResponsibilityDelete {
+        principal_ref: "prep-scope".into(), material_id: "assigned".into(),
+    }).await.unwrap();
+    assert!(store.snapshot("prep-scope").await.unwrap()["orders"]
+        .as_array().unwrap().is_empty());
+    assert!(!store.order_in_scope("prep-scope", "allowed").await.unwrap());
+    pool.close().await;
+    sqlx::query(&format!("DROP DATABASE {db}")).execute(&admin).await.unwrap();
+    admin.close().await;
+}
+
+#[tokio::test]
 async fn preparation_formula_material_scope_and_order_materials() {
     let url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
         .unwrap_or_else(|_| "postgres:///postgres".into());
