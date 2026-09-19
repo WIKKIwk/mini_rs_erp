@@ -1630,9 +1630,16 @@ async fn delete_blocks_initial_queue_head_even_without_started_work() {
         .put_apparatus_sequence("apparatus:default:bosma_8", vec!["zakaz-0153".into()])
         .await
         .unwrap();
+    let Err(ProductionMapError::OrderDeleteBlocked(blockers)) =
+        service.delete_order("zakaz-0153").await
+    else {
+        panic!("initial queue head must block deletion");
+    };
+    assert_eq!(blockers.len(), 1);
+    assert_eq!(blockers[0].code, "first_in_sequence");
     assert_eq!(
-        deletion_blocker_codes(service.delete_order("zakaz-0153").await),
-        vec!["first_in_sequence"]
+        blockers[0].message,
+        "Buyurtma «Bosma 8» navbatida 1-o‘rinda turibdi"
     );
     assert!(service.raw_map("zakaz-0153").await.unwrap().is_some());
 }
@@ -1702,7 +1709,8 @@ async fn delete_checks_every_candidate_of_the_initial_alternative_stage() {
     };
     assert_eq!(blockers.len(), 1);
     assert_eq!(blockers[0].code, "first_in_sequence");
-    assert!(blockers[0].message.contains(alternative));
+    assert!(blockers[0].message.contains("Laminatsiya 2"));
+    assert!(!blockers[0].message.contains(alternative));
 }
 
 #[tokio::test]
@@ -1749,13 +1757,43 @@ async fn delete_retains_work_history_block_on_downstream_apparatus() {
             )
             .await
             .unwrap();
+        let Err(ProductionMapError::OrderDeleteBlocked(blockers)) =
+            service.delete_order("zakaz-0153").await
+        else {
+            panic!("work history must block deletion for state {state}");
+        };
+        assert_eq!(blockers.len(), 1);
+        assert_eq!(blockers[0].code, "work_started");
         assert_eq!(
-            deletion_blocker_codes(service.delete_order("zakaz-0153").await),
-            vec!["work_started"],
-            "state {state}"
+            blockers[0].message,
+            "Buyurtmada ish jarayoni boshlangan: Laminatsiya 1"
         );
         assert!(service.raw_map("zakaz-0153").await.unwrap().is_some());
     }
+}
+
+#[tokio::test]
+async fn delete_keeps_unknown_historical_apparatus_block_without_exposing_id() {
+    let (service, store) = deletion_queue_fixture().await;
+    store
+        .put_apparatus_queue_states(
+            "apparatus:removed:historic",
+            BTreeMap::from([("zakaz-0153".into(), "completed".into())]),
+        )
+        .await
+        .unwrap();
+    let Err(ProductionMapError::OrderDeleteBlocked(blockers)) =
+        service.delete_order("zakaz-0153").await
+    else {
+        panic!("missing apparatus label must not bypass deletion guard");
+    };
+    assert_eq!(blockers.len(), 1);
+    assert_eq!(blockers[0].code, "work_started");
+    assert_eq!(
+        blockers[0].message,
+        "Buyurtmada ish jarayoni boshlangan: Nomi aniqlanmagan apparat"
+    );
+    assert!(service.raw_map("zakaz-0153").await.unwrap().is_some());
 }
 
 #[tokio::test]

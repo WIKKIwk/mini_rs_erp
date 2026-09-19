@@ -277,16 +277,20 @@ impl ProductionMapService {
                     .first()
                     .is_some_and(|first| first.trim() == order_id)
             {
+                let apparatus_name = deletion_apparatus_name(self, &apparatus).await;
                 blockers.push(OrderDeleteBlocker::new(
                     "first_in_sequence",
-                    format!("Buyurtma {apparatus} ketma-ketligida 1-o‘rinda turibdi"),
+                    format!("Buyurtma «{apparatus_name}» navbatida 1-o‘rinda turibdi"),
                 ));
             }
         }
 
         let evidence = order_flow_evidence(self, &order_id).await?;
         if evidence.started {
-            let stages = evidence.started_apparatuses.into_iter().collect::<Vec<_>>();
+            let mut stages = Vec::new();
+            for apparatus in evidence.started_apparatuses {
+                stages.push(deletion_apparatus_name(self, &apparatus).await);
+            }
             let message = if stages.is_empty() {
                 "Buyurtmada ish jarayoni allaqachon boshlangan".to_string()
             } else {
@@ -336,6 +340,23 @@ impl ProductionMapService {
             deleted: true,
         })
     }
+}
+
+// Labels are presentation only: missing/retired catalog entries must neither
+// expose internal IDs nor weaken the work-history and queue deletion guards.
+async fn deletion_apparatus_name(service: &ProductionMapService, value: &str) -> String {
+    if let Ok(id) = crate::core::apparatus_standard::ApparatusId::new(value.trim()) {
+        if let Ok(Some(configuration)) = service.apparatus_resolver.resolve(&id).await {
+            let name = configuration.runtime.display.display_name.trim();
+            if configuration.runtime.apparatus_id == id
+                && configuration.has_coherent_source()
+                && !name.is_empty()
+            {
+                return name.to_string();
+            }
+        }
+    }
+    "Nomi aniqlanmagan apparat".to_string()
 }
 
 struct OrderFlowEvidence {
