@@ -443,6 +443,18 @@ async fn complete_after_wip_start_does_not_reuse_input_qr_as_output_qr() {
     let admin_token = session(&state, PrincipalRole::Admin).await;
     let worker_token =
         session_for(&state, PrincipalRole::Aparatchi, "worker-wip-complete-qr").await;
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::Aparatchi,
+            principal_ref: "print-history-viewer".into(),
+            role_id: "aparatchi".into(),
+            assigned_apparatus: vec!["apparatus:default:bosma_7".into()],
+            assigned_item_groups: vec![],
+        })
+        .await
+        .unwrap();
+    let viewer = session_for(&state, PrincipalRole::Aparatchi, "print-history-viewer").await;
     let router = build_router(state);
 
     let saved = router
@@ -554,6 +566,48 @@ async fn complete_after_wip_start_does_not_reuse_input_qr_as_output_qr() {
     assert_eq!(completed_status, StatusCode::OK, "{completed_body:?}");
     assert_eq!(completed_body["states"]["zakaz-wip-complete-qr"], "pending");
     assert_ne!(completed_body["progress_batch"]["qr_payload"], input_qr);
+
+    // The print-only viewer may read every stage of this order, including
+    // processed print output, but cannot operate/reprint the other stage.
+    for _ in 0..2 {
+        let history = router.clone().oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/wip-batches?order_id=zakaz-wip-complete-qr&status=all",
+            &viewer,
+        )).await.unwrap();
+        assert_eq!(history.status(), StatusCode::OK);
+        let history = json_body(history).await;
+        let batches = history["batches"].as_array().unwrap();
+        assert_eq!(batches.len(), 2);
+        assert!(
+            batches
+                .iter()
+                .any(|b| b["qr_payload"] == input_qr && b["wip_status"] == "processed")
+        );
+        assert!(
+            batches
+                .iter()
+                .any(|b| b["qr_payload"] == completed_body["progress_batch"]["qr_payload"])
+        );
+    }
+    let reprint = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/progress-qr/reprint",
+            &viewer,
+            &serde_json::json!({"qr_payload": completed_body["progress_batch"]["qr_payload"]})
+                .to_string(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(reprint.status(), StatusCode::FORBIDDEN);
+    let action = router.oneshot(request_with_body(
+        "POST", "/v1/mobile/admin/production-maps/queue-action", &viewer,
+        r#"{"apparatus":"apparatus:default:asset-007","order_id":"zakaz-wip-complete-qr","action":"start"}"#,
+    )).await.unwrap();
+    assert_eq!(action.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(action).await["error"], "apparatus_not_assigned");
 }
 
 #[tokio::test]
@@ -648,6 +702,7 @@ async fn wip_batches_endpoint_forbids_worker_unassigned_or_unscoped_listing() {
     assert_eq!(unscoped.status(), StatusCode::FORBIDDEN);
 
     let unassigned = router
+        .clone()
         .oneshot(request(
             "GET",
             "/v1/mobile/admin/production-maps/wip-batches?apparatus=apparatus%3Adefault%3Aasset-007&status=waiting",
@@ -656,4 +711,56 @@ async fn wip_batches_endpoint_forbids_worker_unassigned_or_unscoped_listing() {
         .await
         .expect("unassigned wip");
     assert_eq!(unassigned.status(), StatusCode::FORBIDDEN);
+
+    let saved = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &admin_token,
+            &two_apparatus_order_map_json(
+                "zakaz-other-wip",
+                "Other order",
+                "9410",
+                "apparatus:default:bosma_9",
+                "apparatus:default:asset-007",
+            ),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(saved.status(), StatusCode::OK);
+    for endpoint in ["wip-batches", "opening-wip"] {
+        for (order, expected) in [
+            ("zakaz-wip-scope", StatusCode::OK),
+            ("zakaz-other-wip", StatusCode::FORBIDDEN),
+            ("missing-order", StatusCode::FORBIDDEN),
+            ("", StatusCode::FORBIDDEN),
+        ] {
+            let response = router
+                .clone()
+                .oneshot(request(
+                    "GET",
+                    &format!(
+                        "/v1/mobile/admin/production-maps/{endpoint}?status=all&order_id={order}"
+                    ),
+                    &worker_token,
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected, "{endpoint}: {order}");
+        }
+    }
+    for method in ["POST", "DELETE"] {
+        let response = router
+            .clone()
+            .oneshot(request_with_body(
+                method,
+                "/v1/mobile/admin/production-maps/opening-wip",
+                &worker_token,
+                r#"{"order_id":"zakaz-wip-scope"}"#,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
 }

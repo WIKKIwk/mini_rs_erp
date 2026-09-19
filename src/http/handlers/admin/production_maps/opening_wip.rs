@@ -66,7 +66,15 @@ pub async fn production_map_opening_wip(
     let principal = authorize_any_capability(
         &state,
         &headers,
-        &[Capability::AdminAccess, Capability::ProductionMapManage],
+        if method == Method::GET {
+            &[
+                Capability::AdminAccess,
+                Capability::ProductionMapManage,
+                Capability::ApparatusQueueRead,
+            ]
+        } else {
+            &[Capability::AdminAccess, Capability::ProductionMapManage]
+        },
     )
     .await?;
     match method {
@@ -80,6 +88,18 @@ pub async fn production_map_opening_wip(
             Ok(json_response(serde_json::json!({ "record": record })))
         }
         Method::GET => {
+            let can_view_all = state
+                .admin
+                .principal_has_capability(&principal, Capability::AdminAccess)
+                .await
+                || state
+                    .admin
+                    .principal_has_capability(&principal, Capability::ProductionMapManage)
+                    .await;
+            if !can_view_all {
+                super::wip::require_wip_order_read_scope(&state, &principal, &query.order_id)
+                    .await?;
+            }
             let wip_status = if query.status.trim().is_empty()
                 || query.status.trim().eq_ignore_ascii_case("all")
             {

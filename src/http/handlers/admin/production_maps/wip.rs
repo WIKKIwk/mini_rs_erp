@@ -1,5 +1,38 @@
 use super::*;
 
+/// Reading the history of an order is distinct from operating its apparatuses.
+/// Only an explicit order containing an assigned canonical apparatus is allowed;
+/// an empty order must never turn this into an unscoped WIP listing.
+pub(super) async fn require_wip_order_read_scope(
+    state: &AppState,
+    principal: &Principal,
+    order_id: &str,
+) -> Result<(), AdminError> {
+    let order_id = order_id.trim();
+    if order_id.is_empty() {
+        return Err(forbidden());
+    }
+    let assigned = state.admin.principal_assigned_apparatus(principal).await;
+    if assigned.is_empty() {
+        return Err(forbidden());
+    }
+    let map = state
+        .production_maps
+        .raw_map(order_id)
+        .await
+        .map_err(production_map_error)?
+        .ok_or_else(forbidden)?;
+    if !map.nodes.iter().any(|node| {
+        node.kind == ProductionMapNodeKind::Apparatus
+            && node
+                .canonical_apparatus_id()
+                .is_some_and(|id| queue_state::apparatus_matches_assigned(id.as_str(), &assigned))
+    }) {
+        return Err(forbidden());
+    }
+    Ok(())
+}
+
 #[derive(Default, serde::Deserialize)]
 pub struct WipBatchesQuery {
     #[serde(default)]
@@ -50,7 +83,7 @@ pub async fn production_map_wip_batches(
         let scoped_to_next =
             queue_state::apparatus_matches_assigned(&query.next_apparatus, &assigned_apparatus);
         if !scoped_to_current && !scoped_to_next {
-            return Err(forbidden());
+            require_wip_order_read_scope(&state, &principal, &query.order_id).await?;
         }
     }
     if query.order_id.trim().starts_with("training-") {

@@ -266,6 +266,25 @@ async fn opening_wip_worker_lookup_is_qr_exact_and_apparatus_scoped() {
         }}"#
     );
 
+    let history_url =
+        format!("/v1/mobile/admin/production-maps/opening-wip?order_id={order_id}&status=all");
+    let history = router
+        .clone()
+        .oneshot(request("GET", &history_url, &worker_token))
+        .await
+        .unwrap();
+    assert_eq!(history.status(), StatusCode::OK);
+    assert_eq!(
+        json_body(history).await["records"][0]["batches"][0]["qr_payload"],
+        qr_payload
+    );
+    let denied = router
+        .clone()
+        .oneshot(request("GET", &history_url, &other_worker_token))
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+
     let candidates = router
         .clone()
         .oneshot(request_with_body(
@@ -343,13 +362,11 @@ async fn opening_wip_worker_lookup_is_qr_exact_and_apparatus_scoped() {
     let list = router
         .oneshot(request(
             "GET",
-            &format!(
-                "/v1/mobile/admin/production-maps/opening-wip?order_id={order_id}&status=waiting"
-            ),
+            "/v1/mobile/admin/production-maps/opening-wip?status=waiting",
             &worker_token,
         ))
         .await
-        .expect("worker list denied");
+        .expect("unscoped worker list denied");
     assert_eq!(list.status(), StatusCode::FORBIDDEN);
 }
 
