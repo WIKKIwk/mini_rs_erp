@@ -42,6 +42,7 @@ pub struct SystemUserRecord {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AdminAccessState {
+    /// Encoded Argon2id PHC string. Never expose this value through an API.
     pub custom_code: String,
     pub blocked: bool,
     pub removed: bool,
@@ -96,6 +97,16 @@ pub trait SystemUserLookup: Send + Sync {
 #[async_trait]
 pub trait AdminAccessStateLookup: Send + Sync {
     async fn list_states(&self) -> Result<BTreeMap<String, AdminAccessState>, AuthPortError>;
+
+    async fn builtin_identity(&self, _ref: &str) -> Result<Option<BuiltinLoginIdentity>, AuthPortError> {
+        Ok(None)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BuiltinLoginIdentity {
+    pub phone: String,
+    pub name: String,
 }
 
 pub trait AuthConfigSink: Send + Sync {

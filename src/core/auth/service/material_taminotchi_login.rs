@@ -41,8 +41,8 @@ impl AuthService {
             if code_value.is_empty() {
                 continue;
             }
-            if code.trim() == code_value
-                && phone_matches_normalized(&material.phone, normalized_phone)
+            if phone_matches_normalized(&material.phone, normalized_phone)
+                && super::helpers::code_matches(code_value, code).await?
             {
                 return Ok(Principal {
                     role: PrincipalRole::MaterialTaminotchi,

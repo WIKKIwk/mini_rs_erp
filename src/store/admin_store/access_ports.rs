@@ -13,7 +13,13 @@ impl AdminStatePort for JsonAdminStore {
             .collect())
     }
 
-    async fn put_state(&self, ref_: &str, state: AdminState) -> Result<(), AdminPortError> {
+    async fn put_state(&self, ref_: &str, mut state: AdminState) -> Result<(), AdminPortError> {
+        if !state.custom_code.is_empty() && !crate::core::auth::password::is_password_hash(&state.custom_code) {
+            state.custom_code = crate::core::auth::password::hash_password(state.custom_code)
+                .await.map_err(|_| AdminPortError::LookupFailed)?;
+        }
+        state.pending_persist_code.clear();
+        state.pending_persist_at = None;
         let mut data = self.data.lock().await;
         data.states
             .insert(ref_.trim().to_string(), StoredAdminState::from(&state));

@@ -42,12 +42,13 @@ impl AuthService {
             let Some(state) = states.get(customer.id.trim()).cloned() else {
                 continue;
             };
+            if state.blocked || state.removed { continue; }
             let code_value = state.custom_code.trim();
             if code_value.is_empty() {
                 continue;
             }
-            if code.trim() == code_value
-                && phone_matches_normalized(&customer.phone, normalized_phone)
+            if phone_matches_normalized(&customer.phone, normalized_phone)
+                && super::helpers::code_matches(code_value, code).await?
             {
                 return Ok(Principal {
                     role,

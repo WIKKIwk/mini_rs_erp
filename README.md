@@ -93,6 +93,26 @@ MOBILE_API_LOCAL_STORE_ALLOW_JSON_FALLBACK=0
 RUST_LOG=info
 ```
 
+Account access codes, including the administrator and warehouse account, live
+in PostgreSQL as salted Argon2id hashes. Runtime startup ignores password values
+in `.env` and requires a completed credential cutover. Follow
+[the credential migration procedure](docs/auth-credential-migration.md) before
+starting this version. The procedure preserves existing codes, including legacy
+eight-character administrator codes; it does not impose a new length requirement.
+Code creation/regeneration returns the new code once. Detail/list/settings reads
+never return an existing code or its hash. Resetting a code does not automatically
+revoke previously issued sessions.
+
+Login counts only invalid credentials per normalized phone number. Successful
+logins do not consume the limit and clear earlier failures; internal errors do
+not count. After five failures within 60 seconds, further authentication is
+blocked with HTTP 429 until that window expires, even for a correct code.
+Blocked requests do not extend the window. Concurrent logins for the same phone
+are serialized so failed attempts cannot bypass the limit. This limit is shared
+by clones/listeners within one process; it resets on restart and is not shared
+between separate server processes. Existing sessions
+are unaffected. Multiple replicas also need a shared gateway login limit.
+
 Health check:
 
 ```bash

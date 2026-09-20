@@ -50,7 +50,8 @@ impl AdminWritePort for AdminCatalogOverlay {
     }
 
     async fn update_customer_code(&self, ref_: &str, code: &str) -> Result<(), AdminPortError> {
-        self.admin_store.update_customer_code(ref_, code).await
+        let _ = (ref_, code);
+        Err(AdminPortError::LookupFailed)
     }
 
     async fn create_material_taminotchi(
@@ -78,9 +79,8 @@ impl AdminWritePort for AdminCatalogOverlay {
         ref_: &str,
         code: &str,
     ) -> Result<(), AdminPortError> {
-        self.admin_store
-            .update_material_taminotchi_code(ref_, code)
-            .await
+        let _ = (ref_, code);
+        Err(AdminPortError::LookupFailed)
     }
 
     async fn assign_customer_item(

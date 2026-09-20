@@ -326,7 +326,7 @@ impl AdminService {
             phone: worker.phone,
             avatar_url,
             level: worker.level,
-            code: state.custom_code.trim().to_string(),
+            code: String::new(),
             code_locked: state.code_locked(now),
             code_retry_after_sec: state.retry_after_seconds(now),
         })
@@ -350,7 +350,7 @@ impl AdminService {
             name: user.name,
             phone: user.phone,
             avatar_url,
-            code: state.custom_code.trim().to_string(),
+            code: String::new(),
             blocked: state.blocked,
             code_locked: state.code_locked(now),
             code_retry_after_sec: state.retry_after_seconds(now),

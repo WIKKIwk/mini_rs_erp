@@ -341,6 +341,12 @@ fn login_error(error: AuthError) -> (StatusCode, Json<ErrorResponse>) {
                 error: "invalid credentials",
             }),
         ),
+        AuthError::TooManyAttempts => (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(ErrorResponse {
+                error: "too many login attempts; try again later",
+            }),
+        ),
         AuthError::Internal => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {

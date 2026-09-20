@@ -19,7 +19,7 @@ impl AuthConfigSink for AuthService {
         let current = self.identity.read().expect("auth identity lock").clone();
         let identity = AuthIdentity {
             werka_phone: normalized_werka_phone,
-            werka_code: werka_code.trim().to_string(),
+            werka_code: if werka_code.trim().is_empty() { current.werka_code } else { super::config_code_hash(werka_code) },
             werka_name: blank_default(werka_name, "Werka"),
             material_taminotchi_phone: current.material_taminotchi_phone,
             material_taminotchi_code: current.material_taminotchi_code,

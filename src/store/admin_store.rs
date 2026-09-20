@@ -158,6 +158,20 @@ impl JsonAdminStore {
         })
     }
 
+    /// Run only after the PostgreSQL import committed. Safe to repeat after a crash.
+    pub async fn clear_legacy_access_secrets(&self) -> Result<(), AdminPortError> {
+        let mut data = self.data.lock().await;
+        let mut cleaned = data.clone();
+        for state in cleaned.states.values_mut() {
+            state.custom_code.clear();
+            state.pending_persist_code.clear();
+            state.pending_persist_at_unix = None;
+        }
+        self.persist(&cleaned).await?;
+        *data = cleaned;
+        Ok(())
+    }
+
     async fn persist(&self, data: &StoredAdminData) -> Result<(), AdminPortError> {
         if let Some(parent) = self.path.parent() {
             tokio::fs::create_dir_all(parent)
@@ -165,13 +179,8 @@ impl JsonAdminStore {
                 .map_err(|_| AdminPortError::LookupFailed)?;
         }
         let raw = serde_json::to_vec_pretty(data).map_err(|_| AdminPortError::LookupFailed)?;
-        let tmp_path = self.path.with_extension("json.tmp");
-        tokio::fs::write(&tmp_path, raw)
-            .await
-            .map_err(|_| AdminPortError::LookupFailed)?;
-        tokio::fs::rename(tmp_path, &self.path)
-            .await
-            .map_err(|_| AdminPortError::LookupFailed)
+        crate::store::private_file::write_private(&self.path, raw)
+            .await.map_err(|_| AdminPortError::LookupFailed)
     }
 }
 

@@ -12,12 +12,14 @@ impl AdminService {
             .create_supplier(name.trim(), phone.trim())
             .await?;
         let mut state = self.state_for(&entry.ref_).await?;
-        if state.removed {
-            state.removed = false;
-            state.blocked = false;
-            self.put_state(&entry.ref_, state.clone()).await?;
-        }
-        self.build_supplier(entry, state)
+        state.removed = false;
+        state.blocked = false;
+        let code = random_code(&self.config.read().await.supplier_prefix, &mut BTreeMap::new());
+        state.custom_code = code.clone();
+        self.put_state(&entry.ref_, state.clone()).await?;
+        let mut supplier = self.build_supplier(entry, state)?;
+        supplier.code = code;
+        Ok(supplier)
     }
 
     pub async fn set_supplier_blocked(

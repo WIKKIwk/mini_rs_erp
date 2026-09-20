@@ -1,6 +1,6 @@
 use crate::core::auth::models::{Principal, PrincipalRole};
 
-use super::helpers::{local_phone_query, phone_matches_normalized, supplier_access_code_for};
+use super::helpers::{local_phone_query, phone_matches_normalized};
 use super::{AuthError, AuthService};
 
 impl AuthService {
@@ -43,6 +43,9 @@ impl AuthService {
             .map_err(|_| AuthError::Internal)?;
 
         for supplier in suppliers {
+            if !phone_matches_normalized(&supplier.phone, normalized_phone) {
+                continue;
+            }
             let state = states
                 .get(supplier.id.trim())
                 .cloned()
@@ -51,10 +54,7 @@ impl AuthService {
                 continue;
             }
 
-            let code_value = supplier_access_code_for(&supplier, &state)?;
-            if code.trim() == code_value
-                && phone_matches_normalized(&supplier.phone, normalized_phone)
-            {
+            if super::helpers::code_matches(&state.custom_code, code).await? {
                 return Ok(Principal {
                     role: PrincipalRole::Supplier,
                     display_name: supplier.name.clone(),

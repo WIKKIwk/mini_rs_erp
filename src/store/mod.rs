@@ -1,4 +1,5 @@
 pub mod admin_store;
+pub(crate) mod private_file;
 pub mod calculate_material_store;
 pub mod calculate_order_store;
 pub mod chat_media_local;

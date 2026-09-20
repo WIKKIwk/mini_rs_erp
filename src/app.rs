@@ -214,7 +214,7 @@ impl AppState {
     }
 
     fn build(
-        config: AppConfig,
+        mut config: AppConfig,
         runtime: ApparatusRuntimeServices,
         werka_pool: Option<sqlx::PgPool>,
     ) -> Self {
@@ -226,24 +226,37 @@ impl AppState {
             warehouses,
         } = runtime;
         let admin_store = Arc::new(JsonAdminStore::new(admin_store_path()));
+        let credential_store = werka_pool.as_ref().map(|pool| {
+            // Production authentication must never fall back to configuration secrets.
+            config.admin_code.clear();
+            config.werka_code.clear();
+            config.material_taminotchi_code.clear();
+            Arc::new(crate::db::postgres_auth::PostgresAuthStore::new(pool.clone()))
+        });
         let customer_store = build_customer_store();
         let workers = build_worker_service();
         let system_users = build_system_user_service();
-        let auth = build_auth_service(
+        let mut auth = build_auth_service(
             &config,
             admin_store.clone(),
             workers.clone(),
             system_users.clone(),
             customer_store.clone(),
         );
+        if let Some(store) = &credential_store {
+            auth = auth.with_access_state_lookup(store.clone());
+        }
         let profile_store = build_profile_store(&config);
-        let admin = build_admin_service(
+        let mut admin = build_admin_service(
             &config,
             admin_store,
             auth.clone(),
             profile_store.clone(),
             customer_store,
         );
+        if let Some(store) = credential_store {
+            admin = admin.with_state_port(store);
+        }
         let customer = CustomerService::new();
         let inventory_movements = build_inventory_movement_service();
         let calculate_orders = build_calculate_order_store();

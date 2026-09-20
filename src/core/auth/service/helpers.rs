@@ -1,10 +1,14 @@
-use crate::core::auth::access_codes::{SupplierAccessInput, supplier_access_code};
 use crate::core::auth::models::PrincipalRole;
 use crate::core::auth::ports::{
-    AdminAccessState, CustomerRecord, MaterialTaminotchiRecord, SupplierRecord, WorkerRecord,
+    CustomerRecord, MaterialTaminotchiRecord, WorkerRecord,
 };
 
 use super::AuthError;
+
+pub(super) async fn code_matches(hash: &str, code: &str) -> Result<bool, AuthError> {
+    crate::core::auth::password::verify_password(hash, code.trim())
+        .await.map_err(|_| AuthError::Internal)
+}
 
 pub fn normalize_phone(input: &str) -> Result<String, AuthError> {
     let trimmed = input.trim();
@@ -119,20 +123,4 @@ pub(super) fn merge_worker_records(workers: &mut Vec<WorkerRecord>, extra: Vec<W
 pub(super) fn local_phone_query(normalized_phone: &str) -> Option<String> {
     let digits = normalized_phone.trim().strip_prefix('+')?;
     (digits.len() == 12 && digits.starts_with("998")).then(|| digits[3..].to_string())
-}
-
-pub(super) fn supplier_access_code_for(
-    supplier: &SupplierRecord,
-    state: &AdminAccessState,
-) -> Result<String, AuthError> {
-    let custom = state.custom_code.trim();
-    if !custom.is_empty() {
-        return Ok(custom.to_string());
-    }
-
-    supplier_access_code(&SupplierAccessInput {
-        ref_: supplier.id.clone(),
-        name: supplier.name.clone(),
-        phone: supplier.phone.clone(),
-    })
 }

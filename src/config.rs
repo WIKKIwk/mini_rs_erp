@@ -63,18 +63,18 @@ impl AppConfig {
             session_ttl_seconds: Some(session_ttl_seconds),
             supplier_prefix: env_or("MOBILE_DEV_SUPPLIER_PREFIX", "10")?,
             werka_prefix: env_or("MOBILE_DEV_WERKA_PREFIX", "20")?,
-            werka_code: env_or("MOBILE_DEV_WERKA_CODE", "")?,
+            werka_code: String::new(),
             werka_name: env_or("MOBILE_DEV_WERKA_NAME", "Werka")?,
             werka_phone: env_or("WERKA_PHONE", "+99888862440")?,
-            material_taminotchi_code: env_or("MOBILE_DEV_MATERIAL_TAMINOTCHI_CODE", "")?,
+            material_taminotchi_code: String::new(),
             material_taminotchi_name: env_or(
                 "MOBILE_DEV_MATERIAL_TAMINOTCHI_NAME",
                 "Material taminotchisi",
             )?,
             material_taminotchi_phone: env_or("MOBILE_DEV_MATERIAL_TAMINOTCHI_PHONE", "")?,
-            admin_phone: "+998880000000".to_string(),
-            admin_name: "Admin".to_string(),
-            admin_code: "19621978".to_string(),
+            admin_phone: env_or("ADMINKA_PHONE", "")?,
+            admin_name: env_or("ADMINKA_NAME", "Admin")?,
+            admin_code: String::new(),
         })
     }
 }
@@ -86,6 +86,23 @@ pub struct DotEnvPersister {
 }
 
 impl DotEnvPersister {
+    /// Remove retired credential keys after the database cutover committed.
+    pub fn remove_keys(&self, keys: &[&str]) -> Result<(), AdminPortError> {
+        let _guard = self.lock.lock().map_err(|_| AdminPortError::LookupFailed)?;
+        if !self.path.exists() { return Ok(()); }
+        let mut values = std::collections::BTreeMap::new();
+        for item in dotenvy::from_path_iter(&self.path).map_err(|_| AdminPortError::LookupFailed)? {
+            let (key, value) = item.map_err(|_| AdminPortError::LookupFailed)?;
+            if !keys.contains(&key.as_str()) { values.insert(key, value); }
+        }
+        let mut body = String::new();
+        for (key, value) in values {
+            body.push_str(&format!("{key}={}\n", dotenv_value(&value)));
+        }
+        crate::store::private_file::write_private_sync(&self.path, body.as_bytes())
+            .map_err(|_| AdminPortError::LookupFailed)
+    }
+
     pub fn new(path: impl Into<PathBuf>) -> Self {
         let path = path.into();
         let path = if path.as_os_str().is_empty() {
@@ -142,6 +159,7 @@ fn dotenv_value(value: &str) -> String {
     let escaped = value
         .replace('\\', "\\\\")
         .replace('"', "\\\"")
+        .replace('$', "\\$")
         .replace('\n', "\\n");
     format!("\"{escaped}\"")
 }

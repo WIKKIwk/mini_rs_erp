@@ -21,7 +21,6 @@ use crate::core::admin::ports::{
     AdminAuthConfigSink, AdminEnvPersister, AdminPortError, AdminReadPort, AdminStatePort,
     AdminWritePort,
 };
-use crate::core::auth::access_codes::{SupplierAccessInput, supplier_access_code};
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::auth::service::normalize_phone;
 use crate::core::authz::{
@@ -188,7 +187,17 @@ impl AdminService {
     }
 
     pub async fn settings(&self) -> Result<AdminSettings, AdminPortError> {
-        let config = self.config.read().await;
+        let mut config = self.config.read().await.clone();
+        if let Some(port) = &self.state_port {
+            if let Some(identity) = port.builtin_identity("admin").await? {
+                config.admin_phone = identity.phone;
+                config.admin_name = identity.name;
+            }
+            if let Some(identity) = port.builtin_identity("werka").await? {
+                config.werka_phone = identity.phone;
+                config.werka_name = identity.name;
+            }
+        }
         let state = self.state_for("werka").await.unwrap_or_default();
         let now = OffsetDateTime::now_utc();
         Ok(AdminSettings {
@@ -197,7 +206,7 @@ impl AdminService {
             werka_phone: config.werka_phone.clone(),
             werka_name: config.werka_name.clone(),
             werka_avatar_url: self.profile_avatar_url("werka", "werka").await,
-            werka_code: config.werka_code.clone(),
+            werka_code: String::new(),
             werka_code_locked: state.code_locked(now),
             werka_code_retry_after_sec: state.retry_after_seconds(now),
             admin_phone: config.admin_phone.clone(),
@@ -214,6 +223,13 @@ impl AdminService {
         &self,
         input: AdminSettings,
     ) -> Result<AdminSettings, AdminPortError> {
+        // Legacy clients may echo a just-issued code. Settings updates never persist it.
+        if let Some(port) = &self.state_port {
+            port.put_builtin_identity("admin", &input.admin_phone, &input.admin_name).await?;
+            if !input.werka_phone.trim().is_empty() {
+                port.put_builtin_identity("werka", &input.werka_phone, &input.werka_name).await?;
+            }
+        }
         let mut config = self.config.write().await;
         config.default_target_warehouse = input.default_target_warehouse.trim().to_string();
         config.default_uom = input.default_uom.trim().to_string();
@@ -222,7 +238,6 @@ impl AdminService {
         }
         config.werka_phone = input.werka_phone.trim().to_string();
         config.werka_name = input.werka_name.trim().to_string();
-        config.werka_code = input.werka_code.trim().to_string();
         config.admin_phone = input.admin_phone.trim().to_string();
         config.admin_name = input.admin_name.trim().to_string();
         self.update_auth_runtime(
@@ -241,9 +256,6 @@ impl AdminService {
                 ("MINI_ERP_DEFAULT_UOM", config.default_uom.clone()),
                 ("WERKA_PHONE", config.werka_phone.clone()),
                 ("WERKA_NAME", config.werka_name.clone()),
-                ("MOBILE_DEV_WERKA_CODE", config.werka_code.clone()),
-                ("ADMINKA_PHONE", config.admin_phone.clone()),
-                ("ADMINKA_NAME", config.admin_name.clone()),
             ]))?;
         }
         drop(config);
@@ -404,19 +416,10 @@ impl AdminService {
 
     fn supplier_code(
         &self,
-        entry: &AdminDirectoryEntry,
-        state: &AdminState,
+        _entry: &AdminDirectoryEntry,
+        _state: &AdminState,
     ) -> Result<String, AdminPortError> {
-        let custom = state.custom_code.trim();
-        if !custom.is_empty() {
-            return Ok(custom.to_string());
-        }
-        supplier_access_code(&SupplierAccessInput {
-            ref_: entry.ref_.clone(),
-            name: entry.name.clone(),
-            phone: entry.phone.clone(),
-        })
-        .map_err(|_| AdminPortError::LookupFailed)
+        Ok(String::new())
     }
 }
 

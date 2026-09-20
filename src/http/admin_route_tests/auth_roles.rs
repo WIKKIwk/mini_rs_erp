@@ -1,6 +1,62 @@
 use super::*;
 
 #[tokio::test]
+async fn login_throttle_returns_429_without_issuing_a_session() {
+    let state = test_state();
+    let router = build_router(state.clone());
+    let body = serde_json::json!({
+        "phone": state.config.admin_phone,
+        "code": state.config.admin_code,
+    })
+    .to_string();
+    for _ in 0..10 {
+        let response = router
+            .clone()
+            .oneshot(request_with_body(
+                "POST",
+                "/v1/mobile/auth/login",
+                "",
+                &body,
+            ))
+            .await
+            .expect("configured admin login");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            !json_body(response).await["token"]
+                .as_str()
+                .unwrap()
+                .is_empty()
+        );
+    }
+    for _ in 0..5 {
+        let response = router
+            .clone()
+            .oneshot(request_with_body(
+                "POST",
+                "/v1/mobile/auth/login",
+                "",
+                r#"{"phone":"880000000","code":"wrong-code"}"#,
+            ))
+            .await
+            .expect("login response");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+    let response = router
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/auth/login",
+            "",
+            &body,
+        ))
+        .await
+        .expect("throttled response");
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    let body = json_body(response).await;
+    assert_eq!(body["error"], "too many login attempts; try again later");
+    assert!(body.get("token").is_none());
+}
+
+#[tokio::test]
 async fn admin_capabilities_returns_role_builder_catalog() {
     let state = test_state();
     let admin_token = session(&state, PrincipalRole::Admin).await;

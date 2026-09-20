@@ -195,6 +195,14 @@ pub trait AdminReadPort: Send + Sync {
 pub trait AdminStatePort: Send + Sync {
     async fn states(&self) -> Result<BTreeMap<String, AdminState>, AdminPortError>;
     async fn put_state(&self, ref_: &str, state: AdminState) -> Result<(), AdminPortError>;
+
+    async fn builtin_identity(&self, _ref: &str) -> Result<Option<crate::core::auth::ports::BuiltinLoginIdentity>, AdminPortError> {
+        Ok(None)
+    }
+
+    async fn put_builtin_identity(&self, _ref: &str, _phone: &str, _name: &str) -> Result<(), AdminPortError> {
+        Ok(())
+    }
 }
 
 #[async_trait]

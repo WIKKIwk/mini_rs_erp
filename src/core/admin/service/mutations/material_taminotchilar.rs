@@ -37,10 +37,8 @@ impl AdminService {
         let mut existing_codes = self.existing_state_codes().await?;
         let mut state = self.state_for(&entry.ref_).await?;
         state.custom_code = random_code("70", &mut existing_codes);
-        self.put_state(&entry.ref_, state.clone()).await?;
-        self.write_port()?
-            .update_material_taminotchi_code(&entry.ref_, &state.custom_code)
-            .await?;
+        let code = state.custom_code.clone();
+        self.put_state(&entry.ref_, state).await?;
         self.upsert_role_assignment(RoleAssignmentUpsert {
             principal_role: PrincipalRole::MaterialTaminotchi,
             principal_ref: entry.ref_.clone(),
@@ -50,7 +48,9 @@ impl AdminService {
         })
         .await?;
 
-        self.material_taminotchi_detail(&entry.ref_).await
+        let mut detail = self.material_taminotchi_detail(&entry.ref_).await?;
+        detail.code = code;
+        Ok(detail)
     }
 
     pub async fn material_taminotchi_detail(
@@ -83,7 +83,7 @@ impl AdminService {
             name: entry.name,
             phone: entry.phone,
             avatar_url,
-            code: state.custom_code.trim().to_string(),
+            code: String::new(),
             code_locked: state.code_locked(now),
             code_retry_after_sec: state.retry_after_seconds(now),
             assigned_items: Vec::new(),
@@ -158,10 +158,10 @@ impl AdminService {
         let now = OffsetDateTime::now_utc();
         state = bump_code_regen_state(state, now)?;
         state.custom_code = random_code("70", &mut existing);
-        self.put_state(&entry.ref_, state.clone()).await?;
-        self.write_port()?
-            .update_material_taminotchi_code(&entry.ref_, &state.custom_code)
-            .await?;
-        self.material_taminotchi_detail(&entry.ref_).await
+        let code = state.custom_code.clone();
+        self.put_state(&entry.ref_, state).await?;
+        let mut detail = self.material_taminotchi_detail(&entry.ref_).await?;
+        detail.code = code;
+        Ok(detail)
     }
 }

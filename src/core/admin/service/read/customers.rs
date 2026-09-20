@@ -57,7 +57,7 @@ impl AdminService {
             name: entry.name,
             phone: entry.phone,
             avatar_url,
-            code: state.custom_code.trim().to_string(),
+            code: String::new(),
             code_locked: state.code_locked(now),
             code_retry_after_sec: state.retry_after_seconds(now),
             assigned_items,

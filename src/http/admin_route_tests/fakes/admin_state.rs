@@ -84,7 +84,11 @@ impl AdminAccessStateLookup for FakeAdminStatePort {
                 (
                     key.clone(),
                     AdminAccessState {
-                        custom_code: state.custom_code.clone(),
+                        custom_code: if state.custom_code.is_empty() || crate::core::auth::password::is_password_hash(&state.custom_code) {
+                            state.custom_code.clone()
+                        } else {
+                            crate::core::auth::password::hash_password_sync(&state.custom_code).expect("fixture hash")
+                        },
                         blocked: state.blocked,
                         removed: state.removed,
                     },

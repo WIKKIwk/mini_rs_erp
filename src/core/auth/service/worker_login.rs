@@ -71,8 +71,8 @@ impl AuthService {
                 continue;
             }
             if !state.custom_code.trim().is_empty()
-                && code.trim() == state.custom_code.trim()
                 && phone_matches_normalized(&user.phone, normalized_phone)
+                && super::helpers::code_matches(&state.custom_code, code).await?
             {
                 return Ok(Principal {
                     role,
@@ -123,8 +123,8 @@ impl AuthService {
             if code_value.is_empty() {
                 continue;
             }
-            if code.trim() == code_value
-                && phone_matches_normalized(&worker.phone, normalized_phone)
+            if phone_matches_normalized(&worker.phone, normalized_phone)
+                && super::helpers::code_matches(code_value, code).await?
             {
                 return Ok(Principal {
                     role,

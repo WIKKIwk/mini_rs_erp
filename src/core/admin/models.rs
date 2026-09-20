@@ -341,8 +341,10 @@ pub struct AdminDirectoryEntry {
     pub phone: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AdminState {
+    /// Internal credential hash; plaintext is accepted only when issuing a new code.
     pub custom_code: String,
     pub blocked: bool,
     pub removed: bool,

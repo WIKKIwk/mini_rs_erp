@@ -76,6 +76,126 @@ async fn admin_login_does_not_need_erp() {
 }
 
 #[tokio::test]
+async fn login_limit_is_shared_by_phone_variants_and_service_clones() {
+    let config = config();
+    let auth = AuthService::new(&config);
+    for phone in [
+        "880000000",
+        "+998880000000",
+        "998880000000",
+        " 880000000 ",
+        "880000000",
+    ] {
+        assert!(auth.clone().login(phone, "wrong-code").await.is_err());
+    }
+    assert_eq!(
+        auth.login(&config.admin_phone, &config.admin_code).await,
+        Err(AuthError::TooManyAttempts)
+    );
+    assert_ne!(
+        auth.login("+998901234567", "wrong-code").await,
+        Err(AuthError::TooManyAttempts)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_successful_logins_are_not_limited() {
+    let config = config();
+    let auth = AuthService::new(&config);
+    let mut tasks = tokio::task::JoinSet::new();
+    for _ in 0..20 {
+        let auth = auth.clone();
+        let config = config.clone();
+        tasks.spawn(async move { auth.login(&config.admin_phone, &config.admin_code).await });
+    }
+    let mut accepted = 0;
+    while let Some(result) = tasks.join_next().await {
+        result.expect("login task").expect("successful login");
+        accepted += 1;
+    }
+    assert_eq!(accepted, 20);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_failed_logins_cannot_bypass_the_phone_limit() {
+    let config = config();
+    let auth = AuthService::new(&config);
+    let mut tasks = tokio::task::JoinSet::new();
+    for _ in 0..20 {
+        let auth = auth.clone();
+        let phone = config.admin_phone.clone();
+        tasks.spawn(async move { auth.login(&phone, "wrong-code").await });
+    }
+    let mut rejected_credentials = 0;
+    let mut throttled = 0;
+    while let Some(result) = tasks.join_next().await {
+        match result.expect("login task") {
+            Err(AuthError::InvalidCredentials | AuthError::InvalidRole) => {
+                rejected_credentials += 1
+            }
+            Err(AuthError::TooManyAttempts) => throttled += 1,
+            result => panic!("unexpected authentication result: {result:?}"),
+        }
+    }
+    assert_eq!(rejected_credentials, 5);
+    assert_eq!(throttled, 15);
+}
+
+#[tokio::test]
+async fn successful_login_clears_previous_failures() {
+    let config = config();
+    let auth = AuthService::new(&config);
+    for _ in 0..10 {
+        for _ in 0..4 {
+            assert!(matches!(
+                auth.login(&config.admin_phone, "wrong-code").await,
+                Err(AuthError::InvalidCredentials | AuthError::InvalidRole)
+            ));
+        }
+        assert_eq!(
+            auth.login(&config.admin_phone, &config.admin_code)
+                .await
+                .unwrap()
+                .role,
+            PrincipalRole::Admin
+        );
+    }
+}
+
+#[tokio::test]
+async fn admin_login_requires_the_configured_credentials() {
+    let original = config();
+    let mut changed = original.clone();
+    changed.admin_phone = "+998901234567".to_string();
+    changed.admin_code = "7294810365827406".to_string();
+    let auth = AuthService::new(&changed);
+    assert!(
+        auth.login(&original.admin_phone, &original.admin_code)
+            .await
+            .is_err()
+    );
+    assert!(
+        auth.login(&changed.admin_phone, &original.admin_code)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        auth.login(&changed.admin_phone, &changed.admin_code)
+            .await
+            .unwrap()
+            .role,
+        PrincipalRole::Admin
+    );
+    changed.admin_code.clear();
+    assert!(
+        AuthService::new(&changed)
+            .login(&changed.admin_phone, "")
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
 async fn werka_login_requires_configured_phone() {
     let auth = AuthService::new(&config());
     let principal = auth
@@ -147,7 +267,7 @@ async fn material_taminotchi_login_accepts_customer_custom_code() {
 }
 
 #[tokio::test]
-async fn supplier_login_uses_deterministic_code() {
+async fn supplier_login_accepts_migrated_deterministic_code() {
     let suppliers = Arc::new(FakeSupplierLookup {
         suppliers: vec![SupplierRecord {
             id: "SUP-001".to_string(),
@@ -156,7 +276,9 @@ async fn supplier_login_uses_deterministic_code() {
         }],
     });
     let states = Arc::new(FakeStateLookup {
-        states: BTreeMap::from([("SUP-001".to_string(), AdminAccessState::default())]),
+        states: BTreeMap::from([("SUP-001".to_string(), AdminAccessState {
+            custom_code: "104LJINSVVO5".into(), ..Default::default()
+        })]),
     });
     let auth = AuthService::new(&config()).with_supplier_dependencies(suppliers, states);
 
@@ -167,6 +289,28 @@ async fn supplier_login_uses_deterministic_code() {
 
     assert_eq!(principal.role, PrincipalRole::Supplier);
     assert_eq!(principal.ref_, "SUP-001");
+}
+
+#[tokio::test]
+async fn database_mode_rejects_missing_builtin_without_config_fallback() {
+    let config = config();
+    let auth = AuthService::new(&config).with_access_state_lookup(Arc::new(FakeStateLookup::default()));
+    assert!(auth.login(&config.admin_phone, &config.admin_code).await.is_err());
+    assert!(auth.login(&config.werka_phone, &config.werka_code).await.is_err());
+}
+
+#[tokio::test]
+async fn supplier_login_never_derives_a_code_without_a_stored_hash() {
+    let suppliers = Arc::new(FakeSupplierLookup {
+        suppliers: vec![SupplierRecord {
+            id: "SUP-001".into(), name: "Abdulloh".into(), phone: "+998901234567".into(),
+        }],
+    });
+    let states = Arc::new(FakeStateLookup {
+        states: BTreeMap::from([("SUP-001".into(), AdminAccessState::default())]),
+    });
+    let auth = AuthService::new(&config()).with_supplier_dependencies(suppliers, states);
+    assert_eq!(auth.login("+998901234567", "104LJINSVVO5").await, Err(AuthError::InvalidCredentials));
 }
 
 #[tokio::test]
@@ -181,10 +325,12 @@ async fn supplier_login_rejects_missing_access_state_as_internal_error() {
     let auth = AuthService::new(&config())
         .with_supplier_dependencies(suppliers, Arc::new(FakeStateLookup::default()));
 
-    assert_eq!(
-        auth.login("+998901234567", "104LJINSVVO5").await,
-        Err(AuthError::Internal)
-    );
+    for _ in 0..10 {
+        assert_eq!(
+            auth.login("+998901234567", "104LJINSVVO5").await,
+            Err(AuthError::Internal)
+        );
+    }
 }
 
 #[tokio::test]
@@ -537,6 +683,13 @@ struct FakeStateLookup {
 #[async_trait]
 impl AdminAccessStateLookup for FakeStateLookup {
     async fn list_states(&self) -> Result<BTreeMap<String, AdminAccessState>, AuthPortError> {
-        Ok(self.states.clone())
+        let mut states = self.states.clone();
+        for state in states.values_mut() {
+            if !state.custom_code.is_empty() && !crate::core::auth::password::is_password_hash(&state.custom_code) {
+                state.custom_code = crate::core::auth::password::hash_password(state.custom_code.clone())
+                    .await.map_err(|_| AuthPortError::LookupFailed)?;
+            }
+        }
+        Ok(states)
     }
 }

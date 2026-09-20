@@ -11,10 +11,13 @@ impl AdminService {
         let now = OffsetDateTime::now_utc();
         state = bump_code_regen_state(state, now)?;
         state.custom_code = random_code(&self.config.read().await.supplier_prefix, &mut existing);
-        state.pending_persist_code = state.custom_code.clone();
-        state.pending_persist_at = Some(now + time::Duration::seconds(CODE_REGEN_WINDOW_SECONDS));
+        let code = state.custom_code.clone();
+        state.pending_persist_code.clear();
+        state.pending_persist_at = None;
         self.put_state(&entry.ref_, state).await?;
-        self.supplier_detail(&entry.ref_).await
+        let mut detail = self.supplier_detail(&entry.ref_).await?;
+        detail.code = code;
+        Ok(detail)
     }
 
     pub async fn regenerate_customer_code(
@@ -28,11 +31,11 @@ impl AdminService {
         state = bump_code_regen_state(state, now)?;
         let prefix = self.customer_access_code_prefix(&entry.ref_).await?;
         state.custom_code = random_code(&prefix, &mut existing);
-        self.put_state(&entry.ref_, state.clone()).await?;
-        self.write_port()?
-            .update_customer_code(&entry.ref_, &state.custom_code)
-            .await?;
-        self.customer_detail(&entry.ref_).await
+        let code = state.custom_code.clone();
+        self.put_state(&entry.ref_, state).await?;
+        let mut detail = self.customer_detail(&entry.ref_).await?;
+        detail.code = code;
+        Ok(detail)
     }
 
     pub async fn regenerate_worker_code(
@@ -47,8 +50,11 @@ impl AdminService {
         let now = OffsetDateTime::now_utc();
         state = bump_code_regen_state(state, now)?;
         state.custom_code = random_code("40", &mut existing);
+        let code = state.custom_code.clone();
         self.put_state(&worker.id, state).await?;
-        self.worker_detail(worker).await
+        let mut detail = self.worker_detail(worker).await?;
+        detail.code = code;
+        Ok(detail)
     }
 
     pub async fn regenerate_system_user_code(
@@ -71,8 +77,11 @@ impl AdminService {
             _ => return Err(AdminPortError::NotFound),
         };
         state.custom_code = random_code(prefix, &mut existing);
+        let code = state.custom_code.clone();
         self.put_state(&user.id, state).await?;
-        self.system_user_detail(user).await
+        let mut detail = self.system_user_detail(user).await?;
+        detail.code = code;
+        Ok(detail)
     }
 
     async fn customer_access_code_prefix(&self, ref_: &str) -> Result<String, AdminPortError> {
@@ -100,8 +109,15 @@ impl AdminService {
         let mut existing = BTreeMap::new();
         let code = random_code(&self.config.read().await.werka_prefix, &mut existing);
         state.custom_code = code.clone();
+        if let Some(port) = &self.state_port
+            && port.builtin_identity("werka").await?.is_none() {
+            let config = self.config.read().await;
+            port.put_builtin_identity("werka", &config.werka_phone, &config.werka_name).await?;
+        }
         self.put_state("werka", state).await?;
-        self.config.write().await.werka_code = code;
+        // Keep only a hash in the in-memory compatibility identity.
+        self.config.write().await.werka_code = crate::core::auth::password::hash_password(code.clone())
+            .await.map_err(|_| AdminPortError::LookupFailed)?;
         let config = self.config.read().await;
         self.update_auth_runtime(
             &config.werka_phone,
@@ -111,12 +127,8 @@ impl AdminService {
             &config.admin_name,
         );
         drop(config);
-        if let Some(persister) = &self.env_persister {
-            persister.upsert(BTreeMap::from([(
-                "MOBILE_DEV_WERKA_CODE",
-                self.config.read().await.werka_code.clone(),
-            )]))?;
-        }
-        self.settings().await
+        let mut settings = self.settings().await?;
+        settings.werka_code = code;
+        Ok(settings)
     }
 }

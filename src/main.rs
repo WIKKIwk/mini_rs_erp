@@ -4,6 +4,7 @@ use hyper_util::rt::TokioIo;
 use hyper_util::service::TowerToHyperService;
 use mini_rs_erp::app::AppState;
 use mini_rs_erp::config::AppConfig;
+use mini_rs_erp::core::admin::ports::AdminStatePort;
 use mini_rs_erp::db::postgres::connect_and_migrate_required;
 use mini_rs_erp::db::postgres_qolip_item_code_doctor::PostgresQolipItemCodeDoctor;
 use mini_rs_erp::{error, http};
@@ -25,11 +26,25 @@ async fn main() -> Result<(), error::AppError> {
         )
         .init();
 
-    let config = AppConfig::from_env()?;
+    let mut config = AppConfig::from_env()?;
     let bind_addr = config.bind_addr;
     let postgres_pool = connect_and_migrate_required()
         .await
         .map_err(|error| error::AppError::Storage(error.to_string()))?;
+    let credentials = mini_rs_erp::db::postgres_auth::PostgresAuthStore::new(postgres_pool.clone());
+    credentials.require_ready().await.map_err(error::AppError::Storage)?;
+    for ref_ in ["admin", "werka", "material_taminotchi"] {
+        if let Some(identity) = credentials.builtin_identity(ref_).await
+            .map_err(|_| error::AppError::Storage("account identity lookup failed".into()))? {
+            let (phone, name) = match ref_ {
+                "admin" => (&mut config.admin_phone, &mut config.admin_name),
+                "werka" => (&mut config.werka_phone, &mut config.werka_name),
+                _ => (&mut config.material_taminotchi_phone, &mut config.material_taminotchi_name),
+            };
+            *phone = identity.phone;
+            *name = identity.name;
+        }
+    }
     let reconciled = mini_rs_erp::db::postgres_production_map::PostgresProductionMapStore::new(
         postgres_pool.clone(),
     ).reconcile_alternative_order_lifecycles().await

@@ -84,11 +84,13 @@ impl AdminWritePort for JsonAdminStore {
     }
 
     async fn update_customer_code(&self, ref_: &str, code: &str) -> Result<(), AdminPortError> {
+        let hash = crate::core::auth::password::hash_password(code.trim().to_string())
+            .await.map_err(|_| AdminPortError::LookupFailed)?;
         let mut data = self.data.lock().await;
         data.states
             .entry(ref_.trim().to_string())
             .or_default()
-            .custom_code = code.trim().to_string();
+            .custom_code = hash;
         self.persist(&data).await
     }
 
@@ -126,11 +128,13 @@ impl AdminWritePort for JsonAdminStore {
         ref_: &str,
         code: &str,
     ) -> Result<(), AdminPortError> {
+        let hash = crate::core::auth::password::hash_password(code.trim().to_string())
+            .await.map_err(|_| AdminPortError::LookupFailed)?;
         let mut data = self.data.lock().await;
         data.states
             .entry(ref_.trim().to_string())
             .or_default()
-            .custom_code = code.trim().to_string();
+            .custom_code = hash;
         self.persist(&data).await
     }
 
