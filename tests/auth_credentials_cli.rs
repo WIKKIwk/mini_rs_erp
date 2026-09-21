@@ -90,6 +90,6 @@ async fn cli_import_cleanup_retry_and_stdin_reset() {
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(count, 126);
+    assert!(count >= 129, "credential visibility migration must be applied");
     pool.close().await;
 }

@@ -6,6 +6,25 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$SCRIPT_DIR/qolip_backup_validation.sh"
 
+# A configured Mac obtains maintenance credentials only inside the restore job.
+# Ordinary HTTP startup continues to receive just the runtime password.
+KEYCHAIN_MIGRATE_AFTER_RESTORE=0
+if [ "$(uname -s)" = "Darwin" ] && [ -n "${MINI_ERP_DATABASE_KEYCHAIN_SERVICE:-}" ]; then
+	if [ "${MINI_ERP_KEYCHAIN_MAINTENANCE_ACTIVE:-}" != "1" ]; then
+		exec python3 "$SCRIPT_DIR/macos_keychain.py" --admin db -- bash "$0" "$@"
+	fi
+	case "${MINI_ERP_AUTO_MIGRATE_AFTER_RESTORE:-1}" in
+		0|false|FALSE|off|OFF|no|NO) ;;
+		*)
+			if [ ! -x "$REPO_ROOT/target/release/mini_rs_migrate" ]; then
+				echo "build mini_rs_migrate before a Keychain-managed restore" >&2
+				exit 2
+			fi
+			KEYCHAIN_MIGRATE_AFTER_RESTORE=1
+			;;
+	esac
+fi
+
 RESTORE_DATABASE_URL="${MINI_ERP_RESTORE_DATABASE_URL:-${MINI_ERP_MIGRATION_DATABASE_URL:-${MINI_ERP_DATABASE_URL:-}}}"
 if [ -z "$RESTORE_DATABASE_URL" ]; then
 	echo "MINI_ERP_DATABASE_URL or MINI_ERP_RESTORE_DATABASE_URL is required" >&2
@@ -99,3 +118,7 @@ RESTORE_ARGS=(
 	--set=ON_ERROR_STOP=1 \
 	--single-transaction \
 	--dbname="$RESTORE_DATABASE_URL"
+
+if [ "$KEYCHAIN_MIGRATE_AFTER_RESTORE" = "1" ]; then
+	python3 "$SCRIPT_DIR/macos_keychain.py" migrate
+fi

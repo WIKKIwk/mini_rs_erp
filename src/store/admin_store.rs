@@ -86,6 +86,8 @@ struct StoredItemGroup {
 struct StoredAdminState {
     #[serde(default)]
     custom_code: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    encrypted_code: String,
     #[serde(default)]
     blocked: bool,
     #[serde(default)]
@@ -164,6 +166,7 @@ impl JsonAdminStore {
         let mut cleaned = data.clone();
         for state in cleaned.states.values_mut() {
             state.custom_code.clear();
+            state.encrypted_code.clear();
             state.pending_persist_code.clear();
             state.pending_persist_at_unix = None;
         }
@@ -304,6 +307,7 @@ impl From<&AdminState> for StoredAdminState {
     fn from(value: &AdminState) -> Self {
         Self {
             custom_code: value.custom_code.clone(),
+            encrypted_code: String::new(),
             blocked: value.blocked,
             removed: value.removed,
             assigned_item_codes: value.assigned_item_codes.clone(),

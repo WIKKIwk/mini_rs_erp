@@ -2,7 +2,7 @@ use sqlx::{Postgres, Transaction};
 
 use crate::core::admin::ports::AdminPortError;
 
-pub(super) async fn item_delete_blocker(
+pub(crate) async fn item_delete_blocker(
     transaction: &mut Transaction<'_, Postgres>,
     item_code: &str,
     item_name: &str,

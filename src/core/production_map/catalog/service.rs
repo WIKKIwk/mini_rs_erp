@@ -69,6 +69,7 @@ impl ProductionMapService {
             .maps_by_lifecycle_statuses(&[
                 ProductionOrderLifecycleStatus::ProductionCompleted,
                 ProductionOrderLifecycleStatus::Closed,
+                ProductionOrderLifecycleStatus::Cancelled,
             ])
             .await?;
         let mut candidates = Vec::new();
@@ -141,8 +142,12 @@ impl ProductionMapService {
             }
         };
         let mut closed = Vec::new();
+        let controls = self.store.order_control_states().await?;
         for (map, required_apparatus) in candidates {
             let order_id = map.id.trim().to_string();
+            let early_close = controls.get(&order_id)
+                .and_then(|control| control.early_close.clone())
+                .filter(|close| close.closed_at_unix.is_some());
             let mut logs = logs_by_order.remove(&order_id).unwrap_or_default();
             let closed_event = latest_required_complete_event(&map, &logs, &required_apparatus);
             let sessions = sessions_by_order.remove(&order_id).unwrap_or_default();
@@ -154,7 +159,10 @@ impl ProductionMapService {
                 .filter_map(|s| crate::core::production_map::stage_execution::work_report(s).map(|r| (s, r)))
                 .max_by_key(|(_, r)| r.sequence);
             let (completed_at_unix, closed_by_role, closed_by_ref, closed_by_display_name) =
-                if let Some((session, report)) = last_report {
+                if let Some(close) = &early_close {
+                    (close.closed_at_unix.unwrap(), close.actor.role.clone(),
+                        close.actor.ref_.clone(), close.actor.display_name.clone())
+                } else if let Some((session, report)) = last_report {
                     (report.submitted_at_unix.max(closed_event.map(|e| e.created_at_unix).unwrap_or(0)),
                         if report.worker_role.is_empty() { session.worker_role.clone() } else { report.worker_role }, report.worker_ref, report.worker_display_name)
                 } else if let Some(event) = closed_event {
@@ -206,6 +214,7 @@ impl ProductionMapService {
                 .remove(&order_id)
                 .unwrap_or_default();
             closed.push(FullyCompletedProductionOrder {
+                early_close,
                 order_id,
                 order_number: map.order_number.trim().to_string(),
                 title: map.title.trim().to_string(),

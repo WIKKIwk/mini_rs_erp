@@ -3,7 +3,7 @@ const DEFAULT_MAX_CONNECTIONS: u32 = 16;
 const DEFAULT_ACQUIRE_TIMEOUT_MS: u64 = 500;
 const MIGRATION_LOCK_KEY: i64 = 6_514_811_918_052_026_001;
 
-const POSTGRES_MIGRATIONS: [(&str, &str); 126] = [
+const POSTGRES_MIGRATIONS: [(&str, &str); 130] = [
     (
         "0001_mini_erp_foundation",
         include_str!("../../../migrations/postgres/0001_mini_erp_foundation.sql"),
@@ -513,6 +513,22 @@ const POSTGRES_MIGRATIONS: [(&str, &str); 126] = [
     (
         "0126_auth_credentials",
         include_str!("../../../migrations/postgres/0126_auth_credentials.sql"),
+    ),
+    (
+        "0127_preparation_warehouse_management",
+        include_str!("../../../migrations/postgres/0127_preparation_warehouse_management.sql"),
+    ),
+    (
+        "0128_preparation_material_management",
+        include_str!("../../../migrations/postgres/0128_preparation_material_management.sql"),
+    ),
+    (
+        "0129_admin_access_code_visibility",
+        include_str!("../../../migrations/postgres/0129_admin_access_code_visibility.sql"),
+    ),
+    (
+        "0130_order_early_close",
+        include_str!("../../../migrations/postgres/0130_order_early_close.sql"),
     ),
 ];
 

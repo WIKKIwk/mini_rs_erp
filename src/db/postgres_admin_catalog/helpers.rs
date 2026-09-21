@@ -203,7 +203,7 @@ impl PostgresAdminCatalogStore {
     }
 }
 
-async fn update_operational_item_projections(
+pub(crate) async fn update_operational_item_projections(
     transaction: &mut Transaction<'_, Postgres>,
     original_code: &str,
     code: &str,

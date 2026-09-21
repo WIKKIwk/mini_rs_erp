@@ -1,6 +1,61 @@
 use super::*;
 
 #[tokio::test]
+async fn early_close_unstarted_order_route_retains_history_and_rejects_delete() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+    let router = build_router(state);
+    let id = "zakaz-0009";
+    let saved = router.clone().oneshot(request_with_body("PUT",
+        "/v1/mobile/admin/production-maps", &token,
+        &pechat_order_map_json(id, "Waffle cake 6 sht uzb", "0009", "apparatus:default:bosma_8")))
+        .await.unwrap();
+    assert_eq!(saved.status(), StatusCode::OK);
+    for body in [
+        r#"{"order_id":"zakaz-0009","action":"close_early"}"#,
+        r#"{"order_id":"zakaz-0009","action":"close_early","comment":"  "}"#,
+    ] {
+        let invalid = router.clone().oneshot(request_with_body("POST",
+            "/v1/mobile/admin/production-maps/order-control", &token, body)).await.unwrap();
+        assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+    }
+    let freeze = router.clone().oneshot(request_with_body("POST",
+        "/v1/mobile/admin/production-maps/order-control", &token,
+        r#"{"order_id":"zakaz-0009","action":"freeze"}"#)).await.unwrap();
+    assert_eq!(freeze.status(), StatusCode::CONFLICT);
+    assert_eq!(json_body(freeze).await["error"], "order_not_started");
+    let mut responses = Vec::new();
+    for _ in 0..2 {
+        let closed = router.clone().oneshot(request_with_body("POST",
+            "/v1/mobile/admin/production-maps/order-control", &token,
+            r#"{"order_id":"zakaz-0009","action":"close_early","comment":"  Mijoz rad etdi  "}"#))
+            .await.unwrap();
+        assert_eq!(closed.status(), StatusCode::OK);
+        let body = json_body(closed).await;
+        assert_eq!(body["control"]["early_close"]["comment"], "Mijoz rad etdi");
+        assert!(body["control"]["early_close"]["closed_at_unix"].as_i64().is_some());
+        assert!(body["control"]["freeze_request"].is_null());
+        responses.push(body);
+    }
+    assert_eq!(responses[0], responses[1], "retry must not create a second closure");
+    let archived = router.clone().oneshot(request("GET",
+        "/v1/mobile/admin/production-maps/closed-orders", &token)).await.unwrap();
+    assert_eq!(archived.status(), StatusCode::OK);
+    let body = json_body(archived).await;
+    let orders = body["closed_orders"].as_array().unwrap();
+    assert_eq!(orders.len(), 1);
+    assert_eq!(orders[0]["order_id"], id);
+    assert_eq!(orders[0]["early_close"]["comment"], "Mijoz rad etdi");
+    assert_eq!(orders[0]["logs"], serde_json::json!([]));
+    assert_eq!(orders[0]["progress_batches"], serde_json::json!([]));
+    let delete = router.clone().oneshot(request_with_body("POST",
+        "/v1/mobile/admin/production-maps/order-control", &token,
+        r#"{"order_id":"zakaz-0009","action":"delete"}"#)).await.unwrap();
+    assert_eq!(delete.status(), StatusCode::CONFLICT);
+    assert_eq!(json_body(delete).await["error"], "order_delete_blocked");
+}
+
+#[tokio::test]
 async fn worker_completed_orders_are_actor_scoped_and_latest_first() {
     let print_requests = Arc::new(Mutex::new(Vec::<ScaleDriverPrintRequest>::new()));
     let mut state = test_state();

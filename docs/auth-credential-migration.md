@@ -3,8 +3,9 @@
 The server stores every account's access code in `mini_auth_accounts.credential_hash`
 as an Argon2id PHC string (unique random salt, 19 MiB memory, two passes, one lane).
 Builtin admin/warehouse/material identities are in `mini_auth_builtin_identities`.
-Access flags and code regeneration cooldowns move with the credentials. Other
-catalog and role storage is unchanged by this migration.
+Access flags move with the credentials. Migration 0129 also preserves an encrypted
+copy for admin viewing and copying, with no regeneration cooldown. Other catalog
+and role storage is unchanged. See [admin access codes](admin-access-codes.md).
 
 ## Existing installation
 
@@ -51,10 +52,12 @@ backup requirements remain.
 
 ## Code issuance and recovery
 
-Admin code-generation endpoints return a newly issued code in their response.
-Copy/share it at that time. A later GET returns an empty `code`/`werka_code` field;
-neither plaintext nor the stored hash is exposed. Normal settings updates ignore
-legacy clients that echo `werka_code`; use the regeneration endpoint to change it.
+Admin code-generation endpoints return the new code, and later authorized detail
+and warehouse settings GETs return the same code for viewing and copying. Codes
+remain available after restarting the server. The hash is never returned. Normal
+settings updates ignore echoed `werka_code`; regeneration explicitly changes it.
+Hash-only accounts from the earlier cutover retain their valid login codes; see
+[recovery without resets](admin-access-codes.md) for restoring their readable copy.
 
 An operator with database maintenance access can reset a lost admin code:
 
@@ -67,7 +70,7 @@ Previously issued sessions are not automatically revoked by this command.
 PostgreSQL must be available to validate logins; there is no environment/JSON
 credential fallback. Successful logins are not counted by the failed-login limit.
 
-## Verification (2026-09-20)
+## Original cutover verification (2026-09-20, before visibility was restored)
 
 - 77 focused Rust tests passed: authentication, throttling, admin routes, local
   state, environment cleanup, PostgreSQL import/rotation and the migration CLI.

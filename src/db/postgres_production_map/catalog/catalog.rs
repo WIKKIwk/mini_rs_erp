@@ -7,7 +7,7 @@ use crate::core::production_map::{
     ProductionMapDefinition, ProductionMapError, ProductionOrderLifecycleStatus,
 };
 
-use super::transaction_locks::lock_apparatus_tx;
+use super::transaction_locks::{lock_apparatus_tx, lock_order_tx};
 
 pub(super) async fn load_maps(
     pool: &PgPool,
@@ -124,6 +124,19 @@ pub(super) async fn delete_map_by_id(
         .begin()
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
+    lock_order_tx(&mut tx, map_id).await?;
+    let has_closure = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM mini_order_control_states WHERE order_id = $1 AND early_close IS NOT NULL)")
+        .bind(map_id).fetch_one(&mut *tx).await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    if has_closure {
+        return Err(ProductionMapError::OrderDeleteBlocked(vec![
+            crate::core::production_map::OrderDeleteBlocker::new(
+                "early_close_history",
+                "Erta yopilgan buyurtmaning sababi va tarixini o‘chirib bo‘lmaydi",
+            ),
+        ]));
+    }
     let mini_order_id = sqlx::query_scalar::<_, Option<String>>(
         "SELECT order_id FROM mini_production_maps WHERE id = $1 FOR UPDATE",
     )

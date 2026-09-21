@@ -4,7 +4,7 @@ use crate::{
         auth::models::{Principal, PrincipalRole},
         authz::Capability,
         preparation::*,
-        warehouses::{WarehouseAssignmentUpsert, WarehouseError, WarehouseUpsert},
+        warehouses::WarehouseError,
     },
 };
 use axum::{
@@ -70,17 +70,38 @@ fn error(error: PreparationError) -> ApiError {
         PreparationError::Conflict(_) => "preparation_conflict",
         PreparationError::Forbidden => "preparation_scope",
         PreparationError::WarehouseNotExclusive => "preparation_warehouse_not_exclusive",
+        PreparationError::WarehouseNotOwned => "preparation_warehouse_not_owned",
+        PreparationError::WarehouseNameTaken => "preparation_warehouse_name_taken",
+        PreparationError::WarehouseNotEmpty => "preparation_warehouse_not_empty",
+        PreparationError::WarehouseHasMaterials => "preparation_warehouse_has_materials",
+        PreparationError::WarehouseHasChildren => "preparation_warehouse_has_children",
+        PreparationError::WarehouseInUse => "preparation_warehouse_in_use",
         PreparationError::MaterialNotInWarehouse => "preparation_material_not_in_warehouse",
+        PreparationError::MaterialNotOwned => "preparation_material_not_owned",
+        PreparationError::MaterialNameTaken => "preparation_material_name_taken",
+        PreparationError::MaterialInUse => "preparation_material_in_use",
+        PreparationError::MaterialWarehouseInUse => "preparation_material_warehouse_in_use",
         PreparationError::ReceiptRequiresQr => "preparation_receipt_requires_qr",
         PreparationError::Insufficient => "preparation_insufficient_stock",
         PreparationError::StoreFailed => "preparation_store",
     };
     let status = match &error {
         PreparationError::Invalid(_) => StatusCode::BAD_REQUEST,
-        PreparationError::Conflict(_) | PreparationError::Insufficient => StatusCode::CONFLICT,
+        PreparationError::Conflict(_)
+        | PreparationError::Insufficient
+        | PreparationError::WarehouseNameTaken
+        | PreparationError::WarehouseNotEmpty
+        | PreparationError::WarehouseHasMaterials
+        | PreparationError::WarehouseHasChildren
+        | PreparationError::MaterialNameTaken
+        | PreparationError::MaterialInUse
+        | PreparationError::MaterialWarehouseInUse
+        | PreparationError::WarehouseInUse => StatusCode::CONFLICT,
         PreparationError::Forbidden
+        | PreparationError::WarehouseNotOwned
         | PreparationError::WarehouseNotExclusive
         | PreparationError::MaterialNotInWarehouse
+        | PreparationError::MaterialNotOwned
         | PreparationError::ReceiptRequiresQr => {
             StatusCode::FORBIDDEN
         }
@@ -222,6 +243,57 @@ pub async fn material(
         .map_err(error)
 }
 
+pub async fn list_materials(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    let actor = authorize(&state, &headers).await?;
+    store(&state)?
+        .list_owned_materials(&actor.ref_)
+        .await
+        .map(Json)
+        .map_err(error)
+}
+
+pub async fn rename_material(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<MaterialRename>,
+) -> Result<Json<Value>, ApiError> {
+    let actor = authorize(&state, &headers).await?;
+    store(&state)?
+        .rename_owned_material(&actor.ref_, input)
+        .await
+        .map(Json)
+        .map_err(error)
+}
+
+pub async fn delete_material(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(input): Query<MaterialDelete>,
+) -> Result<Json<Value>, ApiError> {
+    let actor = authorize(&state, &headers).await?;
+    store(&state)?
+        .delete_owned_material(&actor.ref_, &input.item_code)
+        .await
+        .map(Json)
+        .map_err(error)
+}
+
+pub async fn update_material_warehouses(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<MaterialWarehousesUpdate>,
+) -> Result<Json<Value>, ApiError> {
+    let actor = authorize(&state, &headers).await?;
+    store(&state)?
+        .update_owned_material_warehouses(&actor.ref_, input)
+        .await
+        .map(Json)
+        .map_err(error)
+}
+
 pub async fn receipt(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -336,6 +408,47 @@ pub async fn formula_show(
         .await
         .map(Json)
         .map_err(error)
+}
+
+pub async fn formula_orders(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    let actor = authorize(&state, &headers).await?;
+    store(&state)?
+        .formula_orders(&actor.ref_)
+        .await
+        .map(Json)
+        .map_err(error)
+}
+
+pub async fn saved_formula_show(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<FormulaQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let actor = authorize(&state, &headers).await?;
+    store(&state)?.list_saved_formulas(&actor.ref_, &query.product_code, &query.material_id)
+        .await.map(Json).map_err(error)
+}
+
+pub async fn saved_formula_update(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<FormulaUpsert>,
+) -> Result<Json<Value>, ApiError> {
+    let actor = authorize(&state, &headers).await?;
+    store(&state)?.update_saved_formula(&actor, input).await.map(Json).map_err(error)
+}
+
+pub async fn saved_formula_delete(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<FormulaDeleteQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let actor = authorize(&state, &headers).await?;
+    store(&state)?.delete_saved_formula(&actor.ref_, &query.product_code, &query.name, &query.material_id)
+        .await.map(Json).map_err(error)
 }
 
 pub async fn formula_delete(
@@ -454,7 +567,7 @@ pub struct ResponsibilityDeleteQuery {
     pub material_id: String,
 }
 
-/// Bola ombor ochish: faqat o'ziga biriktirilgan ota ombor ostiga.
+/// Bola ombor ochish: faqat masterga eksklyuziv biriktirilgan ota ombor ostiga.
 /// Yaratilgan bola avtomatik shu masterga biriktiriladi — snapshot,
 /// kirim/sarf uni darhol ko'radi.
 pub async fn create_warehouse(
@@ -463,50 +576,49 @@ pub async fn create_warehouse(
     Json(input): Json<PreparationWarehouseCreate>,
 ) -> Result<Json<Value>, ApiError> {
     let actor = authorize(&state, &headers).await?;
-    let preparation = store(&state)?;
-    let parent = preparation
-        .owned_warehouse_name(&actor.ref_, &input.parent_warehouse)
+    let created = store(&state)?
+        .create_child_warehouse(&actor, input)
         .await
         .map_err(error)?;
-    let name = input.warehouse_name().map_err(error)?;
-    if preparation
-        .warehouse_name_exists(&name)
-        .await
-        .map_err(error)?
-    {
-        return Err((
-            StatusCode::CONFLICT,
-            Json(json!({"code":"preparation_conflict","error":"Bunday ombor nomi mavjud"})),
-        ));
-    }
-    let created = state
-        .warehouses
-        .upsert_warehouse(WarehouseUpsert {
-            warehouse: name.clone(),
-            company: String::new(),
-            is_group: false,
-            parent_warehouse: parent.clone(),
-        })
-        .await
-        .map_err(warehouse_api_error)?;
-    state
-        .warehouses
-        .assign_warehouse(WarehouseAssignmentUpsert {
-            assignment_kind: "warehouse".to_string(),
-            warehouse: created.warehouse.clone(),
-            warehouse_name: None,
-            apparatus_id: None,
-            principal_role: PrincipalRole::TayyorlovMasteri,
-            principal_ref: actor.ref_.clone(),
-            display_name: actor.display_name.clone(),
-        })
-        .await
-        .map_err(warehouse_api_error)?;
     state.warehouse_events.notify_updated(
-        &created.warehouse,
+        created["warehouse"].as_str().unwrap_or_default(),
         "warehouse_assignment",
     );
-    Ok(Json(
-        json!({"warehouse": created.warehouse, "parent_warehouse": parent}),
-    ))
+    Ok(Json(created))
+}
+
+pub async fn rename_warehouse(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<PreparationWarehouseRename>,
+) -> Result<Json<Value>, ApiError> {
+    let actor = authorize(&state, &headers).await?;
+    let old = input.warehouse.clone();
+    let result = store(&state)?
+        .rename_child_warehouse(&actor.ref_, input)
+        .await
+        .map_err(error)?;
+    state.warehouse_events.notify_updated(&old, "warehouse_renamed");
+    state.warehouse_events.notify_updated(
+        result["warehouse"].as_str().unwrap_or_default(),
+        "warehouse_renamed",
+    );
+    Ok(Json(result))
+}
+
+pub async fn delete_warehouse(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(input): Query<PreparationWarehouseDelete>,
+) -> Result<Json<Value>, ApiError> {
+    let actor = authorize(&state, &headers).await?;
+    let result = store(&state)?
+        .delete_child_warehouse(&actor.ref_, &input.warehouse)
+        .await
+        .map_err(error)?;
+    state.warehouse_events.notify_updated(
+        &input.warehouse,
+        "warehouse_deleted",
+    );
+    Ok(Json(result))
 }

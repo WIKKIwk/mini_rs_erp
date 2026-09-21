@@ -10,6 +10,10 @@ use crate::core::production_map::{
 
 use super::transaction_locks::lock_order_tx;
 
+#[cfg(test)]
+#[path = "postgres_tests.rs"]
+mod postgres_tests;
+
 #[derive(sqlx::FromRow)]
 struct OrderControlRow {
     order_id: String,
@@ -19,6 +23,7 @@ struct OrderControlRow {
     actor_display_name: String,
     requested_at_unix: i64,
     frozen_at_unix: Option<i64>,
+    early_close: Option<serde_json::Value>,
     request_id: Option<String>,
     request_status: Option<String>,
     target_session_id: Option<String>,
@@ -76,6 +81,7 @@ async fn load_order_control_states_scoped(
              control.actor_display_name,
              control.requested_at_unix,
              control.frozen_at_unix,
+             control.early_close,
              request.request_id,
              request.status AS request_status,
              request.target_session_id,
@@ -133,6 +139,8 @@ async fn load_order_control_states_scoped(
                     requested_at_unix: row.requested_at_unix,
                     frozen_at_unix: row.frozen_at_unix,
                     freeze_request,
+                    early_close: row.early_close.map(serde_json::from_value).transpose()
+                        .map_err(|_| ProductionMapError::StoreFailed)?,
                 },
             ))
         })
@@ -235,6 +243,31 @@ pub(super) async fn save_order_control_state_tx(
     record: &OrderControlRecord,
 ) -> Result<(), ProductionMapError> {
     lock_order_tx(tx, &record.order_id).await?;
+    if record.early_close.is_some() {
+        let lifecycle = sqlx::query_scalar::<_, String>(
+            "SELECT lifecycle_status FROM mini_production_maps WHERE id = $1 FOR UPDATE")
+            .bind(record.order_id.trim()).fetch_optional(&mut **tx).await
+            .map_err(|_| ProductionMapError::StoreFailed)?
+            .ok_or(ProductionMapError::MapNotFound)?;
+        if matches!(lifecycle.as_str(), "production_completed" | "closed") {
+            return Err(ProductionMapError::OrderAlreadyCompleted);
+        }
+        if record.freeze_request.is_none()
+            && record.early_close.as_ref().is_some_and(|close| close.closed_at_unix.is_some())
+        {
+            // Recheck under the order lock: another process may have started
+            // the previously untouched order after the service read it.
+            let running = sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS (SELECT 1 FROM mini_order_run_sessions WHERE order_id = $1 AND status = 'active')
+                     OR EXISTS (SELECT 1 FROM mini_queue_states WHERE order_id = $1 AND state IN ('in_progress', 'print_preflight'))
+                     OR EXISTS (SELECT 1 FROM mini_print_preflight_holds WHERE order_id = $1 AND status IN ('held', 'running'))")
+                .bind(record.order_id.trim()).fetch_one(&mut **tx).await
+                .map_err(|_| ProductionMapError::StoreFailed)?;
+            if running {
+                return Err(ProductionMapError::OrderControlActionNotAllowed);
+            }
+        }
+    }
     let current = sqlx::query_as::<_, (String, Option<String>)>(
         r#"SELECT state, freeze_request_id
            FROM mini_order_control_states
@@ -249,7 +282,7 @@ pub(super) async fn save_order_control_state_tx(
     if let Some(request) = &record.freeze_request {
         validate_freeze_transition(current.as_ref(), record.state, request)?;
         save_freeze_request_tx(tx, record, request).await?;
-    } else if current
+    } else if record.early_close.is_none() && current
         .as_ref()
         .is_some_and(|(state, _)| state != OrderControlState::Active.as_str())
     {
@@ -259,8 +292,8 @@ pub(super) async fn save_order_control_state_tx(
     sqlx::query(
         r#"INSERT INTO mini_order_control_states
              (order_id, state, actor_role, actor_ref, actor_display_name,
-              requested_at_unix, frozen_at_unix, freeze_request_id, updated_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
+              requested_at_unix, frozen_at_unix, freeze_request_id, early_close, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
            ON CONFLICT (order_id) DO UPDATE SET
               state = excluded.state,
               actor_role = excluded.actor_role,
@@ -269,6 +302,7 @@ pub(super) async fn save_order_control_state_tx(
               requested_at_unix = excluded.requested_at_unix,
               frozen_at_unix = excluded.frozen_at_unix,
               freeze_request_id = excluded.freeze_request_id,
+              early_close = excluded.early_close,
               updated_at = excluded.updated_at"#,
     )
     .bind(record.order_id.trim())
@@ -284,9 +318,40 @@ pub(super) async fn save_order_control_state_tx(
             .as_ref()
             .map(|request| request.request_id.trim()),
     )
+    .bind(record.early_close.as_ref().map(serde_json::to_value).transpose()
+        .map_err(|_| ProductionMapError::StoreFailed)?)
     .execute(&mut **tx)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
+    if let Some(close) = &record.early_close {
+        if let Some(closed_at) = close.closed_at_unix {
+            // Cancel only the remaining work, never manufacture completion/output.
+            // Audit + queue removal + lifecycle + worker's final output share this transaction.
+            sqlx::query(
+                "WITH previous AS (
+                    SELECT id, lifecycle_status, lifecycle_version FROM mini_production_maps
+                    WHERE id = $1 AND lifecycle_status NOT IN ('cancelled', 'closed', 'production_completed') FOR UPDATE
+                 ), changed AS (
+                    UPDATE mini_production_maps m SET lifecycle_status = 'cancelled',
+                        completion_outcome = 'with_issue', closed_at = to_timestamp($2),
+                        lifecycle_changed_at = to_timestamp($2), lifecycle_version = m.lifecycle_version + 1
+                    FROM previous p WHERE m.id = p.id RETURNING m.id, m.lifecycle_version, p.lifecycle_status
+                 ) INSERT INTO mini_production_order_lifecycle_events
+                    (event_id, order_id, from_status, to_status, completion_outcome,
+                     actor_role, actor_ref, actor_display_name, source_event_id, reason, lifecycle_version, created_at)
+                 SELECT 'early-close:' || id, id, lifecycle_status, 'cancelled', 'with_issue',
+                    $3, $4, $5, 'early-close:' || id, $6, lifecycle_version, to_timestamp($2)
+                 FROM changed ON CONFLICT (event_id) DO NOTHING"
+            )
+            .bind(record.order_id.trim()).bind(closed_at as f64)
+            .bind(&close.actor.role).bind(&close.actor.ref_).bind(&close.actor.display_name)
+            .bind(&close.comment).execute(&mut **tx).await
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+            sqlx::query("UPDATE mini_queue_sequences SET order_ids = order_ids - $1::text, updated_at = now() WHERE order_ids ? $1::text")
+                .bind(record.order_id.trim()).execute(&mut **tx).await
+                .map_err(|_| ProductionMapError::StoreFailed)?;
+        }
+    }
     Ok(())
 }
 

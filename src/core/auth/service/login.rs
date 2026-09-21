@@ -17,7 +17,15 @@ impl AuthService {
         attempts.check(std::time::Instant::now())?;
         let result = self.authenticate(normalized_phone, code.trim()).await;
         match &result {
-            Ok(_) => attempts.reset(),
+            Ok(principal) => {
+                attempts.reset();
+                if let Some(store) = &self.admin_state_lookup {
+                    // A recovery failure must not turn a correct login into a failure.
+                    if store.remember_access_code(&principal.ref_, code.trim()).await.is_err() {
+                        tracing::warn!("could not preserve verified access code for admin display");
+                    }
+                }
+            }
             Err(AuthError::InvalidCredentials | AuthError::InvalidRole) => {
                 attempts.record_failure(std::time::Instant::now());
             }

@@ -74,6 +74,11 @@ pub(super) async fn delete_map(
     map_id: &str,
 ) -> Result<(), ProductionMapError> {
     let map_id = map_id.trim();
+    if store.order_controls.read().await.get(map_id).is_some_and(|record| record.early_close.is_some()) {
+        return Err(ProductionMapError::OrderDeleteBlocked(vec![OrderDeleteBlocker::new(
+            "early_close_history", "Erta yopilgan buyurtmaning sababi va tarixini o‘chirib bo‘lmaydi",
+        )]));
+    }
     store.maps.write().await.remove(map_id);
     store
         .production_order_lifecycles

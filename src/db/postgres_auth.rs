@@ -6,7 +6,8 @@ use sqlx::{PgPool, Row};
 use crate::core::admin::models::{AdminDirectoryEntry, AdminState};
 use crate::core::admin::ports::{AdminPortError, AdminStatePort};
 use crate::core::auth::access_codes::{SupplierAccessInput, supplier_access_code};
-use crate::core::auth::password::{hash_password, is_password_hash};
+use crate::core::auth::code_vault::CodeCipher;
+use crate::core::auth::password::{hash_password, is_password_hash, verify_password};
 use crate::core::auth::ports::{
     AdminAccessState, AdminAccessStateLookup, AuthPortError, BuiltinLoginIdentity,
 };
@@ -120,11 +121,16 @@ impl PostgresAuthStore {
             );
         }
         for (ref_, state) in states {
+            let code = plaintext_code(&state);
             let (hash, data, _) = encode_state(state)
                 .await
                 .map_err(|_| "credential hashing failed")?;
             sqlx::query("INSERT INTO mini_auth_accounts (principal_ref, credential_hash, access_state) VALUES ($1, $2, $3)")
-                .bind(ref_).bind(hash).bind(data).execute(&mut *tx).await.map_err(|_| "credential import failed")?;
+                .bind(&ref_).bind(&hash).bind(data).execute(&mut *tx).await.map_err(|_| "credential import failed")?;
+            if let (Some(code), Some(hash)) = (code, hash) {
+                save_code(&mut tx, &ref_, &hash, &code).await
+                    .map_err(|_| "recoverable credential import failed")?;
+            }
         }
         for (ref_, phone, name) in identities {
             sqlx::query("INSERT INTO mini_auth_builtin_identities (principal_ref, phone, display_name) VALUES ($1, $2, $3)")
@@ -143,13 +149,37 @@ impl PostgresAuthStore {
 
     pub async fn reset_admin_code(&self, code: String) -> Result<(), String> {
         self.require_ready().await?;
-        let hash = hash_password(code).await?;
+        let hash = hash_password(code.clone()).await?;
+        let mut tx = self.pool.begin().await.map_err(|_| "admin reset transaction failed")?;
         let result = sqlx::query("UPDATE mini_auth_accounts SET credential_hash = $1, updated_at = now() WHERE principal_ref = 'admin'")
-            .bind(hash).execute(&self.pool).await.map_err(|_| "admin credential reset failed")?;
+            .bind(&hash).execute(&mut *tx).await.map_err(|_| "admin credential reset failed")?;
         if result.rows_affected() != 1 {
             return Err("admin account is missing".into());
         }
+        save_code(&mut tx, "admin", &hash, &code).await.map_err(|_| "admin code storage failed")?;
+        tx.commit().await.map_err(|_| "admin reset commit failed")?;
         Ok(())
+    }
+
+    /// Recover only a known, still-current code; never reset a user's credential.
+    pub async fn recover_access_code(&self, ref_: &str, code: &str) -> Result<bool, String> {
+        let mut tx = self.pool.begin().await.map_err(|_| "credential recovery unavailable")?;
+        let row = sqlx::query("SELECT a.credential_hash, EXISTS (
+            SELECT 1 FROM mini_auth_code_vault v WHERE v.principal_ref = a.principal_ref
+            AND v.credential_hash = a.credential_hash) AS available
+            FROM mini_auth_accounts a WHERE a.principal_ref = $1 FOR UPDATE OF a")
+            .bind(ref_.trim()).fetch_optional(&mut *tx).await.map_err(|_| "credential recovery lookup failed")?;
+        let Some(row) = row else { return Ok(false); };
+        if row.try_get::<bool, _>("available").map_err(|_| "credential recovery lookup failed")? {
+            return Ok(false);
+        }
+        let hash = row.try_get::<Option<String>, _>("credential_hash")
+            .map_err(|_| "credential recovery lookup failed")?.unwrap_or_default();
+        if !verify_password(&hash, code.trim()).await? { return Ok(false); }
+        save_code(&mut tx, ref_.trim(), &hash, code.trim()).await
+            .map_err(|_| "credential recovery storage failed")?;
+        tx.commit().await.map_err(|_| "credential recovery commit failed")?;
+        Ok(true)
     }
 
     async fn read_identity(&self, ref_: &str) -> Result<Option<BuiltinLoginIdentity>, sqlx::Error> {
@@ -167,6 +197,25 @@ impl PostgresAuthStore {
         })
         .transpose()
     }
+}
+
+fn plaintext_code(state: &AdminState) -> Option<String> {
+    let code = state.custom_code.trim();
+    (!code.is_empty() && !is_password_hash(code)).then(|| code.to_string())
+}
+
+async fn save_code(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, ref_: &str, hash: &str, code: &str,
+) -> Result<(), AdminPortError> {
+    let encrypted = CodeCipher::load().and_then(|cipher| cipher.encrypt(ref_, hash, code))
+        .map_err(|_| AdminPortError::LookupFailed)?;
+    sqlx::query("INSERT INTO mini_auth_code_vault (principal_ref, credential_hash, encrypted_code)
+        VALUES ($1, $2, $3) ON CONFLICT (principal_ref) DO UPDATE SET
+        credential_hash = EXCLUDED.credential_hash, encrypted_code = EXCLUDED.encrypted_code,
+        updated_at = now()")
+        .bind(ref_).bind(hash).bind(encrypted).execute(&mut **tx).await
+        .map_err(|_| AdminPortError::LookupFailed)?;
+    Ok(())
 }
 
 async fn encode_state(
@@ -224,14 +273,32 @@ impl AdminStatePort for PostgresAuthStore {
     }
 
     async fn put_state(&self, ref_: &str, state: AdminState) -> Result<(), AdminPortError> {
+        let code = plaintext_code(&state);
         let (hash, data, replace_hash) = encode_state(state).await?;
+        let mut tx = self.pool.begin().await.map_err(|_| AdminPortError::LookupFailed)?;
         sqlx::query("INSERT INTO mini_auth_accounts (principal_ref, credential_hash, access_state) VALUES ($1, $2, $3)
             ON CONFLICT (principal_ref) DO UPDATE SET access_state = EXCLUDED.access_state,
             credential_hash = CASE WHEN $4 THEN EXCLUDED.credential_hash ELSE mini_auth_accounts.credential_hash END,
             updated_at = now()")
-            .bind(ref_.trim()).bind(hash).bind(data).bind(replace_hash)
-            .execute(&self.pool).await.map_err(|_| AdminPortError::LookupFailed)?;
+            .bind(ref_.trim()).bind(&hash).bind(data).bind(replace_hash)
+            .execute(&mut *tx).await.map_err(|_| AdminPortError::LookupFailed)?;
+        if let (Some(code), Some(hash)) = (code, hash) {
+            save_code(&mut tx, ref_.trim(), &hash, &code).await?;
+        }
+        tx.commit().await.map_err(|_| AdminPortError::LookupFailed)?;
         Ok(())
+    }
+
+    async fn access_code(&self, ref_: &str) -> Result<String, AdminPortError> {
+        let row = sqlx::query("SELECT v.credential_hash, v.encrypted_code
+            FROM mini_auth_code_vault v JOIN mini_auth_accounts a USING (principal_ref)
+            WHERE v.principal_ref = $1 AND v.credential_hash = a.credential_hash")
+            .bind(ref_.trim()).fetch_optional(&self.pool).await.map_err(|_| AdminPortError::LookupFailed)?;
+        let Some(row) = row else { return Ok(String::new()); };
+        let hash: String = row.try_get("credential_hash").map_err(|_| AdminPortError::LookupFailed)?;
+        let encrypted: String = row.try_get("encrypted_code").map_err(|_| AdminPortError::LookupFailed)?;
+        CodeCipher::load().and_then(|cipher| cipher.decrypt(ref_.trim(), &hash, &encrypted))
+            .map_err(|_| AdminPortError::LookupFailed)
     }
 
     async fn builtin_identity(
@@ -273,6 +340,10 @@ impl AdminStatePort for PostgresAuthStore {
 
 #[async_trait]
 impl AdminAccessStateLookup for PostgresAuthStore {
+    async fn remember_access_code(&self, ref_: &str, code: &str) -> Result<(), AuthPortError> {
+        self.recover_access_code(ref_, code).await.map(|_| ()).map_err(|_| AuthPortError::LookupFailed)
+    }
+
     async fn list_states(&self) -> Result<BTreeMap<String, AdminAccessState>, AuthPortError> {
         Ok(self
             .states()

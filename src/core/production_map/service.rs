@@ -458,7 +458,7 @@ impl ProductionMapService {
         let mut result = BTreeMap::new();
         for (order_id, control) in order_controls
             .iter()
-            .filter(|(_, control)| control.state == OrderControlState::Frozen)
+            .filter(|(_, control)| control.state == OrderControlState::Frozen && control.early_close.is_none())
         {
             let freeze_log = logs_by_order
                 .get(order_id)

@@ -82,6 +82,14 @@ pub struct OrderFreezeRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OrderEarlyClose {
+    pub comment: String,
+    pub actor: QueueActionActor,
+    pub requested_at_unix: i64,
+    pub closed_at_unix: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OrderControlRecord {
     pub order_id: String,
     pub state: OrderControlState,
@@ -91,6 +99,8 @@ pub struct OrderControlRecord {
     pub frozen_at_unix: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub freeze_request: Option<OrderFreezeRequest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub early_close: Option<OrderEarlyClose>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -125,6 +135,7 @@ impl OrderControlRecord {
             requested_at_unix: 0,
             frozen_at_unix: None,
             freeze_request: None,
+            early_close: None,
         }
     }
 }

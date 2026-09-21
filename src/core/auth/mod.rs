@@ -1,4 +1,5 @@
 pub mod access_codes;
+pub mod code_vault;
 pub mod models;
 pub mod ports;
 pub mod password;

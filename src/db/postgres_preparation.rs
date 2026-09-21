@@ -4,6 +4,11 @@ use crate::core::werka::models::SupplierItem;
 use serde_json::{Value, json};
 use sqlx::{PgPool, Postgres, Row, Transaction};
 
+mod warehouses;
+mod materials;
+mod formula_orders;
+mod saved_formulas;
+
 impl From<sqlx::Error> for PreparationError {
     fn from(error: sqlx::Error) -> Self {
         tracing::error!(%error, "preparation storage operation failed");
@@ -93,6 +98,14 @@ impl PostgresPreparationStore {
              ORDER BY w.name",
         )
         .bind(owner)
+        .fetch_all(&mut *tx)
+        .await?;
+        let managed_warehouses: Vec<String> = sqlx::query_scalar(
+            "SELECT name FROM mini_warehouses WHERE preparation_owner_ref = $1
+             AND name = ANY($2) AND parent_warehouse <> '' ORDER BY name",
+        )
+        .bind(owner)
+        .bind(&material_warehouses)
         .fetch_all(&mut *tx)
         .await?;
         // The warehouse view uses the shared ERP raw-material catalog and its
@@ -364,6 +377,12 @@ impl PostgresPreparationStore {
         };
         let history: Vec<Value> = sqlx::query_scalar(
             "SELECT response_json
+                    || COALESCE((
+                        SELECT jsonb_build_object('warehouse', w.name)
+                        FROM mini_preparation_warehouse_history_names link
+                        JOIN mini_warehouses w ON w.id = link.warehouse_id
+                        WHERE link.operation_id = operation.id
+                    ), '{}'::jsonb)
                     || jsonb_build_object('created_at', created_at)
                     || CASE WHEN kind = 'receipt' THEN jsonb_build_object(
                         'reversed', EXISTS (
@@ -440,7 +459,8 @@ impl PostgresPreparationStore {
         tx.commit().await?;
         Ok(
             json!({"warehouses": warehouses, "assigned_warehouses": assigned_warehouses,
-                "material_warehouses": material_warehouses, "materials": materials,
+                "material_warehouses": material_warehouses, "managed_warehouses": managed_warehouses,
+                "materials": materials,
                 "orders": orders, "history": history, "responsibilities": responsibilities}),
         )
     }

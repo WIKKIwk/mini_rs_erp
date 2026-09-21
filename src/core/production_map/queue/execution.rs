@@ -526,6 +526,7 @@ impl ProductionMapService {
                 actor: actor.clone(),
                 requested_at_unix: now,
                 frozen_at_unix: Some(now),
+                early_close: None,
                 freeze_request: Some(OrderFreezeRequest {
                     request_id: format!("order-freeze-issue:{}", event.event_id),
                     status: OrderFreezeRequestStatus::Frozen,
@@ -553,6 +554,10 @@ impl ProductionMapService {
                 actor: control.actor,
                 requested_at_unix: control.requested_at_unix,
                 frozen_at_unix: Some(now),
+                early_close: control.early_close.map(|mut close| {
+                    close.closed_at_unix = Some(now);
+                    close
+                }),
                 freeze_request: Some(freeze_request),
             })
         } else {

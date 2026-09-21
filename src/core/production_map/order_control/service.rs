@@ -34,9 +34,53 @@ impl ProductionMapService {
         order_id: &str,
         actor: QueueActionActor,
     ) -> Result<OrderControlRecord, ProductionMapError> {
+        self.request_order_stop(order_id, actor, None).await
+    }
+
+    pub async fn request_order_early_close(
+        &self,
+        order_id: &str,
+        actor: QueueActionActor,
+        comment: &str,
+    ) -> Result<OrderControlRecord, ProductionMapError> {
+        let comment = comment.trim();
+        if comment.is_empty() || comment.chars().count() > 2000 {
+            return Err(ProductionMapError::ProgressInputInvalid);
+        }
+        self.request_order_stop(order_id, actor, Some(comment.to_string())).await
+    }
+
+    async fn request_order_stop(
+        &self,
+        order_id: &str,
+        actor: QueueActionActor,
+        comment: Option<String>,
+    ) -> Result<OrderControlRecord, ProductionMapError> {
         let _guard = self.queue_action_guard().await;
         let order_id = required_existing_order_id(self, order_id).await?;
-        let current = current_order_control(self, &order_id).await?;
+        let mut current = current_order_control(self, &order_id).await?;
+        if let Some(close) = &current.early_close {
+            return if comment.as_deref() == Some(close.comment.as_str()) {
+                Ok(current)
+            } else {
+                Err(ProductionMapError::OrderControlActionNotAllowed)
+            };
+        }
+        if self.production_order_lifecycle(&order_id).await?.status.is_terminal_for_material_assignment() {
+            return Err(ProductionMapError::OrderAlreadyCompleted);
+        }
+        // A pending freeze can be upgraded without changing its worker/request identity.
+        // An already frozen order has no running roll to wait for.
+        if comment.is_some() && current.state != OrderControlState::Active {
+            let now = unix_seconds();
+            current.early_close = Some(OrderEarlyClose {
+                comment: comment.unwrap(), actor, requested_at_unix: now,
+                closed_at_unix: (current.state == OrderControlState::Frozen).then_some(now),
+            });
+            self.store.put_order_control_state(current.clone()).await?;
+            self.notify_live();
+            return Ok(current);
+        }
         if current.state != OrderControlState::Active {
             return Err(ProductionMapError::OrderControlActionNotAllowed);
         }
@@ -49,7 +93,9 @@ impl ProductionMapService {
         if evidence.completed {
             return Err(ProductionMapError::OrderAlreadyCompleted);
         }
-        if !evidence.started {
+        // Freezing requires started work; early closure also applies to an
+        // untouched queued order, which has no worker/roll to wait for.
+        if !evidence.started && comment.is_none() {
             return Err(ProductionMapError::OrderNotStarted);
         }
 
@@ -138,10 +184,14 @@ impl ProductionMapService {
         let record = OrderControlRecord {
             order_id,
             state,
+            early_close: comment.map(|comment| OrderEarlyClose {
+                comment, actor: actor.clone(), requested_at_unix: now,
+                closed_at_unix: (state == OrderControlState::Frozen).then_some(now),
+            }),
             actor,
             requested_at_unix: now,
             frozen_at_unix: (state == OrderControlState::Frozen).then_some(now),
-            freeze_request: Some(freeze_request),
+            freeze_request: (!freeze_request.target_apparatus.is_empty()).then_some(freeze_request),
         };
         if let Some(write) =
             prepare_direct_freeze_queue_write(self, &record, target_session, target_preflight)
@@ -151,6 +201,8 @@ impl ProductionMapService {
                 .put_apparatus_queue_states_with_event_and_progress(&write)
                 .await?;
         } else if state == OrderControlState::FreezeRequested {
+            self.store.put_order_control_state(record.clone()).await?;
+        } else if record.early_close.is_some() && !evidence.has_active_work {
             self.store.put_order_control_state(record.clone()).await?;
         } else {
             return Err(ProductionMapError::OrderFreezeTargetNotFound);
@@ -197,7 +249,7 @@ impl ProductionMapService {
         let _guard = self.queue_action_guard().await;
         let order_id = required_existing_order_id(self, order_id).await?;
         let current = current_order_control(self, &order_id).await?;
-        if current.state != expected {
+        if current.state != expected || current.early_close.is_some() {
             return Err(ProductionMapError::OrderControlActionNotAllowed);
         }
         let now = unix_seconds();
@@ -225,6 +277,7 @@ impl ProductionMapService {
             requested_at_unix: freeze_request.requested_at_unix,
             frozen_at_unix: None,
             freeze_request: Some(freeze_request),
+            early_close: None,
         };
         if expected == OrderControlState::Frozen && next == OrderControlState::Active {
             restore_frozen_queue_after_unfreeze(self, &record).await?;
@@ -257,6 +310,13 @@ impl ProductionMapService {
             .filter_map(|stage| stage.apparatus_id)
             .collect::<BTreeSet<_>>();
         let mut blockers = Vec::new();
+
+        if current_order_control(self, &order_id).await?.early_close.is_some() {
+            blockers.push(OrderDeleteBlocker::new(
+                "early_close_history",
+                "Erta yopilgan buyurtmaning sababi va tarixi saqlanishi shart; uni o‘chirib bo‘lmaydi",
+            ));
+        }
 
         if self
             .store

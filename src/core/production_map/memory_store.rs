@@ -70,6 +70,35 @@ impl MemoryProductionMapStore {
         &self,
         record: OrderControlRecord,
     ) -> Result<(), ProductionMapError> {
+        if let Some(previous) = self.order_controls.read().await.get(record.order_id.trim()) {
+            if let Some(close) = &previous.early_close {
+                let Some(next) = &record.early_close else {
+                    return Err(ProductionMapError::OrderControlActionNotAllowed);
+                };
+                if close.comment != next.comment || close.actor != next.actor
+                    || close.requested_at_unix != next.requested_at_unix
+                    || (close.closed_at_unix.is_some() && close != next)
+                    || record.state == OrderControlState::Active {
+                    return Err(ProductionMapError::OrderControlActionNotAllowed);
+                }
+            }
+        }
+        if let Some(close) = &record.early_close {
+            if let Some(closed_at) = close.closed_at_unix {
+                if let Some(lifecycle) = self.production_order_lifecycles.write().await.get_mut(record.order_id.trim()) {
+                    if lifecycle.status != ProductionOrderLifecycleStatus::Cancelled {
+                        lifecycle.status = ProductionOrderLifecycleStatus::Cancelled;
+                        lifecycle.lifecycle_version += 1;
+                        lifecycle.lifecycle_changed_at_unix = closed_at;
+                        lifecycle.closed_at_unix = Some(closed_at);
+                        lifecycle.completion_outcome = "with_issue".to_string();
+                    }
+                }
+                for sequence in self.sequences.write().await.values_mut() {
+                    sequence.retain(|id| id != &record.order_id);
+                }
+            }
+        }
         self.order_controls
             .write()
             .await

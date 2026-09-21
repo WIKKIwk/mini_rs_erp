@@ -217,7 +217,11 @@ ensure_backend() {
 	fi
 
 	if [ "$BUILD_RELEASE" = "1" ]; then
-		(cd "$REPO_ROOT" && cargo build --release --locked --bin mini_rs_erp)
+		local build_args=(--release --locked --bin mini_rs_erp)
+		if [ "$(uname -s)" = "Darwin" ]; then
+			build_args+=(--bin mini_rs_migrate)
+		fi
+		(cd "$REPO_ROOT" && cargo build "${build_args[@]}")
 	fi
 
 	local binary="$REPO_ROOT/target/release/mini_rs_erp"
@@ -229,7 +233,12 @@ ensure_backend() {
 
 	rm -f "$APP_LOG"
 	export MOBILE_API_ADDR RUST_LOG
-	spawn_detached "$APP_PID" "$APP_LOG" "$REPO_ROOT" "$binary"
+	if [ "$(uname -s)" = "Darwin" ]; then
+		spawn_detached "$APP_PID" "$APP_LOG" "$REPO_ROOT" python3 \
+			"$REPO_ROOT/tools/db/macos_keychain.py" --if-configured run -- "$binary"
+	else
+		spawn_detached "$APP_PID" "$APP_LOG" "$REPO_ROOT" "$binary"
+	fi
 
 	if ! wait_for_health "$CORE_URL" "mini_rs_erp"; then
 		echo "mini_rs_erp failed to start; see $APP_LOG" >&2

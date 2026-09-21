@@ -6,6 +6,8 @@ struct OrderControlRequest {
     order_id: String,
     #[serde(default)]
     action: String,
+    #[serde(default)]
+    comment: String,
 }
 
 pub async fn production_map_order_control(
@@ -30,6 +32,15 @@ pub async fn production_map_order_control(
     }
     let actor = queue_action_actor(&principal);
     match input.action.trim() {
+        "close_early" => {
+            if input.comment.trim().is_empty() || input.comment.trim().chars().count() > 2000 {
+                return Err(bad_request("early_close_comment_required_or_too_long"));
+            }
+            let control = state.production_maps
+                .request_order_early_close(order_id, actor, &input.comment)
+                .await.map_err(production_map_error)?;
+            Ok(json_response(serde_json::json!({"ok": true, "control": control})))
+        }
         "freeze" => {
             let control = state
                 .production_maps

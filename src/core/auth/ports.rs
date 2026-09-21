@@ -98,6 +98,11 @@ pub trait SystemUserLookup: Send + Sync {
 pub trait AdminAccessStateLookup: Send + Sync {
     async fn list_states(&self) -> Result<BTreeMap<String, AdminAccessState>, AuthPortError>;
 
+    /// Preserve a successfully used legacy code for the administrator without rotating it.
+    async fn remember_access_code(&self, _ref: &str, _code: &str) -> Result<(), AuthPortError> {
+        Ok(())
+    }
+
     async fn builtin_identity(&self, _ref: &str) -> Result<Option<BuiltinLoginIdentity>, AuthPortError> {
         Ok(None)
     }

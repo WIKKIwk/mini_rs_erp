@@ -319,6 +319,7 @@ impl AdminService {
             return Err(AdminPortError::NotFound);
         }
         let avatar_url = self.profile_avatar_url("worker", &worker.id).await;
+        let code = self.access_code(&worker.id).await?;
         let now = OffsetDateTime::now_utc();
         Ok(AdminWorkerDetail {
             id: worker.id,
@@ -326,7 +327,7 @@ impl AdminService {
             phone: worker.phone,
             avatar_url,
             level: worker.level,
-            code: String::new(),
+            code,
             code_locked: state.code_locked(now),
             code_retry_after_sec: state.retry_after_seconds(now),
         })
@@ -340,6 +341,7 @@ impl AdminService {
         if state.removed {
             return Err(AdminPortError::NotFound);
         }
+        let code = self.access_code(&user.id).await?;
         let avatar_url = self
             .profile_avatar_url(profile_role_key(&user.role), &user.id)
             .await;
@@ -350,7 +352,7 @@ impl AdminService {
             name: user.name,
             phone: user.phone,
             avatar_url,
-            code: String::new(),
+            code,
             blocked: state.blocked,
             code_locked: state.code_locked(now),
             code_retry_after_sec: state.retry_after_seconds(now),

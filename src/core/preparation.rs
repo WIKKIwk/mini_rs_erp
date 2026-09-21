@@ -16,8 +16,28 @@ pub enum PreparationError {
     Forbidden,
     #[error("Bu omborga yangi homashyo ulash huquqi yo‘q")]
     WarehouseNotExclusive,
+    #[error("Faqat o‘zingiz yaratgan va faqat sizga biriktirilgan bola omborni boshqarishingiz mumkin")]
+    WarehouseNotOwned,
+    #[error("Bunday nomli ombor mavjud. Boshqa nom kiriting")]
+    WarehouseNameTaken,
+    #[error("Omborda homashyo yoki mahsulot bor. Avval ularni boshqa omborga ko‘chiring")]
+    WarehouseNotEmpty,
+    #[error("Omborga homashyo biriktirilgan. Avval homashyo bog‘lanishlarini olib tashlang")]
+    WarehouseHasMaterials,
+    #[error("Bu omborda bola omborlar bor. Avval ularni boshqaring")]
+    WarehouseHasChildren,
+    #[error("Omborda bog‘langan yozuvlar yoki faol operatsiyalar bor. Uni o‘chirib bo‘lmaydi")]
+    WarehouseInUse,
     #[error("Bu homashyo tanlangan omborga biriktirilmagan")]
     MaterialNotInWarehouse,
+    #[error("Faqat o‘zingiz yaratgan homashyoni boshqarishingiz mumkin")]
+    MaterialNotOwned,
+    #[error("Sizda bunday nomli homashyo mavjud. Boshqa nom kiriting")]
+    MaterialNameTaken,
+    #[error("Homashyo ishlatilgan: qoldiq, kirim, formula yoki boshqa bog‘langan yozuvlar bor. Uni o‘chirib bo‘lmaydi")]
+    MaterialInUse,
+    #[error("Bu omborda homashyo qoldig‘i, kutilayotgan kirim yoki faol ko‘chirish bor. Avval ularni yakunlang")]
+    MaterialWarehouseInUse,
     #[error("Bu omborga kirim uchun tarozi kirimidan foydalaning — QR majburiy")]
     ReceiptRequiresQr,
     #[error("Homashyo qoldig‘i yetarli emas")]
@@ -87,6 +107,26 @@ pub struct MaterialCreate {
     pub warehouse: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MaterialRename {
+    pub item_code: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MaterialDelete {
+    pub item_code: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MaterialWarehousesUpdate {
+    pub item_code: String,
+    pub warehouses: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReceiptCreate {
@@ -152,7 +192,7 @@ pub struct PreparationWarehouseCreate {
 }
 
 impl PreparationWarehouseCreate {
-    fn clean(value: &str) -> Result<String, PreparationError> {
+    pub fn clean(value: &str) -> Result<String, PreparationError> {
         let name = value.split_whitespace().collect::<Vec<_>>().join(" ");
         if name.is_empty() || name.chars().count() > 160 {
             return Err(PreparationError::Invalid(
@@ -175,6 +215,19 @@ impl PreparationWarehouseCreate {
         }
         Ok(name)
     }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreparationWarehouseRename {
+    pub warehouse: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreparationWarehouseDelete {
+    pub warehouse: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

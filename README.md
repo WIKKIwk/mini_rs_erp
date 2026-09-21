@@ -77,6 +77,9 @@ normal production path.
 
 ## Quick Start
 
+For the local Mac configured with Keychain database credentials, use the
+[Mac startup, maintenance and recovery commands](docs/macos-postgres-access.md).
+
 ```bash
 cp .env.example .env
 cargo fmt --check
@@ -99,9 +102,12 @@ in `.env` and requires a completed credential cutover. Follow
 [the credential migration procedure](docs/auth-credential-migration.md) before
 starting this version. The procedure preserves existing codes, including legacy
 eight-character administrator codes; it does not impose a new length requirement.
-Code creation/regeneration returns the new code once. Detail/list/settings reads
-never return an existing code or its hash. Resetting a code does not automatically
-revoke previously issued sessions.
+Administrators can reopen account details and copy the current access code at
+any time. Codes are stored as authenticated ciphertext in `mini_auth_code_vault`,
+separately from the Argon2id login hash; no hash is returned by an API. Admin code
+regeneration has no cooldown. Resetting a code does not automatically revoke
+previously issued sessions. See [admin code storage](docs/admin-access-codes.md)
+for encryption keys and preserving older hash-only credentials.
 
 Login counts only invalid credentials per normalized phone number. Successful
 logins do not consume the limit and clear earlier failures; internal errors do

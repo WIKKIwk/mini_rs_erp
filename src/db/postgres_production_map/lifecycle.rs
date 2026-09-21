@@ -366,7 +366,7 @@ pub(crate) async fn refresh_production_order_lifecycle_tx(
     sqlx::query(
         "UPDATE mini_production_maps
          SET lifecycle_status = $2,
-             completion_outcome = $3,
+             completion_outcome = CASE WHEN $2 = 'cancelled' THEN completion_outcome ELSE $3 END,
              lifecycle_changed_at = CASE WHEN $4 THEN now() ELSE lifecycle_changed_at END,
              production_completed_at = CASE
                  WHEN $4 AND $2 = 'production_completed'

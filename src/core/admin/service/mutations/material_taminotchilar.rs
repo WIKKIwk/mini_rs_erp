@@ -78,12 +78,13 @@ impl AdminService {
             .map(|assignment| assignment.assigned_item_groups)
             .unwrap_or_default();
         let now = OffsetDateTime::now_utc();
+        let code = self.access_code(&entry.ref_).await?;
         Ok(AdminCustomerDetail {
             ref_: entry.ref_,
             name: entry.name,
             phone: entry.phone,
             avatar_url,
-            code: String::new(),
+            code,
             code_locked: state.code_locked(now),
             code_retry_after_sec: state.retry_after_seconds(now),
             assigned_items: Vec::new(),

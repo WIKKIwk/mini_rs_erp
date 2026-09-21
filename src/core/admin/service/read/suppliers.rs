@@ -70,7 +70,7 @@ impl AdminService {
             }
             Err(err) => return Err(err),
         };
-        let code = self.supplier_code(&entry, &state)?;
+        let code = self.access_code(&entry.ref_).await?;
         let avatar_url = self.profile_avatar_url("supplier", &entry.ref_).await;
         let now = OffsetDateTime::now_utc();
         Ok(AdminSupplierDetail {

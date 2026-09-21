@@ -26,6 +26,12 @@ async fn postgres_credential_cutover_and_all_login_roles() {
     .execute(&pool)
     .await
     .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../migrations/postgres/0129_admin_access_code_visibility.sql"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
     let store = Arc::new(PostgresAuthStore::new(pool.clone()));
     assert!(store.require_ready().await.is_err());
     let temp = tempfile::tempdir().unwrap();
@@ -253,31 +259,19 @@ async fn postgres_credential_cutover_and_all_login_roles() {
         .with_state_port(store.clone())
         .with_read_port(legacy.clone())
         .with_write_port(legacy.clone());
-    assert!(
-        admin
-            .supplier_detail(&supplier.ref_)
-            .await
-            .unwrap()
-            .code
-            .is_empty()
+    assert_eq!(
+        admin.supplier_detail(&supplier.ref_).await.unwrap().code,
+        "101234567890"
     );
-    assert!(
-        admin
-            .customer_detail(&customer.ref_)
-            .await
-            .unwrap()
-            .code
-            .is_empty()
+    assert_eq!(
+        admin.customer_detail(&customer.ref_).await.unwrap().code,
+        "301234567890"
     );
-    assert!(
-        admin
-            .worker_detail(worker.clone())
-            .await
-            .unwrap()
-            .code
-            .is_empty()
+    assert_eq!(
+        admin.worker_detail(worker.clone()).await.unwrap().code,
+        "401234567890"
     );
-    assert!(admin.settings().await.unwrap().werka_code.is_empty());
+    assert_eq!(admin.settings().await.unwrap().werka_code, "201234567890");
     let supplier_rotated = admin
         .regenerate_supplier_code(&supplier.ref_)
         .await
@@ -288,13 +282,9 @@ async fn postgres_credential_cutover_and_all_login_roles() {
             .await
             .is_ok()
     );
-    assert!(
-        admin
-            .supplier_detail(&supplier.ref_)
-            .await
-            .unwrap()
-            .code
-            .is_empty()
+    assert_eq!(
+        admin.supplier_detail(&supplier.ref_).await.unwrap().code,
+        supplier_rotated.code
     );
     let material_rotated = admin
         .regenerate_material_taminotchi_code(&material.ref_)
@@ -306,13 +296,13 @@ async fn postgres_credential_cutover_and_all_login_roles() {
             .await
             .is_ok()
     );
-    assert!(
+    assert_eq!(
         admin
             .material_taminotchi_detail(&material.ref_)
             .await
             .unwrap()
-            .code
-            .is_empty()
+            .code,
+        material_rotated.code
     );
     for (phone, old_code, role) in &cases {
         if matches!(
@@ -335,13 +325,9 @@ async fn postgres_credential_cutover_and_all_login_roles() {
                 .unwrap();
             assert!(auth.login(phone, old_code).await.is_err());
             assert!(auth.login(phone, &rotated.code).await.is_ok());
-            assert!(
-                admin
-                    .system_user_detail(user)
-                    .await
-                    .unwrap()
-                    .code
-                    .is_empty()
+            assert_eq!(
+                admin.system_user_detail(user).await.unwrap().code,
+                rotated.code
             );
         }
     }
@@ -350,13 +336,9 @@ async fn postgres_credential_cutover_and_all_login_roles() {
         .await
         .unwrap();
     assert!(!rotated.code.is_empty());
-    assert!(
-        admin
-            .customer_detail(&customer.ref_)
-            .await
-            .unwrap()
-            .code
-            .is_empty()
+    assert_eq!(
+        admin.customer_detail(&customer.ref_).await.unwrap().code,
+        rotated.code
     );
     assert!(auth.login(&customer.phone, "301234567890").await.is_err());
     assert_eq!(
@@ -374,7 +356,10 @@ async fn postgres_credential_cutover_and_all_login_roles() {
             .is_ok()
     );
     let warehouse = admin.regenerate_werka_code().await.unwrap();
-    assert!(admin.settings().await.unwrap().werka_code.is_empty());
+    assert_eq!(
+        admin.settings().await.unwrap().werka_code,
+        warehouse.werka_code
+    );
     assert!(
         auth.login("+998901234509", &warehouse.werka_code)
             .await
@@ -421,6 +406,90 @@ async fn postgres_credential_cutover_and_all_login_roles() {
         .await
         .unwrap()
     );
+
+    // Reopening must keep the same readable code and must not change login hashes.
+    assert_eq!(
+        reopened.access_code(&worker.id).await.unwrap(),
+        worker_rotated.code
+    );
+    assert_eq!(
+        reopened.access_code(&supplier.ref_).await.unwrap(),
+        supplier_rotated.code
+    );
+    assert_eq!(
+        reopened.access_code(&customer.ref_).await.unwrap(),
+        rotated_again.code
+    );
+    assert_eq!(
+        reopened.access_code("werka").await.unwrap(),
+        warehouse.werka_code
+    );
+    assert_eq!(
+        reopened.access_code("admin").await.unwrap(),
+        "admin-replacement-credential"
+    );
+    let reopened_admin = AdminService::new(&config)
+        .with_state_port(Arc::new(reopened))
+        .with_read_port(legacy.clone())
+        .with_write_port(legacy.clone());
+    assert_eq!(
+        reopened_admin
+            .worker_detail(worker.clone())
+            .await
+            .unwrap()
+            .code,
+        worker_rotated.code
+    );
+    // Legacy hash-only accounts recover after a normal successful login, with no reset.
+    sqlx::query("DELETE FROM mini_auth_code_vault WHERE principal_ref = $1")
+        .bind(&worker.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(store.access_code(&worker.id).await.unwrap().is_empty());
+    let before_hash = store.states().await.unwrap()[&worker.id]
+        .custom_code
+        .clone();
+    assert!(
+        !store
+            .recover_access_code(&worker.id, "401111111111")
+            .await
+            .unwrap()
+    );
+    assert!(
+        auth.login(&worker.phone, &worker_rotated.code)
+            .await
+            .is_ok()
+    );
+    assert_eq!(
+        store.access_code(&worker.id).await.unwrap(),
+        worker_rotated.code
+    );
+    assert_eq!(
+        store.states().await.unwrap()[&worker.id].custom_code,
+        before_hash
+    );
+    // Admin regeneration has no cooldown, including a pre-existing cooldown value.
+    let mut state = store.states().await.unwrap()[&worker.id].clone();
+    state.cooldown_until = Some(time::OffsetDateTime::now_utc() + time::Duration::hours(1));
+    store.put_state(&worker.id, state).await.unwrap();
+    for _ in 0..5 {
+        let issued = admin.regenerate_worker_code(worker.clone()).await.unwrap();
+        assert!(!issued.code_locked);
+        assert_eq!(issued.code_retry_after_sec, 0);
+        assert_eq!(store.access_code(&worker.id).await.unwrap(), issued.code);
+    }
+    for row in sqlx::query("SELECT encrypted_code FROM mini_auth_code_vault")
+        .fetch_all(&pool)
+        .await
+        .unwrap()
+    {
+        let ciphertext: String = row.get("encrypted_code");
+        assert!(ciphertext.starts_with("v1:"));
+        for (_, code, _) in &cases {
+            assert!(!ciphertext.contains(code));
+        }
+    }
 
     legacy.clear_legacy_access_secrets().await.unwrap();
     let stored = std::fs::read_to_string(&json_path).unwrap();

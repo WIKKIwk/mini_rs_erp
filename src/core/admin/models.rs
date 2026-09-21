@@ -358,19 +358,12 @@ pub struct AdminState {
 }
 
 impl AdminState {
-    pub fn code_locked(&self, now: OffsetDateTime) -> bool {
-        self.cooldown_until.is_some_and(|until| now < until)
+    pub fn code_locked(&self, _now: OffsetDateTime) -> bool {
+        false
     }
 
-    pub fn retry_after_seconds(&self, now: OffsetDateTime) -> i64 {
-        let Some(until) = self.cooldown_until else {
-            return 0;
-        };
-        if now >= until {
-            return 0;
-        }
-        let seconds = (until - now).whole_seconds();
-        seconds.max(1)
+    pub fn retry_after_seconds(&self, _now: OffsetDateTime) -> i64 {
+        0
     }
 }
 

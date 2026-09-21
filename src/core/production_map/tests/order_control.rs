@@ -9,6 +9,147 @@ const PECHAT_ID: &str = "apparatus:default:bosma_7";
 const LAMINATION_ID: &str = "apparatus:default:asset-007";
 const REZKA_ID: &str = "apparatus:default:asset-010";
 
+#[tokio::test]
+async fn early_close_unstarted_order_is_immediate_archived_and_not_deletable() {
+    let store = std::sync::Arc::new(MemoryProductionMapStore::new());
+    let service = service_with_default_apparatus(store.clone()).await;
+    // Reproduce 0009: released, no queue state, no sessions/output/action events.
+    let id = "zakaz-0009";
+    service.upsert_map(canonical_apparatus_stage_map(id, PECHAT_ID, "7 ta rangli pechat"))
+        .await.unwrap();
+    for apparatus in [PECHAT_ID, REZKA_ID] {
+        store.put_apparatus_sequence(apparatus, vec!["zakaz-before".into(), id.into(), "zakaz-after".into()])
+            .await.unwrap();
+    }
+    assert_eq!(service.production_order_lifecycle(id).await.unwrap().status,
+        ProductionOrderLifecycleStatus::Released);
+    assert_eq!(service.request_order_freeze(id, actor("admin")).await,
+        Err(ProductionMapError::OrderNotStarted), "ordinary freeze keeps its existing rule");
+    for comment in [" ".to_string(), "x".repeat(2001)] {
+        assert_eq!(service.request_order_early_close(id, actor("admin"), &comment).await,
+            Err(ProductionMapError::ProgressInputInvalid));
+    }
+    assert!(service.order_control_state(id).await.unwrap().early_close.is_none());
+    let closed = service.request_order_early_close(id, actor("admin"), "  Mijoz buyurtmani bekor qildi  ")
+        .await.unwrap();
+    assert_eq!(closed.state, OrderControlState::Frozen);
+    assert!(closed.freeze_request.is_none(), "no fictional worker/freeze request");
+    let close = closed.early_close.as_ref().unwrap();
+    assert_eq!(close.comment, "Mijoz buyurtmani bekor qildi");
+    assert!(close.closed_at_unix.is_some());
+    let lifecycle = service.production_order_lifecycle(id).await.unwrap();
+    assert_eq!(lifecycle.status, ProductionOrderLifecycleStatus::Cancelled);
+    assert!(lifecycle.production_completed_at_unix.is_none());
+    let archived = service.fully_completed_orders(100).await.unwrap();
+    assert_eq!(archived.len(), 1);
+    assert_eq!(archived[0].early_close.as_ref(), Some(close));
+    assert!(archived[0].logs.is_empty());
+    assert!(archived[0].progress_batches.is_empty());
+    assert!(store.order_run_sessions_for_order(id).await.unwrap().is_empty());
+    for sequence in store.apparatus_sequences().await.unwrap().values() {
+        assert_eq!(sequence, &vec!["zakaz-before".to_string(), "zakaz-after".to_string()]);
+    }
+    let snapshot = service.live_snapshot().await.unwrap();
+    assert!(snapshot.visible_order_ids.values().all(|ids| !ids.iter().any(|value| value == id)));
+    assert!(snapshot.sequences.values().all(|ids| !ids.iter().any(|value| value == id)));
+    assert_eq!(service.request_order_early_close(id, actor("admin"), &close.comment).await.unwrap(), closed);
+    assert!(matches!(service.delete_order(id).await,
+        Err(ProductionMapError::OrderDeleteBlocked(blockers))
+            if blockers.iter().any(|blocker| blocker.code == "early_close_history")));
+    assert!(service.unfreeze_order(id, actor("admin")).await.is_err());
+    assert!(start_with_qolip(&service, PECHAT_ID, id, actor("worker")).await.is_err());
+    let restarted = service_with_default_apparatus(store).await;
+    assert_eq!(restarted.fully_completed_orders(100).await.unwrap(), archived);
+}
+
+#[tokio::test]
+async fn early_close_waits_for_last_roll_and_preserves_history_and_output() {
+    let store = std::sync::Arc::new(MemoryProductionMapStore::new());
+    let service = service_with_default_apparatus(store.clone()).await;
+    let id = "zakaz-early-close-active";
+    service.upsert_map(canonical_apparatus_stage_map(id, PECHAT_ID, "7 ta rangli pechat"))
+        .await.unwrap();
+    start_with_qolip(&service, PECHAT_ID, id, actor("worker")).await.unwrap();
+    let requested = service.request_order_early_close(id, actor("admin"), "  Mijoz qolgan qismini bekor qildi  ").await.unwrap();
+    assert_eq!(requested.state, OrderControlState::FreezeRequested);
+    assert!(requested.early_close.as_ref().unwrap().closed_at_unix.is_none());
+    assert!(service.fully_completed_orders(100).await.unwrap().is_empty());
+    assert_eq!(service.cancel_order_freeze_request(id, actor("admin")).await,
+        Err(ProductionMapError::OrderControlActionNotAllowed));
+    let retry = service.request_order_early_close(id, actor("admin"), "Mijoz qolgan qismini bekor qildi").await.unwrap();
+    assert_eq!(requested, retry);
+    let result = service.apply_apparatus_queue_action_with_progress(
+        PECHAT_ID, id, queue_state::ApparatusQueueAction::DetachRoll,
+        &[PECHAT_ID.to_string()], actor("worker"), QueueProgressInput {
+            produced_qty: Some(10.0), gross_qty: Some(2.0), bobina_kg: Some(0.5), uom: "m".into(),
+            freeze_request_id: requested.freeze_request.unwrap().request_id,
+            ..QueueProgressInput::default()
+        }).await.unwrap();
+    assert!(result.progress_batch.is_some());
+    let lifecycle = service.production_order_lifecycle(id).await.unwrap();
+    assert_eq!(lifecycle.status, ProductionOrderLifecycleStatus::Cancelled);
+    assert!(lifecycle.production_completed_at_unix.is_none(), "never claim fully produced");
+    let archived = service.fully_completed_orders(100).await.unwrap();
+    let archived = archived.iter().find(|order| order.order_id == id).unwrap();
+    let close = archived.early_close.as_ref().unwrap();
+    assert_eq!(close.comment, "Mijoz qolgan qismini bekor qildi");
+    assert_eq!(close.actor, actor("admin"));
+    assert_eq!(close.closed_at_unix, Some(archived.completed_at_unix));
+    assert!(archived.logs.iter().any(|log| log.action == queue_state::ApparatusQueueAction::Start));
+    assert!(archived.logs.iter().any(|log| log.action == queue_state::ApparatusQueueAction::Freeze));
+    assert_eq!(archived.progress_batches.len(), 1);
+    let snapshot = service.live_snapshot().await.unwrap();
+    assert!(snapshot.sequences.values().all(|ids| !ids.iter().any(|value| value == id)));
+    assert!(snapshot.visible_order_ids.values().all(|ids| !ids.iter().any(|value| value == id)));
+    assert!(snapshot.frozen_orders_by_apparatus.values().all(|orders| orders.iter().all(|order| order.order_id != id)));
+    assert_eq!(service.unfreeze_order(id, actor("admin")).await,
+        Err(ProductionMapError::OrderControlActionNotAllowed));
+    assert!(service.delete_order(id).await.is_err());
+    assert_eq!(start_with_qolip(&service, PECHAT_ID, id, actor("worker")).await,
+        Err(ProductionMapError::OrderFrozen));
+    // Recreate the service to prove history comes from storage, not cached UI state.
+    let restarted = service_with_default_apparatus(store).await;
+    assert_eq!(restarted.fully_completed_orders(100).await.unwrap()[0], *archived);
+}
+
+#[tokio::test]
+async fn early_close_frozen_and_paused_orders_preserves_original_events() {
+    for frozen in [false, true] {
+        let service = service_with_default_apparatus(std::sync::Arc::new(MemoryProductionMapStore::new())).await;
+        let id = "zakaz-early-close-paused";
+        service.upsert_map(canonical_apparatus_stage_map(id, PECHAT_ID, "7 ta rangli pechat")).await.unwrap();
+        start_with_qolip(&service, PECHAT_ID, id, actor("worker")).await.unwrap();
+        service.apply_apparatus_queue_action_with_progress(PECHAT_ID, id,
+            queue_state::ApparatusQueueAction::DetachRoll, &[PECHAT_ID.to_string()], actor("worker"),
+            QueueProgressInput { produced_qty: Some(10.0), gross_qty: Some(2.0), bobina_kg: Some(0.5),
+                uom: "m".into(), ..QueueProgressInput::default() }).await.unwrap();
+        if frozen { service.request_order_freeze(id, actor("admin")).await.unwrap(); }
+        let closed = service.request_order_early_close(id, actor("admin"), "Xomashyo mos kelmadi").await.unwrap();
+        assert_eq!(closed.state, OrderControlState::Frozen);
+        assert!(closed.early_close.unwrap().closed_at_unix.is_some());
+        let archive = service.fully_completed_orders(100).await.unwrap();
+        assert_eq!(archive.len(), 1);
+        assert_eq!(archive[0].progress_batches.len(), 1);
+        assert!(archive[0].logs.iter().any(|log| log.action == queue_state::ApparatusQueueAction::Start));
+    }
+}
+
+#[tokio::test]
+async fn early_close_upgrades_pending_freeze_and_requires_comment() {
+    let service = service_with_default_apparatus(std::sync::Arc::new(MemoryProductionMapStore::new())).await;
+    let id = "zakaz-early-close-upgrade";
+    service.upsert_map(canonical_apparatus_stage_map(id, PECHAT_ID, "7 ta rangli pechat")).await.unwrap();
+    start_with_qolip(&service, PECHAT_ID, id, actor("worker")).await.unwrap();
+    for comment in [" ".to_string(), "x".repeat(2001)] {
+        assert_eq!(service.request_order_early_close(id, actor("admin"), &comment).await,
+            Err(ProductionMapError::ProgressInputInvalid));
+    }
+    let pending = service.request_order_freeze(id, actor("admin")).await.unwrap();
+    let close = service.request_order_early_close(id, actor("manager"), "Buyurtmachi rad etdi").await.unwrap();
+    assert_eq!(pending.freeze_request, close.freeze_request);
+    assert_eq!(close.early_close.unwrap().actor, actor("manager"));
+}
+
 fn actor(role: &str) -> QueueActionActor {
     QueueActionActor {
         role: role.to_string(),
@@ -1159,6 +1300,7 @@ async fn unfreeze_recovers_control_only_refreeze_after_order_was_requeued() {
             requested_at_unix: stuck_request.requested_at_unix,
             frozen_at_unix: Some(stuck_request.transitioned_at_unix),
             freeze_request: Some(stuck_request),
+            early_close: None,
         })
         .await
         .expect("controlled control-only refreeze");

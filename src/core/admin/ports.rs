@@ -196,6 +196,16 @@ pub trait AdminStatePort: Send + Sync {
     async fn states(&self) -> Result<BTreeMap<String, AdminState>, AdminPortError>;
     async fn put_state(&self, ref_: &str, state: AdminState) -> Result<(), AdminPortError>;
 
+    async fn access_code(&self, ref_: &str) -> Result<String, AdminPortError> {
+        let states = self.states().await?;
+        let code = states.get(ref_).map(|state| state.custom_code.as_str()).unwrap_or_default();
+        Ok(if crate::core::auth::password::is_password_hash(code) {
+            String::new()
+        } else {
+            code.to_string()
+        })
+    }
+
     async fn builtin_identity(&self, _ref: &str) -> Result<Option<crate::core::auth::ports::BuiltinLoginIdentity>, AdminPortError> {
         Ok(None)
     }

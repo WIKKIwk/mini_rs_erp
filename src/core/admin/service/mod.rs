@@ -37,8 +37,6 @@ use crate::core::system_users::SystemUser;
 use crate::core::werka::models::{CustomerDirectoryEntry, SupplierItem};
 use crate::core::workers::Worker;
 
-const CODE_REGEN_WINDOW_SECONDS: i64 = 60;
-const MAX_CODE_REGENS_PER_WINDOW: i32 = 3;
 const USER_AVATAR_FALLBACK_CONCURRENCY: usize = 8;
 
 #[derive(Clone)]
@@ -206,7 +204,7 @@ impl AdminService {
             werka_phone: config.werka_phone.clone(),
             werka_name: config.werka_name.clone(),
             werka_avatar_url: self.profile_avatar_url("werka", "werka").await,
-            werka_code: String::new(),
+            werka_code: self.access_code("werka").await?,
             werka_code_locked: state.code_locked(now),
             werka_code_retry_after_sec: state.retry_after_seconds(now),
             admin_phone: config.admin_phone.clone(),
@@ -290,6 +288,13 @@ impl AdminService {
             .get(ref_.trim())
             .cloned()
             .unwrap_or_default())
+    }
+
+    async fn access_code(&self, ref_: &str) -> Result<String, AdminPortError> {
+        match &self.state_port {
+            Some(port) => port.access_code(ref_.trim()).await,
+            None => Ok(String::new()),
+        }
     }
 
     async fn supplier_entries(

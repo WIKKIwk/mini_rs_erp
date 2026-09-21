@@ -135,6 +135,8 @@ pub struct ProductionOrderLogEntry {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FullyCompletedProductionOrder {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub early_close: Option<super::OrderEarlyClose>,
     pub order_id: String,
     pub order_number: String,
     pub title: String,

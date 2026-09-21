@@ -79,26 +79,11 @@ pub(super) fn phone_search_terms(raw: &str, normalized: &str) -> Vec<String> {
 
 pub(super) fn bump_code_regen_state(
     mut state: AdminState,
-    now: OffsetDateTime,
+    _now: OffsetDateTime,
 ) -> Result<AdminState, AdminPortError> {
-    if state.code_locked(now) {
-        return Err(AdminPortError::CodeRegenCooldown);
-    }
-    if state
-        .regen_window_started_at
-        .map(|started| now - started >= time::Duration::seconds(CODE_REGEN_WINDOW_SECONDS))
-        .unwrap_or(true)
-    {
-        state.regen_window_started_at = Some(now);
-        state.regen_window_count = 0;
-        state.cooldown_until = None;
-    }
-    state.regen_window_count += 1;
-    if state.regen_window_count >= MAX_CODE_REGENS_PER_WINDOW {
-        state.cooldown_until = state
-            .regen_window_started_at
-            .map(|started| started + time::Duration::seconds(CODE_REGEN_WINDOW_SECONDS));
-    }
+    state.regen_window_started_at = None;
+    state.regen_window_count = 0;
+    state.cooldown_until = None;
     Ok(state)
 }
 
