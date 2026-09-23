@@ -78,6 +78,16 @@ pub enum ProductionMapError {
     StoreFailed,
     #[error("queue action is not allowed")]
     QueueActionNotAllowed,
+    #[error("queue reorder input is invalid")]
+    QueueReorderInvalid,
+    #[error("queue changed; reload before reordering")]
+    QueueReorderConflict,
+    #[error("frozen orders cannot be reordered")]
+    QueueReorderFrozen,
+    #[error("active order prevents this reorder")]
+    QueueReorderBlocked,
+    #[error("queue reorder key belongs to another request")]
+    QueueReorderIdempotencyConflict,
     #[error("print preflight is active on the apparatus")]
     PrintPreflightActive,
     #[error("print preflight was not found")]

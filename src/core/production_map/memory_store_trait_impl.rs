@@ -1,6 +1,34 @@
 #[async_trait]
 #[cfg(any(test, feature = "verification"))]
 impl ProductionMapStorePort for MemoryProductionMapStore {
+    async fn move_apparatus_sequence(
+        &self,
+        canonical: &crate::core::apparatus_standard::RuntimeApparatusConfiguration,
+        command: &SequenceMove,
+        actor: &QueueActionActor,
+    ) -> Result<SequenceMoveResult, ProductionMapError> {
+        command.validate()?;
+        let mut receipts = self.sequence_move_receipts.lock().await;
+        let key = (command.apparatus.clone(), actor.role.clone(), actor.ref_.clone(), command.idempotency_key.clone());
+        if let Some((previous, result)) = receipts.get(&key) {
+            return if previous == command { Ok(result.clone()) }
+                else { Err(ProductionMapError::QueueReorderIdempotencyConflict) };
+        }
+        let maps = self.maps().await?;
+        let states = self.apparatus_queue_states().await?;
+        let frozen = self.order_control_states().await?.into_iter()
+            .filter_map(|(id,c)| (c.state == OrderControlState::Frozen).then_some(id)).collect();
+        let holds = self.active_print_preflight_holds().await?.into_iter()
+            .filter(|h| h.apparatus == command.apparatus && h.is_live_at(0)).map(|h| h.order_id).collect();
+        let mut sequences = self.sequences.write().await;
+        let state = SequenceMoveState::from_data(canonical, &maps,
+            sequences.get(&command.apparatus).map(Vec::as_slice).unwrap_or_default(),
+            states.get(&command.apparatus).unwrap_or(&BTreeMap::new()), &frozen, &holds);
+        let result = state.apply(command)?;
+        sequences.insert(command.apparatus.clone(), result.order_ids.clone());
+        receipts.insert(key, (command.clone(), result.clone()));
+        Ok(result)
+    }
     async fn active_rezka_paddon(&self, apparatus: &str, actor: &QueueActionActor) -> Result<Option<String>, ProductionMapError> {
         Ok(self.active_paddons.read().await.get(&(actor.role.clone(), actor.ref_.clone(), apparatus.to_string())).cloned())
     }

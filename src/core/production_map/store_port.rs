@@ -293,6 +293,15 @@ pub trait ProductionMapStorePort: Send + Sync {
         Ok(())
     }
     async fn apparatus_sequences(&self) -> StoreResult<ApparatusSequenceMap>;
+    async fn move_apparatus_sequence(
+        &self,
+        _canonical: &crate::core::apparatus_standard::RuntimeApparatusConfiguration,
+        _command: &super::SequenceMove,
+        _actor: &QueueActionActor,
+    ) -> StoreResult<super::SequenceMoveResult> {
+        // Never emulate an atomic command with a non-atomic read/write pair.
+        Err(ProductionMapError::StoreFailed)
+    }
     async fn put_apparatus_sequence(
         &self,
         apparatus: &str,

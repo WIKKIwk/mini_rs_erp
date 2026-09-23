@@ -26,6 +26,8 @@ mod progress;
 mod queue;
 pub mod queue_state;
 mod service;
+mod sequence_move;
+pub use sequence_move::{SequenceMove, SequenceMoveResult, SequenceMoveState};
 #[path = "astatka/service.rs"]
 mod service_astatka;
 #[path = "astatka/bosma.rs"]

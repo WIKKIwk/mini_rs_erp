@@ -8,6 +8,7 @@ use super::super::*;
 
 #[cfg(any(test, feature = "verification"))]
 pub struct MemoryProductionMapStore {
+    pub(super) sequence_move_receipts: tokio::sync::Mutex<BTreeMap<(String, String, String, String), (SequenceMove, SequenceMoveResult)>>,
     pub(super) maps: RwLock<BTreeMap<String, ProductionMapDefinition>>,
     pub(super) production_order_lifecycles:
         RwLock<BTreeMap<String, ProductionOrderLifecycleRecord>>,
@@ -42,6 +43,7 @@ pub struct MemoryProductionMapStore {
 impl MemoryProductionMapStore {
     pub fn new() -> Self {
         Self {
+            sequence_move_receipts: tokio::sync::Mutex::new(BTreeMap::new()),
             maps: RwLock::new(BTreeMap::new()),
             production_order_lifecycles: RwLock::new(BTreeMap::new()),
             sequences: RwLock::new(BTreeMap::new()),

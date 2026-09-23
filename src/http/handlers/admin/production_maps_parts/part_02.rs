@@ -60,6 +60,7 @@ pub async fn production_map_sequence(
                     "epoch": state.production_maps.snapshot_epoch(),
                     "maps": [],
                     "sequences": { apparatus: snapshot.sequences.get(apparatus).cloned().unwrap_or_default() },
+                    "sequence_versions": { apparatus: snapshot.sequence_versions.get(apparatus) },
                     "visible_order_ids": { apparatus: snapshot.visible_order_ids.get(apparatus).cloned().unwrap_or_default() },
                     "queue_states": { apparatus: snapshot.queue_states.get(apparatus).cloned().unwrap_or_default() },
                     "stage_states": { order_id: snapshot.stage_states.get(order_id).cloned().unwrap_or_default() },
@@ -78,6 +79,7 @@ pub async fn production_map_sequence(
                 "epoch": state.production_maps.snapshot_epoch(),
                 "maps": &snapshot.maps,
                 "sequences": &snapshot.sequences,
+                "sequence_versions": &snapshot.sequence_versions,
                 "visible_order_ids": &snapshot.visible_order_ids,
                 "queue_states": &snapshot.queue_states,
                 "stage_states": &snapshot.stage_states,
@@ -88,6 +90,15 @@ pub async fn production_map_sequence(
                 "frozen_orders_by_apparatus": &snapshot.frozen_orders_by_apparatus,
                 "order_customers": order_customers,
             })))
+        }
+        Method::POST => {
+            authorize_any_capability(&state, &headers,
+                &[Capability::AdminAccess, Capability::ProductionMapManage]).await?;
+            let command: crate::core::production_map::SequenceMove = parse_json(&body)?;
+            let result = state.production_maps.move_apparatus_sequence(command, queue_action_actor(&principal))
+                .await.map_err(production_map_error)?;
+            Ok(json_response(serde_json::json!({"ok":true,"order_ids":result.order_ids,
+                "version":result.version,"adjusted":result.adjusted})))
         }
         Method::PUT => {
             authorize_any_capability(

@@ -1,5 +1,13 @@
 #[async_trait]
 impl ProductionMapStorePort for PostgresProductionMapStore {
+    async fn move_apparatus_sequence(
+        &self,
+        canonical: &crate::core::apparatus_standard::RuntimeApparatusConfiguration,
+        command: &crate::core::production_map::SequenceMove,
+        actor: &QueueActionActor,
+    ) -> Result<crate::core::production_map::SequenceMoveResult, ProductionMapError> {
+        sequence_move::commit(&self.pool, canonical, command, actor).await
+    }
     async fn commit_stage_astatka_report(&self, report: crate::core::production_map::StageAstatkaReport,
         expected: Option<OrderRunSession>, actor: QueueActionActor) -> Result<(), ProductionMapError> {
         stage_execution::commit_report(&self.pool, report, expected, actor).await

@@ -39,6 +39,7 @@ struct CachedProductionSnapshot {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ProductionMapLiveSnapshot {
+    pub sequence_versions: BTreeMap<String, String>,
     pub maps: Vec<ProductionMapSaved>,
     pub sequences: BTreeMap<String, Vec<String>>,
     pub visible_order_ids: BTreeMap<String, Vec<String>>,
@@ -369,6 +370,17 @@ impl ProductionMapService {
             &stored_sequences,
             &frozen_order_ids,
         );
+        let holds = self.store.active_print_preflight_holds().await?;
+        let mut sequence_versions = BTreeMap::new();
+        for canonical in &canonical_apparatuses {
+            let id = canonical.runtime.apparatus_id.as_str();
+            let preflight = holds.iter().filter(|h| h.apparatus == id && h.is_live_at(0))
+                .map(|h| h.order_id.clone()).collect();
+            let state = SequenceMoveState::from_data(canonical, &raw_maps,
+                stored_sequences.get(id).map(Vec::as_slice).unwrap_or_default(),
+                queue_states.get(id).unwrap_or(&BTreeMap::new()), &frozen_order_ids, &preflight);
+            sequence_versions.insert(id.to_string(), state.version());
+        }
         apparatus::filter_unselected_print_orders(
             &raw_maps,
             &canonical_apparatuses,
@@ -438,6 +450,7 @@ impl ProductionMapService {
         let maps = compile_saved_maps(raw_maps);
 
         Ok(ProductionMapLiveSnapshot {
+            sequence_versions,
             maps,
             sequences,
             visible_order_ids,

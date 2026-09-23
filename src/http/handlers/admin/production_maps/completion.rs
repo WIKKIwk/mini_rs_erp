@@ -232,6 +232,7 @@ async fn send_production_map_live_snapshot(
                 "epoch": service.snapshot_epoch(),
                 "maps": &snapshot.maps,
                 "sequences": &snapshot.sequences,
+                "sequence_versions": &snapshot.sequence_versions,
                 "visible_order_ids": &snapshot.visible_order_ids,
                 "queue_states": &snapshot.queue_states,
                 "stage_states": &snapshot.stage_states,

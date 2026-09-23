@@ -203,6 +203,32 @@ impl ProductionMapService {
                 (control.state == OrderControlState::Frozen).then_some(order_id)
             })
             .collect::<BTreeSet<_>>();
+        if let Some(moved) = moved_order_id {
+            // Legacy mobiles still send their entire visible list. Translate
+            // only the drag intent; frozen display rows are not queue members.
+            if order_ids.iter().collect::<BTreeSet<_>>().len() != order_ids.len() {
+                return Err(ProductionMapError::QueueActionNotAllowed);
+            }
+            let context = SequenceMoveState::from_data(&canonical, &maps, current_sequence,
+                states, &frozen_order_ids, &preflight_order_ids.iter().cloned().collect());
+            if context.frozen.contains(moved) { return Err(ProductionMapError::QueueReorderFrozen); }
+            let requested = order_ids.iter().filter(|id| !context.frozen.contains(*id))
+                .cloned().collect::<Vec<_>>();
+            let index = requested.iter().position(|id| id == moved)
+                .ok_or(ProductionMapError::QueueActionNotAllowed)?;
+            let before = requested.get(index + 1).cloned();
+            let after = if before.is_none() && index > 0 { requested.get(index - 1).cloned() } else { None };
+            let command = SequenceMove { apparatus: apparatus.into(), order_id: moved.into(),
+                before_order_id: before, after_order_id: after, expected_version: context.version(),
+                idempotency_key: format!("legacy-{:032x}", rand::random::<u128>()) };
+            let mut result = self.store.move_apparatus_sequence(&canonical, &command,
+                &QueueActionActor { role: "system".into(), ref_: "legacy-queue-reorder".into(), display_name: String::new() }).await?;
+            self.notify_live();
+            // Old clients require every submitted ID in the response. This is
+            // a display-only compatibility projection, NEVER persisted.
+            result.order_ids.extend(order_ids.into_iter().filter(|id| context.frozen.contains(id)));
+            return Ok(result.order_ids);
+        }
         let mut barrier_states = states.clone();
         if pechat::is_pechat_apparatus(&canonical) {
             for state in barrier_states.values_mut() {
@@ -218,28 +244,6 @@ impl ProductionMapService {
         for order_id in preflight_order_ids {
             barrier_states.insert(order_id, "print_preflight".to_string());
         }
-        let effective_sequence;
-        let current_sequence = if moved_order_id.is_some() {
-            effective_sequence = queue_state::effective_apparatus_sequence_excluding(
-                current_sequence,
-                &visible_sequence,
-                &frozen_order_ids,
-            );
-            effective_sequence.as_slice()
-        } else {
-            current_sequence
-        };
-        let order_ids = if let Some(moved_order_id) = moved_order_id {
-            nearest_allowed_sequence(
-                current_sequence,
-                &order_ids,
-                moved_order_id,
-                &barrier_states,
-                &frozen_order_ids,
-            )?
-        } else {
-            order_ids
-        };
         validate_active_sequence_barrier(
             current_sequence,
             &order_ids,

@@ -820,6 +820,48 @@ async fn production_map_sequence_round_trips_on_server() {
 }
 
 #[tokio::test]
+async fn production_map_sequence_move_versions_retries_and_strict_input() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+    let router = build_router(state.clone());
+    let app = "apparatus:default:bosma_8";
+    let path = "/v1/mobile/admin/production-maps/sequence";
+    for (id,number) in [("zakaz-1111","1111"),("zakaz-2222","2222")] {
+        let saved = router.clone().oneshot(request_with_body("PUT","/v1/mobile/admin/production-maps",&token,
+            &pechat_order_map_json_with_dims(id,id,number,app,8,1250.0))).await.unwrap();
+        assert_eq!(saved.status(),StatusCode::OK);
+    }
+    let snapshot = json_body(router.clone().oneshot(request("GET",path,&token)).await.unwrap()).await;
+    let sequence = snapshot["sequences"][app].as_array().unwrap();
+    let moved = sequence.last().unwrap().as_str().unwrap();
+    let anchor = sequence.first().unwrap().as_str().unwrap();
+    let command = serde_json::json!({"apparatus":app,"order_id":moved,"before_order_id":anchor,
+        "expected_version":snapshot["sequence_versions"][app],"idempotency_key":"http-reorder"});
+    let worker = session(&state, PrincipalRole::Aparatchi).await;
+    let forbidden = router.clone().oneshot(request_with_body("POST",path,&worker,&command.to_string())).await.unwrap();
+    assert_eq!(forbidden.status(),StatusCode::FORBIDDEN);
+    let first = router.clone().oneshot(request_with_body("POST",path,&token,&command.to_string())).await.unwrap();
+    assert_eq!(first.status(),StatusCode::OK);
+    let result = json_body(first).await;
+    assert_eq!(result["order_ids"][0],moved);
+    let retry = router.clone().oneshot(request_with_body("POST",path,&token,&command.to_string())).await.unwrap();
+    assert_eq!(retry.status(),StatusCode::OK);
+    assert_eq!(json_body(retry).await,result);
+    let mut stale = command.clone();
+    stale["idempotency_key"] = serde_json::json!("stale-client");
+    let response = router.clone().oneshot(request_with_body("POST",path,&token,&stale.to_string())).await.unwrap();
+    assert_eq!(response.status(),StatusCode::CONFLICT);
+    assert_eq!(json_body(response).await["error"],"queue_reorder_conflict");
+    let mut ambiguous = command;
+    ambiguous["order_ids"] = serde_json::json!([]);
+    let response = router.clone().oneshot(request_with_body("POST",path,&token,&ambiguous.to_string())).await.unwrap();
+    assert_eq!(response.status(),StatusCode::BAD_REQUEST);
+    let current = json_body(router.oneshot(request("GET",path,&token)).await.unwrap()).await;
+    assert_eq!(current["sequences"][app],result["order_ids"]);
+    assert_eq!(current["sequence_versions"][app],result["version"]);
+}
+
+#[tokio::test]
 async fn production_map_sequence_rejects_unknown_and_wrong_apparatus_orders() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;

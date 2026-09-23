@@ -31,6 +31,9 @@ mod catalog_helpers;
 #[path = "postgres_production_map/completion/requests.rs"]
 mod completion_helpers;
 mod lifecycle;
+mod sequence_move;
+#[cfg(test)]
+mod sequence_move_tests;
 mod stage_execution;
 pub(crate) mod pending_orders;
 #[path = "postgres_production_map/catalog/maps.rs"]
