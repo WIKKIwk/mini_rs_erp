@@ -18,6 +18,63 @@ fn parse_order_inline_query(query: &str) -> Option<(OrderInlineKind, String)> {
     Some((kind, value))
 }
 
+fn parse_group_inline_query(query: &str) -> Option<String> {
+    let mut parts = query.trim_start().splitn(2, char::is_whitespace);
+    let prefix = parts.next()?.to_ascii_lowercase();
+    if prefix != "g7" {
+        return None;
+    }
+    Some(parts.next().unwrap_or_default().trim().to_string())
+}
+
+async fn group_inline_results(
+    service: &TelegramService,
+    telegram_user_id: &str,
+    query: &str,
+) -> Result<Vec<serde_json::Value>, TelegramError> {
+    let Some(value) = parse_group_inline_query(query) else {
+        return Ok(Vec::new());
+    };
+    let query_key = value.to_lowercase();
+    let mut groups = service
+        .writable_user_groups(telegram_user_id)
+        .await?
+        .into_iter()
+        .filter(|group| {
+            query_key.is_empty()
+                || group.title.to_lowercase().contains(&query_key)
+                || group.username.to_lowercase().contains(&query_key)
+        })
+        .collect::<Vec<_>>();
+    groups.sort_by_key(|group| group.title.to_lowercase());
+
+    let mut results = Vec::new();
+    for group in groups.into_iter().take(20) {
+        let choice = format!("{}:{}", group.chat_type, group.chat_id);
+        let result_id = format!("group-{}", group.chat_id);
+        let description = if group.username.trim().is_empty() {
+            group.chat_type.clone()
+        } else {
+            format!(
+                "{} · @{}",
+                group.chat_type,
+                group.username.trim_start_matches('@')
+            )
+        };
+        let token = service
+            .remember_order_choice(telegram_user_id, choice)
+            .await;
+        results.push(inline_article(
+            &result_id,
+            &group.title,
+            &description,
+            &format!("Guruh: {}", group.title),
+            &format!("user_group_inline:{token}"),
+        ));
+    }
+    Ok(results)
+}
+
 async fn order_inline_results(
     service: &TelegramService,
     telegram_user_id: &str,
@@ -38,15 +95,11 @@ async fn order_inline_results(
                 .await
                 .map_err(TelegramError::OrderCatalog)?
             {
-                let token = service
-                    .remember_order_choice(telegram_user_id, customer.ref_.clone())
-                    .await;
-                results.push(inline_article(
-                    &token,
+                results.push(inline_article_without_markup(
+                    &format!("customer-{}", customer.ref_),
                     &customer.name,
                     &customer.ref_,
                     &format!("Mijoz: {}", customer.name),
-                    &format!("order:customer:{token}"),
                 ));
             }
         }
@@ -56,15 +109,11 @@ async fn order_inline_results(
                 .await
                 .map_err(TelegramError::OrderCatalog)?
             {
-                let token = service
-                    .remember_order_choice(telegram_user_id, item.code.clone())
-                    .await;
-                results.push(inline_article(
-                    &token,
+                results.push(inline_article_without_markup(
+                    &format!("product-{}", item.code),
                     &item.name,
                     &format!("{} · {}", item.code, item.uom),
                     &format!("Mahsulot: {}", item.name),
-                    &format!("order:product:{token}"),
                 ));
             }
         }
@@ -74,15 +123,11 @@ async fn order_inline_results(
                 .await
                 .map_err(TelegramError::OrderCatalog)?
             {
-                let token = service
-                    .remember_order_choice(telegram_user_id, material.id.clone())
-                    .await;
-                results.push(inline_article(
-                    &token,
+                results.push(inline_article_without_markup(
+                    &format!("material-{}", material.id),
                     &material.name,
                     &format!("{} ta mikron", material.variants.len()),
                     &format!("Material: {}", material.name),
-                    &format!("order:material:{token}"),
                 ));
             }
         }
@@ -113,11 +158,46 @@ fn inline_article(
     })
 }
 
+fn inline_article_without_markup(
+    id: &str,
+    title: &str,
+    description: &str,
+    message_text: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "type": "article",
+        "id": id,
+        "title": title,
+        "description": description,
+        "input_message_content": {"message_text": message_text}
+    })
+}
+
 fn customer_step_keyboard() -> serde_json::Value {
     serde_json::json!({
         "inline_keyboard": [
             [{"text": "🔎 Mijoz tanlash", "switch_inline_query_current_chat": INLINE_CUSTOMER_PREFIX}],
             [{"text": "➕ Mijoz qo‘shish", "callback_data": "order:add_customer"}],
+            [{"text": "❌ Bekor qilish", "callback_data": "order:cancel"}]
+        ]
+    })
+}
+
+fn customer_confirmation_keyboard() -> serde_json::Value {
+    serde_json::json!({
+        "inline_keyboard": [
+            [{"text": "✅ Tanlash", "callback_data": "order:customer_confirm"}],
+            [{"text": "👤 Mijoz", "callback_data": "order:customer_reselect"}],
+            [{"text": "❌ Bekor qilish", "callback_data": "order:cancel"}]
+        ]
+    })
+}
+
+fn product_confirmation_keyboard() -> serde_json::Value {
+    serde_json::json!({
+        "inline_keyboard": [
+            [{"text": "✅ Tanlash", "callback_data": "order:product_confirm"}],
+            [{"text": "📦 Mahsulot", "callback_data": "order:product_reselect"}],
             [{"text": "❌ Bekor qilish", "callback_data": "order:cancel"}]
         ]
     })
@@ -180,6 +260,18 @@ fn layer_options_keyboard() -> serde_json::Value {
     })
 }
 
+fn side_keyboard() -> serde_json::Value {
+    serde_json::json!({"inline_keyboard": [
+        [
+            {"text": "1", "callback_data": "order:side:1"},
+            {"text": "2", "callback_data": "order:side:2"},
+            {"text": "3", "callback_data": "order:side:3"},
+            {"text": "4", "callback_data": "order:side:4"}
+        ],
+        [{"text": "❌ Bekor qilish", "callback_data": "order:cancel"}]
+    ]})
+}
+
 fn order_review_keyboard() -> serde_json::Value {
     serde_json::json!({
         "inline_keyboard": [
@@ -201,7 +293,10 @@ fn order_edit_keyboard() -> serde_json::Value {
                 {"text": "🧱 Material qatlamlari", "callback_data": "order:edit:layers"},
                 {"text": "🖨 Bosma parametrlari", "callback_data": "order:edit:print"}
             ],
-            [{"text": "🖼 Order rasmi", "callback_data": "order:edit:image"}],
+            [
+                {"text": "🖼 Order rasmi", "callback_data": "order:edit:image"},
+                {"text": "🔄 Taraf", "callback_data": "order:edit:side"}
+            ],
             [{"text": "↩️ Tekshiruvga qaytish", "callback_data": "order:review"}]
         ]
     })

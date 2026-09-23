@@ -39,12 +39,11 @@ async fn handle_order_text(
             };
             draft.step = TelegramOrderStep::Product;
             service.save_order_draft(telegram_user_id, draft).await?;
-            send_message_with_markup(
+            send_or_edit_order_prompt(
                 service,
                 token,
                 chat_id,
                 &format!("{prefix}\n\n📦 Mahsulot nomini tanlang:"),
-                None,
                 Some(product_step_keyboard()),
             )
             .await?;
@@ -92,16 +91,15 @@ async fn handle_order_text(
                 service
                     .save_order_draft(telegram_user_id, draft.clone())
                     .await?;
-                send_order_review(service, token, chat_id, telegram_user_id, &draft).await?;
+                send_order_review(service, token, chat_id).await?;
             } else {
                 draft.step = TelegramOrderStep::Status;
                 service.save_order_draft(telegram_user_id, draft).await?;
-                send_message_with_markup(
+                send_or_edit_order_prompt(
                     service,
                     token,
                     chat_id,
                     &format!("{prefix}\n\nHolatni tanlang:"),
-                    None,
                     Some(status_keyboard()),
                 )
                 .await?;
@@ -118,12 +116,11 @@ async fn handle_order_text(
             draft.edge_allowance_mm = Some(allowance);
             draft.step = TelegramOrderStep::ColdGlue;
             service.save_order_draft(telegram_user_id, draft).await?;
-            send_message_with_markup(
+            send_or_edit_order_prompt(
                 service,
                 token,
                 chat_id,
                 "Holodniy kley bo‘ladimi?",
-                None,
                 Some(cold_glue_keyboard()),
             )
             .await?;
@@ -228,7 +225,7 @@ async fn handle_order_text(
                 service
                     .save_order_draft(telegram_user_id, draft.clone())
                     .await?;
-                send_order_review(service, token, chat_id, telegram_user_id, &draft).await?;
+                send_order_review(service, token, chat_id).await?;
             } else {
                 draft.step = TelegramOrderStep::Material;
                 service.save_order_draft(telegram_user_id, draft).await?;
@@ -275,12 +272,11 @@ async fn handle_order_text(
                 )
                 .await?;
             } else {
-                send_message_with_markup(
+            send_or_edit_order_prompt(
                     service,
                     token,
                     chat_id,
                     "Holodniy kley bo‘ladimi?",
-                    None,
                     Some(cold_glue_keyboard()),
                 )
                 .await?;
@@ -294,6 +290,9 @@ async fn handle_order_text(
                 "Orderni yuborish uchun rasm yoki rasm faylini yuboring.",
             )
             .await?;
+        }
+        TelegramOrderStep::Side => {
+            send_side_step(service, token, chat_id).await?;
         }
         TelegramOrderStep::Review => {
             send_order_text(
@@ -317,12 +316,229 @@ async fn handle_order_text(
     Ok(true)
 }
 
+async fn handle_inline_customer_selection(
+    service: &TelegramService,
+    token: &str,
+    message: &TelegramMessage,
+) -> Result<(), TelegramError> {
+    let Some(user) = message.from.as_ref() else {
+        return Ok(());
+    };
+    let telegram_user_id = user.id.to_string();
+    let Some(mut draft) = service.order_draft(&telegram_user_id).await? else {
+        return Ok(());
+    };
+    if draft.step != TelegramOrderStep::Customer {
+        return Ok(());
+    }
+    let Some(customer_name) = message
+        .text
+        .as_deref()
+        .and_then(|text| text.strip_prefix("Mijoz:").map(str::trim))
+        .filter(|name| !name.is_empty())
+    else {
+        return Ok(());
+    };
+    let catalog = service.order_catalog().await?;
+    let Some(customer) = catalog
+        .find_customer_by_name(customer_name)
+        .await
+        .map_err(TelegramError::OrderCatalog)?
+    else {
+        return Ok(());
+    };
+    let previous_prompt_message_id = draft.prompt_message_id.take();
+    draft.customer_ref = customer.ref_.clone();
+    draft.customer_name = customer.name.clone();
+    draft.step = TelegramOrderStep::CustomerConfirmation;
+    draft.prompt_message_id = Some(message.message_id);
+    draft.prompt_inline_message_id = None;
+    service.save_order_draft(&telegram_user_id, draft).await?;
+    if let Some(message_id) = previous_prompt_message_id
+        && message_id != message.message_id
+    {
+        delete_message(
+            service,
+            token,
+            &message.chat.id.to_string(),
+            message_id,
+        )
+        .await
+        .ok();
+    }
+    show_customer_confirmation(
+        service,
+        token,
+        &message.chat.id.to_string(),
+        &customer.name,
+    )
+    .await
+}
+
+async fn handle_inline_product_selection(
+    service: &TelegramService,
+    token: &str,
+    message: &TelegramMessage,
+) -> Result<(), TelegramError> {
+    let Some(user) = message.from.as_ref() else {
+        return Ok(());
+    };
+    let telegram_user_id = user.id.to_string();
+    let Some(mut draft) = service.order_draft(&telegram_user_id).await? else {
+        return Ok(());
+    };
+    if draft.step != TelegramOrderStep::Product {
+        return Ok(());
+    }
+    let Some(product_name) = message
+        .text
+        .as_deref()
+        .and_then(|text| text.strip_prefix("Mahsulot:").map(str::trim))
+        .filter(|name| !name.is_empty())
+    else {
+        return Ok(());
+    };
+    let catalog = service.order_catalog().await?;
+    let Some(item) = catalog
+        .find_customer_item_by_name(&draft.customer_ref, product_name)
+        .await
+        .map_err(TelegramError::OrderCatalog)?
+    else {
+        return Ok(());
+    };
+    let previous_prompt_message_id = draft.prompt_message_id.take();
+    draft.product_code = item.code;
+    draft.product_name = item.name.clone();
+    draft.step = TelegramOrderStep::ProductConfirmation;
+    draft.prompt_message_id = Some(message.message_id);
+    draft.prompt_inline_message_id = None;
+    service.save_order_draft(&telegram_user_id, draft).await?;
+    if let Some(message_id) = previous_prompt_message_id
+        && message_id != message.message_id
+    {
+        delete_message(
+            service,
+            token,
+            &message.chat.id.to_string(),
+            message_id,
+        )
+        .await
+        .ok();
+    }
+    show_product_confirmation(
+        service,
+        token,
+        &message.chat.id.to_string(),
+        &item.name,
+    )
+    .await
+}
+
+async fn handle_inline_material_selection(
+    service: &TelegramService,
+    token: &str,
+    message: &TelegramMessage,
+) -> Result<(), TelegramError> {
+    let Some(user) = message.from.as_ref() else {
+        return Ok(());
+    };
+    let telegram_user_id = user.id.to_string();
+    let Some(mut draft) = service.order_draft(&telegram_user_id).await? else {
+        return Ok(());
+    };
+    if draft.step != TelegramOrderStep::Material {
+        return Ok(());
+    }
+    let Some(material_name) = message
+        .text
+        .as_deref()
+        .and_then(|text| text.strip_prefix("Material:").map(str::trim))
+        .filter(|name| !name.is_empty())
+    else {
+        return Ok(());
+    };
+    let catalog = service.order_catalog().await?;
+    let material = catalog
+        .search_materials(material_name, 50)
+        .await
+        .map_err(TelegramError::OrderCatalog)?
+        .into_iter()
+        .find(|item| normalize_order_text(&item.name) == normalize_order_text(material_name));
+    let Some(material) = material else {
+        return Ok(());
+    };
+    let previous_prompt_message_id = draft.prompt_message_id.take();
+    draft.pending_material_id = material.id;
+    draft.pending_material_name = material.name;
+    draft.step = TelegramOrderStep::Micron;
+    draft.prompt_message_id = Some(message.message_id);
+    draft.prompt_inline_message_id = None;
+    service.save_order_draft(&telegram_user_id, draft).await?;
+    if let Some(message_id) = previous_prompt_message_id
+        && message_id != message.message_id
+    {
+        delete_message(
+            service,
+            token,
+            &message.chat.id.to_string(),
+            message_id,
+        )
+        .await
+        .ok();
+    }
+    send_micron_step(service, token, &message.chat.id.to_string()).await
+}
+
+async fn show_customer_confirmation(
+    service: &TelegramService,
+    token: &str,
+    chat_id: &str,
+    customer_name: &str,
+) -> Result<(), TelegramError> {
+    let text = format!(
+        "Mijoz: «{customer_name}»\n\n\
+Tanlovni tasdiqlash uchun pastdagi «✅ Tanlash» tugmasini bosing.\n\
+Boshqa mijoz tanlash uchun «👤 Mijoz» tugmasini yoki «❌ Bekor qilish» tugmasini bosing."
+    );
+    send_or_edit_order_prompt(
+        service,
+        token,
+        chat_id,
+        &text,
+        Some(customer_confirmation_keyboard()),
+    )
+    .await
+}
+
+async fn show_product_confirmation(
+    service: &TelegramService,
+    token: &str,
+    chat_id: &str,
+    product_name: &str,
+) -> Result<(), TelegramError> {
+    let text = format!(
+        "Mahsulot: «{product_name}»\n\n\
+Tanlovni tasdiqlash uchun pastdagi «✅ Tanlash» tugmasini bosing.\n\
+Boshqa mahsulot tanlash uchun «📦 Mahsulot» tugmasini yoki «❌ Bekor qilish» tugmasini bosing."
+    );
+    send_or_edit_order_prompt(
+        service,
+        token,
+        chat_id,
+        &text,
+        Some(product_confirmation_keyboard()),
+    )
+    .await
+}
+
 async fn handle_order_callback(
     service: &TelegramService,
     token: &str,
     chat_id: &str,
     telegram_user_id: &str,
     data: &str,
+    callback_message: Option<&TelegramMessage>,
+    inline_message_id: Option<&str>,
 ) -> Result<(), TelegramError> {
     let Some(mut draft) = service.order_draft(telegram_user_id).await? else {
         send_order_text(
@@ -334,8 +550,37 @@ async fn handle_order_callback(
         .await?;
         return Ok(());
     };
+    let is_side_prompt = callback_message.is_some_and(|message| {
+        draft.side_prompt_message_id == Some(message.message_id)
+    });
+    if data.starts_with("order:side:") && (draft.step != TelegramOrderStep::Side || !is_side_prompt) {
+        return Ok(());
+    }
+    if let Some(inline_message_id) = inline_message_id {
+        let previous_prompt_message_id = draft.prompt_message_id.take();
+        draft.prompt_inline_message_id = Some(inline_message_id.to_string());
+        service
+            .save_order_draft(telegram_user_id, draft.clone())
+            .await?;
+        if let Some(message_id) = previous_prompt_message_id {
+            delete_message(service, token, chat_id, message_id).await.ok();
+        }
+    } else if let Some(message) = callback_message.filter(|_| !is_side_prompt) {
+        draft.prompt_inline_message_id = None;
+        draft.prompt_message_id = Some(message.message_id);
+        service
+            .save_order_draft(telegram_user_id, draft.clone())
+            .await?;
+    }
     let payload = data.trim_start_matches("order:");
     let (action, value) = payload.split_once(':').unwrap_or((payload, ""));
+    if action == "side" {
+        if draft.select_side(value) {
+            service.save_order_draft(telegram_user_id, draft).await?;
+            send_order_review(service, token, chat_id).await?;
+        }
+        return Ok(());
+    }
     if action == "cancel" {
         if draft.pending_order_saved {
             send_order_text(
@@ -347,7 +592,7 @@ async fn handle_order_callback(
             .await?;
             return Ok(());
         }
-        service.clear_order_draft(telegram_user_id).await?;
+        clear_side_prompt(service, token, chat_id).await?;
         send_order_text(
             service,
             token,
@@ -355,10 +600,13 @@ async fn handle_order_callback(
             "Order ochish jarayoni bekor qilindi.",
         )
         .await?;
+        service.clear_order_draft(telegram_user_id).await?;
         return Ok(());
     }
     if action == "confirm" {
-        if draft.step == TelegramOrderStep::Review {
+        if draft.step == TelegramOrderStep::Side {
+            send_side_step(service, token, chat_id).await?;
+        } else if draft.step == TelegramOrderStep::Review {
             confirm_order(service, token, chat_id, telegram_user_id).await?;
         } else {
             send_order_text(
@@ -371,9 +619,65 @@ async fn handle_order_callback(
         }
         return Ok(());
     }
+    if action == "customer_confirm" {
+        if draft.step != TelegramOrderStep::CustomerConfirmation {
+            send_order_text(service, token, chat_id, "Avval mijozni tanlang.").await?;
+            return Ok(());
+        }
+        let customer_name = draft.customer_name.clone();
+        draft.step = TelegramOrderStep::Product;
+        service.save_order_draft(telegram_user_id, draft).await?;
+        send_product_step(service, token, chat_id, &customer_name, telegram_user_id).await?;
+        return Ok(());
+    }
+    if action == "customer_reselect" {
+        if draft.step != TelegramOrderStep::CustomerConfirmation {
+            send_order_text(service, token, chat_id, "Avval mijozni tanlang.").await?;
+            return Ok(());
+        }
+        draft.customer_ref.clear();
+        draft.customer_name.clear();
+        draft.step = TelegramOrderStep::Customer;
+        service.save_order_draft(telegram_user_id, draft).await?;
+        send_customer_step(service, token, chat_id, telegram_user_id).await?;
+        return Ok(());
+    }
+    if action == "product_confirm" {
+        if draft.step != TelegramOrderStep::ProductConfirmation {
+            send_order_text(service, token, chat_id, "Avval mahsulotni tanlang.").await?;
+            return Ok(());
+        }
+        let editing_basics = draft.edit_section == Some(TelegramOrderEditSection::Basics);
+        if editing_basics {
+            draft.edit_section = None;
+            draft.step = TelegramOrderStep::Review;
+            service
+                .save_order_draft(telegram_user_id, draft.clone())
+                .await?;
+            send_order_review(service, token, chat_id).await?;
+        } else {
+            draft.step = TelegramOrderStep::Status;
+            service.save_order_draft(telegram_user_id, draft).await?;
+            send_status_step(service, token, chat_id).await?;
+        }
+        return Ok(());
+    }
+    if action == "product_reselect" {
+        if draft.step != TelegramOrderStep::ProductConfirmation {
+            send_order_text(service, token, chat_id, "Avval mahsulotni tanlang.").await?;
+            return Ok(());
+        }
+        let customer_name = draft.customer_name.clone();
+        draft.product_code.clear();
+        draft.product_name.clear();
+        draft.step = TelegramOrderStep::Product;
+        service.save_order_draft(telegram_user_id, draft).await?;
+        send_product_step(service, token, chat_id, &customer_name, telegram_user_id).await?;
+        return Ok(());
+    }
     if action == "review" {
         if draft.step == TelegramOrderStep::Review {
-            send_order_review(service, token, chat_id, telegram_user_id, &draft).await?;
+            send_order_review(service, token, chat_id).await?;
         }
         return Ok(());
     }
@@ -411,7 +715,7 @@ async fn handle_order_callback(
                 draft.product_name.clear();
                 draft.step = TelegramOrderStep::Customer;
                 service.save_order_draft(telegram_user_id, draft).await?;
-                send_customer_step(service, token, chat_id).await?;
+                send_customer_step(service, token, chat_id, telegram_user_id).await?;
             }
             "dimensions" => {
                 draft.edit_section = Some(TelegramOrderEditSection::Dimensions);
@@ -455,6 +759,12 @@ async fn handle_order_callback(
                 )
                 .await?;
             }
+            "side" => {
+                draft.request_side();
+                draft.edit_section = Some(TelegramOrderEditSection::Side);
+                service.save_order_draft(telegram_user_id, draft).await?;
+                send_side_step(service, token, chat_id).await?;
+            }
             _ => send_order_edit_menu(service, token, chat_id).await?,
         }
         return Ok(());
@@ -484,9 +794,15 @@ async fn handle_order_callback(
                 .map_err(TelegramError::OrderCatalog)?;
             draft.customer_ref = customer.ref_.clone();
             draft.customer_name = customer.name.clone();
-            draft.step = TelegramOrderStep::Product;
+            draft.step = TelegramOrderStep::CustomerConfirmation;
             service.save_order_draft(telegram_user_id, draft).await?;
-            send_product_step(service, token, chat_id, &customer.name).await?;
+            show_customer_confirmation(
+                service,
+                token,
+                chat_id,
+                &customer.name,
+            )
+            .await?;
         }
         "add_product" if draft.step == TelegramOrderStep::Product => {
             draft.step = TelegramOrderStep::ProductName;
@@ -519,21 +835,16 @@ async fn handle_order_callback(
                 return Ok(());
             };
             draft.product_code = item.code;
-            draft.product_name = item.name;
-            let editing_basics =
-                draft.edit_section == Some(TelegramOrderEditSection::Basics);
-            if editing_basics {
-                draft.edit_section = None;
-                draft.step = TelegramOrderStep::Review;
-                service
-                    .save_order_draft(telegram_user_id, draft.clone())
-                    .await?;
-                send_order_review(service, token, chat_id, telegram_user_id, &draft).await?;
-            } else {
-                draft.step = TelegramOrderStep::Status;
-                service.save_order_draft(telegram_user_id, draft).await?;
-                send_status_step(service, token, chat_id).await?;
-            }
+            draft.product_name = item.name.clone();
+            draft.step = TelegramOrderStep::ProductConfirmation;
+            service.save_order_draft(telegram_user_id, draft).await?;
+            show_product_confirmation(
+                service,
+                token,
+                chat_id,
+                &item.name,
+            )
+            .await?;
         }
         "status" if draft.step == TelegramOrderStep::Status => {
             draft.status = match value {
@@ -543,7 +854,13 @@ async fn handle_order_callback(
             };
             draft.step = TelegramOrderStep::Tiraj;
             service.save_order_draft(telegram_user_id, draft).await?;
-            send_order_text(service, token, chat_id, "Tirajni kg da raqam bilan yuboring:").await?;
+            send_order_text(
+                service,
+                token,
+                chat_id,
+                "Tirajni kg da raqam bilan yuboring:",
+            )
+            .await?;
         }
         "print" if draft.step == TelegramOrderStep::PrintMethod => {
             use crate::core::production_map::automatic::PrintMethod;
@@ -611,7 +928,7 @@ async fn handle_order_callback(
                 service
                     .save_order_draft(telegram_user_id, draft.clone())
                     .await?;
-                send_order_review(service, token, chat_id, telegram_user_id, &draft).await?;
+                send_order_review(service, token, chat_id).await?;
             } else {
                 draft.step = TelegramOrderStep::PrintMethod;
                 service.save_order_draft(telegram_user_id, draft).await?;
@@ -632,7 +949,7 @@ async fn handle_order_callback(
                 service
                     .save_order_draft(telegram_user_id, draft.clone())
                     .await?;
-                send_order_review(service, token, chat_id, telegram_user_id, &draft).await?;
+                send_order_review(service, token, chat_id).await?;
             } else {
                 draft.step = TelegramOrderStep::Attachment;
                 service.save_order_draft(telegram_user_id, draft).await?;

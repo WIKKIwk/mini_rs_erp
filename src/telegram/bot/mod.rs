@@ -16,7 +16,7 @@ use super::models::{
 };
 use super::order::{
     TelegramOrderAttachment, TelegramOrderDraft, TelegramOrderEditSection, TelegramOrderLayer,
-    TelegramOrderStep, order_caption, order_review,
+    TelegramOrderStep, normalize_order_text, order_caption, order_prompt,
 };
 use super::service::{TelegramError, TelegramService};
 use super::useraccount::{CodeOutcome, LoginOutcome, ResendOutcome};
@@ -28,8 +28,10 @@ const INLINE_PASSWORD_PREFIX: &str = "p4 ";
 const INLINE_CUSTOMER_PREFIX: &str = "c7 ";
 const INLINE_PRODUCT_PREFIX: &str = "i7 ";
 const INLINE_MATERIAL_PREFIX: &str = "m7 ";
+const INLINE_GROUP_PREFIX: &str = "g7 ";
 const MAX_ORDER_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
 const TELEGRAM_FILE_BASE: &str = "https://api.telegram.org/file/bot";
+const ORDER_SIDE_IMAGE: &[u8] = include_bytes!("../assets/taraf.jpg");
 
 #[derive(Debug, Clone)]
 pub(crate) struct TelegramOrderNotification {
@@ -146,6 +148,8 @@ struct TelegramMessage {
     #[serde(default)]
     from: Option<TelegramUser>,
     #[serde(default)]
+    via_bot: Option<TelegramUser>,
+    #[serde(default)]
     text: Option<String>,
     #[serde(default)]
     photo: Option<Vec<TelegramPhotoSize>>,
@@ -155,6 +159,11 @@ struct TelegramMessage {
     contact: Option<TelegramContact>,
     #[serde(default)]
     message_thread_id: Option<i64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct TelegramSentMessage {
+    message_id: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -228,6 +237,8 @@ struct TelegramCallbackQuery {
     data: Option<String>,
     #[serde(default)]
     message: Option<TelegramMessage>,
+    #[serde(default)]
+    inline_message_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -196,8 +196,8 @@ async fn order_edit_postgres_atomic_save_history_and_races() {
     let pool = PgPool::connect_with(postgres_test_database_options(&url, &db))
         .await
         .unwrap();
-    apply_foundation_migration(&pool).await.unwrap();
-    apply_foundation_migration(&pool).await.unwrap();
+    crate::db::postgres::apply_postgres_migrations_through_version(&pool, "0121")
+        .await.unwrap();
 
     use crate::core::apparatus_standard::{
         ApparatusId,
@@ -209,6 +209,11 @@ async fn order_edit_postgres_atomic_save_history_and_races() {
             pool.clone(),
         ),
     ));
+    // The topology backfill requires the same factory apparatuses that an
+    // existing installation already has before migration 0122 is applied.
+    apparatus_service.bootstrap_factory_defaults().await.unwrap();
+    apply_foundation_migration(&pool).await.unwrap();
+    apply_foundation_migration(&pool).await.unwrap();
     for spec in [
         TestApparatusSpec::cut("apparatus:test:cut", "Cut"),
         TestApparatusSpec::laminate("apparatus:test:lam", "Laminate"),
@@ -257,6 +262,20 @@ async fn order_edit_postgres_atomic_save_history_and_races() {
     )
     .await
     .unwrap();
+    // Exercise the real runtime ACLs, not the migration/owner connection.
+    // Owner-only integration tests previously hid the history-lock failure.
+    let runtime_pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(3)
+        .after_connect(|connection, _| Box::pin(async move {
+            sqlx::query("SET ROLE mini_rs_erp").execute(connection).await?;
+            Ok(())
+        }))
+        .connect_with(postgres_test_database_options(&url, &db))
+        .await.unwrap();
+    assert_eq!(sqlx::query_scalar::<_, String>("SELECT current_user")
+        .fetch_one(&runtime_pool).await.unwrap(), "mini_rs_erp");
+    verify_runtime_history_locks(&runtime_pool).await;
+    let sink = PostgresMiniOrderSink::new(runtime_pool.clone());
     let head = sink.order_edit_source("zakaz-1001").await;
     assert!(matches!(head, Err(Error::Locked(_))), "{head:?}");
     let source = sink.order_edit_source("zakaz-1002").await.unwrap();
@@ -477,10 +496,52 @@ async fn order_edit_postgres_atomic_save_history_and_races() {
         (true, count),
         "quick clones do not modify reusable templates"
     );
+    runtime_pool.close().await;
     pool.close().await;
     sqlx::query(&format!("DROP DATABASE {db}"))
         .execute(&admin)
         .await
         .unwrap();
     admin.close().await;
+}
+
+async fn verify_runtime_history_locks(pool: &PgPool) {
+    for table in ["mini_raw_material_events", "mini_preparation_operations"] {
+        assert!(!sqlx::query_scalar::<_, bool>(
+            "SELECT has_table_privilege(current_user, $1, 'UPDATE,DELETE,TRUNCATE')")
+            .bind(table).fetch_one(pool).await.unwrap());
+        let mut rejected = pool.begin().await.unwrap();
+        let error = sqlx::query(&format!("LOCK TABLE public.{table} IN SHARE ROW EXCLUSIVE MODE"))
+            .execute(&mut *rejected).await.unwrap_err();
+        let explained = Error::from(error);
+        assert!(matches!(&explained, Error::Storage { code: "order_edit_database_permission", .. }));
+        assert!(explained.to_string().contains("baza ruxsatlari"));
+        rejected.rollback().await.unwrap();
+
+        let mut edit = pool.begin().await.unwrap();
+        sqlx::query("SELECT public.mini_lock_order_edit_history($1)")
+            .bind(table).execute(&mut *edit).await.unwrap();
+        // INSERT takes ROW EXCLUSIVE: history cannot appear after eligibility
+        // is checked and before the edit commits, even from another process.
+        let mut writer = pool.begin().await.unwrap();
+        sqlx::query("SET LOCAL lock_timeout = '100ms'").execute(&mut *writer).await.unwrap();
+        let error = sqlx::query(&format!("LOCK TABLE public.{table} IN ROW EXCLUSIVE MODE"))
+            .execute(&mut *writer).await.unwrap_err();
+        assert!(matches!(Error::from(error), Error::Storage { code: "order_edit_database_busy", .. }));
+        writer.rollback().await.unwrap();
+        edit.rollback().await.unwrap();
+        let mut writer = pool.begin().await.unwrap();
+        sqlx::query(&format!("LOCK TABLE public.{table} IN ROW EXCLUSIVE MODE NOWAIT"))
+            .execute(&mut *writer).await.unwrap();
+        writer.rollback().await.unwrap();
+    }
+    let error = sqlx::query("SELECT public.mini_lock_order_edit_history('mini_orders')")
+        .execute(pool).await.unwrap_err();
+    assert_eq!(error.as_database_error().unwrap().code().as_deref(), Some("22023"));
+    let public_execute: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM pg_proc p, aclexplode(p.proacl) a
+         WHERE p.oid = 'public.mini_lock_order_edit_history(text)'::regprocedure
+           AND a.grantee = 0 AND a.privilege_type = 'EXECUTE')")
+        .fetch_one(pool).await.unwrap();
+    assert!(!public_execute);
 }

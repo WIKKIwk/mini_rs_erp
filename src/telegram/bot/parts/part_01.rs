@@ -67,6 +67,39 @@ async fn handle_update(
     };
     let chat_id = message.chat.id.to_string();
     let is_private = message.chat.chat_type == "private";
+    if is_private && message.from.is_some() && message.via_bot.is_none() {
+        // Private chatdagi foydalanuvchi xabari keyingi bot prompti bilan
+        // almashtiriladi; shu sabab tarixda qolmasligi uchun darhol tozalanadi.
+        delete_message(service, token, &chat_id, message.message_id)
+            .await
+            .ok();
+    }
+    if message.via_bot.is_some() {
+        if is_private {
+            if message
+                .text
+                .as_deref()
+                .is_some_and(|text| text.starts_with("Mijoz:"))
+            {
+                return handle_inline_customer_selection(service, token, &message).await;
+            }
+            if message
+                .text
+                .as_deref()
+                .is_some_and(|text| text.starts_with("Mahsulot:"))
+            {
+                return handle_inline_product_selection(service, token, &message).await;
+            }
+            if message
+                .text
+                .as_deref()
+                .is_some_and(|text| text.starts_with("Material:"))
+            {
+                return handle_inline_material_selection(service, token, &message).await;
+            }
+        }
+        return Ok(());
+    }
     if is_private && let Some(contact) = message.contact.as_ref() {
         return handle_contact(service, token, &message, contact).await;
     }

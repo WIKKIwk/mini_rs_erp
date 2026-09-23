@@ -1,6 +1,24 @@
 #[cfg(test)]
 mod tests {
     #[test]
+    fn side_buttons_match_the_embedded_reference_image() {
+        let image = image::load_from_memory(super::ORDER_SIDE_IMAGE).unwrap();
+        assert_eq!((image.width(), image.height()), (1655, 624));
+        let keyboard = super::side_keyboard();
+        let choices = keyboard["inline_keyboard"][0].as_array().unwrap();
+        assert_eq!(choices.len(), 4);
+        for (index, choice) in choices.iter().enumerate() {
+            let side = (index + 1).to_string();
+            assert_eq!(choice["text"], side);
+            assert_eq!(choice["callback_data"], format!("order:side:{side}"));
+            let mut draft = super::TelegramOrderDraft::default();
+            draft.request_side();
+            let value = choice["callback_data"].as_str().unwrap().strip_prefix("order:side:").unwrap();
+            assert!(draft.select_side(value));
+        }
+    }
+
+    #[test]
     fn order_form_is_separate_from_print_method_and_cold_glue() {
         let keyboard = super::status_keyboard();
         let choices = keyboard["inline_keyboard"][0].as_array().unwrap();
@@ -35,6 +53,78 @@ mod tests {
     }
 
     #[test]
+    fn group_picker_uses_inline_search_and_back_button() {
+        let keyboard = super::user_group_inline_keyboard();
+        assert_eq!(
+            keyboard["inline_keyboard"][0][0]["switch_inline_query_current_chat"],
+            "g7 "
+        );
+        assert_eq!(
+            keyboard["inline_keyboard"][1][0]["callback_data"],
+            "user_groups_back"
+        );
+    }
+
+    #[test]
+    fn customer_selection_requires_confirmation() {
+        let keyboard = super::customer_confirmation_keyboard();
+        assert_eq!(
+            keyboard["inline_keyboard"][0][0]["callback_data"],
+            "order:customer_confirm"
+        );
+        assert_eq!(
+            keyboard["inline_keyboard"][1][0]["callback_data"],
+            "order:customer_reselect"
+        );
+        assert_eq!(
+            keyboard["inline_keyboard"][2][0]["callback_data"],
+            "order:cancel"
+        );
+        let result = super::inline_article_without_markup(
+            "customer-1",
+            "365 Korzinka",
+            "customer-ref",
+            "Mijoz: 365 Korzinka",
+        );
+        assert!(result.get("reply_markup").is_none());
+    }
+
+    #[test]
+    fn product_selection_requires_confirmation() {
+        let keyboard = super::product_confirmation_keyboard();
+        assert_eq!(
+            keyboard["inline_keyboard"][0][0]["callback_data"],
+            "order:product_confirm"
+        );
+        assert_eq!(
+            keyboard["inline_keyboard"][1][0]["callback_data"],
+            "order:product_reselect"
+        );
+        assert_eq!(
+            keyboard["inline_keyboard"][2][0]["callback_data"],
+            "order:cancel"
+        );
+        let result = super::inline_article_without_markup(
+            "product-1",
+            "888 Kukuruz",
+            "ITEM · Kg",
+            "Mahsulot: 888 Kukuruz",
+        );
+        assert!(result.get("reply_markup").is_none());
+    }
+
+    #[test]
+    fn material_selection_has_no_intermediate_confirmation_button() {
+        let result = super::inline_article_without_markup(
+            "material-1",
+            "BOPP",
+            "2 ta mikron",
+            "Material: BOPP",
+        );
+        assert!(result.get("reply_markup").is_none());
+    }
+
+    #[test]
     fn pending_order_frame_count_is_a_positive_integer() {
         assert_eq!(super::parse_frame_count(" 3 "), Some(3.0));
         assert_eq!(super::parse_frame_count("2,0"), Some(2.0));
@@ -46,6 +136,11 @@ mod tests {
     #[test]
     fn micron_is_a_positive_integer_text_input_not_an_inline_choice() {
         assert!(super::parse_order_inline_query("n7 19").is_none());
+        assert_eq!(
+            super::parse_group_inline_query("g7 Abdulfattox"),
+            Some("Abdulfattox".to_string())
+        );
+        assert_eq!(super::parse_group_inline_query("g7"), Some(String::new()));
         assert_eq!(super::parse_micron("19"), Some("19".to_string()));
         assert_eq!(super::parse_micron(" 019 "), Some("19".to_string()));
         for value in ["", "0", "-1", "1.5", "12a", "abc", "1/2"] {

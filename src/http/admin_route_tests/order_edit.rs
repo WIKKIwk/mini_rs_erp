@@ -6,6 +6,7 @@ struct EditSink {
     source: Mutex<OrderEditSource>,
     blocked: std::sync::atomic::AtomicBool,
     saves: AtomicUsize,
+    storage_failure: std::sync::atomic::AtomicBool,
 }
 
 #[async_trait]
@@ -34,6 +35,12 @@ impl MiniOrderSink for EditSink {
         template: &CalculateOrderTemplate,
         actor: &QueueActionActor,
     ) -> Result<OrderEditSource, OrderEditError> {
+        if self.storage_failure.load(Ordering::SeqCst) {
+            return Err(OrderEditError::Storage {
+                code: "order_edit_database_permission",
+                message: "Serverning baza hisobi tarix yozuvlarini himoyalash amalini bajara olmadi. Administrator baza sozlamalarini tekshirishi kerak.".into(),
+            });
+        }
         let mut source = self.source.lock().await;
         if source.revision != original.revision {
             return Err(OrderEditError::Conflict);
@@ -112,6 +119,7 @@ async fn order_edit_route_authorization_stale_form_and_existing_order_update() {
         }),
         blocked: std::sync::atomic::AtomicBool::new(false),
         saves: AtomicUsize::new(0),
+        storage_failure: std::sync::atomic::AtomicBool::new(false),
     });
     state.production_orders = sink.clone();
     let token = session(&state, PrincipalRole::Admin).await;
@@ -156,6 +164,14 @@ async fn order_edit_route_authorization_stale_form_and_existing_order_update() {
     assert_eq!(response.status(), StatusCode::CONFLICT);
     assert_eq!(json_body(response).await["error"], "Buyurtmada harakat bor");
     sink.blocked.store(false, Ordering::SeqCst);
+    sink.storage_failure.store(true, Ordering::SeqCst);
+    let response = app.clone().oneshot(request_with_body("PUT", path, &token, &body)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let failure = json_body(response).await;
+    assert_eq!(failure["error"], "order_edit_database_permission");
+    assert!(failure["message"].as_str().unwrap().contains("tarix yozuvlarini himoyalash"));
+    assert_eq!(sink.saves.load(Ordering::SeqCst), 0);
+    sink.storage_failure.store(false, Ordering::SeqCst);
     let response = app
         .clone()
         .oneshot(request_with_body("PUT", path, &token, &body))

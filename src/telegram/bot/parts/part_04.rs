@@ -118,6 +118,19 @@ async fn send_message_with_markup(
     thread_id: Option<i64>,
     reply_markup: Option<serde_json::Value>,
 ) -> Result<(), TelegramError> {
+    send_message_with_markup_result(service, token, chat_id, text, thread_id, reply_markup)
+        .await
+        .map(|_| ())
+}
+
+async fn send_message_with_markup_result(
+    service: &TelegramService,
+    token: &str,
+    chat_id: &str,
+    text: &str,
+    thread_id: Option<i64>,
+    reply_markup: Option<serde_json::Value>,
+) -> Result<i64, TelegramError> {
     let mut body = serde_json::json!({
         "chat_id": chat_id,
         "text": text,
@@ -135,9 +148,139 @@ async fn send_message_with_markup(
         .send()
         .await
         .map_err(|error| TelegramError::Transport(error.to_string()))?;
+    let message: TelegramSentMessage = parse_api_response(response).await?;
+    Ok(message.message_id)
+}
+
+async fn send_or_edit_order_prompt(
+    service: &TelegramService,
+    token: &str,
+    chat_id: &str,
+    text: &str,
+    reply_markup: Option<serde_json::Value>,
+) -> Result<(), TelegramError> {
+    let draft = service.order_draft(chat_id).await?;
+    let text = if let Some(draft) = draft.as_ref() {
+        let has_image = draft.pending_order_saved || service.order_attachment(chat_id).await.is_some();
+        order_prompt(&draft.order_number, draft, has_image, text)
+    } else {
+        text.to_string()
+    };
+    let edit_markup = reply_markup
+        .clone()
+        .or_else(|| Some(serde_json::json!({"inline_keyboard": []})));
+    if let Some(mut draft) = draft {
+        if let Some(inline_message_id) = draft.prompt_inline_message_id.clone() {
+            match edit_inline_message_with_markup(
+                service,
+                token,
+                &inline_message_id,
+                &text,
+                edit_markup.clone(),
+            )
+            .await
+            {
+                Ok(()) => return Ok(()),
+                Err(error) if error.to_string().contains("message is not modified") => {
+                    return Ok(())
+                }
+                Err(_) => {
+                    draft.prompt_inline_message_id = None;
+                    service.save_order_draft(chat_id, draft.clone()).await?;
+                }
+            }
+        }
+        if let Some(message_id) = draft.prompt_message_id {
+            match edit_message_with_markup(
+                service,
+                token,
+                chat_id,
+                message_id,
+                &text,
+                edit_markup,
+            )
+            .await
+            {
+                Ok(()) => return Ok(()),
+                Err(error) if error.to_string().contains("message is not modified") => {
+                    return Ok(())
+                }
+                Err(_) => {
+                    delete_message(service, token, chat_id, message_id)
+                        .await
+                        .ok();
+                }
+            }
+        }
+    }
+    let message_id = send_message_with_markup_result(
+        service,
+        token,
+        chat_id,
+        &text,
+        None,
+        reply_markup,
+    )
+    .await?;
+    if let Some(mut draft) = service.order_draft(chat_id).await? {
+        draft.prompt_message_id = Some(message_id);
+        service.save_order_draft(chat_id, draft).await?;
+    }
+    Ok(())
+}
+
+async fn edit_message_with_markup(
+    service: &TelegramService,
+    token: &str,
+    chat_id: &str,
+    message_id: i64,
+    text: &str,
+    reply_markup: Option<serde_json::Value>,
+) -> Result<(), TelegramError> {
+    let mut body = serde_json::json!({
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "text": text,
+    });
+    if let Some(reply_markup) = reply_markup {
+        body["reply_markup"] = reply_markup;
+    }
+    let response = service
+        .http_client()
+        .post(bot_url(token, "editMessageText"))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|error| TelegramError::Transport(error.to_string()))?;
     parse_api_response(response)
         .await
         .map(|_: serde_json::Value| ())
+}
+
+async fn edit_inline_message_with_markup(
+    service: &TelegramService,
+    token: &str,
+    inline_message_id: &str,
+    text: &str,
+    reply_markup: Option<serde_json::Value>,
+) -> Result<(), TelegramError> {
+    let mut body = serde_json::json!({
+        "inline_message_id": inline_message_id,
+        "text": text,
+    });
+    if let Some(reply_markup) = reply_markup {
+        body["reply_markup"] = reply_markup;
+    }
+    let response = service
+        .http_client()
+        .post(bot_url(token, "editMessageText"))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|error| TelegramError::Transport(error.to_string()))?;
+    parse_api_response(response)
+        .await
+        .map(|_: bool| ())
 }
 
 async fn delete_message(
@@ -306,18 +449,16 @@ fn remove_keyboard_markup() -> serde_json::Value {
     serde_json::json!({"remove_keyboard": true})
 }
 
-fn user_group_keyboard(groups: &[TelegramUserGroup]) -> serde_json::Value {
-    let rows = groups
-        .iter()
-        .take(20)
-        .map(|group| {
-            vec![serde_json::json!({
-                "text": format!("{} · {}", group.title, group.chat_type),
-                "callback_data": format!("user_group:{}:{}", group.chat_type, group.chat_id)
-            })]
-        })
-        .collect::<Vec<_>>();
-    serde_json::json!({"inline_keyboard": rows})
+fn user_group_inline_keyboard() -> serde_json::Value {
+    serde_json::json!({
+        "inline_keyboard": [
+            [{
+                "text": "🔎 Guruh qidirish",
+                "switch_inline_query_current_chat": INLINE_GROUP_PREFIX
+            }],
+            [{"text": "↩️ Orqaga", "callback_data": "user_groups_back"}]
+        ]
+    })
 }
 
 async fn start_new_order(
@@ -351,11 +492,12 @@ async fn start_new_order(
         .await?;
         return Ok(());
     }
+    clear_side_prompt(service, token, chat_id).await?;
     service.clear_order_attachment(telegram_user_id).await;
     service
         .save_order_draft(telegram_user_id, TelegramOrderDraft::default())
         .await?;
-    send_customer_step(service, token, chat_id).await
+    send_customer_step(service, token, chat_id, telegram_user_id).await
 }
 
 async fn send_order_text(
@@ -364,20 +506,21 @@ async fn send_order_text(
     chat_id: &str,
     text: &str,
 ) -> Result<(), TelegramError> {
-    send_message(service, token, chat_id, text, None).await
+    send_or_edit_order_prompt(service, token, chat_id, text, None).await
 }
 
 async fn send_customer_step(
     service: &TelegramService,
     token: &str,
     chat_id: &str,
+    telegram_user_id: &str,
 ) -> Result<(), TelegramError> {
-    send_message_with_markup(
+    let _ = telegram_user_id;
+    send_or_edit_order_prompt(
         service,
         token,
         chat_id,
         "👤 Mijozni tanlang:",
-        None,
         Some(customer_step_keyboard()),
     )
     .await
@@ -388,13 +531,14 @@ async fn send_product_step(
     token: &str,
     chat_id: &str,
     customer_name: &str,
+    telegram_user_id: &str,
 ) -> Result<(), TelegramError> {
-    send_message_with_markup(
+    let _ = telegram_user_id;
+    send_or_edit_order_prompt(
         service,
         token,
         chat_id,
         &format!("✅ Mijoz: {customer_name}\n\n📦 Mahsulot nomini tanlang:"),
-        None,
         Some(product_step_keyboard()),
     )
     .await
@@ -405,12 +549,11 @@ async fn send_status_step(
     token: &str,
     chat_id: &str,
 ) -> Result<(), TelegramError> {
-    send_message_with_markup(
+    send_or_edit_order_prompt(
         service,
         token,
         chat_id,
         "📦 Buyurtma turini tanlang:",
-        None,
         Some(status_keyboard()),
     )
     .await
@@ -421,31 +564,95 @@ async fn send_print_method_step(
     token: &str,
     chat_id: &str,
 ) -> Result<(), TelegramError> {
-    send_message_with_markup(
+    send_or_edit_order_prompt(
         service,
         token,
         chat_id,
         "🖨 Bosma turini tanlang:",
-        None,
         Some(print_method_keyboard()),
     )
     .await
+}
+
+async fn clear_side_prompt(
+    service: &TelegramService,
+    token: &str,
+    chat_id: &str,
+) -> Result<(), TelegramError> {
+    if let Some(mut draft) = service.order_draft(chat_id).await?
+        && let Some(message_id) = draft.side_prompt_message_id.take()
+    {
+        delete_message(service, token, chat_id, message_id).await.ok();
+        service.save_order_draft(chat_id, draft).await?;
+    }
+    Ok(())
+}
+
+async fn send_side_step(
+    service: &TelegramService,
+    token: &str,
+    chat_id: &str,
+) -> Result<(), TelegramError> {
+    // Keep the full order summary in its editable text message: photo captions
+    // cannot hold long customer/product names and multiple material layers.
+    send_order_text(service, token, chat_id, "Tarafini quyidagi rasm orqali tanlang.").await?;
+    let Some(mut draft) = service.order_draft(chat_id).await? else {
+        return Ok(());
+    };
+    if let Some(message_id) = draft.side_prompt_message_id {
+        let response = request_json::<serde_json::Value, _>(
+            service,
+            token,
+            "editMessageReplyMarkup",
+            &serde_json::json!({
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "reply_markup": side_keyboard(),
+            }),
+        ).await;
+        match response {
+            Ok(_) => return Ok(()),
+            Err(error) if error.to_string().contains("message is not modified") => return Ok(()),
+            Err(_) => {
+                delete_message(service, token, chat_id, message_id).await.ok();
+            }
+        }
+    }
+    let form = reqwest::multipart::Form::new()
+        .text("chat_id", chat_id.to_string())
+        .text("caption", "Tarafini tanlang:")
+        .text("reply_markup", side_keyboard().to_string())
+        .part(
+            "photo",
+            reqwest::multipart::Part::bytes(ORDER_SIDE_IMAGE.to_vec())
+                .file_name("taraf.jpg")
+                .mime_str("image/jpeg")
+                .map_err(|error| TelegramError::Transport(error.to_string()))?,
+        );
+    let response = service
+        .http_client()
+        .post(bot_url(token, "sendPhoto"))
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|error| TelegramError::Transport(error.to_string()))?;
+    let message: TelegramSentMessage = parse_api_response(response).await?;
+    draft.side_prompt_message_id = Some(message.message_id);
+    service.save_order_draft(chat_id, draft).await?;
+    Ok(())
 }
 
 async fn send_order_review(
     service: &TelegramService,
     token: &str,
     chat_id: &str,
-    telegram_user_id: &str,
-    draft: &TelegramOrderDraft,
 ) -> Result<(), TelegramError> {
-    let has_image = service.order_attachment(telegram_user_id).await.is_some();
-    send_message_with_markup(
+    clear_side_prompt(service, token, chat_id).await?;
+    send_or_edit_order_prompt(
         service,
         token,
         chat_id,
-        &order_review(&draft.order_number, draft, has_image),
-        None,
+        "🧾 Buyurtmani tekshiring.\nTasdiqlash va yuborish yoki tahrirlash tugmasini bosing.",
         Some(order_review_keyboard()),
     )
     .await
@@ -456,12 +663,11 @@ async fn send_order_edit_menu(
     token: &str,
     chat_id: &str,
 ) -> Result<(), TelegramError> {
-    send_message_with_markup(
+    send_or_edit_order_prompt(
         service,
         token,
         chat_id,
         "✏️ Qaysi bo‘limni tahrirlamoqchisiz?",
-        None,
         Some(order_edit_keyboard()),
     )
     .await
@@ -473,12 +679,11 @@ async fn send_material_step(
     chat_id: &str,
     layer_number: usize,
 ) -> Result<(), TelegramError> {
-    send_message_with_markup(
+    send_or_edit_order_prompt(
         service,
         token,
         chat_id,
         &format!("{layer_number}-qavat materialini tanlang:"),
-        None,
         Some(material_step_keyboard()),
     )
     .await
@@ -504,7 +709,7 @@ async fn send_layer_options(
     chat_id: &str,
     draft: &TelegramOrderDraft,
 ) -> Result<(), TelegramError> {
-    send_message_with_markup(
+    send_or_edit_order_prompt(
         service,
         token,
         chat_id,
@@ -512,7 +717,6 @@ async fn send_layer_options(
             "✅ {}-qavat qo‘shildi. Yana qavat qo‘shasizmi?",
             draft.layers.len()
         ),
-        None,
         Some(layer_options_keyboard()),
     )
     .await

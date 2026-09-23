@@ -378,6 +378,8 @@ pub struct AdminErrorResponse {
 #[derive(Debug, Default, Serialize)]
 pub struct AdminErrorDetails {
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub blockers: Option<Vec<crate::core::production_map::OrderDeleteBlocker>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub apparatus_options: Option<Vec<String>>,

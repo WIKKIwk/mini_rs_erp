@@ -22,6 +22,11 @@ pub enum OrderEditError {
     Conflict,
     #[error("{0}")]
     Invalid(String),
+    #[error("{message}")]
+    Storage {
+        code: &'static str,
+        message: String,
+    },
     #[error(
         "Server buyurtmaning tahrirlash ma’lumotlarini o‘qiy yoki saqlay olmadi. Bu kiritgan ma’lumotlaringizdagi xato emas. Buyurtmani qayta ochib holatini tekshiring; muammo takrorlansa mas’ul administratorga murojaat qiling"
     )]

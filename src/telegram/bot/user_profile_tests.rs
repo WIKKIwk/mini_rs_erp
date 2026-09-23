@@ -12,6 +12,33 @@ fn qr_account(role: TelegramAccountRole) -> TelegramUserAccount {
 }
 
 #[tokio::test]
+async fn side_selection_survives_restart_and_preserves_the_order_image() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("telegram.json");
+    let service = TelegramService::new(path.clone());
+    let mut draft = TelegramOrderDraft::default();
+    draft.request_side();
+    draft.prompt_message_id = Some(10);
+    draft.side_prompt_message_id = Some(11);
+    service.save_order_draft("123", draft.clone()).await.unwrap();
+    service.save_order_attachment("123", TelegramOrderAttachment {
+        file_name: "customer-order.png".into(),
+        mime_type: "image/png".into(),
+        body: vec![1, 2, 3],
+    }).await;
+    let restarted = TelegramService::new(path.clone());
+    let mut restored = restarted.order_draft("123").await.unwrap().unwrap();
+    assert_eq!(restored, draft);
+    assert!(restored.select_side("3"));
+    service.save_order_draft("123", restored).await.unwrap();
+    let restored = TelegramService::new(path).order_draft("123").await.unwrap().unwrap();
+    assert_eq!(restored.side, Some(3));
+    assert_eq!(restored.step, TelegramOrderStep::Review);
+    assert_eq!(restored.prompt_message_id, Some(10));
+    assert_eq!(service.order_attachment("123").await.unwrap().file_name, "customer-order.png");
+}
+
+#[tokio::test]
 async fn qr_login_start_and_group_selection_use_the_saved_profile() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("telegram.json");

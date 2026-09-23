@@ -102,7 +102,7 @@ async fn handle_contact(
             .await?;
         }
         Ok(LoginOutcome::Authorized) => {
-            send_user_group_picker(service, token, &chat_id, &user.id.to_string()).await?;
+            send_user_group_picker(service, token, &chat_id).await?;
         }
         Err(error) => {
             send_message(
@@ -134,7 +134,16 @@ async fn handle_callback_query(
         .map(|message| message.chat.id.to_string())
         .unwrap_or_else(|| telegram_user_id.clone());
     if data.starts_with("order:") {
-        handle_order_callback(service, token, &chat_id, &telegram_user_id, data).await?;
+        handle_order_callback(
+            service,
+            token,
+            &chat_id,
+            &telegram_user_id,
+            data,
+            callback.message.as_ref(),
+            callback.inline_message_id.as_deref(),
+        )
+        .await?;
         return Ok(());
     }
     match data {
@@ -149,7 +158,7 @@ async fn handle_callback_query(
                 .await?;
             }
             Ok(ResendOutcome::Authorized) => {
-                send_user_group_picker(service, token, &chat_id, &telegram_user_id).await?;
+                send_user_group_picker(service, token, &chat_id).await?;
             }
             Err(error) => {
                 send_message(
@@ -177,14 +186,44 @@ async fn handle_callback_query(
             .await?;
         }
         "user_groups" => {
-            send_user_group_picker(service, token, &chat_id, &telegram_user_id).await?;
+            if let Some(message) = callback.message.as_ref() {
+                edit_user_group_picker(service, token, &chat_id, message.message_id).await?;
+            } else {
+                send_user_group_picker(service, token, &chat_id).await?;
+            }
+        }
+        "user_groups_back" => {
+            let Some(account) = service.user_by_telegram_id(&telegram_user_id).await? else {
+                return Ok(());
+            };
+            if let Some(message) = callback.message.as_ref() {
+                edit_message_with_markup(
+                    service,
+                    token,
+                    &chat_id,
+                    message.message_id,
+                    &account_guide(&account),
+                    account_guide_keyboard(&account),
+                )
+                .await?;
+            } else {
+                send_message_with_markup(
+                    service,
+                    token,
+                    &chat_id,
+                    &account_guide(&account),
+                    None,
+                    account_guide_keyboard(&account),
+                )
+                .await?;
+            }
         }
         "delivery:user" => {
             let account = service
                 .set_delivery_mode(&telegram_user_id, TelegramDeliveryMode::UserProfile)
                 .await?;
             if account.user_profile_connected {
-                send_user_group_picker(service, token, &chat_id, &telegram_user_id).await?;
+                send_user_group_picker(service, token, &chat_id).await?;
             } else {
                 send_contact_request(service, token, &chat_id).await?;
             }
@@ -195,38 +234,44 @@ async fn handle_callback_query(
             else {
                 return Ok(());
             };
-            match service
-                .select_user_group(&telegram_user_id, chat_id_value, chat_type)
+            confirm_user_group_selection(
+                service,
+                token,
+                &chat_id,
+                &telegram_user_id,
+                chat_type,
+                chat_id_value,
+            )
+            .await?;
+        }
+        value if value.starts_with("user_group_inline:") => {
+            let choice_token = value.trim_start_matches("user_group_inline:");
+            let Some(selection) = service
+                .take_order_choice(&telegram_user_id, choice_token)
                 .await
-            {
-                Ok(account) => {
-                    send_message_with_markup(
-                        service,
-                        token,
-                        &chat_id,
-                        &format!(
-                            "✅ User profile ulandi. Orderlar faqat «{}» guruhiga yuboriladi.",
-                            account
-                                .selected_chat_title
-                                .as_deref()
-                                .unwrap_or("tanlangan guruh")
-                        ),
-                        None,
-                        Some(remove_keyboard_markup()),
-                    )
-                    .await?;
-                }
-                Err(error) => {
-                    send_message(
-                        service,
-                        token,
-                        &chat_id,
-                        &user_account_error_message(&error),
-                        None,
-                    )
-                    .await?;
-                }
-            }
+            else {
+                send_message(
+                    service,
+                    token,
+                    &chat_id,
+                    "Guruh tanlovi eskirgan. «Guruh tanlash»ni qayta oching.",
+                    None,
+                )
+                .await?;
+                return Ok(());
+            };
+            let Some((chat_type, chat_id_value)) = selection.split_once(':') else {
+                return Ok(());
+            };
+            confirm_user_group_selection(
+                service,
+                token,
+                &chat_id,
+                &telegram_user_id,
+                chat_type,
+                chat_id_value,
+            )
+            .await?;
         }
         _ => {}
     }
@@ -252,10 +297,64 @@ async fn send_user_group_picker(
     service: &TelegramService,
     token: &str,
     chat_id: &str,
-    telegram_user_id: &str,
 ) -> Result<(), TelegramError> {
-    let groups = match service.writable_user_groups(telegram_user_id).await {
-        Ok(groups) => groups,
+    send_message_with_markup(
+        service,
+        token,
+        chat_id,
+        "Guruhni inline orqali yozib qidirib tanlang:",
+        None,
+        Some(user_group_inline_keyboard()),
+    )
+    .await
+}
+
+async fn edit_user_group_picker(
+    service: &TelegramService,
+    token: &str,
+    chat_id: &str,
+    message_id: i64,
+) -> Result<(), TelegramError> {
+    edit_message_with_markup(
+        service,
+        token,
+        chat_id,
+        message_id,
+        "Guruhni inline orqali yozib qidirib tanlang:",
+        Some(user_group_inline_keyboard()),
+    )
+    .await
+}
+
+async fn confirm_user_group_selection(
+    service: &TelegramService,
+    token: &str,
+    chat_id: &str,
+    telegram_user_id: &str,
+    chat_type: &str,
+    chat_id_value: &str,
+) -> Result<(), TelegramError> {
+    match service
+        .select_user_group(telegram_user_id, chat_id_value, chat_type)
+        .await
+    {
+        Ok(account) => {
+            send_message_with_markup(
+                service,
+                token,
+                chat_id,
+                &format!(
+                    "✅ User profile ulandi. Orderlar faqat «{}» guruhiga yuboriladi.",
+                    account
+                        .selected_chat_title
+                        .as_deref()
+                        .unwrap_or("tanlangan guruh")
+                ),
+                None,
+                Some(remove_keyboard_markup()),
+            )
+            .await?;
+        }
         Err(error) => {
             send_message(
                 service,
@@ -265,30 +364,9 @@ async fn send_user_group_picker(
                 None,
             )
             .await?;
-            return Ok(());
         }
-    };
-    if groups.is_empty() {
-        send_message_with_markup(
-            service,
-            token,
-            chat_id,
-            "Siz yozish huquqiga ega bo‘lgan guruh topilmadi. Telegram profilingizni guruhga qo‘shing yoki admin huquqini tekshiring.",
-            None,
-            Some(remove_keyboard_markup()),
-        )
-        .await?;
-        return Ok(());
     }
-    send_message_with_markup(
-        service,
-        token,
-        chat_id,
-        "Guruh tanlang. User profile orderlarni boshqa chatlarga yubormaydi:",
-        None,
-        Some(user_group_keyboard(&groups)),
-    )
-    .await
+    Ok(())
 }
 
 async fn connect_group(

@@ -12,7 +12,32 @@ use crate::core::production_map::{
 impl From<sqlx::Error> for Error {
     fn from(error: sqlx::Error) -> Self {
         tracing::error!(?error, "opened order edit persistence failed");
-        Self::Store
+        let code = error.as_database_error().and_then(|error| error.code());
+        let (code, reason) = match code.as_deref() {
+            Some("42501") => ("order_edit_database_permission", "Serverning bazaga ulanish hisobi buyurtmaga bog‘liq ma’lumotni o‘qish, yozish yoki saqlash paytida himoyalash amalini bajara olmadi. Administrator serverning baza ruxsatlari va migratsiyalarini tekshirishi kerak. Bu sizning hisobingiz yoki kiritgan KG qiymatingizdagi xato emas."),
+            Some("55P03") => ("order_edit_database_busy", "Buyurtmaga bog‘liq ma’lumotlar boshqa amal tomonidan band qilingan. Server saqlash uchun ularning bo‘shashini kutdi, ammo kutish muddati tugadi. Birozdan keyin buyurtmani qayta ochib urinib ko‘ring."),
+            Some("40P01" | "40001") => ("order_edit_database_conflict", "Buyurtmani saqlash boshqa bir vaqtda bajarilayotgan amal bilan to‘qnashdi. Baza ushbu tahrirni bekor qildi. Buyurtmani qayta ochib, o‘zgarishlarni yana saqlang."),
+            Some("57014") => ("order_edit_database_timeout", "Bazada buyurtmani tekshirish yoki saqlash so‘rovi bajarilish vaqtida to‘xtatildi; so‘rov vaqti tugagan bo‘lishi mumkin. Buyurtmani qayta ochib holatini tekshiring."),
+            Some("42P01" | "42703" | "42883") => ("order_edit_database_schema", "Server kodi kutayotgan baza jadvali, maydoni yoki funksiyasi mavjud emas. Administrator serverga mos baza migratsiyalarini o‘rnatishi kerak."),
+            Some("23503") => ("order_edit_database_reference", "Buyurtma bog‘langan mahsulot, apparat yoki boshqa yozuv bazada topilmadi. Buyurtmani qayta oching; administrator uning bog‘lanishlarini tekshirishi kerak."),
+            Some("23505") => ("order_edit_database_duplicate", "Saqlanayotgan buyurtma yoki unga bog‘liq yozuvning noyob qiymati bazada takrorlanyapti. Administrator takrorlangan yozuvni tekshirishi kerak."),
+            Some("23514" | "23502" | "22003" | "22P02") => ("order_edit_database_value", "Buyurtmadagi qiymat bazaning majburiy maydon, son chegarasi yoki ma’lumot formati talabiga mos kelmadi. Administrator server logidagi maydon tafsilotini tekshirishi kerak."),
+            Some(code) if code.starts_with("08") || matches!(code, "57P01" | "57P02" | "57P03" | "53300") => ("order_edit_database_unavailable", "Serverning baza bilan aloqasi uzildi yoki baza hozir ulanishni qabul qilmayapti. Administrator baza xizmatini tekshirishi kerak. Buyurtmani qayta ochib, saqlangan holatini tekshiring."),
+            _ => match error {
+                sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed | sqlx::Error::Io(_) | sqlx::Error::Tls(_) => ("order_edit_database_unavailable", "Server bazaga ulana olmadi yoki bo‘sh ulanishni o‘z vaqtida ololmadi. Administrator baza xizmatini tekshirishi kerak. Buyurtmani qayta ochib, saqlangan holatini tekshiring."),
+                sqlx::Error::ColumnDecode { .. } | sqlx::Error::Decode(_) | sqlx::Error::ColumnNotFound(_) => ("order_edit_database_format", "Bazada saqlangan buyurtma ma’lumotining formati server kutayotgan formatga mos emas. Administrator saqlangan ma’lumot va server versiyasini tekshirishi kerak."),
+                _ => ("order_edit_database_failed", "Buyurtmani bazada tekshirish yoki yozish vaqtida kutilmagan xato yuz berdi. Aniq texnik tafsilot server logiga yozildi; administrator buyurtma raqami va xato vaqtiga qarab uni tekshirishi kerak."),
+            },
+        };
+        Self::Storage { code, message: reason.into() }
+    }
+}
+
+fn invalid_stored_data(context: &str, error: serde_json::Error) -> Error {
+    tracing::error!(context, ?error, "opened order edit data format failed");
+    Error::Storage {
+        code: "order_edit_database_format",
+        message: format!("{context} server kutayotgan formatga mos emas. Administrator shu buyurtmaning bazada saqlangan ma’lumotlarini tekshirishi kerak."),
     }
 }
 
@@ -29,12 +54,14 @@ pub(super) async fn load_source(
         .fetch_optional(&mut **tx)
         .await?
         .ok_or(Error::NotFound)?;
-    let map: ProductionMapDefinition = serde_json::from_value(map).map_err(|_| Error::Store)?;
+    let map: ProductionMapDefinition = serde_json::from_value(map)
+        .map_err(|error| invalid_stored_data("Buyurtmaning ishlab chiqarish xaritasi", error))?;
     if id.starts_with("template-") || map.order_number.trim().is_empty() {
         return Err(Error::Locked("Faqat ochilgan buyurtmani tahrirlash mumkin"));
     }
     let mut template: CalculateOrderTemplate = match calculation {
-        Some(value) => serde_json::from_value(value).map_err(|_| Error::Store)?,
+        Some(value) => serde_json::from_value(value)
+            .map_err(|error| invalid_stored_data("Buyurtmaning saqlangan hisob-kitobi", error))?,
         None => {
             // Legacy fallback only accepts an unambiguous order-specific input,
             // never another order with the same product code.
@@ -81,7 +108,7 @@ fn legacy_calculation(
         .into_iter()
         .map(serde_json::from_value)
         .collect::<Result<Vec<CalculateOrderTemplate>, _>>()
-        .map_err(|_| Error::Store)?;
+        .map_err(|error| invalid_stored_data("Buyurtmaning eski hisob-kitob shabloni", error))?;
     // Order numbers are stronger evidence than reusable source-map links.
     // Never select by recency or product alone, and never fall back to a weaker
     // link when an explicit order-specific record exists but is incompatible.
@@ -273,7 +300,7 @@ async fn check_queues(tx: &mut Transaction<'_, Postgres>, id: &str) -> Result<()
     .into_iter()
     .map(serde_json::from_value)
     .collect::<Result<Vec<ProductionMapDefinition>, _>>()
-    .map_err(|_| Error::Store)?;
+    .map_err(|error| invalid_stored_data("Navbatdagi buyurtmalarning ishlab chiqarish xaritasi", error))?;
     let sequences = sqlx::query_as::<_, (String, serde_json::Value)>(
         "SELECT canonical_apparatus_id, order_ids FROM mini_queue_sequences",
     )
@@ -282,7 +309,7 @@ async fn check_queues(tx: &mut Transaction<'_, Postgres>, id: &str) -> Result<()
     .into_iter()
     .map(|(key, value)| serde_json::from_value::<Vec<String>>(value).map(|ids| (key, ids)))
     .collect::<Result<BTreeMap<_, _>, _>>()
-    .map_err(|_| Error::Store)?;
+    .map_err(|error| invalid_stored_data("Apparatdagi buyurtmalar ketma-ketligi", error))?;
     let frozen = sqlx::query_scalar::<_, String>(
         "SELECT order_id FROM mini_order_control_states WHERE state = 'frozen'",
     )
@@ -301,7 +328,10 @@ async fn check_queues(tx: &mut Transaction<'_, Postgres>, id: &str) -> Result<()
     {
         states.entry(apparatus).or_default().insert(
             order,
-            ApparatusQueueOrderState::parse(&state).ok_or(Error::Store)?,
+            ApparatusQueueOrderState::parse(&state).ok_or_else(|| Error::Storage {
+                code: "order_edit_database_format",
+                message: "Apparat navbatida server tanimaydigan buyurtma holati saqlangan. Administrator navbatdagi holatlarni tekshirishi kerak.".into(),
+            })?,
         );
     }
     let map = maps
@@ -336,9 +366,18 @@ pub(super) async fn save(
         "mini_order_products",
         "mini_quick_order_templates",
     ]) {
-        sqlx::query(&format!("LOCK TABLE {table} IN SHARE ROW EXCLUSIVE MODE"))
-            .execute(&mut *tx)
-            .await?;
+        if matches!(table, "mini_raw_material_events" | "mini_preparation_operations") {
+            // The narrowly scoped definer only locks these append-only tables;
+            // it does not grant permission to alter their historical records.
+            sqlx::query("SELECT public.mini_lock_order_edit_history($1)")
+                .bind(table)
+                .execute(&mut *tx)
+                .await?;
+        } else {
+            sqlx::query(&format!("LOCK TABLE public.{table} IN SHARE ROW EXCLUSIVE MODE"))
+                .execute(&mut *tx)
+                .await?;
+        }
     }
     let current = load_source(&mut tx, &original.map.id).await?;
     if current.revision != original.revision

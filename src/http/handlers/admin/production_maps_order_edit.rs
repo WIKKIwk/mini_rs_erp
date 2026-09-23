@@ -16,7 +16,16 @@ fn opened_order_edit_error(error: crate::core::order_edit::OrderEditError) -> Ad
         OrderEditError::NotFound => not_found(error.to_string()),
         OrderEditError::Locked(_) | OrderEditError::Conflict => conflict(error.to_string()),
         OrderEditError::Invalid(_) => bad_request(error.to_string()),
-        OrderEditError::Store => server_error(error.to_string()),
+        OrderEditError::Storage { code, message } => {
+            let mut response = AdminErrorResponse::new(code);
+            response.message = Some(message);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(response))
+        }
+        OrderEditError::Store => {
+            let mut response = AdminErrorResponse::new("order_edit_storage_failed");
+            response.message = Some(error.to_string());
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(response))
+        }
     }
 }
 

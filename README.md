@@ -809,6 +809,14 @@ State ownership rules:
 
 ## Failure and Error Contract
 
+Opened-order edits retain their business rejection reasons. Database failures
+also return an `order_edit_*` code and an operator-facing `message` explaining
+permissions, lock waits, concurrent writes, missing schema, invalid stored data,
+or connection failures; raw SQL and database values remain in server logs.
+Migration `0131_order_edit_history_locks` is required: its fixed-target definer
+locks raw-material and preparation history without granting runtime permission
+to update or delete append-only records. Apply migrations before restarting.
+
 Handlers preserve a predictable mobile contract:
 
 | Condition | HTTP behavior |

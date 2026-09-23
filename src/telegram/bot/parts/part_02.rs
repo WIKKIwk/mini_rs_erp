@@ -8,6 +8,17 @@ async fn handle_inline_query(
         answer_inline_query(service, token, &inline_query.id, Vec::new()).await?;
         return Ok(());
     };
+    if account.user_profile_connected && parse_group_inline_query(&inline_query.query).is_some() {
+        let results = match group_inline_results(service, &telegram_user_id, &inline_query.query).await {
+            Ok(results) => results,
+            Err(error) => {
+                tracing::warn!(?error, "telegram group inline search failed");
+                Vec::new()
+            }
+        };
+        answer_inline_query(service, token, &inline_query.id, results).await?;
+        return Ok(());
+    }
     if account.role == TelegramAccountRole::SalesManager
         && parse_order_inline_query(&inline_query.query).is_some()
         && service.order_draft(&telegram_user_id).await?.is_some()
@@ -71,7 +82,7 @@ async fn handle_inline_query(
                     .await?;
                 }
                 Ok(CodeOutcome::Authorized) => {
-                    send_user_group_picker(service, token, &chat_id, &telegram_user_id).await?;
+                    send_user_group_picker(service, token, &chat_id).await?;
                 }
                 Err(error) => {
                     send_inline_login_prompt(
@@ -92,7 +103,7 @@ async fn handle_inline_query(
                 .await
             {
                 Ok(_) => {
-                    send_user_group_picker(service, token, &chat_id, &telegram_user_id).await?;
+                    send_user_group_picker(service, token, &chat_id).await?;
                 }
                 Err(error) => {
                     send_inline_login_prompt(
@@ -156,7 +167,7 @@ async fn handle_private_text(
                 .set_delivery_mode(&telegram_user_id, TelegramDeliveryMode::UserProfile)
                 .await?;
             if account.user_profile_connected {
-                send_user_group_picker(service, token, &chat_id, &telegram_user_id).await?;
+                send_user_group_picker(service, token, &chat_id).await?;
             } else {
                 send_contact_request(service, token, &chat_id).await?;
             }
@@ -187,13 +198,14 @@ async fn handle_private_text(
             return Ok(true);
         }
         Some("groups") if account.user_profile_connected => {
-            send_user_group_picker(service, token, &chat_id, &telegram_user_id).await?;
+            send_user_group_picker(service, token, &chat_id).await?;
             return Ok(true);
         }
         Some("cancel") => {
             service.cancel_user_profile_login(&telegram_user_id).await;
             let had_order = service.order_draft(&telegram_user_id).await?.is_some();
             if had_order {
+                clear_side_prompt(service, token, &chat_id).await?;
                 service.clear_order_draft(&telegram_user_id).await?;
             }
             send_message_with_markup(
@@ -234,7 +246,7 @@ async fn handle_private_text(
             .set_delivery_mode(&telegram_user_id, TelegramDeliveryMode::UserProfile)
             .await?;
         if account.user_profile_connected {
-            send_user_group_picker(service, token, &chat_id, &telegram_user_id).await?;
+            send_user_group_picker(service, token, &chat_id).await?;
         } else {
             send_contact_request(service, token, &chat_id).await?;
         }
@@ -252,11 +264,6 @@ async fn handle_private_text(
         .await
         && is_login_code(text)
     {
-        // Kod oddiy xabar bo'lib tarixda qolmasligi uchun avval o'chiramiz
-        // (huquq bo'lmasa e'tiborsiz), keyin inline yo'lni ko'rsatamiz.
-        delete_message(service, token, &chat_id, message.message_id)
-            .await
-            .ok();
         send_inline_login_prompt(
             service,
             token,
@@ -290,6 +297,10 @@ async fn handle_private_media(
     let Some(mut draft) = service.order_draft(&telegram_user_id).await? else {
         return Ok(());
     };
+    if draft.step == TelegramOrderStep::Side {
+        send_side_step(service, token, &chat_id).await?;
+        return Ok(());
+    }
     if !matches!(draft.step, TelegramOrderStep::Attachment | TelegramOrderStep::Review) {
         send_order_text(
             service,
@@ -373,12 +384,11 @@ async fn handle_private_media(
             },
         )
         .await;
-    draft.edit_section = None;
-    draft.step = TelegramOrderStep::Review;
+    draft.request_side();
     service
         .save_order_draft(&telegram_user_id, draft.clone())
         .await?;
-    send_order_review(service, token, &chat_id, &telegram_user_id, &draft).await?;
+    send_side_step(service, token, &chat_id).await?;
     Ok(())
 }
 
@@ -406,6 +416,12 @@ async fn confirm_order(
             "Avval order ma’lumotlarini to‘liq kiriting va rasm yuboring.",
         )
         .await?;
+        return Ok(());
+    }
+    if !draft.pending_order_saved && !draft.side.is_some_and(|side| (1..=4).contains(&side)) {
+        draft.request_side();
+        service.save_order_draft(telegram_user_id, draft).await?;
+        send_side_step(service, token, chat_id).await?;
         return Ok(());
     }
 
@@ -676,7 +692,6 @@ async fn confirm_order(
             .await?;
         }
         Ok(count) => {
-            service.clear_order_draft(telegram_user_id).await?;
             send_order_text(
                 service,
                 token,
@@ -684,6 +699,7 @@ async fn confirm_order(
                 &format!("{saved_message}\nRasm bilan {count} ta guruhga yuborildi."),
             )
             .await?;
+            service.clear_order_draft(telegram_user_id).await?;
         }
         Err(error) => {
             send_order_text(

@@ -19,8 +19,10 @@ pub(crate) struct TelegramOrderLayer {
 pub(crate) enum TelegramOrderStep {
     #[default]
     Customer,
+    CustomerConfirmation,
     CustomerName,
     Product,
+    ProductConfirmation,
     ProductName,
     Status,
     Tiraj,
@@ -35,6 +37,7 @@ pub(crate) enum TelegramOrderStep {
     EdgeAllowance,
     ColdGlue,
     Attachment,
+    Side,
     Review,
 }
 
@@ -46,6 +49,7 @@ pub(crate) enum TelegramOrderEditSection {
     Layers,
     Print,
     Image,
+    Side,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -68,14 +72,47 @@ pub(crate) struct TelegramOrderDraft {
     pub frame_count: Option<f64>,
     pub diameter_mm: Option<f64>,
     pub roll_count: Option<i64>,
+    pub side: Option<u8>,
     #[serde(default)]
     pub edit_section: Option<TelegramOrderEditSection>,
     #[serde(default)]
     pub pending_order_saved: bool,
+    #[serde(default)]
+    pub customer_prompt_message_id: Option<i64>,
+    #[serde(default)]
+    pub product_prompt_message_id: Option<i64>,
+    #[serde(default)]
+    pub prompt_message_id: Option<i64>,
+    #[serde(default)]
+    pub prompt_inline_message_id: Option<String>,
+    pub side_prompt_message_id: Option<i64>,
     pub step: TelegramOrderStep,
 }
 
 impl TelegramOrderDraft {
+    pub(crate) fn request_side(&mut self) {
+        self.edit_section = None;
+        self.side = None;
+        self.step = TelegramOrderStep::Side;
+    }
+
+    pub(crate) fn select_side(&mut self, value: &str) -> bool {
+        if self.step != TelegramOrderStep::Side {
+            return false;
+        }
+        let side = match value {
+            "1" => 1,
+            "2" => 2,
+            "3" => 3,
+            "4" => 4,
+            _ => return false,
+        };
+        self.side = Some(side);
+        self.edit_section = None;
+        self.step = TelegramOrderStep::Review;
+        true
+    }
+
     pub(crate) fn production_options(
         &self,
     ) -> Option<crate::core::production_map::automatic::OrderProductionOptions> {
@@ -189,13 +226,15 @@ pub(crate) fn order_caption(
         Some(false) => "Yo‘q",
         None => "—",
     };
+    let side = draft.side.map(|value| value.to_string()).unwrap_or_else(|| "—".into());
     format!(
         "Buyurtma raqami: №T{} {}\n\
 Mijoz: {}\n\
 Mahsulot: {}\n\
 Holat: {}\n\
 Bosma: {method}\n\
-Holodniy kley: {cold}\n\n\
+Holodniy kley: {cold}\n\
+Taraf: {side}\n\n\
 1. Material: {}\n\
 2. Rang: {}\n\
 3. Tiraj: {} kg\n\
@@ -214,10 +253,11 @@ Holodniy kley: {cold}\n\n\
     )
 }
 
-pub(crate) fn order_review(
+pub(crate) fn order_prompt(
     order_number: &str,
     draft: &TelegramOrderDraft,
     has_image: bool,
+    prompt: &str,
 ) -> String {
     let status = match draft.status.as_str() {
         "rulon" => "Rulon",
@@ -245,25 +285,31 @@ pub(crate) fn order_review(
         }
         None => "—".to_string(),
     };
-    let layers = if draft.layers.is_empty() {
-        "—".to_string()
-    } else {
-        draft
-            .layers
-            .iter()
-            .enumerate()
-            .map(|(index, layer)| {
-                format!(
-                    "{}. {} — {} mikron",
-                    index + 1,
-                    dash(&layer.material),
-                    dash(&layer.micron)
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
+    let mut layers = draft
+        .layers
+        .iter()
+        .enumerate()
+        .map(|(index, layer)| {
+            format!(
+                "{}. {} — {} mikron",
+                index + 1,
+                dash(&layer.material),
+                dash(&layer.micron)
+            )
+        })
+        .collect::<Vec<_>>();
+    if !draft.pending_material_name.trim().is_empty() {
+        layers.push(format!(
+            "{}. {} — mikron: —",
+            layers.len() + 1,
+            draft.pending_material_name.trim()
+        ));
+    } else if layers.is_empty() || draft.step == TelegramOrderStep::Material {
+        layers.push(format!("{}. Material: — · Mikron: —", layers.len() + 1));
+    }
+    let layers = layers.join("\n");
     let image = if has_image { "✅ Yuklandi" } else { "❌ Kutilmoqda" };
+    let side = draft.side.map(|value| value.to_string()).unwrap_or_else(|| "—".into());
     let tiraj = draft
         .tiraj_kg
         .map(format_number)
@@ -285,7 +331,7 @@ pub(crate) fn order_review(
         .map(|value| value.to_string())
         .unwrap_or_else(|| "—".to_string());
     format!(
-        "🧾 Buyurtmani tekshiring\n\n\
+        "🧾 Buyurtma ma’lumotlari\n\n\
 №T{}\n\n\
 📌 Buyurtma asoslari\n\
 Mijoz: {}\n\
@@ -302,7 +348,10 @@ Bosma turi: {method}\n\
 Val/rang soni: {roll_count}\n\
 Edge allowance: {edge_allowance}\n\
 Cold glue: {cold_glue}\n\n\
-🖼 Order rasmi: {image}",
+🖼 Order rasmi: {image}\n\
+Taraf: {side}\n\n\
+━━━━━━━━━━━━━━\n\n\
+{prompt}",
         if order_number.trim().is_empty() {
             "—"
         } else {
@@ -336,7 +385,7 @@ fn format_number(value: f64) -> String {
 mod tests {
     use super::{
         TelegramOrderDraft, TelegramOrderLayer, TelegramOrderStep, normalize_order_text,
-        order_caption, order_review,
+        order_caption, order_prompt,
     };
 
     #[test]
@@ -344,6 +393,8 @@ mod tests {
         let old: TelegramOrderDraft =
             serde_json::from_str(r#"{"status":"rulon","step":"material"}"#).unwrap();
         assert_eq!(old.edge_allowance_mm, None);
+        assert_eq!(old.side, None);
+        assert_eq!(old.side_prompt_message_id, None);
         let draft = TelegramOrderDraft {
             status: "flexo".into(),
             edge_allowance_mm: Some(40.5),
@@ -396,6 +447,98 @@ mod tests {
     }
 
     #[test]
+    fn empty_order_prompt_shows_all_fields_above_the_current_question() {
+        let text = order_prompt("", &TelegramOrderDraft::default(), false, "👤 Mijozni tanlang:");
+        for field in [
+            "№T—",
+            "Mijoz: —",
+            "Mahsulot: —",
+            "Turi: —",
+            "Tiraj: — kg",
+            "Bitta kadrdagi mahsulot o‘lchami: — mm",
+            "Kadr soni: — ta",
+            "Diametr: — mm",
+            "1. Material: — · Mikron: —",
+            "Bosma turi: —",
+            "Val/rang soni: —",
+            "Edge allowance: —",
+            "Cold glue: —",
+            "Order rasmi: ❌ Kutilmoqda",
+            "Taraf: —",
+        ] {
+            assert!(text.contains(field), "missing {field}: {text}");
+        }
+        assert!(text.ends_with("━━━━━━━━━━━━━━\n\n👤 Mijozni tanlang:"));
+        assert_eq!(text.matches("📌 Buyurtma asoslari").count(), 1);
+    }
+
+    #[test]
+    fn order_prompt_updates_partial_layers_and_keeps_entered_values_between_steps() {
+        let mut draft = TelegramOrderDraft {
+            customer_name: "365 Korzinka".into(),
+            product_name: "Guruch 1 kg".into(),
+            status: "rulon".into(),
+            tiraj_kg: Some(123.0),
+            pending_material_id: "bopp".into(),
+            pending_material_name: "BOPP".into(),
+            step: TelegramOrderStep::Micron,
+            ..Default::default()
+        };
+        let text = order_prompt("", &draft, false, "Mikronni kiriting:");
+        assert!(text.contains("1. BOPP — mikron: —"));
+        assert!(text.ends_with("Mikronni kiriting:"));
+
+        draft.layers.push(TelegramOrderLayer {
+            material_id: std::mem::take(&mut draft.pending_material_id),
+            material: std::mem::take(&mut draft.pending_material_name),
+            micron: "20".into(),
+        });
+        draft.step = TelegramOrderStep::Material;
+        let text = order_prompt("", &draft, false, "2-qavat materialini tanlang:");
+        assert!(text.contains("Mijoz: 365 Korzinka"));
+        assert!(text.contains("Mahsulot: Guruch 1 kg"));
+        assert!(text.contains("Turi: Rulon"));
+        assert!(text.contains("Tiraj: 123 kg"));
+        assert!(text.contains("1. BOPP — 20 mikron\n2. Material: — · Mikron: —"));
+        assert!(!text.contains("Mikronni kiriting:"));
+        assert!(text.ends_with("2-qavat materialini tanlang:"));
+
+        draft.step = TelegramOrderStep::Review;
+        let text = order_prompt("0019", &draft, true, "🧾 Buyurtmani tekshiring");
+        assert!(!text.contains("2. Material:"));
+        assert!(text.contains("Order rasmi: ✅ Yuklandi"));
+        assert_eq!(text.matches("📌 Buyurtma asoslari").count(), 1);
+        assert!(text.ends_with("🧾 Buyurtmani tekshiring"));
+    }
+
+    #[test]
+    fn image_upload_requires_one_of_four_sides_before_review() {
+        for value in ["1", "2", "3", "4"] {
+            let mut draft = TelegramOrderDraft {
+                step: TelegramOrderStep::Attachment,
+                side: Some(4),
+                ..Default::default()
+            };
+            assert!(!draft.select_side(value));
+            draft.request_side();
+            assert_eq!(draft.step, TelegramOrderStep::Side);
+            assert_eq!(draft.side, None);
+            for invalid in ["", "0", "5", "-1", "01", "abc"] {
+                assert!(!draft.select_side(invalid));
+                assert_eq!(draft.step, TelegramOrderStep::Side);
+                assert_eq!(draft.side, None);
+            }
+            assert!(draft.select_side(value));
+            assert_eq!(draft.side, Some(value.parse().unwrap()));
+            assert_eq!(draft.step, TelegramOrderStep::Review);
+            assert!(!draft.select_side("2"), "stale buttons must not change the selection");
+            let field = format!("Taraf: {value}");
+            assert!(order_prompt("0019", &draft, true, "Tekshiring").contains(&field));
+            assert!(order_caption("0019", &draft, "Manager").contains(&field));
+        }
+    }
+
+    #[test]
     fn order_review_lists_every_layer_and_confirmation_fields() {
         let draft = TelegramOrderDraft {
             customer_name: "Freshboll".into(),
@@ -424,7 +567,7 @@ mod tests {
             step: TelegramOrderStep::Review,
             ..Default::default()
         };
-        let review = order_review("2730", &draft, true);
+        let review = order_prompt("2730", &draft, true, "🧾 Buyurtmani tekshiring");
         assert!(review.contains("Freshboll"));
         assert!(review.contains("Tiraj: 500 kg"));
         assert!(review.contains("1. PET — 12 mikron"));

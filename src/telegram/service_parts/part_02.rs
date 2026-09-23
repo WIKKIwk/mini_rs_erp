@@ -68,6 +68,7 @@ impl TelegramService {
                 frame_product_size_mm: draft.frame_product_size_mm.unwrap_or_default(),
                 frame_count: draft.frame_count.unwrap_or_default(),
                 roll_count: draft.roll_count,
+                note: draft.side.map(|side| format!("Taraf: {side}")).unwrap_or_default(),
                 edge_allowance_mm: draft
                     .edge_allowance_mm
                     .unwrap_or(crate::core::formula::DEFAULT_EDGE_ALLOWANCE_MM),
