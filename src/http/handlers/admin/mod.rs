@@ -45,6 +45,7 @@ pub use production_maps::{
     production_map_auto_open, production_map_save_with_order, production_map_schedule,
     production_map_schedule_cancel,
     production_map_order_edit,
+    production_map_replay,
     production_map_sequence, production_map_wip_batches, production_maps,
     raw_material_assignment_candidate_orders, raw_material_assignment_candidates,
     raw_material_assignment_diagnostics, raw_material_assignment_lookup,

@@ -52,6 +52,12 @@ async fn fixture() -> (PgPool, Arc<RuntimeApparatusConfiguration>, SequenceMove)
     .execute(&pool)
     .await
     .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/postgres/0133_queue_events_outbox.sql"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
     sqlx::query("INSERT INTO mini_apparatus VALUES ($1,'8 color')")
         .bind(APP)
         .execute(&pool)

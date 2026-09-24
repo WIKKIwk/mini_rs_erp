@@ -31,9 +31,16 @@ pub async fn production_map_live(
     let principal = authenticated_principal_for_live(&state, &headers, &query.token).await?;
     require_any_live_capability(&state, &principal).await?;
     let include_completion_requests = matches!(principal.role, PrincipalRole::Admin);
+    let delta_enabled = query.protocol.as_deref() == Some("delta");
     Ok(ws
         .on_upgrade(move |socket| {
-            production_map_live_socket(state, socket, principal, include_completion_requests)
+            production_map_live_socket(
+                state,
+                socket,
+                principal,
+                include_completion_requests,
+                delta_enabled,
+            )
         })
         .into_response())
 }
@@ -42,6 +49,8 @@ pub async fn production_map_live(
 pub struct ProductionMapLiveQuery {
     #[serde(default)]
     token: String,
+    #[serde(default)]
+    protocol: Option<String>,
 }
 
 async fn authenticated_principal_for_live(
@@ -86,6 +95,7 @@ async fn production_map_live_socket(
     mut socket: WebSocket,
     principal: Principal,
     include_completion_requests: bool,
+    delta_enabled: bool,
 ) {
     let service = state.production_maps.clone();
     let mut rx = service.subscribe_live();
@@ -121,7 +131,7 @@ async fn production_map_live_socket(
             }
             received = rx.recv() => {
                 match received {
-                    Ok(()) => {
+                    Ok(crate::core::production_map::ProductionMapLiveEvent::Invalidate) => {
                         if !send_production_map_live_snapshot(
                             &state,
                             &mut socket,
@@ -131,6 +141,36 @@ async fn production_map_live_socket(
                             &mut last_payload_initialized,
                         ).await {
                             break;
+                        }
+                    }
+                    Ok(crate::core::production_map::ProductionMapLiveEvent::Delta(delta)) => {
+                        if delta_enabled {
+                            let payload = serde_json::json!({
+                                "ok": true,
+                                "type": "delta",
+                                "epoch": &delta.epoch,
+                                "apparatus": &delta.apparatus,
+                                "base_revision": delta.base_revision,
+                                "revision": delta.revision,
+                                "ops": &delta.ops,
+                                "version": &delta.version,
+                            });
+                            if let Ok(json) = serde_json::to_string(&payload) {
+                                if !send_production_map_live_message(&mut socket, Message::Text(json.into())).await {
+                                    break;
+                                }
+                            }
+                        } else {
+                            if !send_production_map_live_snapshot(
+                                &state,
+                                &mut socket,
+                                &principal,
+                                include_completion_requests,
+                                &mut last_payload_fingerprint,
+                                &mut last_payload_initialized,
+                            ).await {
+                                break;
+                            }
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
@@ -225,6 +265,7 @@ async fn send_production_map_live_snapshot(
             let order_customers = production_map_order_customers(state, &snapshot.maps).await;
             let payload = serde_json::json!({
                 "ok": true,
+                "type": "snapshot",
                 // Monotonic snapshot revision. Clients ignore unknown fields
                 // today, but can use `rev` to detect a missed update and
                 // resync instead of sitting on stale state.

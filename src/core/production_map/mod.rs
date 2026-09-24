@@ -96,7 +96,10 @@ pub(crate) use progress::{progress_batch_id, progress_qr_payload};
 pub(crate) use queue::{
     QueueActionPolicyInput, QueueActionPolicyProfile, allowed_actions_for_control,
 };
-pub use service::{PreparedApparatusQueueAction, ProductionMapLiveSnapshot, ProductionMapService};
+pub use service::{
+    PreparedApparatusQueueAction, ProductionMapLiveDelta, ProductionMapLiveEvent,
+    ProductionMapLiveSnapshot, ProductionMapService,
+};
 pub use print_preflight::{PrintPreflightHold, PrintPreflightStatus};
 pub(crate) use service_progress_metrics::{
     bosma_completion_metrics_are_complete, laminatsiya_completion_metrics_are_complete,

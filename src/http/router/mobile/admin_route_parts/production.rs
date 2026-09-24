@@ -112,6 +112,10 @@ fn production_routes() -> Router<AppState> {
             any(admin::production_map_sequence),
         )
         .route(
+            "/v1/mobile/admin/production-maps/replay",
+            any(admin::production_map_replay),
+        )
+        .route(
             "/v1/mobile/admin/production-maps/queue-policies",
             any(admin::production_map_queue_policies),
         )

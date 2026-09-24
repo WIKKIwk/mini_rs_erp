@@ -131,6 +131,54 @@ pub async fn production_map_sequence(
     }
 }
 
+#[derive(Default, serde::Deserialize)]
+pub struct ProductionMapReplayQuery {
+    #[serde(default)]
+    pub apparatus: String,
+    #[serde(default)]
+    pub from_rev: i64,
+    #[serde(default)]
+    pub to_rev: i64,
+}
+
+pub async fn production_map_replay(
+    State(state): State<AppState>,
+    Query(query): Query<ProductionMapReplayQuery>,
+    method: Method,
+    headers: HeaderMap,
+) -> Result<Response, AdminError> {
+    if method != Method::GET {
+        return Err(method_not_allowed());
+    }
+    let _principal = authorize_any_capability(
+        &state,
+        &headers,
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::ApparatusQueueRead,
+            Capability::RawMaterialAssign,
+            Capability::QolipManage,
+            Capability::PreparationAccess,
+        ],
+    )
+    .await?;
+
+    let apparatus = query.apparatus.trim();
+    if apparatus.is_empty() {
+        return Err(bad_request("apparatus is required"));
+    }
+    let events = state
+        .production_maps
+        .queue_events_replay(apparatus, query.from_rev, query.to_rev)
+        .await
+        .map_err(production_map_error)?;
+    Ok(json_response(serde_json::json!({
+        "ok": true,
+        "events": events,
+    })))
+}
+
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ApparatusQueuePolicyPutRequest {

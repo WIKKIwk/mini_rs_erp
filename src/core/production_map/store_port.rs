@@ -307,6 +307,14 @@ pub trait ProductionMapStorePort: Send + Sync {
         apparatus: &str,
         order_ids: Vec<String>,
     ) -> StoreResult<()>;
+    async fn queue_events_replay(
+        &self,
+        _apparatus: &str,
+        _from_rev: i64,
+        _to_rev: i64,
+    ) -> StoreResult<Vec<serde_json::Value>> {
+        Ok(Vec::new())
+    }
 
     // Finite capacity, working calendars, downtime, and reservations.
     async fn apparatus_downtimes(&self) -> StoreResult<Vec<ApparatusDowntime>> {

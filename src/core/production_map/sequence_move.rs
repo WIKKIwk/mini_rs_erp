@@ -48,6 +48,8 @@ pub struct SequenceMoveResult {
     pub order_ids: Vec<String>,
     pub version: String,
     pub adjusted: bool,
+    #[serde(default)]
+    pub revision: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -155,6 +157,7 @@ impl SequenceMoveState {
             order_ids,
             version: next.version(),
             adjusted,
+            revision: None,
         })
     }
 }
@@ -174,7 +177,25 @@ impl ProductionMapService {
             .store
             .move_apparatus_sequence(&canonical, &command, &actor)
             .await?;
-        self.notify_live();
+        if let Some(rev) = result.revision {
+            let base_rev = (rev - 1).max(0);
+            let op = serde_json::json!({
+                "type": "move",
+                "id": &command.order_id,
+                "before_id": &command.before_order_id,
+                "after_id": &command.after_order_id,
+            });
+            self.notify_live_delta(ProductionMapLiveDelta {
+                epoch: self.snapshot_epoch().to_string(),
+                apparatus: canonical.runtime.apparatus_id.to_string(),
+                base_revision: base_rev,
+                revision: rev,
+                ops: vec![op],
+                version: result.version.clone(),
+            });
+        } else {
+            self.notify_live();
+        }
         Ok(result)
     }
 }

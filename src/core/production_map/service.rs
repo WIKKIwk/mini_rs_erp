@@ -9,7 +9,7 @@ pub use super::prepared_queue_action::PreparedApparatusQueueAction;
 pub(super) use super::prepared_queue_action::QueueProgressRecords;
 use super::progress::effective_apparatus_queue_policy_record;
 use super::service_maps::compile_saved_maps;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, OwnedMutexGuard, RwLock, broadcast};
 
 const LIVE_NOTIFY_CAPACITY: usize = 256;
@@ -150,11 +150,27 @@ fn stage_states_for_snapshot(
     result
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProductionMapLiveEvent {
+    Invalidate,
+    Delta(std::sync::Arc<ProductionMapLiveDelta>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProductionMapLiveDelta {
+    pub epoch: String,
+    pub apparatus: String,
+    pub base_revision: i64,
+    pub revision: i64,
+    pub ops: Vec<serde_json::Value>,
+    pub version: String,
+}
+
 #[derive(Clone)]
 pub struct ProductionMapService {
     pub(super) store: std::sync::Arc<dyn ProductionMapStorePort>,
     pub(super) apparatus_resolver: std::sync::Arc<dyn CanonicalApparatusResolver>,
-    live_notify: broadcast::Sender<()>,
+    live_notify: broadcast::Sender<ProductionMapLiveEvent>,
     queue_action_lock: std::sync::Arc<Mutex<()>>,
     snapshot_cache: std::sync::Arc<ProductionSnapshotCache>,
 }
@@ -274,17 +290,34 @@ impl ProductionMapService {
         self.queue_action_lock.clone().lock_owned().await
     }
 
-    pub fn subscribe_live(&self) -> broadcast::Receiver<()> {
+    pub fn subscribe_live(&self) -> broadcast::Receiver<ProductionMapLiveEvent> {
         self.live_notify.subscribe()
     }
 
     pub fn notify_live(&self) {
         self.snapshot_cache.revision.fetch_add(1, Ordering::AcqRel);
-        let _ = self.live_notify.send(());
+        let _ = self.live_notify.send(ProductionMapLiveEvent::Invalidate);
+    }
+
+    pub fn notify_live_delta(&self, delta: ProductionMapLiveDelta) {
+        self.snapshot_cache.revision.fetch_add(1, Ordering::AcqRel);
+        let _ = self.live_notify.send(ProductionMapLiveEvent::Delta(std::sync::Arc::new(delta)));
     }
 
     pub fn snapshot_epoch(&self) -> &str {
         &self.snapshot_cache.epoch
+    }
+
+    pub async fn queue_events_replay(
+        &self,
+        apparatus: &str,
+        from_rev: i64,
+        to_rev: i64,
+    ) -> Result<Vec<serde_json::Value>, ProductionMapError> {
+        let canonical = self.resolve_canonical_apparatus_text(apparatus).await?;
+        self.store
+            .queue_events_replay(canonical.runtime.apparatus_id.as_str(), from_rev, to_rev)
+            .await
     }
 
     pub async fn live_snapshot(&self) -> Result<ProductionMapLiveSnapshot, ProductionMapError> {

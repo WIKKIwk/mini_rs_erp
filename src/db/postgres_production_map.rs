@@ -306,6 +306,35 @@ impl PostgresProductionMapStore {
         save_apparatus_sequence(&self.pool, apparatus, order_ids).await
     }
 
+    pub(crate) async fn queue_events_replay(
+        &self,
+        apparatus: &str,
+        from_rev: i64,
+        to_rev: i64,
+    ) -> Result<Vec<serde_json::Value>, ProductionMapError> {
+        let events = sqlx::query_scalar::<_, serde_json::Value>(
+            "SELECT json_build_object(
+                'id', id,
+                'canonical_apparatus_id', canonical_apparatus_id,
+                'revision', revision,
+                'base_revision', base_revision,
+                'event_type', event_type,
+                'ops', ops,
+                'created_at', created_at
+             )
+             FROM mini_queue_events
+             WHERE canonical_apparatus_id = $1 AND revision >= $2 AND revision <= $3
+             ORDER BY revision ASC",
+        )
+        .bind(apparatus)
+        .bind(from_rev)
+        .bind(to_rev)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+        Ok(events)
+    }
+
     async fn apparatus_downtimes(&self) -> Result<Vec<ApparatusDowntime>, ProductionMapError> {
         load_apparatus_downtimes(&self.pool).await
     }

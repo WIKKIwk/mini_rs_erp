@@ -127,6 +127,15 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         PostgresProductionMapStore::put_apparatus_sequence(self, apparatus, order_ids).await
     }
 
+    async fn queue_events_replay(
+        &self,
+        apparatus: &str,
+        from_rev: i64,
+        to_rev: i64,
+    ) -> Result<Vec<serde_json::Value>, ProductionMapError> {
+        PostgresProductionMapStore::queue_events_replay(self, apparatus, from_rev, to_rev).await
+    }
+
     async fn apparatus_downtimes(&self) -> Result<Vec<ApparatusDowntime>, ProductionMapError> {
         PostgresProductionMapStore::apparatus_downtimes(self).await
     }
