@@ -25,8 +25,10 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
             sequences.get(&command.apparatus).map(Vec::as_slice).unwrap_or_default(),
             states.get(&command.apparatus).unwrap_or(&BTreeMap::new()), &frozen, &holds);
         let mut result = state.apply(command)?;
-        sequences.insert(command.apparatus.clone(), result.order_ids.clone());
-        result.revision = Some(1);
+        if result.event.is_some() {
+            sequences.insert(command.apparatus.clone(), result.order_ids.clone());
+            result.revision = Some(1);
+        }
         receipts.insert(key, (command.clone(), result.clone()));
         Ok(result)
     }

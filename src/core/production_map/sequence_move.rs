@@ -50,6 +50,39 @@ pub struct SequenceMoveResult {
     pub adjusted: bool,
     #[serde(default)]
     pub revision: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event: Option<serde_json::Value>,
+}
+
+pub fn compute_canonical_sequence_delta(
+    old_sequence: &[String],
+    new_sequence: &[String],
+    moved_order_id: &str,
+) -> Option<serde_json::Value> {
+    if old_sequence == new_sequence {
+        return None;
+    }
+    let new_idx = new_sequence.iter().position(|id| id == moved_order_id)?;
+    let old_idx = old_sequence.iter().position(|id| id == moved_order_id);
+    if old_idx == Some(new_idx) {
+        return None;
+    }
+    let before_id = if new_idx + 1 < new_sequence.len() {
+        Some(new_sequence[new_idx + 1].clone())
+    } else {
+        None
+    };
+    let after_id = if new_idx > 0 {
+        Some(new_sequence[new_idx - 1].clone())
+    } else {
+        None
+    };
+    Some(serde_json::json!({
+        "type": "move",
+        "id": moved_order_id,
+        "before_id": before_id,
+        "after_id": after_id,
+    }))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -151,6 +184,7 @@ impl SequenceMoveState {
         )
         .map_err(|_| ProductionMapError::QueueReorderBlocked)?;
         let adjusted = order_ids != requested;
+        let event = compute_canonical_sequence_delta(&self.order_ids, &order_ids, &command.order_id);
         let mut next = self.clone();
         next.order_ids = order_ids.clone();
         Ok(SequenceMoveResult {
@@ -158,6 +192,7 @@ impl SequenceMoveState {
             version: next.version(),
             adjusted,
             revision: None,
+            event,
         })
     }
 }
@@ -177,25 +212,91 @@ impl ProductionMapService {
             .store
             .move_apparatus_sequence(&canonical, &command, &actor)
             .await?;
-        if let Some(rev) = result.revision {
+        if let (Some(rev), Some(op)) = (result.revision, &result.event) {
             let base_rev = (rev - 1).max(0);
-            let op = serde_json::json!({
-                "type": "move",
-                "id": &command.order_id,
-                "before_id": &command.before_order_id,
-                "after_id": &command.after_order_id,
-            });
             self.notify_live_delta(ProductionMapLiveDelta {
                 epoch: self.snapshot_epoch().to_string(),
                 apparatus: canonical.runtime.apparatus_id.to_string(),
                 base_revision: base_rev,
                 revision: rev,
-                ops: vec![op],
+                ops: vec![op.clone()],
                 version: result.version.clone(),
             });
-        } else {
-            self.notify_live();
         }
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod canonical_delta_tests {
+    use super::*;
+
+    fn apply_client_delta(initial: &[String], op: &serde_json::Value) -> Vec<String> {
+        let mut result = initial.to_vec();
+        let id = op.get("id").and_then(|v| v.as_str()).unwrap();
+        result.retain(|x| x != id);
+        let after_id = op.get("after_id").and_then(|v| v.as_str());
+        let before_id = op.get("before_id").and_then(|v| v.as_str());
+        if let Some(after) = after_id {
+            if let Some(idx) = result.iter().position(|x| x == after) {
+                result.insert(idx + 1, id.to_string());
+                return result;
+            }
+        }
+        if let Some(before) = before_id {
+            if let Some(idx) = result.iter().position(|x| x == before) {
+                result.insert(idx, id.to_string());
+                return result;
+            }
+        }
+        result.insert(0, id.to_string());
+        result
+    }
+
+    #[test]
+    fn canonical_delta_invariant_apply_matches_new_sequence() {
+        let old_seq = vec!["A".to_string(), "B".to_string(), "C".to_string(), "D".to_string()];
+
+        // Move D to head
+        let new_seq = vec!["D".to_string(), "A".to_string(), "B".to_string(), "C".to_string()];
+        let delta = compute_canonical_sequence_delta(&old_seq, &new_seq, "D").unwrap();
+        assert_eq!(apply_client_delta(&old_seq, &delta), new_seq);
+
+        // Move A to tail
+        let new_seq = vec!["B".to_string(), "C".to_string(), "D".to_string(), "A".to_string()];
+        let delta = compute_canonical_sequence_delta(&old_seq, &new_seq, "A").unwrap();
+        assert_eq!(apply_client_delta(&old_seq, &delta), new_seq);
+
+        // Move D between A and B
+        let new_seq = vec!["A".to_string(), "D".to_string(), "B".to_string(), "C".to_string()];
+        let delta = compute_canonical_sequence_delta(&old_seq, &new_seq, "D").unwrap();
+        assert_eq!(apply_client_delta(&old_seq, &delta), new_seq);
+
+        // No change
+        assert!(compute_canonical_sequence_delta(&old_seq, &old_seq, "A").is_none());
+    }
+
+    #[test]
+    fn canonical_delta_when_clamped_by_active_order_never_violates_barrier() {
+        let old_seq = vec![
+            "zakaz-0003".to_string(),
+            "zakaz-0018".to_string(),
+            "zakaz-0020".to_string(),
+        ];
+        let clamped_new = vec![
+            "zakaz-0003".to_string(),
+            "zakaz-0020".to_string(),
+            "zakaz-0018".to_string(),
+        ];
+        let delta = compute_canonical_sequence_delta(&old_seq, &clamped_new, "zakaz-0020").unwrap();
+
+        assert_eq!(delta["after_id"], "zakaz-0003");
+        assert_eq!(delta["before_id"], "zakaz-0018");
+        let applied = apply_client_delta(&old_seq, &delta);
+        assert_eq!(applied, clamped_new);
+        assert_eq!(applied[0], "zakaz-0003");
+
+        let delta_none = compute_canonical_sequence_delta(&old_seq, &old_seq, "zakaz-0018");
+        assert!(delta_none.is_none());
     }
 }

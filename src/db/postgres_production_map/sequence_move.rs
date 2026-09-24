@@ -143,43 +143,48 @@ async fn commit_once(
         &holds.into_iter().collect::<BTreeSet<_>>(),
     );
     let result = state.apply(command)?;
-    let (new_rev,): (i64,) = sqlx::query_as(
-        "INSERT INTO mini_queue_sequences (apparatus,canonical_apparatus_id,order_ids,revision,updated_at)
-        VALUES (COALESCE((SELECT name FROM mini_apparatus WHERE id=$1),$1),$1,$2,1,now())
-        ON CONFLICT (canonical_apparatus_id) DO UPDATE SET
-            order_ids=excluded.order_ids,
-            revision=COALESCE(mini_queue_sequences.revision, 0) + 1,
-            updated_at=excluded.updated_at
-        RETURNING revision",
-    )
-    .bind(&command.apparatus)
-    .bind(serde_json::json!(result.order_ids))
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(db_error)?;
-
-    let base_rev = (new_rev - 1).max(0);
-    let op = serde_json::json!([{
-        "type": "move",
-        "id": &command.order_id,
-        "before_id": &command.before_order_id,
-        "after_id": &command.after_order_id,
-    }]);
-
-    sqlx::query(
-        "INSERT INTO mini_queue_events (canonical_apparatus_id, revision, base_revision, event_type, ops)
-        VALUES ($1, $2, $3, 'delta', $4)
-        ON CONFLICT (canonical_apparatus_id, revision) DO NOTHING",
-    )
-    .bind(&command.apparatus)
-    .bind(new_rev)
-    .bind(base_rev)
-    .bind(op)
-    .execute(&mut *tx)
-    .await
-    .map_err(db_error)?;
     let mut result = result;
-    result.revision = Some(new_rev);
+    if let Some(op) = result.event.clone() {
+        let (new_rev,): (i64,) = sqlx::query_as(
+            "INSERT INTO mini_queue_sequences (apparatus,canonical_apparatus_id,order_ids,revision,updated_at)
+            VALUES (COALESCE((SELECT name FROM mini_apparatus WHERE id=$1),$1),$1,$2,1,now())
+            ON CONFLICT (canonical_apparatus_id) DO UPDATE SET
+                order_ids=excluded.order_ids,
+                revision=COALESCE(mini_queue_sequences.revision, 0) + 1,
+                updated_at=excluded.updated_at
+            RETURNING revision",
+        )
+        .bind(&command.apparatus)
+        .bind(serde_json::json!(result.order_ids))
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(db_error)?;
+
+        let base_rev = (new_rev - 1).max(0);
+        sqlx::query(
+            "INSERT INTO mini_queue_events (canonical_apparatus_id, revision, base_revision, event_type, ops)
+            VALUES ($1, $2, $3, 'delta', $4)
+            ON CONFLICT (canonical_apparatus_id, revision) DO NOTHING",
+        )
+        .bind(&command.apparatus)
+        .bind(new_rev)
+        .bind(base_rev)
+        .bind(serde_json::json!([op]))
+        .execute(&mut *tx)
+        .await
+        .map_err(db_error)?;
+
+        result.revision = Some(new_rev);
+    } else {
+        let current_rev: Option<i64> = sqlx::query_scalar(
+            "SELECT revision FROM mini_queue_sequences WHERE canonical_apparatus_id=$1",
+        )
+        .bind(&command.apparatus)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(db_error)?;
+        result.revision = current_rev;
+    }
     sqlx::query(
         "INSERT INTO mini_queue_reorder_commands
         (canonical_apparatus_id,actor_role,actor_ref,idempotency_key,request_json,result_json)

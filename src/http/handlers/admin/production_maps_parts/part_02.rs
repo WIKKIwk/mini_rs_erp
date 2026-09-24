@@ -97,8 +97,14 @@ pub async fn production_map_sequence(
             let command: crate::core::production_map::SequenceMove = parse_json(&body)?;
             let result = state.production_maps.move_apparatus_sequence(command, queue_action_actor(&principal))
                 .await.map_err(production_map_error)?;
-            Ok(json_response(serde_json::json!({"ok":true,"order_ids":result.order_ids,
-                "version":result.version,"adjusted":result.adjusted})))
+            Ok(json_response(serde_json::json!({
+                "ok": true,
+                "order_ids": result.order_ids,
+                "version": result.version,
+                "adjusted": result.adjusted,
+                "revision": result.revision,
+                "ops": result.event.as_ref().map(|e| vec![e.clone()]).unwrap_or_default(),
+            })))
         }
         Method::PUT => {
             authorize_any_capability(
