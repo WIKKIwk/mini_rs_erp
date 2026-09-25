@@ -40,6 +40,7 @@ struct CachedProductionSnapshot {
 #[derive(Debug, Clone, Serialize)]
 pub struct ProductionMapLiveSnapshot {
     pub sequence_versions: BTreeMap<String, String>,
+    pub sequence_revisions: BTreeMap<String, i64>,
     pub maps: Vec<ProductionMapSaved>,
     pub sequences: BTreeMap<String, Vec<String>>,
     pub visible_order_ids: BTreeMap<String, Vec<String>>,
@@ -378,9 +379,9 @@ impl ProductionMapService {
     async fn build_production_snapshot(
         &self,
     ) -> Result<ProductionMapLiveSnapshot, ProductionMapError> {
-        let (raw_maps, stored_sequences, mut queue_states, order_controls) = tokio::try_join!(
+        let (raw_maps, (stored_sequences, sequence_revisions), mut queue_states, order_controls) = tokio::try_join!(
             self.store.maps(),
-            self.store.apparatus_sequences(),
+            self.store.apparatus_sequences_with_revisions(),
             self.store.apparatus_queue_states(),
             self.store.order_control_states(),
         )?;
@@ -484,6 +485,7 @@ impl ProductionMapService {
 
         Ok(ProductionMapLiveSnapshot {
             sequence_versions,
+            sequence_revisions,
             maps,
             sequences,
             visible_order_ids,

@@ -348,6 +348,16 @@ material list but does not bypass material scans, Qolip, queue, or start guards.
 
 #### Queue and WIP Flow
 
+Queue snapshots expose `sequence_revisions`, read together with the stored
+sequences, separately from the process-local snapshot `rev` and `epoch`.
+Reorder acknowledgements and deltas use only the apparatus's durable revision.
+Reorder events persist `base_version` and `version` fingerprints inside their
+operation payload in the same transaction as the queue and retry receipt.
+Replay returns up to 200 ordered events and the current server epoch; older
+events without fingerprints and non-reorder invalidations require a snapshot.
+Clients must never compare an apparatus revision with the global snapshot rev.
+The existing 0132/0133 tables support this contract without a new migration.
+
 Production queue flow is stateful:
 
 ```mermaid

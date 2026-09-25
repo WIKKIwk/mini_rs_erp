@@ -293,6 +293,13 @@ pub trait ProductionMapStorePort: Send + Sync {
         Ok(())
     }
     async fn apparatus_sequences(&self) -> StoreResult<ApparatusSequenceMap>;
+    /// Sequence and durable cursor must describe the same database read.
+    /// Stores without durable cursors use snapshot-only recovery.
+    async fn apparatus_sequences_with_revisions(
+        &self,
+    ) -> StoreResult<(ApparatusSequenceMap, BTreeMap<String, i64>)> {
+        Ok((self.apparatus_sequences().await?, BTreeMap::new()))
+    }
     async fn move_apparatus_sequence(
         &self,
         _canonical: &crate::core::apparatus_standard::RuntimeApparatusConfiguration,

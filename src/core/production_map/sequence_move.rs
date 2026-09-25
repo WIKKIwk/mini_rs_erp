@@ -184,9 +184,15 @@ impl SequenceMoveState {
         )
         .map_err(|_| ProductionMapError::QueueReorderBlocked)?;
         let adjusted = order_ids != requested;
-        let event = compute_canonical_sequence_delta(&self.order_ids, &order_ids, &command.order_id);
+        let mut event = compute_canonical_sequence_delta(&self.order_ids, &order_ids, &command.order_id);
         let mut next = self.clone();
         next.order_ids = order_ids.clone();
+        // Persist the fingerprint chain with the operation, so replay cannot
+        // apply a move on top of a different membership/barrier state.
+        if let Some(op) = event.as_mut() {
+            op["base_version"] = serde_json::json!(command.expected_version);
+            op["version"] = serde_json::json!(next.version());
+        }
         Ok(SequenceMoveResult {
             order_ids,
             version: next.version(),

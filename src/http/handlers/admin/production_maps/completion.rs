@@ -154,6 +154,7 @@ async fn production_map_live_socket(
                                 "revision": delta.revision,
                                 "ops": &delta.ops,
                                 "version": &delta.version,
+                                "base_version": delta.ops.first().and_then(|op| op.get("base_version")),
                             });
                             if let Ok(json) = serde_json::to_string(&payload) {
                                 if !send_production_map_live_message(&mut socket, Message::Text(json.into())).await {
@@ -274,6 +275,7 @@ async fn send_production_map_live_snapshot(
                 "maps": &snapshot.maps,
                 "sequences": &snapshot.sequences,
                 "sequence_versions": &snapshot.sequence_versions,
+                "sequence_revisions": &snapshot.sequence_revisions,
                 "visible_order_ids": &snapshot.visible_order_ids,
                 "queue_states": &snapshot.queue_states,
                 "stage_states": &snapshot.stage_states,

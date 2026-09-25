@@ -119,6 +119,30 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         PostgresProductionMapStore::apparatus_sequences(self).await
     }
 
+    async fn apparatus_sequences_with_revisions(
+        &self,
+    ) -> Result<(BTreeMap<String, Vec<String>>, BTreeMap<String, i64>), ProductionMapError> {
+        let rows = sqlx::query_as::<_, (String, serde_json::Value, i64)>(
+            "SELECT canonical_apparatus_id, order_ids, revision FROM mini_queue_sequences",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+        let mut sequences = BTreeMap::new();
+        let mut revisions = BTreeMap::new();
+        for (id, payload, revision) in rows {
+            if !crate::core::production_map::queue_state::is_canonical_apparatus_id(&id) {
+                continue;
+            }
+            let Ok(ids) = serde_json::from_value::<Vec<String>>(payload) else {
+                continue;
+            };
+            revisions.insert(id.clone(), revision);
+            sequences.insert(id, ids);
+        }
+        Ok((sequences, revisions))
+    }
+
     async fn put_apparatus_sequence(
         &self,
         apparatus: &str,

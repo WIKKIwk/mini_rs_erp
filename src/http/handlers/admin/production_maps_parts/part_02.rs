@@ -61,6 +61,7 @@ pub async fn production_map_sequence(
                     "maps": [],
                     "sequences": { apparatus: snapshot.sequences.get(apparatus).cloned().unwrap_or_default() },
                     "sequence_versions": { apparatus: snapshot.sequence_versions.get(apparatus) },
+                    "sequence_revisions": { apparatus: snapshot.sequence_revisions.get(apparatus) },
                     "visible_order_ids": { apparatus: snapshot.visible_order_ids.get(apparatus).cloned().unwrap_or_default() },
                     "queue_states": { apparatus: snapshot.queue_states.get(apparatus).cloned().unwrap_or_default() },
                     "stage_states": { order_id: snapshot.stage_states.get(order_id).cloned().unwrap_or_default() },
@@ -80,6 +81,7 @@ pub async fn production_map_sequence(
                 "maps": &snapshot.maps,
                 "sequences": &snapshot.sequences,
                 "sequence_versions": &snapshot.sequence_versions,
+                "sequence_revisions": &snapshot.sequence_revisions,
                 "visible_order_ids": &snapshot.visible_order_ids,
                 "queue_states": &snapshot.queue_states,
                 "stage_states": &snapshot.stage_states,
@@ -103,6 +105,7 @@ pub async fn production_map_sequence(
                 "version": result.version,
                 "adjusted": result.adjusted,
                 "revision": result.revision,
+                "epoch": state.production_maps.snapshot_epoch(),
                 "ops": result.event.as_ref().map(|e| vec![e.clone()]).unwrap_or_default(),
             })))
         }
@@ -171,8 +174,10 @@ pub async fn production_map_replay(
     .await?;
 
     let apparatus = query.apparatus.trim();
-    if apparatus.is_empty() {
-        return Err(bad_request("apparatus is required"));
+    if !queue_state::is_canonical_apparatus_id(apparatus)
+        || query.from_rev < 0 || query.to_rev < query.from_rev
+    {
+        return Err(bad_request("canonical apparatus and valid revision range are required"));
     }
     let events = state
         .production_maps
@@ -182,6 +187,7 @@ pub async fn production_map_replay(
     Ok(json_response(serde_json::json!({
         "ok": true,
         "events": events,
+        "epoch": state.production_maps.snapshot_epoch(),
     })))
 }
 

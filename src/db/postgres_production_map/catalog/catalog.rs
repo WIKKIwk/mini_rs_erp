@@ -250,13 +250,20 @@ pub(super) async fn save_apparatus_sequence_tx(
         .collect::<Vec<_>>();
     let payload = serde_json::to_value(order_ids).map_err(|_| ProductionMapError::StoreFailed)?;
     sqlx::query(
-        "INSERT INTO mini_queue_sequences
+        "WITH saved AS (INSERT INTO mini_queue_sequences
             (apparatus, canonical_apparatus_id, order_ids, updated_at)
          VALUES (COALESCE((SELECT name FROM mini_apparatus WHERE id = $1), $1), $1, $2, now())
          ON CONFLICT (canonical_apparatus_id) DO UPDATE SET
            apparatus = excluded.apparatus,
            order_ids = excluded.order_ids,
-           updated_at = excluded.updated_at",
+           revision = mini_queue_sequences.revision + 1,
+           updated_at = excluded.updated_at
+         WHERE mini_queue_sequences.order_ids IS DISTINCT FROM excluded.order_ids
+         RETURNING canonical_apparatus_id, revision)
+         INSERT INTO mini_queue_events
+           (canonical_apparatus_id, revision, base_revision, event_type, ops)
+         SELECT canonical_apparatus_id, revision, revision - 1, 'invalidate', '[]'::jsonb
+         FROM saved",
     )
     .bind(apparatus_id.as_str())
     .bind(payload)

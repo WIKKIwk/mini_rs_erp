@@ -136,6 +136,8 @@ fn merge_worker_training_overlay(
     snapshot
         .sequences
         .retain(|apparatus, _| !is_training_apparatus(apparatus, &active_apparatuses));
+    snapshot.sequence_versions.retain(|apparatus, _| !is_training_apparatus(apparatus, &active_apparatuses));
+    snapshot.sequence_revisions.retain(|apparatus, _| !is_training_apparatus(apparatus, &active_apparatuses));
     snapshot
         .visible_order_ids
         .retain(|apparatus, _| !is_training_apparatus(apparatus, &active_apparatuses));

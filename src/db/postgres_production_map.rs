@@ -318,13 +318,15 @@ impl PostgresProductionMapStore {
                 'canonical_apparatus_id', canonical_apparatus_id,
                 'revision', revision,
                 'base_revision', base_revision,
+                'base_version', ops->0->>'base_version',
+                'version', ops->0->>'version',
                 'event_type', event_type,
                 'ops', ops,
                 'created_at', created_at
              )
              FROM mini_queue_events
              WHERE canonical_apparatus_id = $1 AND revision >= $2 AND revision <= $3
-             ORDER BY revision ASC",
+             ORDER BY revision ASC LIMIT 200",
         )
         .bind(apparatus)
         .bind(from_rev)
