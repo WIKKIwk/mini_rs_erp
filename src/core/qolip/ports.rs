@@ -9,6 +9,10 @@ use super::models::{
 
 #[async_trait]
 pub trait QolipStorePort: Send + Sync {
+    /// Exact catalog identities and global QR readiness, without returning mold inventory.
+    async fn order_products(&self, _item_codes: &[String]) -> Result<Vec<QolipProduct>, QolipError> {
+        Err(QolipError::StoreFailed)
+    }
     async fn assigned_warehouses(&self, principal: &Principal) -> Result<Vec<String>, QolipError>;
     async fn assigned_blocks(&self, principal: &Principal) -> Result<Vec<QolipBlock>, QolipError>;
     async fn all_blocks(&self) -> Result<Vec<QolipBlock>, QolipError>;

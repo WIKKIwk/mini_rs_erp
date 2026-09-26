@@ -1,5 +1,26 @@
 #[async_trait]
 impl QolipStorePort for MemoryQolipStore {
+    async fn order_products(&self, item_codes: &[String]) -> Result<Vec<QolipProduct>, QolipError> {
+        let products = self.products.read().await.clone();
+        let mut result = Vec::new();
+        for product in products {
+            if !item_codes.iter().any(|code| code.trim().eq_ignore_ascii_case(product.code.trim())) {
+                continue;
+            }
+            let specs = self.product_specs(&product.code).await?;
+            let has_qolip_spec = !product.item_group.trim().is_empty() && specs.iter().any(|spec| {
+                spec.item_code.trim().eq_ignore_ascii_case(product.code.trim())
+                    && spec.item_group.trim().eq_ignore_ascii_case(product.item_group.trim())
+                    && !spec.qolip_code.trim().is_empty()
+            });
+            result.push(QolipProduct {
+                code: product.code, name: product.name, item_group: product.item_group,
+                has_qolip_spec, ..Default::default()
+            });
+        }
+        Ok(result)
+    }
+
     async fn assigned_warehouses(&self, _principal: &Principal) -> Result<Vec<String>, QolipError> {
         MemoryQolipStore::assigned_warehouses(self, _principal).await
     }

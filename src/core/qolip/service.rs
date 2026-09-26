@@ -20,6 +20,12 @@ pub struct QolipService {
     store: Arc<dyn QolipStorePort>,
 }
 
+impl QolipService {
+    pub async fn order_products(&self, item_codes: &[String]) -> Result<Vec<QolipProduct>, QolipError> {
+        self.store.order_products(item_codes).await
+    }
+}
+
 include!("service_impl_parts/part_01.rs");
 include!("service_impl_parts/part_02.rs");
 

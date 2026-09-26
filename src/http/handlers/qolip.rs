@@ -15,6 +15,9 @@ use crate::core::qolip::{
 use crate::core::warehouses::{WarehouseDeleteRequest, WarehouseUpsert};
 
 mod support;
+mod order_products;
+
+pub use order_products::order_products;
 
 use self::support::*;
 pub use self::support::{

@@ -1,8 +1,8 @@
 {
   "protocol": 1,
   "route_snapshot": {
-    "count": 266,
-    "sha256": "cbd85c2cc4c999e53c9feb1dbedcd693e8b7e5f50560cccf9915c19ae3f5336c"
+    "count": 285,
+    "sha256": "d6e8fac94f974b13139efe05174a3b4e4bf878f84c71c96a2dd626cecf93ecb8"
   },
   "access_matrices": [
     {
@@ -89,6 +89,15 @@
     }
   ],
   "cases": [
+    {"name":"qolip_order_products_anonymous","request":{"method":"POST","uri":"/v1/mobile/qolip/order-products","body":{"order_ids":[]}},"expect":{"status":401}},
+    {"name":"qolip_order_products_customer","request":{"method":"POST","uri":"/v1/mobile/qolip/order-products","role":"customer","body":{"order_ids":[]}},"expect":{"status":403}},
+    {"name":"qolip_order_products_qolipchi","request":{"method":"POST","uri":"/v1/mobile/qolip/order-products","role":"qolipchi","body":{"order_ids":[]}},"expect":{"status":200,"body":{"ok":true,"orders":[]}}},
+    {"name":"qolip_order_products_admin","request":{"method":"POST","uri":"/v1/mobile/qolip/order-products","role":"admin","body":{"order_ids":[]}},"expect":{"status":200,"body":{"ok":true,"orders":[]}}},
+    {"name":"qolip_order_products_wrong_method","request":{"method":"GET","uri":"/v1/mobile/qolip/order-products","role":"qolipchi"},"expect":{"status":405}},
+    {"name":"qolip_order_products_empty_id","request":{"method":"POST","uri":"/v1/mobile/qolip/order-products","role":"qolipchi","body":{"order_ids":[" "]}},"expect":{"status":400}},
+    {"name":"qolip_order_products_over_limit","request":{"method":"POST","uri":"/v1/mobile/qolip/order-products","role":"qolipchi","body":{"order_ids":["x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x"]}},"expect":{"status":400}},
+    {"name":"qolip_order_products_unknown_order","request":{"method":"POST","uri":"/v1/mobile/qolip/order-products","role":"qolipchi","body":{"order_ids":["unknown"]}},"expect":{"status":200,"body":{"ok":true,"orders":[{"order_id":"unknown","product":null}]}}},
+
     {"name":"preparation_formula_orders_anonymous","request":{"method":"GET","uri":"/v1/mobile/preparation/formula-orders"},"expect":{"status":401}},
     {"name":"preparation_formula_saved_show_anonymous","request":{"method":"GET","uri":"/v1/mobile/preparation/formulas/saved?product_code=P&material_id="},"expect":{"status":401}},
     {"name":"preparation_formula_saved_show_material_taminotchi","request":{"method":"GET","uri":"/v1/mobile/preparation/formulas/saved?product_code=P&material_id=","role":"material_taminotchi"},"expect":{"status":403}},

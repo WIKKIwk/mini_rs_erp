@@ -11,6 +11,7 @@ mod catalog;
 mod cell_qr;
 mod checkouts;
 mod locations;
+mod order_products;
 mod rows;
 
 use self::catalog::{
@@ -43,6 +44,10 @@ impl PostgresQolipStore {
 
 #[async_trait]
 impl QolipStorePort for PostgresQolipStore {
+    async fn order_products(&self, item_codes: &[String]) -> Result<Vec<QolipProduct>, QolipError> {
+        order_products::load(&self.pool, item_codes).await
+    }
+
     async fn assigned_warehouses(&self, principal: &Principal) -> Result<Vec<String>, QolipError> {
         load_assigned_warehouses(&self.pool, principal).await
     }
