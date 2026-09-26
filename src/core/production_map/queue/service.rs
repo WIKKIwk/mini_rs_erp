@@ -770,7 +770,11 @@ impl ProductionMapService {
                 } else {
                     ApparatusQueuePreviousWipMode::NotRequired
                 };
-                if opening_wip_mode == ApparatusQueuePreviousWipMode::ScanRequired {
+                // Opening stock and newly produced rolls are alternative inputs.
+                // Only suppress a waiting gate; keep available production WIP scannable.
+                if opening_wip_mode == ApparatusQueuePreviousWipMode::ScanRequired
+                    && previous_wip_mode == ApparatusQueuePreviousWipMode::Waiting
+                {
                     previous_wip_mode = ApparatusQueuePreviousWipMode::NotRequired;
                 }
                 let active_order_is_this = active_order_id

@@ -929,3 +929,120 @@ async fn opening_wip_delete_rejects_non_admin_and_used_batch() {
         Err(ProductionMapError::OpeningWipDeleteLocked),
     );
 }
+
+#[tokio::test]
+async fn mixed_opening_and_production_wip_accept_either_without_consuming_the_other() {
+    for choose_opening in [false, true] {
+        let store = Arc::new(MemoryProductionMapStore::new());
+        let service = ProductionMapService::new_for_test(store.clone());
+        let order = "zakaz-mixed-wip";
+        service
+            .upsert_map(print_lamination_rezka_map(order))
+            .await
+            .unwrap();
+        let mut input = source_opening_input(order, "mixed-opening", LAMINATION_ID, "second");
+        input.batches.truncate(1);
+        let opening = service
+            .create_opening_wip(input, admin_actor())
+            .await
+            .unwrap();
+        for index in 1..=3 {
+            let batch: OrderProgressBatch = serde_json::from_value(serde_json::json!({
+                "batch_id": format!("mixed-produced-{index}"), "session_id": "lamination-run",
+                "started_at_unix": 1, "completed_at_unix": index,
+                "apparatus": LAMINATION_ID, "order_id": order,
+                "action": "complete", "status": "completed", "produced_qty": 100.0,
+                "uom": "m", "qr_payload": format!("MIXED-QR-{index}"),
+                "label_item_code": "MIXED", "label_item_name": "Mixed WIP",
+                "executor_name": "Worker", "worker_role": "aparatchi",
+                "worker_ref": "lamination-worker", "worker_display_name": "Worker",
+                "wip_status": "waiting", "current_apparatus": LAMINATION_ID,
+                "next_apparatus": REZKA_ID,
+                "payload_json": {"stage_node_id": "second", "next_stage_node_id": "rezka"}
+            }))
+            .unwrap();
+            ProductionMapStorePort::put_order_progress_batch(store.as_ref(), batch)
+                .await
+                .unwrap();
+        }
+        let controls = service.queue_action_controls().await.unwrap();
+        let control = &controls[REZKA_ID][order];
+        assert_eq!(
+            control.interaction.opening_wip_mode,
+            ApparatusQueuePreviousWipMode::ScanRequired
+        );
+        assert_eq!(
+            control.interaction.previous_wip_mode,
+            ApparatusQueuePreviousWipMode::ScanRequired
+        );
+        assert!(
+            control
+                .allowed_actions
+                .contains(&queue_state::ApparatusQueueAction::Start)
+        );
+        let batches = service
+            .wip_progress_batches(WipProgressBatchQuery::new(
+                LAMINATION_ID,
+                REZKA_ID,
+                "",
+                Some(OrderProgressBatchWipStatus::Waiting),
+                false,
+                order,
+                250,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(batches.len(), 3);
+        for batch in &batches {
+            service
+                .start_input_for_qr(REZKA_ID, order, &batch.batch_id, &batch.qr_payload)
+                .await
+                .unwrap();
+        }
+        let selected_qr = if choose_opening {
+            opening.batches[0].qr_payload.as_str()
+        } else {
+            "MIXED-QR-2"
+        };
+        service
+            .apply_apparatus_queue_action_with_progress(
+                REZKA_ID,
+                order,
+                queue_state::ApparatusQueueAction::Start,
+                &[REZKA_ID.into()],
+                worker_actor(),
+                QueueProgressInput {
+                    qr_payload: selected_qr.into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let old = service
+            .opening_wip_batch(&opening.batches[0].batch_id, "")
+            .await
+            .unwrap();
+        assert_eq!(
+            old.batch.wip_status,
+            if choose_opening {
+                OpeningWipBatchStatus::InUse
+            } else {
+                OpeningWipBatchStatus::Waiting
+            }
+        );
+        for index in 1..=3 {
+            let batch = service
+                .progress_batch_for_qr("", &format!("MIXED-QR-{index}"))
+                .await
+                .unwrap();
+            assert_eq!(
+                batch.wip_status,
+                if !choose_opening && index == 2 {
+                    OrderProgressBatchWipStatus::InUse
+                } else {
+                    OrderProgressBatchWipStatus::Waiting
+                }
+            );
+        }
+    }
+}
