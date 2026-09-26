@@ -35,6 +35,7 @@ const SESSION_ID: &str = "e2e-order-session";
 const PROGRESS_BATCH_ID: &str = "e2e-progress-batch";
 const OPENING_WIP_INTAKE_ID: &str = "e2e-opening-wip-intake";
 const OPENING_WIP_BATCH_ID: &str = "e2e-opening-wip-batch";
+const TEMPLATE_MAP_ID: &str = "template-zakaz-0001";
 
 #[tokio::test]
 async fn order_reset_restores_a_real_database_to_the_pre_order_snapshot() {
@@ -79,10 +80,13 @@ async fn order_reset_restores_a_real_database_to_the_pre_order_snapshot() {
         .await
         .expect("apply full migration set");
     // Test the actual HTTP login's privileges, not a superuser bypass.
-    let runtime_options = PgConnectOptions::from_str(&admin_url)
+    let mut runtime_options = PgConnectOptions::from_str(&admin_url)
         .expect("parse test runtime connection")
         .database(&database_name)
         .username("mini_rs_erp");
+    if let Ok(password) = std::env::var("MINI_ERP_TEST_RUNTIME_DATABASE_PASSWORD") {
+        runtime_options = runtime_options.password(&password);
+    }
     let runtime_pool = PgPool::connect_with(runtime_options)
         .await
         .expect("runtime database (local test authentication must permit mini_rs_erp)");
@@ -215,6 +219,14 @@ async fn order_reset_restores_a_real_database_to_the_pre_order_snapshot() {
 
     let after = snapshot(&pool).await;
     assert_eq!(after, before);
+    let source_map_id: String = sqlx::query_scalar(
+        "SELECT payload_json->>'source_map_id' FROM mini_quick_order_templates
+         WHERE id = 'e2e-quick-template'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("template link survives reset");
+    assert_eq!(source_map_id, TEMPLATE_MAP_ID);
 
     runtime_pool.close().await;
     pool.close().await;
@@ -451,6 +463,58 @@ async fn seed_canonical_apparatus(
 
 async fn seed_pre_order_state(pool: &PgPool) {
     let mut tx = pool.begin().await.expect("baseline transaction");
+    let template_map = json!({
+        "id": TEMPLATE_MAP_ID, "product_code": ITEM_CODE, "title": "Reusable template",
+        "nodes": [
+            {"id": "start", "kind": "start", "title": "Start"},
+            {"id": "end", "kind": "end", "title": "End"}
+        ],
+        "edges": [{"from": "start", "to": "end"}]
+    });
+    sqlx::query(
+        "INSERT INTO mini_production_maps (id, product_code, title, map_json)
+         VALUES ($1, $2, 'Reusable template', $3)",
+    )
+    .bind(TEMPLATE_MAP_ID)
+    .bind(ITEM_CODE)
+    .bind(&template_map)
+    .execute(&mut *tx)
+    .await
+    .expect("baseline template map");
+    for node in template_map["nodes"].as_array().unwrap() {
+        sqlx::query(
+            "INSERT INTO mini_production_map_nodes (map_id, node_id, kind, title, payload_json)
+             VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(TEMPLATE_MAP_ID)
+        .bind(node["id"].as_str().unwrap())
+        .bind(node["kind"].as_str().unwrap())
+        .bind(node["title"].as_str().unwrap())
+        .bind(node)
+        .execute(&mut *tx)
+        .await
+        .expect("baseline template node");
+    }
+    sqlx::query(
+        "INSERT INTO mini_production_map_edges
+             (map_id, edge_index, from_node_id, to_node_id, payload_json)
+         VALUES ($1, 0, 'start', 'end', $2)",
+    )
+    .bind(TEMPLATE_MAP_ID)
+    .bind(&template_map["edges"][0])
+    .execute(&mut *tx)
+    .await
+    .expect("baseline template edge");
+    sqlx::query(
+        "INSERT INTO mini_quick_order_templates
+             (id, owner_key, code, name, product_name, payload_json, quick_key)
+         VALUES ('e2e-quick-template', 'admin:e2e', 'E2E-TEMPLATE', 'Reusable template',
+                 'E2E product', jsonb_build_object('source_map_id', $1::text), 'e2e-template')",
+    )
+    .bind(TEMPLATE_MAP_ID)
+    .execute(&mut *tx)
+    .await
+    .expect("baseline quick template");
     sqlx::query(
         "INSERT INTO mini_item_groups (name, parent_item_group, is_group, payload_json)
          VALUES ('E2E Materials', 'All Item Groups', true, '{}'::jsonb)
@@ -983,6 +1047,9 @@ async fn snapshot(pool: &PgPool) -> Value {
     for (key, table) in [
         ("orders", "mini_orders"),
         ("maps", "mini_production_maps"),
+        ("map_nodes", "mini_production_map_nodes"),
+        ("map_edges", "mini_production_map_edges"),
+        ("templates", "mini_quick_order_templates"),
         ("order_products", "mini_order_products"),
         ("queue_states", "mini_queue_states"),
         ("queue_events", "mini_queue_action_events"),
@@ -1048,6 +1115,13 @@ async fn snapshot(pool: &PgPool) -> Value {
         "receipt": {"status": receipt.0, "qty": receipt.1},
         "sequence": {"last_value": sequence.0, "is_called": sequence.1},
         "queue_sequence": queue_sequence,
+        "template_map": sqlx::query_scalar::<_, Value>(
+            "SELECT map_json FROM mini_production_maps WHERE id = $1",
+        )
+        .bind(TEMPLATE_MAP_ID)
+        .fetch_optional(pool)
+        .await
+        .expect("template map snapshot"),
     })
 }
 

@@ -174,7 +174,7 @@ mod tests {
                 },
             )
             .await
-            .expect("current user state assets");
+            .expect("authorized state assets");
         assert_eq!(state_assets.len(), 1);
 
         let other_actor = InventoryActor::new(
@@ -196,7 +196,7 @@ mod tests {
             )
             .await
             .expect("other user state assets");
-        assert!(other_state_assets.is_empty());
+        assert_eq!(other_state_assets, state_assets);
 
         let source_assets = service
             .assets(

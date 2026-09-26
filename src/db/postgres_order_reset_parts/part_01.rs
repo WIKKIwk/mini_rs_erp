@@ -75,7 +75,8 @@ impl PostgresOrderResetStore {
             .await?,
             production_maps_deleted: count_rows(
                 &mut tx,
-                "SELECT COUNT(*) FROM mini_production_maps",
+                "SELECT COUNT(*) FROM mini_production_maps
+                 WHERE id IN (SELECT id FROM reset_map_ids)",
             )
             .await?,
             ..OrderResetReport::default()
@@ -314,8 +315,12 @@ impl PostgresOrderResetStore {
              WHERE lower(order_id) IN (SELECT lower(id) FROM reset_order_ids)",
         )
         .await?;
-        report.production_maps_deleted =
-            delete_rows(&mut tx, "DELETE FROM mini_production_maps").await?;
+        report.production_maps_deleted = delete_rows(
+            &mut tx,
+            "DELETE FROM mini_production_maps
+             WHERE id IN (SELECT id FROM reset_map_ids)",
+        )
+        .await?;
         report.pending_orders_deleted =
             delete_rows(&mut tx, "DELETE FROM mini_pending_orders").await?;
         report.orders_deleted = delete_rows(
@@ -347,7 +352,8 @@ impl PostgresOrderResetStore {
             "SELECT
                  (SELECT COUNT(*) FROM mini_orders
                   WHERE lower(id) IN (SELECT lower(id) FROM reset_order_ids))
-               + (SELECT COUNT(*) FROM mini_production_maps)
+               + (SELECT COUNT(*) FROM mini_production_maps
+                  WHERE id IN (SELECT id FROM reset_map_ids))
                + (SELECT COUNT(*) FROM mini_pending_orders)
                + (SELECT COUNT(*) FROM mini_order_products
                   WHERE lower(order_id) IN (SELECT lower(id) FROM reset_order_ids))

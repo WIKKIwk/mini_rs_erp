@@ -91,13 +91,7 @@ impl MemoryInventoryMovementStore {
             .filter(|asset| actor.can_manage_warehouse(&asset.custody_warehouse))
             .filter(|asset| {
                 !query.current_user_states_only
-                    || (asset.physical_location.kind == InventoryLocationKind::State
-                        && state
-                            .placement_updated_by_ref
-                            .get(&(asset.kind, asset.asset_ref.to_ascii_lowercase()))
-                            .is_some_and(|owner_ref| {
-                                owner_ref.trim() == actor.principal.ref_.trim()
-                            }))
+                    || asset.physical_location.kind == InventoryLocationKind::State
             })
             .filter(|asset| {
                 requested_warehouse

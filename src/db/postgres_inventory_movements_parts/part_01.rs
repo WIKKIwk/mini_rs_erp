@@ -122,13 +122,7 @@ WHERE ($1 = true OR lower(assets.warehouse) = ANY($2))
         OR lower(assets.identifier) LIKE $6
         OR lower(assets.asset_ref) LIKE $6
   )
-  AND (
-        $9 = false
-        OR (
-            location.kind = 'state'
-            AND placement.updated_by_ref = $10
-        )
-  )
+  AND ($9 = false OR location.kind = 'state')
 ORDER BY lower(assets.item_name), lower(assets.identifier), assets.asset_ref
 LIMIT $7 OFFSET $8
 "#;

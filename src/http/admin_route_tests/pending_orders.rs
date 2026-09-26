@@ -1,6 +1,9 @@
 use super::*;
 use crate::core::pending_orders::{PendingOrderStore, test_pending_order};
-use crate::db::postgres::{apply_foundation_migration, postgres_test_database_options};
+use crate::db::postgres::{
+    apply_foundation_migration, apply_postgres_migrations_through_version,
+    postgres_test_database_options,
+};
 use crate::db::postgres_calculate_order::PostgresCalculateOrderStore;
 use crate::db::postgres_production_map::{
     PostgresProductionMapStore, pending_orders::PostgresPendingOrderStore,
@@ -59,8 +62,10 @@ async fn pending_orders_postgres_atomic_completion_and_worker_isolation() {
     let pool = sqlx::PgPool::connect_with(postgres_test_database_options(&admin_url, &db_name))
         .await
         .unwrap();
-    apply_foundation_migration(&pool).await.unwrap();
-    apply_foundation_migration(&pool).await.unwrap();
+    // The alternative backfill needs the factory catalog before migration 0122.
+    apply_postgres_migrations_through_version(&pool, "0121_print_preflight_order_status")
+        .await
+        .unwrap();
     let mut state = test_state();
     state.apparatus = crate::core::apparatus_standard::CanonicalApparatusService::new(Arc::new(
         crate::db::postgres_canonical_apparatus::PostgresCanonicalApparatusRepository::new(
@@ -68,6 +73,8 @@ async fn pending_orders_postgres_atomic_completion_and_worker_isolation() {
         ),
     ));
     state.apparatus.bootstrap_factory_defaults().await.unwrap();
+    apply_foundation_migration(&pool).await.unwrap();
+    apply_foundation_migration(&pool).await.unwrap();
     state.production_maps = ProductionMapService::new(
         Arc::new(PostgresProductionMapStore::new(pool.clone())),
         Arc::new(CanonicalServiceApparatusResolver::new(
@@ -174,6 +181,8 @@ async fn pending_orders_postgres_atomic_completion_and_worker_isolation() {
     let done = store.get(&pending.id).await.unwrap().completion.unwrap();
     assert_eq!(done.saved.map.id, "zakaz-9011");
     assert_eq!(done.saved.map.order_number, "9011");
+    assert!(done.template.source_map_id.starts_with("template-"));
+    assert_ne!(done.template.source_map_id, "template-zakaz-9011");
     assert_eq!(done.saved.map.order_kg, Some(600.0));
     assert!(done.saved.map.base_length.unwrap() > 0.0);
     assert_eq!(done.template.product, "Edited product");
@@ -265,6 +274,10 @@ async fn pending_orders_postgres_atomic_completion_and_worker_isolation() {
         .await
         .unwrap();
     assert_eq!(templates, 2, "reset must preserve previous templates");
+    let replacement = store.get(&pending.id).await.unwrap().completion.unwrap();
+    assert_ne!(replacement.template.source_map_id, done.template.source_map_id);
+    assert!(state.production_maps.raw_map(&done.template.source_map_id).await.unwrap().is_some());
+    assert!(state.production_maps.raw_map(&replacement.template.source_map_id).await.unwrap().is_some());
     drop(state);
     drop(store);
     drop(reopened);

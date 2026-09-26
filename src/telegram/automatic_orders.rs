@@ -68,7 +68,7 @@ impl AutomaticOrders {
             .await
             .map_err(|e| e.to_string())?;
         let mut source = saved.map.clone();
-        source.id = format!("template-{}", pending.id);
+        source.id = format!("template-{:032x}", rand::random::<u128>());
         source.code.clear();
         source.order_number.clear();
         source.order_kg = None;

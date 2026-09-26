@@ -210,6 +210,8 @@ pub struct InventoryAssetQuery {
     pub query: String,
     #[serde(default)]
     pub asset_kind: Option<InventoryAssetKind>,
+    /// Legacy wire name: state locations within the actor's warehouse scope,
+    /// regardless of who last placed the asset there.
     #[serde(default)]
     pub current_user_states_only: bool,
     #[serde(default = "default_asset_limit")]

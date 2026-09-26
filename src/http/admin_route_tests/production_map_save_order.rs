@@ -43,10 +43,9 @@ async fn production_map_save_with_order_saves_map_and_template() {
     assert_eq!(value["saved"]["map"]["id"], "zakaz-7777");
     assert_eq!(value["saved"]["map"]["customer_name"], "555 kukuruz");
     assert_eq!(value["template"]["name"], "atomic mahsulot");
-    assert_eq!(
-        value["template"]["source_map_id"].as_str().unwrap_or(""),
-        "template-zakaz-7777"
-    );
+    let template_map_id = value["template"]["source_map_id"].as_str().unwrap();
+    assert!(template_map_id.starts_with("template-"));
+    assert_ne!(template_map_id, "template-zakaz-7777");
     let template_id = value["template"]["id"]
         .as_str()
         .expect("template id")
@@ -91,20 +90,38 @@ async fn production_map_save_with_order_saves_map_and_template() {
     let fetched_template_map = build_router(state.clone())
         .oneshot(request(
             "GET",
-            "/v1/mobile/admin/production-maps?id=template-zakaz-7777",
+            &format!("/v1/mobile/admin/production-maps?id={template_map_id}"),
             &token,
         ))
         .await
         .expect("fetch template map by id");
     assert_eq!(fetched_template_map.status(), StatusCode::OK);
     let fetched_template_value = json_body(fetched_template_map).await;
-    assert_eq!(fetched_template_value["map"]["id"], "template-zakaz-7777");
+    assert_eq!(fetched_template_value["map"]["id"], template_map_id);
     assert_eq!(
         fetched_template_value["map"]["order_number"]
             .as_str()
             .unwrap_or(""),
         ""
     );
+
+    let mut edited_template = fetched_template_value["map"].clone();
+    edited_template["nodes"][0]["title"] = serde_json::json!("Template v2 start");
+    let edited = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &token,
+            &edited_template.to_string(),
+        ))
+        .await
+        .expect("edit template independently");
+    assert_eq!(edited.status(), StatusCode::OK);
+    let order_after_edit = build_router(state.clone())
+        .oneshot(request("GET", "/v1/mobile/admin/production-maps?id=zakaz-7777", &token))
+        .await
+        .expect("order after template edit");
+    assert_eq!(json_body(order_after_edit).await["map"], fetched_value["map"]);
 
     let cleanup_body = format!(r#"{{"id":"{template_id}"}}"#);
     let cleanup = build_router(state)
@@ -162,10 +179,9 @@ async fn production_map_auto_open_reuses_automatic_routing_and_saves_order() {
     assert_eq!(value["saved"]["map"]["id"], "zakaz-0001");
     assert_eq!(value["saved"]["map"]["order_number"], "0001");
     assert_eq!(value["template"]["order_number"], "0001");
-    assert_eq!(
-        value["template"]["source_map_id"],
-        "template-zakaz-0001"
-    );
+    let template_map_id = value["template"]["source_map_id"].as_str().unwrap();
+    assert!(template_map_id.starts_with("template-"));
+    assert_ne!(template_map_id, "template-zakaz-0001");
 
     let nodes = value["saved"]["map"]["nodes"]
         .as_array()

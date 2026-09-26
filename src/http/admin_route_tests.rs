@@ -89,6 +89,7 @@ mod production_map_validation;
 mod qolip_blocks;
 mod qolip_warehouse_ownership;
 mod qolip_cell_qr;
+mod qolip_products_cache;
 mod qolip_checkout;
 mod qolip_return_move;
 mod qolipchi_workers;

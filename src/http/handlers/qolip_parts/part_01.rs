@@ -184,7 +184,10 @@ pub async fn products(
     method: Method,
     headers: HeaderMap,
     Query(query): Query<QolipSearchQuery>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<QolipErrorResponse>)> {
+) -> Result<axum::response::Response, (StatusCode, Json<QolipErrorResponse>)> {
+    use axum::http::header;
+    use axum::response::IntoResponse;
+    use sha2::{Digest, Sha256};
     if method != Method::GET {
         return Err(method_not_allowed());
     }
@@ -229,10 +232,39 @@ pub async fn products(
             product,
         })
         .collect::<Vec<_>>();
-    Ok(Json(serde_json::json!({
+    let body = serde_json::to_vec(&serde_json::json!({
         "ok": true,
         "products": products,
-    })))
+    }))
+    .map_err(|_| qolip_error(QolipError::StoreFailed))?;
+    // Revalidate only after authorization and current warehouse/lock lookup.
+    // This avoids transferring and parsing an unchanged catalog on re-entry.
+    let etag = format!("\"{:x}\"", Sha256::digest(&body));
+    let unchanged = headers.get_all(header::IF_NONE_MATCH).iter().any(|value| {
+        value.to_str().is_ok_and(|value| {
+            value.split(',').any(|tag| {
+                let tag = tag.trim().strip_prefix("W/").unwrap_or(tag.trim());
+                tag == etag || tag == "*"
+            })
+        })
+    });
+    let mut response = if unchanged {
+        StatusCode::NOT_MODIFIED.into_response()
+    } else {
+        ([(header::CONTENT_TYPE, "application/json")], body).into_response()
+    };
+    response
+        .headers_mut()
+        .insert(header::ETAG, etag.parse().unwrap());
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("private, no-cache"),
+    );
+    response.headers_mut().insert(
+        header::VARY,
+        axum::http::HeaderValue::from_static("Authorization"),
+    );
+    Ok(response)
 }
 
 pub async fn product_specs(

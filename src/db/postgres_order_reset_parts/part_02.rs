@@ -30,10 +30,12 @@ async fn create_reset_targets(tx: &mut Transaction<'_, Postgres>) -> Result<(), 
         "INSERT INTO reset_order_ids (id)
          SELECT btrim(id) FROM mini_orders WHERE btrim(id) <> ''
          UNION
-         SELECT btrim(id) FROM mini_production_maps WHERE btrim(id) <> ''
+         SELECT btrim(id) FROM mini_production_maps
+          WHERE btrim(id) <> '' AND lower(btrim(id)) NOT LIKE 'template-%'
          UNION
          SELECT btrim(order_id) FROM mini_production_maps
           WHERE btrim(COALESCE(order_id, '')) <> ''
+            AND lower(btrim(id)) NOT LIKE 'template-%'
          UNION
          SELECT btrim(order_id) FROM mini_opening_wip_intakes WHERE btrim(order_id) <> ''
          UNION
@@ -86,7 +88,8 @@ async fn create_reset_targets(tx: &mut Transaction<'_, Postgres>) -> Result<(), 
 
     sqlx::query(
         "INSERT INTO reset_map_ids (id)
-         SELECT btrim(id) FROM mini_production_maps WHERE btrim(id) <> ''
+         SELECT id FROM mini_production_maps
+          WHERE btrim(id) <> '' AND lower(btrim(id)) NOT LIKE 'template-%'
          ON CONFLICT (id) DO NOTHING",
     )
     .execute(&mut **tx)

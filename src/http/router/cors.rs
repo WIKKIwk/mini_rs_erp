@@ -27,13 +27,13 @@ fn insert_cors_headers(headers: &mut HeaderMap) {
     headers.insert(
         header::ACCESS_CONTROL_ALLOW_HEADERS,
         HeaderValue::from_static(
-            "authorization,content-length,content-range,content-type,idempotency-key,x-file-name,range",
+            "authorization,content-length,content-range,content-type,idempotency-key,x-file-name,range,if-none-match",
         ),
     );
     headers.insert(
         header::ACCESS_CONTROL_EXPOSE_HEADERS,
         HeaderValue::from_static(
-            "accept-ranges,content-length,content-range,content-type,location",
+            "accept-ranges,content-length,content-range,content-type,location,etag",
         ),
     );
     headers.insert(

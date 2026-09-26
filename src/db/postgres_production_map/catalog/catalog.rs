@@ -47,13 +47,39 @@ pub(super) async fn load_map_by_id(
         "SELECT map_json FROM mini_production_maps WHERE id = $1",
     ).bind(map_id.trim()).fetch_optional(pool).await
         .map_err(|_| ProductionMapError::StoreFailed)?;
-    Ok(payload.and_then(|payload| match serde_json::from_value(payload) {
-        Ok(map) => Some(map),
-        Err(error) => {
-            tracing::warn!(?error, "skipping stored production map with invalid payload");
-            None
-        }
-    }))
+    payload
+        .map(|payload| {
+            serde_json::from_value(payload).map_err(|error| {
+                tracing::warn!(?error, map_id, "stored production map has invalid payload");
+                ProductionMapError::StoreFailed
+            })
+        })
+        .transpose()
+}
+
+#[cfg(test)]
+mod map_read_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn stored_invalid_map_is_an_error_not_a_missing_map() {
+        let url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://wikki@127.0.0.1:5432/postgres".into());
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&url).await.unwrap();
+        sqlx::query("CREATE TEMP TABLE mini_production_maps (id TEXT PRIMARY KEY, map_json JSONB)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO mini_production_maps VALUES ('template-invalid', '{\"broken\":true}')")
+            .execute(&pool).await.unwrap();
+        assert_eq!(load_map_by_id(&pool, "template-absent").await.unwrap(), None);
+        assert_eq!(load_map_by_id(&pool, "template-invalid").await,
+            Err(ProductionMapError::StoreFailed));
+        let stored: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mini_production_maps")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(stored, 1, "reading a corrupt map must not delete it");
+        pool.close().await;
+    }
 }
 
 pub(super) async fn load_maps_for_apparatus(

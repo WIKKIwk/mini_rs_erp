@@ -160,71 +160,62 @@ pub(super) async fn load_products(
             FROM eligible_items items
             FULL OUTER JOIN visible_sources source
               ON lower(source.item_code) = lower(items.code)
+        ),
+        customers_per_item AS (
+            -- Resolve customers once per item, not once per mold of that item.
+            SELECT lower(assignments.item_code) AS item_code,
+                array_agg(
+                    CASE WHEN btrim(customers.name) <> ''
+                         THEN customers.name ELSE customers.ref END
+                    ORDER BY lower(customers.name), customers.ref
+                ) AS customer_names,
+                bool_or(lower(customers.name) LIKE $2 OR lower(customers.ref) LIKE $2) AS matches_query
+            FROM mini_customer_items assignments
+            JOIN mini_customers customers ON customers.ref = assignments.customer_ref
+            GROUP BY lower(assignments.item_code)
+        ),
+        active_sessions AS MATERIALIZED (
+            SELECT payload_json
+            FROM mini_order_run_sessions
+            WHERE status IN ('active', 'paused', 'frozen', 'roll_detached')
+              AND payload_json->>'qolip_lock_owner' = 'true'
+        ),
+        in_use_qolips AS (
+            SELECT lower(qolip_code) AS code
+            FROM mini_qolip_checkouts
+            WHERE lower(status) = 'open'
+            UNION
+            SELECT lower(payload_json->>'qolip_code') FROM active_sessions
+            UNION
+            SELECT lower(code.value)
+            FROM active_sessions session
+            CROSS JOIN LATERAL jsonb_array_elements_text(
+                CASE WHEN jsonb_typeof(session.payload_json->'qolip_codes') = 'array'
+                     THEN session.payload_json->'qolip_codes' ELSE '[]'::jsonb END
+            ) AS code(value)
         )
         SELECT
             product.code,
             product.name,
             product.item_group,
-            COALESCE((
-                SELECT array_agg(
-                    CASE WHEN btrim(customers.name) <> ''
-                         THEN customers.name ELSE customers.ref END
-                    ORDER BY lower(customers.name), customers.ref
-                )
-                FROM mini_customer_items assignments
-                JOIN mini_customers customers
-                  ON customers.ref = assignments.customer_ref
-                WHERE lower(assignments.item_code) = lower(product.code)
-            ), ARRAY[]::text[]) AS customer_names,
+            COALESCE(customers.customer_names, ARRAY[]::text[]) AS customer_names,
             COALESCE(product.qolip_code, '') AS qolip_code,
             product.first_qolip_code,
             COALESCE(product.warehouse, '') AS warehouse,
             COALESCE(product.size, 0) AS size,
             COALESCE(product.color, '') AS color,
             product.has_qolip_spec,
-            EXISTS (
-                SELECT 1
-                FROM mini_qolip_checkouts checkout
-                WHERE lower(checkout.qolip_code) = lower(product.qolip_code)
-                  AND lower(checkout.status) = 'open'
-            ) OR EXISTS (
-                SELECT 1
-                FROM mini_order_run_sessions session
-                WHERE session.status IN ('active', 'paused', 'frozen', 'roll_detached')
-                  AND session.payload_json->>'qolip_lock_owner' = 'true'
-                  AND (
-                      lower(session.payload_json->>'qolip_code') = lower(product.qolip_code)
-                      OR EXISTS (
-                          SELECT 1
-                          FROM jsonb_array_elements_text(
-                              CASE
-                                  WHEN jsonb_typeof(session.payload_json->'qolip_codes') = 'array'
-                                  THEN session.payload_json->'qolip_codes'
-                                  ELSE '[]'::jsonb
-                              END
-                          ) AS code(value)
-                          WHERE lower(code.value) = lower(product.qolip_code)
-                      )
-                  )
-            ) AS is_in_use
+            in_use.code IS NOT NULL AS is_in_use
         FROM product_rows product
+        LEFT JOIN customers_per_item customers ON customers.item_code = lower(product.code)
+        LEFT JOIN in_use_qolips in_use ON in_use.code = lower(product.qolip_code)
         WHERE (NOT $4 OR product.has_qolip_spec)
           AND (
             $1 = ''
             OR lower(product.code) LIKE $2
             OR lower(product.name) LIKE $2
             OR lower(COALESCE(product.qolip_code, '')) LIKE $2
-            OR EXISTS (
-                SELECT 1
-                FROM mini_customer_items assignments
-                JOIN mini_customers customers
-                  ON customers.ref = assignments.customer_ref
-                WHERE lower(assignments.item_code) = lower(product.code)
-                  AND (
-                    lower(customers.name) LIKE $2
-                    OR lower(customers.ref) LIKE $2
-                  )
-            )
+            OR customers.matches_query
           )
         ORDER BY lower(product.name), lower(product.code), lower(COALESCE(product.qolip_code, ''))
         LIMIT $3

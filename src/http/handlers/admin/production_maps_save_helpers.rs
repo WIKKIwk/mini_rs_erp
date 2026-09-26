@@ -27,12 +27,48 @@ fn template_map_copy_for_save(
         return None;
     }
     let mut template_map = map.clone();
-    template_map.id = format!("template-{map_id}");
+    // Order numbers can restart after a reset; template identity must not.
+    template_map.id = format!("template-{:032x}", rand::random::<u128>());
     template_map.code.clear();
     template_map.order_number.clear();
     template_map.order_kg = None;
     template_map.base_length = None;
     Some(template_map)
+}
+
+#[cfg(test)]
+mod template_identity_tests {
+    use super::*;
+
+    #[test]
+    fn template_map_identity_is_independent_of_reused_order_numbers() {
+        let map: ProductionMapDefinition = serde_json::from_value(serde_json::json!({
+            "id": "zakaz-0001", "code": "0001", "order_number": "0001",
+            "product_code": "PRODUCT", "title": "Order",
+            "order_kg": 120, "base_length": 300,
+            "nodes": [{"id": "start", "kind": "start", "title": "Start"},
+                      {"id": "end", "kind": "end", "title": "End"}],
+            "edges": [{"from": "start", "to": "end"}]
+        })).unwrap();
+        let template: CalculateOrderTemplate = serde_json::from_value(serde_json::json!({
+            "name": "Template", "product": "PRODUCT",
+            "frame_product_size_mm": 635, "frame_count": 1
+        })).unwrap();
+        let first = template_map_copy_for_save(&map, &template).unwrap();
+        let second = template_map_copy_for_save(&map, &template).unwrap();
+        assert_ne!(first.id, second.id);
+        assert_ne!(first.id, "template-zakaz-0001");
+        assert!(first.id.starts_with("template-"));
+        assert_eq!(first.nodes, map.nodes);
+        assert_eq!(first.edges, map.edges);
+        assert!(first.order_number.is_empty());
+        assert!(first.code.is_empty());
+        assert_eq!(first.order_kg, None);
+        assert_eq!(first.base_length, None);
+        let mut linked_template = template;
+        linked_template.source_map_id = first.id;
+        assert!(template_map_copy_for_save(&map, &linked_template).is_none());
+    }
 }
 
 fn order_template_snapshot_for_map(
