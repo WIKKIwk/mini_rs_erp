@@ -2,7 +2,9 @@ use async_trait::async_trait;
 use sqlx::PgPool;
 
 use crate::core::calculate_orders::CalculateOrderTemplate;
-use crate::core::mini_orders::{MiniOrderError, MiniOrderSink, NewProductionOrder, OrderMaterial};
+use crate::core::mini_orders::{
+    MiniOrderError, MiniOrderSink, NewProductionOrder, OrderMaterial, OrderMaterialTask,
+};
 use crate::core::production_map::{ProductionMapDefinition, ProductionMapError};
 use crate::core::quantity::positive_erp_quantity;
 use crate::core::werka::models::SupplierItem;
@@ -22,6 +24,62 @@ impl PostgresMiniOrderSink {
 
 #[async_trait]
 impl MiniOrderSink for PostgresMiniOrderSink {
+    async fn order_material_tasks(
+        &self,
+        order_ids: &[String],
+        item_groups: &[String],
+    ) -> Result<Vec<OrderMaterialTask>, MiniOrderError> {
+        // The apparatus selects the queue window in the client. Supply coverage
+        // belongs to the order: layers may be delivered to different stages.
+        let groups: Vec<_> = item_groups
+            .iter()
+            .map(|group| group.trim().to_lowercase())
+            .collect();
+        let rows = sqlx::query_as::<_, (String, String, String, f64, bool)>(
+            "WITH layers AS (
+                SELECT product.order_id,
+                       COALESCE(NULLIF(btrim(material.payload_json->>'name'), ''),
+                                btrim(layer.value->>'material')) AS material_name,
+                       replace(layer.value->>'micron', ',', '.')::double precision AS micron
+                FROM mini_order_products product
+                CROSS JOIN LATERAL jsonb_array_elements(product.layers_json) layer(value)
+                LEFT JOIN mini_calculate_materials material ON material.id = layer.value->>'material_id'
+                WHERE product.order_id = ANY($1)
+             )
+             SELECT DISTINCT layers.order_id, item.code, item.name, layers.micron,
+                    EXISTS (
+                        SELECT 1 FROM mini_raw_material_assignments assignment
+                        JOIN mini_raw_material_stock stock ON stock.barcode = assignment.barcode
+                        WHERE assignment.order_id = layers.order_id
+                          AND assignment.item_code = item.code
+                          AND stock.item_code = item.code
+                          AND abs(stock.micron - layers.micron) < 0.000001
+                          AND stock.reserved_order_id = layers.order_id
+                          AND (stock.status = 'consumed'
+                               OR (stock.status IN ('reserved', 'in_use') AND stock.qty > 0))
+                    ) AS assigned
+             FROM layers JOIN mini_items item
+               ON lower(btrim(item.code)) = lower(layers.material_name)
+               OR lower(btrim(item.name)) = lower(layers.material_name)
+             WHERE lower(btrim(item.item_group)) = ANY($2)
+             ORDER BY layers.order_id, item.code, layers.micron",
+        )
+        .bind(order_ids).bind(groups).fetch_all(&self.pool).await
+        .map_err(|_| MiniOrderError::StoreFailed)?;
+        Ok(rows
+            .into_iter()
+            .map(
+                |(order_id, item_code, material, micron, assigned)| OrderMaterialTask {
+                    order_id,
+                    item_code,
+                    material,
+                    micron,
+                    assigned,
+                },
+            )
+            .collect())
+    }
+
     async fn order_materials(&self, order_id: &str) -> Result<Vec<OrderMaterial>, MiniOrderError> {
         // Read the order's own layers once; no reusable calculation lookup or
         // catalog pagination is needed to find its material types.

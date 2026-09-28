@@ -154,6 +154,7 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/v1/mobile/chat/device-token", any(chat::device_token))
         .route("/v1/mobile/chat/live", any(chat::live))
         .route("/v1/mobile/gscale/items", any(gscale::items))
+        .route("/v1/mobile/gscale/material-tasks", any(gscale::material_tasks))
         .route(
             "/v1/mobile/gscale/material-receipt/print",
             any(gscale::material_receipt_print),

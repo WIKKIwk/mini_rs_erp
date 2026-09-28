@@ -8,6 +8,8 @@ use super::*;
 struct RawMaterialStockReprintRequest {
     #[serde(default)]
     barcode: String,
+    #[serde(default)]
+    order_id: String,
 }
 
 pub async fn raw_material_stock_reprint_prepare(
@@ -27,7 +29,9 @@ pub async fn raw_material_stock_reprint_prepare(
     }
     require_material_reprint_capabilities(&state, &principal).await?;
     let request: RawMaterialStockReprintRequest = parse_json(&body)?;
-    let stock = reprintable_material_stock(&state, &principal, &request.barcode).await?;
+    let stock = reprintable_material_stock(
+        &state, &principal, &request.barcode, &request.order_id,
+    ).await?;
     let reprint_id = new_raw_material_reprint_id();
     Ok(json_response(serde_json::json!({
         "ok": true,
@@ -101,6 +105,9 @@ async fn require_material_reprint_capabilities(
     state: &AppState,
     principal: &Principal,
 ) -> Result<(), AdminError> {
+    if principal.role == PrincipalRole::Admin {
+        return Ok(());
+    }
     if principal.role != PrincipalRole::MaterialTaminotchi {
         return Err(forbidden());
     }
@@ -112,8 +119,23 @@ async fn reprintable_material_stock(
     state: &AppState,
     principal: &Principal,
     barcode: &str,
+    order_id: &str,
 ) -> Result<RawMaterialStockEntry, AdminError> {
     let stock = material_stock_in_scope(state, principal, barcode).await?;
+    let order_id = order_id.trim();
+    if !order_id.is_empty() {
+        let assignments = state.production_maps.raw_material_assignments_for_order(order_id)
+            .await.map_err(production_map_error)?;
+        if !assignments.iter().any(|assignment|
+            assignment.barcode.trim().eq_ignore_ascii_case(stock.barcode.trim())
+                && assignment.item_code.trim() == stock.item_code.trim()) {
+            return Err(raw_material_stock_locked_error());
+        }
+        if stock.reserved_order_id.trim() == order_id
+            && matches!(stock.status.trim(), "reserved" | "in_use" | "consumed") {
+            return Ok(stock);
+        }
+    }
     if !stock.status.trim().eq_ignore_ascii_case("available")
         || !stock.reserved_order_id.trim().is_empty()
     {
@@ -137,9 +159,11 @@ async fn material_stock_in_scope(
         .await
         .map_err(|_| server_error("raw material stock fetch failed"))?
         .ok_or_else(|| not_found("raw_material_stock_not_found"))?;
-    let warehouses = material_warehouse_scope(state, principal).await?;
-    if !warehouse_in_scope(&warehouses, &stock.warehouse) {
-        return Err(forbidden());
+    if principal.role != PrincipalRole::Admin {
+        let warehouses = material_warehouse_scope(state, principal).await?;
+        if !warehouse_in_scope(&warehouses, &stock.warehouse) {
+            return Err(forbidden());
+        }
     }
     Ok(stock)
 }

@@ -1099,6 +1099,65 @@ async fn material_taminotchi_safely_deletes_only_available_raw_material_in_own_s
 }
 
 #[tokio::test]
+async fn admin_reprints_raw_material_without_warehouse_assignment() {
+    let material_store = Arc::new(RawMaterialStockLookup::default());
+    let mut state = test_state();
+    state.gscale = GscaleService::new().with_receipt_store(material_store.clone());
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+    let mut restricted_tokens = Vec::new();
+    for role in [
+        PrincipalRole::MaterialTaminotchi,
+        PrincipalRole::TayyorlovMasteri,
+        PrincipalRole::Werka,
+        PrincipalRole::Qolipchi,
+    ] {
+        restricted_tokens.push(session(&state, role).await);
+    }
+    let router = build_router(state);
+    let prepared = router.clone().oneshot(request_with_body(
+        "POST", "/v1/mobile/admin/raw-material-stock/reprint/prepare", &admin_token,
+        r#"{"barcode":"30AA"}"#,
+    )).await.unwrap();
+    let status = prepared.status();
+    let body = json_body(prepared).await;
+    assert_eq!(status, StatusCode::OK, "{body:?}");
+    assert_eq!(body["stock"]["warehouse"], "Kalidor");
+    assert_eq!(body["stock"]["source_receipt_id"], "GSR-30AA");
+    assert_eq!(body["print"]["epc"], "30AA");
+    assert_eq!(body["print"]["gross_qty"], 12.0);
+    let confirm_body = serde_json::json!({
+        "barcode": "30AA",
+        "reprint_id": body["reprint_id"],
+    }).to_string();
+    let confirmed = router.clone().oneshot(request_with_body(
+        "POST", "/v1/mobile/admin/raw-material-stock/reprint/confirm", &admin_token,
+        &confirm_body,
+    )).await.unwrap();
+    assert_eq!(confirmed.status(), StatusCode::OK);
+    assert_eq!(json_body(confirmed).await["barcode"], "30AA");
+
+    for token in restricted_tokens {
+        for (endpoint, payload) in [
+            ("prepare", r#"{"barcode":"30AA"}"#),
+            ("confirm", confirm_body.as_str()),
+        ] {
+            let response = router.clone().oneshot(request_with_body(
+                "POST", &format!("/v1/mobile/admin/raw-material-stock/reprint/{endpoint}"),
+                &token, payload,
+            )).await.unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        }
+    }
+    let stored = material_store.raw_material_stock_by_barcode("30AA")
+        .await.unwrap().unwrap();
+    assert_eq!(stored.barcode, "30AA");
+    assert_eq!(stored.source_receipt_id, "GSR-30AA");
+    assert_eq!(stored.qty, 12.0);
+    assert_eq!(stored.status, "available");
+    assert!(stored.reserved_order_id.is_empty());
+}
+
+#[tokio::test]
 async fn material_taminotchi_reprints_existing_assigned_raw_material_identity() {
     let material_store = Arc::new(RawMaterialStockLookup::default());
     material_store.set_stock_length("30AA", 125.0).await;
@@ -1180,6 +1239,50 @@ async fn material_taminotchi_reprints_existing_assigned_raw_material_identity() 
     let assigned_status = assigned.status();
     let assigned_body = json_body(assigned).await;
     assert_eq!(assigned_status, StatusCode::OK, "{assigned_body:?}");
+
+    // The order detail is readable with material/warehouse scope even when
+    // the supply role has no worker apparatus assignment.
+    let detail = router.clone().oneshot(request(
+        "GET", "/v1/mobile/admin/raw-material-assignments?order_id=zakaz-raw-reprint", &token,
+    )).await.unwrap();
+    let detail_status = detail.status();
+    let detail = json_body(detail).await;
+    assert_eq!(detail_status, StatusCode::OK, "{detail:?}");
+    assert_eq!(detail.as_array().unwrap().len(), 1);
+    assert_eq!(detail[0]["barcode"], "30AA");
+
+    for stock_status in ["reserved", "in_use", "consumed"] {
+        material_store.set_stock_status("30AA", stock_status, "zakaz-raw-reprint").await;
+        for reprint_token in [&token, &admin_token] {
+            let response = router.clone().oneshot(request_with_body(
+                "POST", "/v1/mobile/admin/raw-material-stock/reprint/prepare", reprint_token,
+                r#"{"barcode":"30AA","order_id":"zakaz-raw-reprint"}"#,
+            )).await.unwrap();
+            let status = response.status();
+            let body = json_body(response).await;
+            assert_eq!(status, StatusCode::OK, "{stock_status}: {body:?}");
+            assert_eq!(body["print"]["epc"], "30AA");
+        }
+        let stored = material_store.raw_material_stock_by_barcode("30AA").await.unwrap().unwrap();
+        assert_eq!(stored.status, stock_status);
+        assert_eq!(stored.reserved_order_id, "zakaz-raw-reprint");
+        assert_eq!(stored.qty, 12.0);
+    }
+    for payload in [r#"{"barcode":"30AA"}"#,
+                    r#"{"barcode":"30AA","order_id":"zakaz-other"}"#,
+                    r#"{"barcode":"30CC","order_id":"zakaz-raw-reprint"}"#] {
+        let response = router.clone().oneshot(request_with_body(
+            "POST", "/v1/mobile/admin/raw-material-stock/reprint/prepare", &token, payload,
+        )).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+    material_store.set_stock_status("30AA", "deleted", "zakaz-raw-reprint").await;
+    let deleted = router.clone().oneshot(request_with_body(
+        "POST", "/v1/mobile/admin/raw-material-stock/reprint/prepare", &token,
+        r#"{"barcode":"30AA","order_id":"zakaz-raw-reprint"}"#,
+    )).await.unwrap();
+    assert_eq!(deleted.status(), StatusCode::CONFLICT);
+    material_store.set_stock_status("30AA", "available", "").await;
 
     let response = router
         .clone()

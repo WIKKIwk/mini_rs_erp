@@ -11,7 +11,7 @@ use crate::core::admin::service::AdminService;
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::authz::RoleAssignmentUpsert;
 use crate::core::calculate_orders::CalculateOrderTemplate;
-use crate::core::mini_orders::{MiniOrderError, MiniOrderSink, OrderMaterial};
+use crate::core::mini_orders::{MiniOrderError, MiniOrderSink, OrderMaterial, OrderMaterialTask};
 use crate::core::production_map::{
     MemoryProductionMapStore, ProductionMapDefinition, ProductionMapService,
     ProductionMapStorePort, TestCanonicalApparatusResolver,
@@ -26,6 +26,17 @@ struct OrderMaterials(AtomicUsize);
 
 #[async_trait]
 impl MiniOrderSink for OrderMaterials {
+    async fn order_material_tasks(&self, ids: &[String], groups: &[String])
+        -> Result<Vec<OrderMaterialTask>, MiniOrderError> {
+        self.0.fetch_add(1, Ordering::Relaxed);
+        assert!(groups.iter().any(|group| group == "Rulon"));
+        assert!(groups.iter().all(|group| group != "Kraska"));
+        Ok(ids.iter().map(|id| OrderMaterialTask {
+            order_id: id.clone(), item_code: "ROLL-1000".into(),
+            material: "PET".into(), micron: 12.0, assigned: id == "zakaz-9001",
+        }).collect())
+    }
+
     async fn order_materials(&self, order_id: &str) -> Result<Vec<OrderMaterial>, MiniOrderError> {
         self.0.fetch_add(1, Ordering::Relaxed);
         let rows = match order_id {
@@ -186,4 +197,33 @@ async fn receipt_rejects_materials_and_microns_outside_selected_order() {
         assert_eq!(body["error"], "order_material_assignment_invalid");
         assert_eq!(body["detail"], expected);
     }
+}
+
+#[tokio::test]
+async fn material_tasks_reads_window_once_with_user_group_scope() {
+    let (state, sink, principal) = fixture().await;
+    let token = state.sessions.create(principal).await.unwrap();
+    let router = build_router(state);
+    let response = router.clone().oneshot(request("POST", "/v1/mobile/gscale/material-tasks",
+        &token, r#"{"order_ids":["zakaz-9001","zakaz-9002"]}"#)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    assert_eq!(body["orders"][0]["materials"][0]["assigned"], true);
+    assert_eq!(body["orders"][1]["materials"][0]["assigned"], false);
+    assert_eq!(sink.0.load(Ordering::Relaxed), 1);
+    let too_many = serde_json::json!({"order_ids": vec!["zakaz-9001"; 51]});
+    let response = router.oneshot(request("POST", "/v1/mobile/gscale/material-tasks",
+        &token, &too_many.to_string())).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(sink.0.load(Ordering::Relaxed), 1);
+}
+
+#[tokio::test]
+async fn material_tasks_rejects_other_roles() {
+    let (state, _, mut principal) = fixture().await;
+    principal.role = PrincipalRole::Qolipchi;
+    let token = state.sessions.create(principal).await.unwrap();
+    let response = build_router(state).oneshot(request("POST", "/v1/mobile/gscale/material-tasks",
+        &token, r#"{"order_ids":["zakaz-9001"]}"#)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }

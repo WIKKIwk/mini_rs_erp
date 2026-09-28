@@ -12,7 +12,11 @@ pub async fn order_products(
     body: Bytes,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<QolipErrorResponse>)> {
     let principal = authenticated_principal(&state, &headers).await?;
-    ensure_qolip_access(&state, &principal).await?;
+    // Supply users can read the attached mold for an order, without print access.
+    if principal.role != crate::core::auth::models::PrincipalRole::MaterialTaminotchi
+        || !state.admin.principal_has_capability(&principal, Capability::RawMaterialAssign).await {
+        ensure_qolip_access(&state, &principal).await?;
+    }
     if method != Method::POST {
         return Err(method_not_allowed());
     }

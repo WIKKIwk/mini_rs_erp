@@ -188,6 +188,9 @@ pub async fn code_qr_print(
         return Err(method_not_allowed());
     }
     let principal = authenticated_principal(&state, &headers).await?;
+    if principal.role == crate::core::auth::models::PrincipalRole::MaterialTaminotchi {
+        return Err(forbidden());
+    }
     ensure_qolip_access(&state, &principal).await?;
     let input: QolipCodeQrPrintRequest =
         serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json"))?;

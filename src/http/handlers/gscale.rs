@@ -18,6 +18,62 @@ use crate::http::handlers::material_catalog::{
     roll_material_item_group_roots,
 };
 
+pub async fn material_tasks(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<GscaleErrorResponse>)> {
+    if method != Method::POST {
+        return Err(method_not_allowed());
+    }
+    let principal = authenticated_principal(&state, &headers).await?;
+    if principal.role != PrincipalRole::MaterialTaminotchi
+        || !state
+            .admin
+            .principal_has_capability(&principal, Capability::RawMaterialAssign)
+            .await
+    {
+        return Err(forbidden());
+    }
+    #[derive(Deserialize)]
+    struct Request {
+        order_ids: Vec<String>,
+    }
+    let request: Request = serde_json::from_slice(&body)
+        .map_err(|_| bad_request("invalid_json", "So‘rov noto‘g‘ri"))?;
+    if request.order_ids.len() > 50 || request.order_ids.iter().any(|id| id.trim().is_empty()) {
+        return Err(bad_request(
+            "invalid_order_ids",
+            "Ko‘pi bilan 50 ta order tanlang",
+        ));
+    }
+    let ids: Vec<_> = request
+        .order_ids
+        .iter()
+        .map(|id| id.trim().to_string())
+        .collect();
+    let groups = state
+        .admin
+        .principal_assigned_item_group_scope(&principal)
+        .await
+        .map_err(admin_read_error)?;
+    let materials = if ids.is_empty() || groups.is_empty() {
+        Vec::new()
+    } else {
+        state
+            .production_orders
+            .order_material_tasks(&ids, &groups)
+            .await
+            .map_err(|_| admin_read_error(AdminPortError::LookupFailed))?
+    };
+    let orders: Vec<_> = ids.iter().map(|id| serde_json::json!({
+        "order_id": id,
+        "materials": materials.iter().filter(|material| &material.order_id == id).collect::<Vec<_>>(),
+    })).collect();
+    Ok(Json(serde_json::json!({"ok": true, "orders": orders})))
+}
+
 pub async fn items(
     State(state): State<AppState>,
     method: Method,

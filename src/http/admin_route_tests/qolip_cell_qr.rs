@@ -578,3 +578,21 @@ impl QolipStorePort for ForbiddenQolipStore {
         Ok(None)
     }
 }
+
+#[tokio::test]
+async fn material_order_mold_information_is_read_only() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::MaterialTaminotchi).await;
+    let router = build_router(state);
+    let read = router.clone().oneshot(request_with_body(
+        "POST", "/v1/mobile/qolip/order-products", &token,
+        r#"{"order_ids":["zakaz-missing"]}"#,
+    )).await.unwrap();
+    assert_eq!(read.status(), StatusCode::OK);
+    assert_eq!(json_body(read).await["orders"][0]["order_id"], "zakaz-missing");
+    let print = router.oneshot(request_with_body(
+        "POST", "/v1/mobile/qolip/code-qr/print", &token,
+        r#"{"qolip_code":"QOLIP-0007"}"#,
+    )).await.unwrap();
+    assert_eq!(print.status(), StatusCode::FORBIDDEN);
+}

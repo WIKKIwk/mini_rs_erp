@@ -38,6 +38,34 @@ async fn postgres_order_materials_read_saved_layers_in_one_query() {
     assert_eq!(materials[1].microns, vec![30.0]);
     assert_eq!(sink.order_materials("zakaz-9002").await.unwrap()[0].item.code, "OPP");
     assert!(sink.order_materials("zakaz-missing").await.unwrap().is_empty());
+    sqlx::raw_sql("CREATE TEMP TABLE mini_raw_material_assignments
+            (barcode text, order_id text, item_code text);
+        CREATE TEMP TABLE mini_raw_material_stock
+            (barcode text, item_code text, micron numeric, reserved_order_id text, status text, qty numeric);
+        INSERT INTO mini_raw_material_assignments VALUES
+            ('pet12', 'zakaz-9001', 'FILM-PET'),
+            ('pet20-other', 'zakaz-9002', 'FILM-PET'),
+            ('pe-wrong', 'zakaz-9001', 'OLD-PE');
+        INSERT INTO mini_raw_material_stock VALUES
+            ('pet12', 'FILM-PET', 12, 'zakaz-9001', 'reserved', 15),
+            ('pet20-other', 'FILM-PET', 20, 'zakaz-9002', 'reserved', 15),
+            ('pe-wrong', 'OLD-PE', 50, 'zakaz-9001', 'reserved', 15);")
+        .execute(&pool).await.unwrap();
+    let ids = vec!["zakaz-9001".into(), "zakaz-9002".into()];
+    let groups = vec!["Rulon".into()];
+    let tasks = sink.order_material_tasks(&ids, &groups).await.unwrap();
+    assert_eq!(tasks.len(), 4);
+    assert!(tasks[0].assigned); // PET 12, matching order and micron.
+    assert!(!tasks[1].assigned); // PET 20 belongs to another order.
+    assert!(!tasks[2].assigned); // PE 30 was not supplied (only PE 50).
+    assert!(!tasks[3].assigned); // OPP has no assignment.
+    assert!(sink.order_material_tasks(&ids, &["Kraska".into()]).await.unwrap().is_empty());
+    for (status, qty, expected) in [("consumed", 0, true), ("available", 15, false),
+                                  ("reserved", 0, false), ("in_use", 5, true)] {
+        sqlx::query("UPDATE mini_raw_material_stock SET status=$1, qty=$2 WHERE barcode='pet12'")
+            .bind(status).bind(qty).execute(&pool).await.unwrap();
+        assert_eq!(sink.order_material_tasks(&ids, &groups).await.unwrap()[0].assigned, expected);
+    }
     pool.close().await;
 }
 

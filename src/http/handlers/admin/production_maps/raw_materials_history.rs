@@ -104,15 +104,24 @@ async fn material_scoped_raw_material_assignments(
     state: &AppState,
     principal: &Principal,
     assignments: Vec<RawMaterialAssignment>,
+    order_details: bool,
 ) -> Result<Vec<RawMaterialAssignment>, AdminError> {
     let assigned = material_warehouse_scope(state, principal).await?;
     let assigned_apparatus = state.admin.principal_assigned_apparatus(principal).await;
-    if assigned.is_empty() || assigned_apparatus.is_empty() {
+    if assigned.is_empty() || (!order_details && assigned_apparatus.is_empty()) {
         return Ok(Vec::new());
     }
+    let item_groups = if order_details {
+        state.admin.principal_assigned_item_group_scope(principal).await
+            .map_err(|_| server_error("item group scope fetch failed"))?
+    } else { Vec::new() };
     let mut out = Vec::new();
     for assignment in assignments {
-        if !super::raw_material_details::assigned_apparatus_contains(
+        if order_details && !item_groups.iter().any(|group|
+            group.trim().eq_ignore_ascii_case(assignment.item_group.trim())) {
+            continue;
+        }
+        if !order_details && !super::raw_material_details::assigned_apparatus_contains(
             assignment.apparatus_id.as_ref(),
             &assigned_apparatus,
         ) {

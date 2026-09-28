@@ -12,6 +12,15 @@ pub struct OrderMaterial {
     pub microns: Vec<f64>,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct OrderMaterialTask {
+    pub order_id: String,
+    pub item_code: String,
+    pub material: String,
+    pub micron: f64,
+    pub assigned: bool,
+}
+
 /// Prepared maps and the exact calculation must become visible together.
 pub struct NewProductionOrder {
     pub map: ProductionMapDefinition,
@@ -29,6 +38,14 @@ pub enum MiniOrderError {
 
 #[async_trait]
 pub trait MiniOrderSink: Send + Sync {
+    async fn order_material_tasks(
+        &self,
+        _order_ids: &[String],
+        _item_groups: &[String],
+    ) -> Result<Vec<OrderMaterialTask>, MiniOrderError> {
+        Err(MiniOrderError::StoreFailed)
+    }
+
     async fn order_materials(&self, _order_id: &str) -> Result<Vec<OrderMaterial>, MiniOrderError> {
         Err(MiniOrderError::StoreFailed)
     }

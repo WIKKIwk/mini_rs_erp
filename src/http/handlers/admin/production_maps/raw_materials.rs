@@ -463,16 +463,18 @@ pub async fn raw_material_assignments(
                     ));
                 }
             }
-            let mut assignments = state
-                .production_maps
-                .raw_material_assignments()
-                .await
-                .map_err(production_map_error)?;
+            let mut assignments = if query.order_id.trim().is_empty() {
+                state.production_maps.raw_material_assignments().await
+            } else {
+                state.production_maps.raw_material_assignments_for_order(&query.order_id).await
+            }.map_err(production_map_error)?;
             if principal.role == PrincipalRole::MaterialTaminotchi
                 || principal.role == PrincipalRole::TayyorlovMasteri
             {
                 assignments =
-                    material_scoped_raw_material_assignments(&state, &principal, assignments)
+                    material_scoped_raw_material_assignments(&state, &principal, assignments,
+                        principal.role == PrincipalRole::MaterialTaminotchi
+                            && !query.order_id.trim().is_empty())
                         .await?;
             }
             if !query.order_id.trim().is_empty() {
