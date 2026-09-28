@@ -3,6 +3,14 @@ use thiserror::Error;
 
 use crate::core::calculate_orders::CalculateOrderTemplate;
 use crate::core::production_map::{ProductionMapDefinition, ProductionMapError};
+use crate::core::werka::models::SupplierItem;
+
+/// Catalog material and thicknesses from an opened order's saved layers.
+#[derive(Debug, Clone)]
+pub struct OrderMaterial {
+    pub item: SupplierItem,
+    pub microns: Vec<f64>,
+}
 
 /// Prepared maps and the exact calculation must become visible together.
 pub struct NewProductionOrder {
@@ -21,6 +29,10 @@ pub enum MiniOrderError {
 
 #[async_trait]
 pub trait MiniOrderSink: Send + Sync {
+    async fn order_materials(&self, _order_id: &str) -> Result<Vec<OrderMaterial>, MiniOrderError> {
+        Err(MiniOrderError::StoreFailed)
+    }
+
     async fn create_order_atomic(
         &self,
         _order: &NewProductionOrder,

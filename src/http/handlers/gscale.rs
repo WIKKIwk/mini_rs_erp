@@ -3,12 +3,14 @@ use axum::body::Bytes;
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, Method, StatusCode};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 use crate::app::AppState;
 use crate::core::admin::ports::AdminPortError;
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::authz::Capability;
 use crate::core::gscale::{GscaleServiceError, MaterialReceiptPrintRequest};
+use crate::core::mini_orders::OrderMaterial;
 use crate::core::werka::models::SupplierItem;
 use crate::http::handlers::auth::{ErrorResponse, bearer_token};
 use crate::http::handlers::material_catalog::{
@@ -37,7 +39,14 @@ pub async fn items(
     if !can_read_gscale && !can_manage_rezka {
         return Err(forbidden());
     }
-    let items = gscale_items_for_principal(&state, &principal, &query)
+    let order_id = query.order_id.as_deref().unwrap_or_default().trim();
+    let order_materials = if principal.role == PrincipalRole::MaterialTaminotchi && !order_id.is_empty() {
+        Some(state.production_orders.order_materials(order_id).await
+            .map_err(|_| bad_request("order_materials_failed", "Order homashyolarini yuklab bo‘lmadi"))?)
+    } else {
+        None
+    };
+    let items = gscale_items_for_principal(&state, &principal, &query, order_materials.as_deref())
         .await
         .map_err(admin_read_error)?;
     let dimension_groups = state
@@ -46,13 +55,15 @@ pub async fn items(
         .await
         .map_err(admin_read_error)?;
     let mut catalog = Vec::with_capacity(items.len());
-    let order_id = query.order_id.as_deref().unwrap_or_default().trim();
     let groups = if order_id.is_empty() { Vec::new() } else {
         state.admin.item_group_tree().await.map_err(admin_read_error)?
     };
+    let mut options_by_group = BTreeMap::<String, BTreeMap<String, String>>::new();
     for item in items {
         let mut order_apparatus_options = std::collections::BTreeMap::new();
-        if !order_id.is_empty() {
+        if let Some(options) = options_by_group.get(&item.item_group) {
+            order_apparatus_options = options.clone();
+        } else if !order_id.is_empty() {
             let group_path = material_group_path(&groups, &item.item_group);
             let options = state.production_maps.raw_material_assignment_apparatus_options(order_id, &group_path)
                 .await.map_err(|_| bad_request("order_material_options_failed", "Order apparatlarini aniqlab bo‘lmadi"))?;
@@ -63,9 +74,13 @@ pub async fn items(
                     .map(|config| config.runtime.display.display_name.clone()).unwrap_or_else(|| option.clone());
                 order_apparatus_options.insert(option, name);
             }
+            options_by_group.insert(item.item_group.clone(), order_apparatus_options.clone());
         }
         catalog.push(GscaleCatalogItem {
             requires_dimensions: requires_material_dimensions(&item, &dimension_groups),
+            order_microns: order_materials.as_ref()
+                .and_then(|materials| materials.iter().find(|material| material.item.code == item.code))
+                .map(|material| material.microns.clone()).unwrap_or_default(),
             item, order_apparatus_options,
         });
     }
@@ -79,6 +94,8 @@ struct GscaleCatalogItem {
     #[serde(flatten)]
     item: SupplierItem,
     requires_dimensions: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    order_microns: Vec<f64>,
     order_apparatus_options: std::collections::BTreeMap<String, String>,
 }
 
@@ -95,6 +112,7 @@ async fn gscale_items_for_principal(
     state: &AppState,
     principal: &Principal,
     query: &GscaleItemsQuery,
+    order_materials: Option<&[OrderMaterial]>,
 ) -> Result<Vec<SupplierItem>, AdminPortError> {
     let group = query.group.as_deref().unwrap_or("");
     let search = query.q.as_deref().unwrap_or("");
@@ -144,6 +162,15 @@ async fn gscale_items_for_principal(
     };
     if groups.is_empty() {
         return Ok(Vec::new());
+    }
+
+    if let Some(materials) = order_materials {
+        let search = search.trim().to_lowercase();
+        return Ok(materials.iter()
+            .map(|material| &material.item)
+            .filter(|item| groups.iter().any(|group| group.trim().eq_ignore_ascii_case(item.item_group.trim())))
+            .filter(|item| search.is_empty() || item.code.to_lowercase().contains(&search) || item.name.to_lowercase().contains(&search))
+            .skip(offset).take(limit).cloned().collect());
     }
 
     state

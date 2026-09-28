@@ -82,6 +82,16 @@ async fn receipt_order_assignment(
     state: &AppState, principal: &Principal, order_id: &str, apparatus: &str,
     item_code: &str, warehouse: &str, width_mm: Option<f64>, micron: Option<f64>,
 ) -> Result<Option<serde_json::Value>, MaterialCatalogError> {
+    if principal.role == PrincipalRole::MaterialTaminotchi && !order_id.trim().is_empty() {
+        let materials = state.production_orders.order_materials(order_id).await
+            .map_err(|_| MaterialCatalogError::ReadFailed)?;
+        let material = materials.iter()
+            .find(|material| material.item.code.trim().eq_ignore_ascii_case(item_code.trim()))
+            .ok_or_else(|| MaterialCatalogError::OrderAssignment("Homashyo order qavatlariga mos emas".into()))?;
+        if !micron.is_some_and(|micron| material.microns.iter().any(|expected| (micron - expected).abs() < 0.000001)) {
+            return Err(MaterialCatalogError::OrderAssignment("Mikron order qavatlariga mos emas".into()));
+        }
+    }
     super::admin::validate_receipt_order_assignment(state, principal, order_id, apparatus, item_code, warehouse, width_mm, micron)
         .await.map_err(|(_, axum::Json(error))| MaterialCatalogError::OrderAssignment(error.error))
 }

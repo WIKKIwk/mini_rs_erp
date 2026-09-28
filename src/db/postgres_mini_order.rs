@@ -2,9 +2,10 @@ use async_trait::async_trait;
 use sqlx::PgPool;
 
 use crate::core::calculate_orders::CalculateOrderTemplate;
-use crate::core::mini_orders::{MiniOrderError, MiniOrderSink, NewProductionOrder};
+use crate::core::mini_orders::{MiniOrderError, MiniOrderSink, NewProductionOrder, OrderMaterial};
 use crate::core::production_map::{ProductionMapDefinition, ProductionMapError};
 use crate::core::quantity::positive_erp_quantity;
+use crate::core::werka::models::SupplierItem;
 
 mod order_edit;
 
@@ -21,6 +22,57 @@ impl PostgresMiniOrderSink {
 
 #[async_trait]
 impl MiniOrderSink for PostgresMiniOrderSink {
+    async fn order_materials(&self, order_id: &str) -> Result<Vec<OrderMaterial>, MiniOrderError> {
+        // Read the order's own layers once; no reusable calculation lookup or
+        // catalog pagination is needed to find its material types.
+        let rows = sqlx::query_as::<_, (String, String, String, String, Vec<String>)>(
+            "WITH layers AS (
+                SELECT layer.value,
+                       COALESCE(NULLIF(btrim(material.payload_json->>'name'), ''),
+                                btrim(layer.value->>'material')) AS material_name
+                FROM mini_order_products product
+                CROSS JOIN LATERAL jsonb_array_elements(product.layers_json) layer(value)
+                LEFT JOIN mini_calculate_materials material
+                  ON material.id = layer.value->>'material_id'
+                WHERE product.order_id = $1
+             )
+             SELECT item.code, item.name, item.uom, item.item_group,
+                    array_agg(DISTINCT COALESCE(btrim(layers.value->>'micron'), ''))
+             FROM layers
+             JOIN mini_items item
+               ON lower(btrim(item.code)) = lower(layers.material_name)
+               OR lower(btrim(item.name)) = lower(layers.material_name)
+             GROUP BY item.code, item.name, item.uom, item.item_group
+             ORDER BY lower(item.code), item.code",
+        )
+        .bind(order_id.trim())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|_| MiniOrderError::StoreFailed)?;
+        rows.into_iter()
+            .map(|(code, name, uom, item_group, values)| {
+                let mut microns = values
+                    .iter()
+                    .map(|value| {
+                        value.replace(',', ".").parse::<f64>().ok()
+                            .and_then(positive_erp_quantity)
+                            .ok_or(MiniOrderError::StoreFailed)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                microns.sort_by(f64::total_cmp);
+                microns.dedup();
+                Ok(OrderMaterial {
+                    item: SupplierItem {
+                        code, name, uom, item_group,
+                        warehouse: String::new(),
+                        customer_names: Vec::new(),
+                    },
+                    microns,
+                })
+            })
+            .collect()
+    }
+
     async fn create_order_atomic(
         &self,
         order: &NewProductionOrder,

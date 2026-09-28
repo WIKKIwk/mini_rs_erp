@@ -7,6 +7,41 @@ use crate::db::postgres::{apply_foundation_migration, postgres_test_database_opt
 use crate::db::postgres_mini_order::PostgresMiniOrderSink;
 
 #[tokio::test]
+async fn postgres_order_materials_read_saved_layers_in_one_query() {
+    let url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://wikki@127.0.0.1:5432/postgres".into());
+    // One connection keeps the fixture in temporary tables, isolated from
+    // both live data and other tests, while exercising the real SQL reader.
+    let pool = sqlx::postgres::PgPoolOptions::new().max_connections(1)
+        .connect(&url).await.unwrap();
+    sqlx::raw_sql("CREATE TEMP TABLE mini_order_products (order_id text, layers_json jsonb);
+        CREATE TEMP TABLE mini_calculate_materials (id text, payload_json jsonb);
+        CREATE TEMP TABLE mini_items (code text, name text, uom text, item_group text);
+        INSERT INTO mini_items VALUES
+            ('FILM-PET', 'PET', 'Kg', 'Rulon'),
+            ('OLD-PE', 'PE white', 'Kg', 'Rulon'),
+            ('OPP', 'OPP', 'Kg', 'Rulon');
+        INSERT INTO mini_calculate_materials VALUES ('pe-id', '{\"name\":\"PE white\"}');
+        INSERT INTO mini_order_products VALUES
+            ('zakaz-9001', '[{\"material\":\"pet\",\"micron\":\"12\"},
+                            {\"material\":\"PET\",\"micron\":\"20\"},
+                            {\"material\":\"PET\",\"micron\":\"12\"},
+                            {\"material_id\":\"pe-id\",\"material\":\"PE oq\",\"micron\":\"30\"}]'),
+            ('zakaz-9002', '[{\"material\":\"OPP\",\"micron\":\"25\"}]');")
+        .execute(&pool).await.unwrap();
+    let sink = PostgresMiniOrderSink::new(pool.clone());
+    let materials = sink.order_materials("zakaz-9001").await.unwrap();
+    assert_eq!(materials.len(), 2);
+    assert_eq!(materials[0].item.code, "FILM-PET");
+    assert_eq!(materials[0].microns, vec![12.0, 20.0]);
+    assert_eq!(materials[1].item.code, "OLD-PE");
+    assert_eq!(materials[1].microns, vec![30.0]);
+    assert_eq!(sink.order_materials("zakaz-9002").await.unwrap()[0].item.code, "OPP");
+    assert!(sink.order_materials("zakaz-missing").await.unwrap().is_empty());
+    pool.close().await;
+}
+
+#[tokio::test]
 async fn postgres_mini_order_sink_saves_order_and_product_rows() {
     let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
         .unwrap_or_else(|_| "postgres://wikki@127.0.0.1:5432/postgres".to_string());
