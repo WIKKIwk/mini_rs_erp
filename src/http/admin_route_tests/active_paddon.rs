@@ -4,6 +4,42 @@ const APPARATUS: &str = "apparatus:default:asset-010";
 const PATH: &str = "/v1/mobile/admin/production-maps/paddons/active";
 
 #[tokio::test]
+async fn paddon_delete_requires_write_access_and_valid_input() {
+    let state = test_state();
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::Aparatchi,
+            principal_ref: "delete-worker".into(),
+            role_id: "aparatchi".into(),
+            assigned_apparatus: vec![APPARATUS.into()],
+            assigned_item_groups: vec![],
+        })
+        .await
+        .unwrap();
+    let path = "/v1/mobile/admin/production-maps/paddons/delete";
+    let admin = session(&state, PrincipalRole::Admin).await;
+    let worker = session_for(&state, PrincipalRole::Aparatchi, "delete-worker").await;
+    let customer = session(&state, PrincipalRole::Customer).await;
+    let router = build_router(state);
+    for (token, expected) in [
+        ("", StatusCode::UNAUTHORIZED),
+        (customer.as_str(), StatusCode::FORBIDDEN),
+        (admin.as_str(), StatusCode::BAD_REQUEST),
+        (worker.as_str(), StatusCode::BAD_REQUEST),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(request_with_body("POST", path, token, r#"{"code":" "}"#))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+    }
+    let response = router.oneshot(request("GET", path, &admin)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+}
+
+#[tokio::test]
 async fn active_paddon_is_shared_by_sessions_but_isolated_by_authenticated_user() {
     let state = test_state();
     for worker in ["worker-a", "worker-b"] {

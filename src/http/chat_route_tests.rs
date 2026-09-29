@@ -105,6 +105,84 @@ async fn customer_can_register_device_token_for_chat() {
 }
 
 #[tokio::test]
+async fn order_alert_roles_register_and_remove_android_and_ios_chat_tokens() {
+    use crate::core::push::service::PushService;
+    use crate::store::push_token_store::PushTokenStore;
+    use std::sync::Arc;
+
+    let tempdir = tempfile::tempdir().expect("temporary push store");
+    let mut state = test_state();
+    state.push = PushService::new(Arc::new(PushTokenStore::new(
+        tempdir.path().join("push_tokens.json"),
+    )));
+    let store = state.push.store_for_tests();
+    for (role, role_key) in [
+        (PrincipalRole::Aparatchi, "aparatchi"),
+        (PrincipalRole::Qolipchi, "qolipchi"),
+        (PrincipalRole::MaterialTaminotchi, "material_taminotchi"),
+    ] {
+        let token = state
+            .sessions
+            .create(Principal {
+                role,
+                display_name: "Push test".into(),
+                legal_name: String::new(),
+                ref_: "push-test".into(),
+                phone: String::new(),
+                avatar_url: String::new(),
+            })
+            .await
+            .expect("test session");
+        let owner = format!("{role_key}:push-test");
+        for platform in ["android", "ios"] {
+            let device_token = format!("fcm-{role_key}-{platform}");
+            let response = build_router(state.clone())
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/v1/mobile/chat/device-token")
+                        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "token":device_token, "platform":platform,
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{role_key}/{platform}");
+            let records = store.list(&owner).await.unwrap();
+            assert!(
+                records
+                    .iter()
+                    .any(|record| record.token == device_token && record.platform == platform)
+            );
+        }
+        assert_eq!(store.list(&owner).await.unwrap().len(), 2);
+        for platform in ["android", "ios"] {
+            let response = build_router(state.clone())
+                .oneshot(
+                    Request::builder()
+                        .method("DELETE")
+                        .uri(format!(
+                            "/v1/mobile/chat/device-token?token=fcm-{role_key}-{platform}"
+                        ))
+                        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{role_key}/{platform}");
+        }
+        assert!(store.list(&owner).await.unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
 async fn resumable_chat_media_chunk_requires_authenticated_session() {
     let response = build_router(test_state())
         .oneshot(

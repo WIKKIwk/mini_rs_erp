@@ -31,6 +31,10 @@ mod material_assignment_alternatives;
 mod queue_display_recency;
 #[path = "resume_work_session.rs"]
 mod resume_work_session;
+#[path = "qr_usage_errors.rs"]
+mod qr_usage_errors;
+#[path = "cold_glue_workflow.rs"]
+mod cold_glue_workflow;
 
 const FLOW_REZKA_ID: &str = "apparatus:test:flow-rezka";
 const FLOW_PECHAT_ID: &str = "apparatus:test:flow-pechat";
@@ -42,6 +46,7 @@ const PECHAT_9_ID: &str = "apparatus:default:bosma_9";
 const FLEXO_ID: &str = "apparatus:default:asset-005";
 const LAMINATION_1_ID: &str = "apparatus:default:asset-007";
 const LAMINATION_2_ID: &str = "apparatus:default:asset-008";
+const COLD_GLUE_ID: &str = "apparatus:default:holodniy_kley";
 const REZKA_ID: &str = "apparatus:default:asset-010";
 
 struct SnapshotSessionReadProbeStore {
@@ -3106,6 +3111,15 @@ async fn first_stage_pause_resume_complete_keeps_both_wips_available_for_laminat
 
 #[tokio::test]
 async fn laminatsiya_worker_handoff_keeps_roll_in_apparatus_until_continue_or_remove() {
+    assert_lamination_workflow_handoff(LAMINATION_1_ID).await;
+}
+
+#[tokio::test]
+async fn cold_glue_worker_handoff_keeps_roll_in_apparatus_until_continue_or_remove() {
+    assert_lamination_workflow_handoff(COLD_GLUE_ID).await;
+}
+
+async fn assert_lamination_workflow_handoff(second: &str) {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
     let service = default_service_with_store(store.clone()).await;
     let actor = QueueActionActor {
@@ -3115,7 +3129,6 @@ async fn laminatsiya_worker_handoff_keeps_roll_in_apparatus_until_continue_or_re
     };
     let order_id = "zakaz-laminatsiya-handoff";
     let first = FLOW_PECHAT_ID;
-    let second = LAMINATION_1_ID;
     service
         .upsert_map(two_stage_map(order_id, first, second))
         .await
@@ -4001,6 +4014,15 @@ async fn resume_without_resumable_wip_keeps_queue_paused() {
 
 #[tokio::test]
 async fn laminatsiya_astatka_uses_order_timeline_and_previous_report_anchor() {
+    assert_lamination_workflow_astatka(LAMINATION_1_ID).await;
+}
+
+#[tokio::test]
+async fn cold_glue_astatka_uses_order_timeline_and_own_apparatus_identity() {
+    assert_lamination_workflow_astatka(COLD_GLUE_ID).await;
+}
+
+async fn assert_lamination_workflow_astatka(apparatus: &str) {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
     let service = default_service_with_store(store.clone()).await;
     let actor = QueueActionActor {
@@ -4009,7 +4031,6 @@ async fn laminatsiya_astatka_uses_order_timeline_and_previous_report_anchor() {
         display_name: "Laminatsiya Astatka Worker".to_string(),
     };
     let order_id = "zakaz-laminatsiya-astatka";
-    let apparatus = LAMINATION_1_ID;
     service
         .upsert_map(two_stage_map(order_id, FLOW_PECHAT_ID, apparatus))
         .await
@@ -4046,6 +4067,7 @@ async fn laminatsiya_astatka_uses_order_timeline_and_previous_report_anchor() {
         )
         .await
         .expect("first astatka");
+    assert_eq!(first.apparatus, apparatus);
     assert_eq!(first.from_at_unix, 100);
     assert_eq!(first.lamination_print_leftover_rolls, 1.0);
 
@@ -4971,7 +4993,7 @@ async fn downstream_complete_keeps_order_open_until_all_input_wips_processed() {
         .await;
     assert_eq!(
         reused_processed,
-        Err(ProductionMapError::ProgressBatchNotAccepted)
+        Err(ProductionMapError::ProgressBatchAlreadyUsed { apparatus_name: String::new() })
     );
     assert_eq!(
         service

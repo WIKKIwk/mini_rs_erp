@@ -83,6 +83,8 @@ mod production_map_basic;
 mod production_map_canonical_snapshot;
 mod production_map_save_order;
 mod order_edit;
+mod order_alerts;
+mod order_alerts_chat;
 mod pending_orders;
 mod order_images;
 mod production_map_validation;

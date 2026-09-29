@@ -31,6 +31,8 @@ mod helpers;
 mod move_run;
 mod opening_wip;
 mod order_control;
+mod order_alerts;
+pub use order_alerts::production_map_order_alert;
 mod order_image;
 mod paddons;
 mod print_preflight;
@@ -65,6 +67,7 @@ pub use self::opening_wip::{
 pub use self::order_control::production_map_order_control;
 pub use self::order_image::production_map_order_image_view;
 pub use self::paddons::{
+    production_map_paddon_delete,
     production_map_active_paddon,
     production_map_paddon_create, production_map_paddon_detail, production_map_paddon_item_add,
     production_map_paddon_item_remove, production_map_paddon_items_add,

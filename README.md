@@ -346,6 +346,39 @@ the requester may cancel. A subsequent request gets a new identity and freshly
 eligible candidates, leaving old cards terminal. Approval refreshes the worker's
 material list but does not bypass material scans, Qolip, queue, or start guards.
 
+#### Order Alerts
+
+Admin FCM configuration is available in the mobile **Notification settings** page:
+`GET/PUT /v1/mobile/admin/push-config`, `POST .../push-config/check`, and
+`POST .../push-config/test`. These endpoints require the admin role and the
+corresponding settings capability. Upload a Firebase **service-account JSON**,
+not a device token. Save verifies Google OAuth and FCM project permission with
+`validate_only` before changing anything. The existing push workers immediately
+use the new sender; no restart or mobile rebuild is needed for credential rotation
+within the same Firebase project. Status responses never include private keys.
+
+Credentials are encrypted with the existing access-code vault and atomically saved
+to `data/fcm-config.enc` (override: `FCM_CONFIG_PATH`, file mode `0600` on Unix).
+Preserve this file and the vault key (`MINI_ERP_ACCESS_CODE_KEY` or
+`data/access-code.key`) across deployments and server recovery. An admin-saved
+configuration takes precedence over the legacy `FCM_SERVICE_ACCOUNT_PATH` file.
+Invalid credentials or failed persistence leave the previous sender active.
+Without valid configuration the chat push worker retains its retry behavior.
+The test endpoint accepts only a device token owned by the calling admin and
+reports FCM acceptance, not confirmed display on the phone. iOS still requires
+its Firebase client configuration, push signing entitlement, and APNs setup.
+
+Workers can send an order reminder with
+`POST /v1/mobile/admin/production-maps/order-alert` and
+`{order_id, apparatus, kind, request_id}`. `kind` is `raw_material` or `qolip`;
+no resource or barcode selection is needed. The worker must be assigned to the
+apparatus and the apparatus must belong to the order. Active employees of the
+corresponding role receive a normal chat message containing the order number,
+apparatus, and worker. Existing chat persistence and push delivery handle the
+notification. Reuse `request_id` when retrying to avoid duplicate chat messages.
+No recipients or failed persistence returns an error. Mobile device tokens use
+`/v1/mobile/chat/device-token`, which supports these employee roles.
+
 #### Queue and WIP Flow
 
 Queue snapshots expose `sequence_revisions`, read together with the stored

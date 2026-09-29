@@ -69,7 +69,7 @@ pub(super) fn validated_progress_metrics(
         None
     };
     let is_rezka = apparatus::is_rezka_apparatus(canonical);
-    let is_laminatsiya = apparatus::is_laminatsiya_apparatus(canonical);
+    let is_laminatsiya = apparatus::uses_lamination_workflow(canonical);
     let is_pechat = pechat::is_pechat_apparatus(canonical);
     let allow_partial_station_completion =
         (is_laminatsiya || is_rezka) && is_complete && progress.allow_partial_station_completion;
@@ -154,7 +154,7 @@ pub(super) fn validated_laminatsiya_worker_handoff_metrics(
     canonical: &RuntimeApparatusConfiguration,
     progress: &QueueProgressInput,
 ) -> Result<ProgressMetrics, ProductionMapError> {
-    if !apparatus::is_laminatsiya_apparatus(canonical) {
+    if !apparatus::uses_lamination_workflow(canonical) {
         return Err(ProductionMapError::ProgressInputInvalid);
     }
     let metrics = ProgressMetrics {
@@ -187,7 +187,7 @@ pub(super) fn validated_laminatsiya_removed_roll_metrics(
     canonical: &RuntimeApparatusConfiguration,
     progress: &QueueProgressInput,
 ) -> Result<ProgressMetrics, ProductionMapError> {
-    if !apparatus::is_laminatsiya_apparatus(canonical) {
+    if !apparatus::uses_lamination_workflow(canonical) {
         return Err(ProductionMapError::ProgressInputInvalid);
     }
     let finished_goods_meter =
@@ -237,7 +237,7 @@ fn validate_progress_metrics(
         return Err(ProductionMapError::BosmaCompletionMetricsRequired);
     }
     if is_complete
-        && apparatus::is_laminatsiya_apparatus(canonical)
+        && apparatus::uses_lamination_workflow(canonical)
         && !allow_partial_station_completion
         && !laminatsiya_completion_metrics_are_complete(
             metrics.lamination_print_leftover_rolls,
@@ -250,7 +250,7 @@ fn validate_progress_metrics(
         return Err(ProductionMapError::LaminatsiyaCompletionMetricsRequired);
     }
     if is_complete
-        && apparatus::is_laminatsiya_apparatus(canonical)
+        && apparatus::uses_lamination_workflow(canonical)
         && allow_partial_station_completion
         && (metrics.finished_goods_kg.is_none() || metrics.finished_goods_meter.is_none())
     {

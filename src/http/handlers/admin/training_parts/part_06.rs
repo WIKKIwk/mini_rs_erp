@@ -210,7 +210,7 @@ fn training_complete_requires_full_report(
         return !training_complete_requires_rezka_total_waste_only(map, apparatus)
             && !has_unprocessed_previous_wips;
     }
-    !is_laminatsiya_apparatus(map, apparatus) || !has_unprocessed_previous_wips
+    !training_uses_lamination_workflow(map, apparatus) || !has_unprocessed_previous_wips
 }
 
 fn training_complete_requires_rezka_total_waste_only(

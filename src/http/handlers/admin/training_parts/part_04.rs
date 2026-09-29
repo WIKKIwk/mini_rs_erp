@@ -172,7 +172,7 @@ pub(super) async fn training_queue_action(
         }
         training_rezka_frame_count(&training_map, &apparatus)?;
     }
-    if is_complete && is_laminatsiya_apparatus(&training_map, &apparatus) {
+    if is_complete && training_uses_lamination_workflow(&training_map, &apparatus) {
         let metrics_ready = if full_completion_report_required {
             training_laminatsiya_full_metrics_are_complete(&print_input)
         } else {

@@ -184,6 +184,29 @@ mod tests {
     }
 
     #[test]
+    fn cold_glue_training_reuses_lamination_input_and_preserves_its_identity() {
+        let mut map = laminatsiya_training_map();
+        let apparatus = "apparatus:default:holodniy_kley";
+        map.nodes[1].apparatus_id = apparatus.into();
+        map.nodes[1].title = "Holodniy kley aparat".into();
+        map.nodes[1].role_code = "glue".into();
+        assert!(training_uses_lamination_workflow(&map, apparatus));
+        assert_eq!(
+            training_input_stage_for_map(&map, apparatus).as_deref(),
+            Some(TRAINING_VIRTUAL_INPUT_BOSMA)
+        );
+        let worker_map = training_worker_map(map);
+        let target = worker_map
+            .nodes
+            .iter()
+            .find(|node| node.apparatus_id == apparatus)
+            .unwrap();
+        assert_eq!(target.title, "Holodniy kley aparat");
+        assert_eq!(target.role_code, "glue");
+        assert!(worker_map.nodes.iter().any(is_training_input_node));
+    }
+
+    #[test]
     fn laminatsiya_training_map_gets_virtual_bosma_input() {
         let map = laminatsiya_training_map();
 

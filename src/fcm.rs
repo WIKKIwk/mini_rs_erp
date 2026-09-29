@@ -1,4 +1,5 @@
 mod auth;
+pub mod config;
 mod payload;
 mod token_cleanup;
 
@@ -9,40 +10,11 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 
-use crate::core::push::ports::{NoopPushSender, PushSendError, PushSenderPort, PushTokenStorePort};
+use crate::core::push::ports::{PushSendError, PushSenderPort, PushTokenStorePort};
 
 use self::auth::{ServiceAccount, ServiceAccountTokenProvider};
 use self::payload::FcmPayload;
 use self::token_cleanup::{should_drop_push_token, truncate_token};
-
-pub fn discover_push_sender(store: Arc<dyn PushTokenStorePort>) -> Arc<dyn PushSenderPort> {
-    let Some(path) = discover_service_account_path() else {
-        tracing::info!("push sender disabled: no firebase admin sdk json found");
-        return Arc::new(NoopPushSender);
-    };
-    let raw = match std::fs::read(&path) {
-        Ok(raw) => raw,
-        Err(error) => {
-            tracing::warn!(%error, "push sender disabled: read service account failed");
-            return Arc::new(NoopPushSender);
-        }
-    };
-    let account: ServiceAccount = match serde_json::from_slice(&raw) {
-        Ok(account) => account,
-        Err(error) => {
-            tracing::warn!(%error, "push sender disabled: parse service account failed");
-            return Arc::new(NoopPushSender);
-        }
-    };
-    let project_id = account.project_id.trim().to_string();
-    if project_id.is_empty() {
-        tracing::warn!("push sender disabled: project_id missing in service account");
-        return Arc::new(NoopPushSender);
-    }
-
-    tracing::info!(%project_id, "push sender enabled");
-    Arc::new(FcmPushSender::new(store, account, project_id))
-}
 
 fn discover_service_account_path() -> Option<PathBuf> {
     if let Ok(env) = std::env::var("FCM_SERVICE_ACCOUNT_PATH") {

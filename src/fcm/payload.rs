@@ -9,9 +9,12 @@ pub(super) struct FcmPayload {
 
 impl FcmPayload {
     pub(super) fn new(token: &str, title: &str, body: &str, data: HashMap<String, String>) -> Self {
-        let is_chat = data
-            .get("event_type")
-            .is_some_and(|event_type| event_type.trim() == "chat.message.created");
+        let is_chat = data.get("event_type").is_some_and(|event_type| {
+            matches!(
+                event_type.trim(),
+                "chat.message.created" | "push.configuration.test"
+            )
+        });
         let channel_id = if is_chat {
             "accord_chat"
         } else {

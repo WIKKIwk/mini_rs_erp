@@ -703,7 +703,7 @@ impl ProductionMapService {
             if !scanned.is_empty() {
                 return Err(ProductionMapError::RawMaterialMismatch);
             }
-            if !super::apparatus::is_laminatsiya_apparatus(&canonical)
+            if !super::apparatus::uses_lamination_workflow(&canonical)
                 && !requirements.assignments_satisfied
             {
                 return Err(ProductionMapError::RawMaterialAssignmentNotFound);
@@ -757,7 +757,7 @@ impl ProductionMapService {
         progress: &QueueProgressInput,
     ) -> Result<bool, ProductionMapError> {
         let canonical = self.validated_material_apparatus(apparatus).await?;
-        if !super::apparatus::is_laminatsiya_apparatus(&canonical)
+        if !super::apparatus::uses_lamination_workflow(&canonical)
             || (progress.qr_payload.trim().is_empty()
                 && progress.progress_batch_id.trim().is_empty())
         {

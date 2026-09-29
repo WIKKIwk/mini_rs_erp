@@ -696,6 +696,9 @@ pub trait ProductionMapStorePort: Send + Sync {
     async fn create_paddon(&self, _input: PaddonCreateInput) -> StoreResult<PaddonSummary> {
         Err(ProductionMapError::StoreFailed)
     }
+    async fn delete_paddon(&self, _code: &str) -> StoreResult<()> {
+        Err(ProductionMapError::StoreFailed)
+    }
     async fn paddon_snapshot(&self, _code: &str) -> StoreResult<Option<PaddonSnapshot>> {
         Ok(None)
     }

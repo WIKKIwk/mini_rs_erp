@@ -345,9 +345,11 @@ impl ProductionMapService {
                 && !chain::stage_ids_match_for_map(order_map, &batch.next_apparatus, apparatus))
             || (!preferred_stage_node_id.is_empty()
                 && !chain::stage_node_ids_match_for_map(order_map, &preferred_stage_node_id, &stage.node_id))
-            || batch.wip_status != OrderProgressBatchWipStatus::Waiting
         {
             return Err(ProductionMapError::ProgressBatchNotAccepted);
+        }
+        if batch.wip_status != OrderProgressBatchWipStatus::Waiting {
+            return Err(progress_batch_usage_error(&batch, order_map));
         }
         Ok(Some(batch))
     }
@@ -455,7 +457,6 @@ impl ProductionMapService {
         if batch.order_id.trim() != order_id
             || !chain::stage_ids_match_for_map(order_map, &batch.apparatus, &previous_apparatus)
             || !batch.action.records_progress_output()
-            || !source_wip_is_usable
             || (!batch.next_apparatus.trim().is_empty()
                 && !chain::stage_ids_match_for_map(order_map, &batch.next_apparatus, apparatus))
             || (!json_string_field(&batch.payload_json, "next_stage_node_id").is_empty()
@@ -463,6 +464,9 @@ impl ProductionMapService {
                     &json_string_field(&batch.payload_json, "next_stage_node_id"), &stage.node_id))
         {
             return Err(ProductionMapError::ProgressBatchNotAccepted);
+        }
+        if !source_wip_is_usable {
+            return Err(progress_batch_usage_error(&batch, order_map));
         }
         Ok(Some(batch))
     }
@@ -1903,7 +1907,7 @@ impl ProductionMapService {
         now: i64,
         canonical: &RuntimeApparatusConfiguration,
     ) -> Result<QueueProgressRecords, ProductionMapError> {
-        if !apparatus::is_laminatsiya_apparatus(canonical)
+        if !apparatus::uses_lamination_workflow(canonical)
             || (progress.worker_handoff && progress.remove_roll_from_apparatus)
         {
             return Err(ProductionMapError::ProgressInputInvalid);
@@ -2360,7 +2364,7 @@ impl ProductionMapService {
             now,
         } = context;
         let is_rezka = apparatus::is_rezka_apparatus(canonical);
-        let is_laminatsiya = apparatus::is_laminatsiya_apparatus(canonical);
+        let is_laminatsiya = apparatus::uses_lamination_workflow(canonical);
         if action != queue_state::ApparatusQueueAction::Merge
             || (!is_rezka && !is_laminatsiya)
         {

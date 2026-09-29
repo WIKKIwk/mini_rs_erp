@@ -158,10 +158,8 @@ pub(super) fn filter_unselected_print_orders(
 /// Queue-owned stage-specific helpers cannot classify an opaque ID without a
 /// canonical apparatus lookup. They fail closed for operations that require a
 /// specific family; callers use these only as conservative guards.
-pub(super) fn is_laminatsiya_apparatus(apparatus: &RuntimeApparatusConfiguration) -> bool {
-    apparatus.is_active()
-        && apparatus.runtime.execution_profile.operation == ExecutionOperation::Laminate
-        && apparatus.supports(EquipmentCapabilityCode::Laminate)
+pub(super) fn uses_lamination_workflow(apparatus: &RuntimeApparatusConfiguration) -> bool {
+    apparatus.uses_lamination_workflow()
 }
 
 pub(super) fn is_rezka_apparatus(apparatus: &RuntimeApparatusConfiguration) -> bool {
@@ -171,7 +169,7 @@ pub(super) fn is_rezka_apparatus(apparatus: &RuntimeApparatusConfiguration) -> b
 }
 
 pub(super) fn requires_previous_stage(apparatus: &RuntimeApparatusConfiguration) -> bool {
-    is_laminatsiya_apparatus(apparatus) || is_rezka_apparatus(apparatus)
+    uses_lamination_workflow(apparatus) || is_rezka_apparatus(apparatus)
 }
 
 pub(super) fn requires_qolip_scan(apparatus: &RuntimeApparatusConfiguration) -> bool {

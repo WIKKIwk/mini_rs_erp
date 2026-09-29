@@ -418,6 +418,16 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         ProductionMapError::RezkaFinalRollRequired => bad_request("rezka_final_roll_required"),
         ProductionMapError::ProgressBatchNotFound => not_found("progress_batch_not_found"),
         ProductionMapError::ProgressBatchNotAccepted => bad_request("progress_batch_not_accepted"),
+        ProductionMapError::ProgressBatchAlreadyUsed { apparatus_name } => {
+            let mut body = AdminErrorResponse::new("progress_batch_already_used");
+            body.apparatus_name = Some(apparatus_name);
+            (StatusCode::BAD_REQUEST, Json(body))
+        }
+        ProductionMapError::ProgressBatchInUse { apparatus_name } => {
+            let mut body = AdminErrorResponse::new("progress_batch_in_use");
+            body.apparatus_name = Some(apparatus_name);
+            (StatusCode::BAD_REQUEST, Json(body))
+        }
         ProductionMapError::ProgressBatchNotResumable => {
             bad_request("progress_batch_not_resumable")
         }
@@ -459,6 +469,7 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         ProductionMapError::PaddonAlreadyReceived => conflict("paddon_already_received"),
         ProductionMapError::PaddonCodeExhausted => conflict("paddon_code_exhausted"),
         ProductionMapError::PaddonNotFound => not_found("paddon_not_found"),
+        ProductionMapError::PaddonDeleteLocked => conflict("paddon_delete_locked"),
         ProductionMapError::PaddonItemAlreadyAssigned => conflict("paddon_item_already_assigned"),
         ProductionMapError::PaddonItemNotAssigned => bad_request("paddon_item_not_assigned"),
         ProductionMapError::CapacityProfileInvalid => bad_request("capacity_profile_invalid"),

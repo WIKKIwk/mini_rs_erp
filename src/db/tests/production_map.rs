@@ -16,6 +16,8 @@ use crate::db::postgres_production_map::PostgresProductionMapStore;
 use super::seed_standard_canonical_apparatus;
 #[path = "paddon_receipt.rs"]
 mod paddon_receipt;
+#[path = "paddon_delete.rs"]
+mod paddon_delete;
 
 #[tokio::test]
 async fn postgres_production_map_store_persists_maps_sequences_and_queue_states() {

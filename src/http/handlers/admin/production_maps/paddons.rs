@@ -308,6 +308,40 @@ pub async fn production_map_paddon_create(
     })))
 }
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PaddonDeleteRequest {
+    code: String,
+}
+
+pub async fn production_map_paddon_delete(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AdminError> {
+    authorize_any_capability(
+        &state,
+        &headers,
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::ApparatusQueueManage,
+        ],
+    )
+    .await?;
+    if method != Method::POST {
+        return Err(method_not_allowed());
+    }
+    let input: PaddonDeleteRequest = parse_json(&body)?;
+    state
+        .production_maps
+        .delete_paddon(&input.code)
+        .await
+        .map_err(production_map_error)?;
+    Ok(json_response(serde_json::json!({"ok": true})))
+}
+
 pub async fn production_map_paddon_item_add(
     State(state): State<AppState>,
     method: Method,

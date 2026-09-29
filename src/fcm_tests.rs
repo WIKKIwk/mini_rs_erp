@@ -144,7 +144,7 @@ struct MockFcmRequest {
     body: String,
 }
 
-const TEST_PRIVATE_KEY: &str = r#"-----BEGIN PRIVATE KEY-----
+pub(crate) const TEST_PRIVATE_KEY: &str = r#"-----BEGIN PRIVATE KEY-----
 MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDydatENz2MLGYr
 H3j+5vpEOP181WWeSAxdaFe3Upv9F/hrl0Y42Ya7GGy6j2EyOkqpUGiWhApB6S0/
 0fYL8fCIhQ/sb+YlKBTpQ4eFj5epGUVr8wHBkVvyNFOQQ/lBc6shyhifbJ+oYc7I

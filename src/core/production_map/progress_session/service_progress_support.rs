@@ -7,6 +7,34 @@ use super::progress::{
 };
 use super::service_progress_metrics::ProgressMetrics;
 
+/// Preserve the WIP ownership guard while reporting why a matching QR is blocked.
+pub(super) fn progress_batch_usage_error(
+    batch: &OrderProgressBatch,
+    map: &ProductionMapDefinition,
+) -> ProductionMapError {
+    let owner = match batch.wip_status {
+        OrderProgressBatchWipStatus::Processed => non_empty_or(
+            &batch.processed_by_apparatus,
+            &batch.used_by_apparatus,
+        ),
+        _ => batch.used_by_apparatus.clone(),
+    };
+    let owner = non_empty_or(&owner, &batch.current_apparatus);
+    let apparatus_name = map.nodes.iter()
+        .find(|node| node.kind == ProductionMapNodeKind::Apparatus
+            && (node.apparatus_id.trim() == owner.trim() || node.title.trim() == owner.trim()))
+        .map(|node| node.title.trim().to_string())
+        .filter(|name| !name.starts_with("apparatus:"))
+        .unwrap_or_default();
+    match batch.wip_status {
+        OrderProgressBatchWipStatus::Processed =>
+            ProductionMapError::ProgressBatchAlreadyUsed { apparatus_name },
+        OrderProgressBatchWipStatus::InUse =>
+            ProductionMapError::ProgressBatchInUse { apparatus_name },
+        OrderProgressBatchWipStatus::Waiting => ProductionMapError::ProgressBatchNotAccepted,
+    }
+}
+
 
 pub(super) fn start_session_payload(
     actor: &QueueActionActor,

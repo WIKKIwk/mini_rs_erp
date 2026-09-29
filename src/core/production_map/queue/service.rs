@@ -604,7 +604,7 @@ impl ProductionMapService {
                 continue;
             };
             let is_rezka = apparatus::is_rezka_apparatus(canonical);
-            let is_laminatsiya = apparatus::is_laminatsiya_apparatus(canonical);
+            let is_laminatsiya = apparatus::uses_lamination_workflow(canonical);
             let apparatus_preflight = print_preflight_by_apparatus.get(&storage_key);
             let stored_sequence = sequences
                 .get(&storage_key)

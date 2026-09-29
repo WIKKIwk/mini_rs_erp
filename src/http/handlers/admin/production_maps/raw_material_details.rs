@@ -328,6 +328,9 @@ pub(super) async fn roll_width_allowance_mm(
             ProductionMapError::RawMaterialInvalidInput,
         ));
     }
+    if configuration.uses_lamination_workflow() {
+        return Ok(Some(30.0));
+    }
     Ok(match configuration.runtime.execution_profile.operation {
         ExecutionOperation::Print => Some(20.0),
         ExecutionOperation::Laminate => Some(30.0),

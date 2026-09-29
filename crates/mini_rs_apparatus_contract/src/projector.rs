@@ -9,8 +9,8 @@ use sha2::{Digest, Sha256};
 use super::{
     ApparatusCapacity, ApparatusDisplay, ApparatusId, ApparatusLifecycle,
     CanonicalApparatusRevision, CapacityAvailability, EquipmentCapabilityCode, EquipmentClassId,
-    EquipmentHierarchyScope, ExecutionProfile, FactoryMapPlacement, LifecycleState,
-    MaterialExecutionPolicy, PhysicalAssetId, QueueDiscipline, ToolingExecutionPolicy,
+    EquipmentHierarchyScope, ExecutionOperation, ExecutionProfile, FactoryMapPlacement, LifecycleState,
+    MaterialExecutionPolicy, PhysicalAssetId, ProcessTechnology, QueueDiscipline, ToolingExecutionPolicy,
     TrainingProfile, WorkingWindowV1,
 };
 
@@ -216,6 +216,20 @@ impl RuntimeApparatusConfiguration {
 
     pub fn supports(&self, capability: EquipmentCapabilityCode) -> bool {
         self.runtime.capabilities.contains_key(&capability)
+    }
+
+    /// Shared roll-processing workflow. Cold glue keeps its own canonical
+    /// operation, identity and group while using lamination's operator actions.
+    pub fn uses_lamination_workflow(&self) -> bool {
+        self.is_active()
+            && match self.runtime.execution_profile.operation {
+                ExecutionOperation::Laminate => self.supports(EquipmentCapabilityCode::Laminate),
+                ExecutionOperation::Glue => {
+                    self.runtime.execution_profile.technology == ProcessTechnology::ColdGlue
+                        && self.supports(EquipmentCapabilityCode::Glue)
+                }
+                _ => false,
+            }
     }
 }
 

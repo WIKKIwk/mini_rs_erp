@@ -1341,8 +1341,33 @@ async fn laminatsiya_queue_exposes_start_for_waiting_print_wip_behind_unready_qu
 
 #[tokio::test]
 async fn laminatsiya_merge_splices_same_order_wips_and_rejects_another_order() {
+    assert_lamination_workflow_merge("apparatus:default:asset-007").await;
+}
+
+#[tokio::test]
+async fn cold_glue_merge_splices_same_order_wips_and_rejects_another_order() {
+    assert_lamination_workflow_merge("apparatus:default:holodniy_kley").await;
+}
+
+async fn assert_lamination_workflow_merge(apparatus: &str) {
     let print_requests = Arc::new(Mutex::new(Vec::<ScaleDriverPrintRequest>::new()));
     let mut state = test_state();
+    if apparatus == "apparatus:default:holodniy_kley" {
+        use crate::core::apparatus_standard::{ExecutionOperation, ProcessTechnology};
+        state
+            .apparatus
+            .seed_for_test(
+                ApparatusId::new(apparatus).unwrap(),
+                canonical_draft(&TestApparatusSpec::operation(
+                    apparatus,
+                    "Holodniy kley aparat",
+                    ExecutionOperation::Glue,
+                    ProcessTechnology::ColdGlue,
+                )),
+            )
+            .await
+            .unwrap();
+    }
     state.gscale = GscaleService::new().with_driver(Arc::new(FakeProgressDriver {
         requests: print_requests,
         fail: false,
@@ -1355,7 +1380,7 @@ async fn laminatsiya_merge_splices_same_order_wips_and_rejects_another_order() {
             role_id: "aparatchi".to_string(),
             assigned_apparatus: vec![
                 "apparatus:default:bosma_7".to_string(),
-                "apparatus:default:asset-007".to_string(),
+                apparatus.to_string(),
                 "apparatus:default:asset-008".to_string(),
             ],
             assigned_item_groups: Vec::new(),
@@ -1375,7 +1400,7 @@ async fn laminatsiya_merge_splices_same_order_wips_and_rejects_another_order() {
             "Laminatsiya merge",
             "9342",
             "apparatus:default:bosma_7",
-            "apparatus:default:asset-007",
+            apparatus,
         ),
         pechat_order_map_json_with_dims(
             foreign_order_id,
@@ -1571,7 +1596,7 @@ async fn laminatsiya_merge_splices_same_order_wips_and_rejects_another_order() {
             &worker_token,
             &format!(
                 r#"{{
-                    "apparatus":"apparatus:default:asset-007",
+                    "apparatus":"{apparatus}",
                     "order_id":"{order_id}",
                     "action":"start",
                     "qr_payload":"{first_qr}"
@@ -1614,7 +1639,7 @@ async fn laminatsiya_merge_splices_same_order_wips_and_rejects_another_order() {
         .expect("laminatsiya merge control");
     let snapshot_body = json_body(snapshot).await;
     let action_control =
-        &snapshot_body["queue_action_controls"]["apparatus:default:asset-007"][order_id];
+        &snapshot_body["queue_action_controls"][apparatus][order_id];
     assert!(
         action_control["allowed_actions"]
             .as_array()
@@ -1638,7 +1663,7 @@ async fn laminatsiya_merge_splices_same_order_wips_and_rejects_another_order() {
             &worker_token,
             &format!(
                 r#"{{
-                    "apparatus":"apparatus:default:asset-007",
+                    "apparatus":"{apparatus}",
                     "order_id":"{order_id}",
                     "action":"merge",
                     "qr_payload":"{foreign_qr}"
@@ -1661,7 +1686,7 @@ async fn laminatsiya_merge_splices_same_order_wips_and_rejects_another_order() {
             &worker_token,
             &format!(
                 r#"{{
-                    "apparatus":"apparatus:default:asset-007",
+                    "apparatus":"{apparatus}",
                     "order_id":"{order_id}",
                     "action":"merge",
                     "qr_payload":"{second_qr}",
@@ -1700,7 +1725,7 @@ async fn laminatsiya_merge_splices_same_order_wips_and_rejects_another_order() {
             &worker_token,
             &format!(
                 r#"{{
-                    "apparatus":"apparatus:default:asset-007",
+                    "apparatus":"{apparatus}",
                     "order_id":"{order_id}",
                     "action":"complete",
                     "qr_payload":"{second_qr}",
@@ -1720,6 +1745,7 @@ async fn laminatsiya_merge_splices_same_order_wips_and_rejects_another_order() {
     let completed_body = json_body(completed).await;
     assert_eq!(completed_status, StatusCode::OK, "{completed_body:?}");
     assert_eq!(completed_body["states"][order_id], "completed");
+    assert_eq!(completed_body["progress_batch"]["apparatus"], apparatus);
     let source_links = completed_body["progress_batch"]["payload_json"]["source_input_links"]
         .as_array()
         .expect("output source links");

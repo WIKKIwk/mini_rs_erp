@@ -10,6 +10,8 @@ mod suppliers;
 mod system;
 mod system_users;
 mod telegram;
+mod push_config;
+pub use push_config::{push_config, push_config_check, push_config_test};
 mod training;
 mod warehouse_live;
 mod workers;
@@ -23,6 +25,8 @@ pub use customers::{
 };
 pub use items::{item_detail, item_uoms};
 pub use production_maps::{
+    production_map_order_alert,
+    production_map_paddon_delete,
     material_link_requests,
     werka_paddon_preview, werka_paddon_receive,
     production_map_apparatus_transfer, production_map_audit, production_map_capacity,
@@ -384,6 +388,8 @@ pub struct AdminErrorDetails {
     pub blockers: Option<Vec<crate::core::production_map::OrderDeleteBlocker>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub apparatus_options: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub apparatus_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub order_width_mm: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]

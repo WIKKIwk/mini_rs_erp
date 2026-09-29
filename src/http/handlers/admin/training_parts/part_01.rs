@@ -154,9 +154,14 @@ fn training_apparatus_role<'a>(
     })
 }
 
-fn is_laminatsiya_apparatus(map: &ProductionMapDefinition, apparatus_id: &str) -> bool {
+fn training_role_uses_lamination_workflow(role: &str) -> bool {
+    role.eq_ignore_ascii_case(TRAINING_LAMINATSIYA_ROLE)
+        || role.eq_ignore_ascii_case("glue")
+}
+
+fn training_uses_lamination_workflow(map: &ProductionMapDefinition, apparatus_id: &str) -> bool {
     training_apparatus_role(map, apparatus_id)
-        .is_some_and(|role| role.eq_ignore_ascii_case(TRAINING_LAMINATSIYA_ROLE))
+        .is_some_and(training_role_uses_lamination_workflow)
 }
 
 fn is_rezka_apparatus(map: &ProductionMapDefinition, apparatus_id: &str) -> bool {
@@ -173,7 +178,7 @@ fn is_training_input_node(node: &ProductionMapNode) -> bool {
 }
 
 fn virtual_training_input_id_for_role(role: &str) -> Option<&'static str> {
-    if role.eq_ignore_ascii_case(TRAINING_LAMINATSIYA_ROLE) {
+    if training_role_uses_lamination_workflow(role) {
         Some(TRAINING_VIRTUAL_INPUT_BOSMA)
     } else if role.eq_ignore_ascii_case(TRAINING_REZKA_ROLE) {
         Some(TRAINING_VIRTUAL_INPUT_LAMINATSIYA)

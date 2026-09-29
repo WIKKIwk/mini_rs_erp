@@ -44,7 +44,7 @@ use crate::db::postgres_order_reset::PostgresOrderResetStore;
 use crate::db::postgres_raw_material_events::PostgresRawMaterialEventStore;
 use crate::db::postgres_training_workspace::PostgresTrainingWorkspaceStore;
 use crate::db::postgres_werka::PostgresWerkaHomeLookup;
-use crate::fcm::discover_push_sender;
+use crate::fcm::config::FcmConfigService;
 use crate::google_sheets::{OrderSheetSink, discover_order_sheet_sink};
 use crate::rps::RpsDriverClient;
 use crate::store::admin_store::JsonAdminStore;
@@ -95,6 +95,7 @@ pub struct AppState {
     pub mobile_releases: MobileReleaseStore,
     pub calculate_order_image_dir: Arc<std::path::PathBuf>,
     pub push: PushService,
+    pub fcm_config: Arc<FcmConfigService>,
     pub gscale: GscaleService,
     pub qolip: QolipService,
     pub rezka: RezkaService,
@@ -282,8 +283,8 @@ impl AppState {
         let calculate_order_image_dir = Arc::new(calculate_order_image_dir());
         let push_token_store = build_push_token_store(&config);
         let profiles = build_profile_service(&config, profile_store);
-        let push = PushService::new(push_token_store.clone())
-            .with_sender(discover_push_sender(push_token_store));
+        let fcm_config = FcmConfigService::load(push_token_store.clone());
+        let push = PushService::new(push_token_store).with_sender(fcm_config.clone());
         let chat = build_chat_service();
         let chat_media = build_chat_media_service(&config);
         chat.start_delivery_worker(push.clone());
@@ -341,6 +342,7 @@ impl AppState {
             mobile_releases,
             calculate_order_image_dir,
             push,
+            fcm_config,
             gscale,
             qolip,
             rezka,

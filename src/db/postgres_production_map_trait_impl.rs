@@ -598,6 +598,10 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         PostgresProductionMapStore::create_paddon(self, input).await
     }
 
+    async fn delete_paddon(&self, code: &str) -> Result<(), ProductionMapError> {
+        paddon_delete::delete_paddon(&self.pool, code).await
+    }
+
     async fn paddon_snapshot(
         &self,
         code: &str,

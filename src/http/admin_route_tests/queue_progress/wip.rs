@@ -119,6 +119,9 @@ async fn scoped_progress_qr_lookup_accepts_assigned_alternative_without_claiming
     let claimed = router.oneshot(request_with_body("POST", "/v1/mobile/admin/production-maps/progress-qr/lookup", &admin,
         &serde_json::json!({"qr_payload":batch["qr_payload"],"apparatus":lam2,"order_id":order}).to_string())).await.unwrap();
     assert_eq!(claimed.status(), StatusCode::BAD_REQUEST);
+    let claimed_body = json_body(claimed).await;
+    assert_eq!(claimed_body["error"], "progress_batch_in_use");
+    assert_eq!(claimed_body["apparatus_name"], "Lam1");
 }
 
 #[tokio::test]

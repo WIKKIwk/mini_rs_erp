@@ -1,5 +1,9 @@
 fn production_routes() -> Router<AppState> {
     Router::new()
+        .route(
+            "/v1/mobile/admin/production-maps/order-alert",
+            any(admin::production_map_order_alert),
+        )
         .route("/v1/mobile/admin/pending-orders", any(admin::pending_orders))
         .route("/v1/mobile/admin/production-maps/order-edit", any(admin::production_map_order_edit))
         .route("/v1/mobile/admin/pending-orders/image", any(admin::pending_order_image))
@@ -218,6 +222,10 @@ fn production_routes() -> Router<AppState> {
         .route(
             "/v1/mobile/admin/production-maps/paddons/create",
             any(admin::production_map_paddon_create),
+        )
+        .route(
+            "/v1/mobile/admin/production-maps/paddons/delete",
+            any(admin::production_map_paddon_delete),
         )
         .route(
             "/v1/mobile/admin/production-maps/paddons/items/add",

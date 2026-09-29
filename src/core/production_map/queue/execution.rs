@@ -273,7 +273,7 @@ impl ProductionMapService {
             // This releases only this paused order; another running order is untouched.
             parsed.insert(order_id.to_string(), queue_state::ApparatusQueueOrderState::Completed);
         } else if remove_roll_from_apparatus {
-            if !apparatus::is_laminatsiya_apparatus(&canonical)
+            if !apparatus::uses_lamination_workflow(&canonical)
                 || from_state != queue_state::ApparatusQueueOrderState::Paused
             {
                 return Err(ProductionMapError::QueueActionNotAllowed);
@@ -370,7 +370,7 @@ impl ProductionMapService {
                 serde_json::json!(progress.freeze_request_id.trim());
         }
         if queue_action == queue_state::ApparatusQueueAction::Complete
-            && (apparatus::is_laminatsiya_apparatus(&canonical)
+            && (apparatus::uses_lamination_workflow(&canonical)
                 || apparatus::is_rezka_apparatus(&canonical))
             && !progress.force_full_completion_metrics
         {
@@ -944,7 +944,7 @@ fn has_unprocessed_previous_wips_from_batches<'a>(
     let Some(previous_apparatus) = previous_apparatus else {
         return false;
     };
-    let requires_previous_stage_completion = apparatus::is_laminatsiya_apparatus(canonical)
+    let requires_previous_stage_completion = apparatus::uses_lamination_workflow(canonical)
         || apparatus::is_rezka_apparatus(canonical);
     let previous_stage_completed = all_states.iter().any(|(candidate, states)| {
         super::super::types::apparatus_ids_match(candidate, &previous_apparatus)

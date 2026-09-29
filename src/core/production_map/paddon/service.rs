@@ -87,6 +87,16 @@ impl ProductionMapService {
         self.store.create_paddon(input).await
     }
 
+    pub async fn delete_paddon(&self, code: &str) -> Result<(), ProductionMapError> {
+        let code = code.trim();
+        if code.is_empty() || code.len() > 128 {
+            return Err(ProductionMapError::PaddonInvalidInput);
+        }
+        self.store.delete_paddon(code).await?;
+        self.notify_live();
+        Ok(())
+    }
+
     pub async fn paddon_snapshot(&self, code: &str) -> Result<PaddonSnapshot, ProductionMapError> {
         let code = code.trim();
         if code.is_empty() {

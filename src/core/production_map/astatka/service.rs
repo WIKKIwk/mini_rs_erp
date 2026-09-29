@@ -30,7 +30,7 @@ impl ProductionMapService {
             .map_err(|_| ProductionMapError::ProgressInputInvalid)?;
         let canonical = self.resolve_canonical_apparatus(&apparatus_id).await?;
         if canonical.runtime.apparatus_id != apparatus_id
-            || !super::apparatus::is_laminatsiya_apparatus(&canonical)
+            || !super::apparatus::uses_lamination_workflow(&canonical)
         {
             return Err(ProductionMapError::ProgressInputInvalid);
         }

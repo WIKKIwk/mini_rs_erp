@@ -215,6 +215,10 @@ pub enum ProductionMapError {
     ProgressBatchNotFound,
     #[error("progress batch does not match previous stage")]
     ProgressBatchNotAccepted,
+    #[error("progress batch was already used at {apparatus_name}")]
+    ProgressBatchAlreadyUsed { apparatus_name: String },
+    #[error("progress batch is in use at {apparatus_name}")]
+    ProgressBatchInUse { apparatus_name: String },
     #[error("progress batch cannot resume")]
     ProgressBatchNotResumable,
     #[error("progress batch correction reason is required")]
@@ -257,6 +261,8 @@ pub enum ProductionMapError {
     PaddonCodeExhausted,
     #[error("paddon was not found")]
     PaddonNotFound,
+    #[error("paddon is not empty or has activity history")]
+    PaddonDeleteLocked,
     #[error("progress batch is already assigned to another paddon")]
     PaddonItemAlreadyAssigned,
     #[error("progress batch is not assigned to this paddon")]
