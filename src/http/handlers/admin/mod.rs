@@ -11,7 +11,7 @@ mod system;
 mod system_users;
 mod telegram;
 mod push_config;
-pub use push_config::{push_config, push_config_check, push_config_test};
+pub use push_config::{push_config, push_config_check, push_config_test, push_mobile_config, push_client_config};
 mod training;
 mod warehouse_live;
 mod workers;

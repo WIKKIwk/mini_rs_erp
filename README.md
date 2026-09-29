@@ -365,8 +365,18 @@ configuration takes precedence over the legacy `FCM_SERVICE_ACCOUNT_PATH` file.
 Invalid credentials or failed persistence leave the previous sender active.
 Without valid configuration the chat push worker retains its retry behavior.
 The test endpoint accepts only a device token owned by the calling admin and
-reports FCM acceptance, not confirmed display on the phone. iOS still requires
-its Firebase client configuration, push signing entitlement, and APNs setup.
+reports FCM acceptance, not confirmed display on the phone.
+
+`PUT /v1/mobile/admin/push-config/mobile` accepts `{platform, config}` for Android
+and iOS public Firebase SDK options uploaded through the same admin page.
+Project, package/bundle ID, app ID and sender ID are validated. Public options
+are persisted beside the encrypted credential file as `fcm-config.clients.json`.
+Preserve both files across deployments. `GET /v1/mobile/push-config` serves only
+these public options to authenticated employees; service-account credentials and
+admin metadata are never returned there. Changing the server project hides old
+client configurations until matching ones are uploaded. Devices fetch settings
+at login/start/resume and cache them for native background push initialization.
+iOS still needs the Apple signing entitlement and APNs setup in Firebase Console.
 
 Workers can send an order reminder with
 `POST /v1/mobile/admin/production-maps/order-alert` and

@@ -1,5 +1,7 @@
 fn identity_routes() -> Router<AppState> {
     Router::new()
+        .route("/v1/mobile/push-config", any(admin::push_client_config))
+        .route("/v1/mobile/admin/push-config/mobile", any(admin::push_mobile_config))
         .route("/v1/mobile/admin/push-config", any(admin::push_config))
         .route("/v1/mobile/admin/push-config/check", any(admin::push_config_check))
         .route("/v1/mobile/admin/push-config/test", any(admin::push_config_test))

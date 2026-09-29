@@ -254,6 +254,7 @@ async fn fcm_config_http_requires_admin_and_never_returns_private_key() {
         ("PUT", ""),
         ("POST", "/check"),
         ("POST", "/test"),
+        ("PUT", "/mobile"),
     ] {
         let response = crate::http::router::build_router(state.clone())
             .oneshot(request(method, suffix, &worker, json!({})))
@@ -267,7 +268,8 @@ async fn fcm_config_http_requires_admin_and_never_returns_private_key() {
         .oneshot(request("PUT", "", &admin, mismatch))
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    // The old phone project must not prevent migrating the server to a new project.
+    assert_eq!(response.status(), StatusCode::OK);
     let response = crate::http::router::build_router(state.clone())
         .oneshot(request(
             "PUT",
@@ -278,7 +280,7 @@ async fn fcm_config_http_requires_admin_and_never_returns_private_key() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    let response = crate::http::router::build_router(state)
+    let response = crate::http::router::build_router(state.clone())
         .oneshot(request("GET", "", &admin, json!({})))
         .await
         .unwrap();
@@ -289,4 +291,93 @@ async fn fcm_config_http_requires_admin_and_never_returns_private_key() {
     assert!(!public.contains("private_key"));
     assert!(!public.contains("PRIVATE KEY"));
     assert!(public.contains("project-one"));
+    let client = mobile_config("project-one", "ios");
+    let response = crate::http::router::build_router(state.clone())
+        .oneshot(request(
+            "PUT",
+            "/mobile",
+            &admin,
+            json!({"platform":"ios", "config":client}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    for (token, expected) in [
+        (worker.as_str(), StatusCode::OK),
+        (admin.as_str(), StatusCode::OK),
+        ("invalid", StatusCode::UNAUTHORIZED),
+    ] {
+        let response = crate::http::router::build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/mobile/push-config")
+                    .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+        if expected == StatusCode::OK {
+            let body = to_bytes(response.into_body(), 4096).await.unwrap();
+            let json: Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(json["ios"]["project_id"], "project-one");
+            assert_eq!(json.as_object().unwrap().len(), 2);
+            assert!(!String::from_utf8_lossy(&body).contains("private_key"));
+            assert!(!String::from_utf8_lossy(&body).contains("client_email"));
+        }
+    }
+}
+
+fn mobile_config(project: &str, platform: &str) -> crate::fcm::mobile_config::FirebaseClientConfig {
+    crate::fcm::mobile_config::FirebaseClientConfig {
+        project_id: project.into(),
+        app_id: format!("1:12345:{platform}:abc123"),
+        messaging_sender_id: "12345".into(),
+        api_key: "AIzaTestPublicKey".into(),
+        application_id: if platform == "ios" {
+            "com.example.accordMobileV2.mirsaid.uzkingshark"
+        } else {
+            "com.example.accord_mobile_v2"
+        }
+        .into(),
+    }
+}
+
+#[tokio::test]
+async fn fcm_mobile_configs_validate_persist_and_follow_server_project() {
+    let (_dir, service, _) = setup().await;
+    service.save(account("project-one")).await.unwrap();
+    for platform in ["android", "ios"] {
+        let config = mobile_config("project-one", platform);
+        service.save_mobile_config(platform, config).await.unwrap();
+    }
+    assert!(service.status().mobile.android.is_some());
+    assert!(service.status().mobile.ios.is_some());
+    let before = std::fs::read(service.path.with_extension("clients.json")).unwrap();
+    assert!(matches!(
+        service
+            .save_mobile_config("ios", mobile_config("wrong-project", "ios"))
+            .await,
+        Err(FcmConfigError::ProjectMismatch)
+    ));
+    let mut bad = mobile_config("project-one", "ios");
+    bad.application_id = "other.app".into();
+    assert!(matches!(
+        service.save_mobile_config("ios", bad).await,
+        Err(FcmConfigError::InvalidClientConfig)
+    ));
+    assert_eq!(
+        std::fs::read(service.path.with_extension("clients.json")).unwrap(),
+        before
+    );
+    let mut restored = FcmConfigService::new(service.store.clone(), service.path.clone());
+    restored.cipher_override = service.cipher_override.clone();
+    restored.endpoints = service.endpoints.clone();
+    restored.restore();
+    assert!(restored.mobile_configs().ios.is_some());
+    assert!(restored.mobile_configs().android.is_some());
+    service.save(account("project-two")).await.unwrap();
+    assert!(service.mobile_configs().ios.is_none());
+    assert!(service.mobile_configs().android.is_none());
 }

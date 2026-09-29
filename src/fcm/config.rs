@@ -1,4 +1,5 @@
 //! Admin-managed FCM credentials. Never expose the credential document in status responses.
+use super::mobile_config::FirebaseMobileConfigs;
 use super::{
     FcmPushSender, auth::ServiceAccount, discover_service_account_path, payload::FcmPayload,
 };
@@ -28,10 +29,15 @@ pub struct FcmConfigStatus {
     pub source: String,
     pub last_verified_at: Option<i64>,
     pub error: Option<String>,
+    pub mobile: FirebaseMobileConfigs,
 }
 
 #[derive(Debug, Clone, Copy, thiserror::Error)]
 pub enum FcmConfigError {
+    #[error("push_config_invalid_client_config")]
+    InvalidClientConfig,
+    #[error("push_config_project_mismatch")]
+    ProjectMismatch,
     #[error("push_config_invalid_credentials")]
     InvalidCredentials,
     #[error("push_config_google_rejected")]
@@ -49,16 +55,17 @@ pub enum FcmConfigError {
 }
 
 #[derive(Default)]
-struct RuntimeConfig {
+pub(super) struct RuntimeConfig {
     sender: Option<Arc<FcmPushSender>>,
-    status: FcmConfigStatus,
+    pub(super) status: FcmConfigStatus,
 }
 
 pub struct FcmConfigService {
     store: Arc<dyn PushTokenStorePort>,
-    path: PathBuf,
-    runtime: RwLock<RuntimeConfig>,
-    update: Mutex<()>,
+    pub(super) path: PathBuf,
+    pub(super) runtime: RwLock<RuntimeConfig>,
+    pub(super) update: Mutex<()>,
+    pub(super) mobile: RwLock<FirebaseMobileConfigs>,
     #[cfg(test)]
     cipher_override: Option<Arc<CodeCipher>>,
     #[cfg(test)]
@@ -81,7 +88,12 @@ impl FcmConfigService {
     }
 
     fn new(store: Arc<dyn PushTokenStorePort>, path: PathBuf) -> Self {
+        let mobile = std::fs::read(path.with_extension("clients.json"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default();
         Self {
+            mobile: RwLock::new(mobile),
             store,
             path,
             runtime: RwLock::new(RuntimeConfig::default()),
@@ -148,6 +160,7 @@ impl FcmConfigService {
             source: source.into(),
             last_verified_at: verified,
             error: None,
+            mobile: FirebaseMobileConfigs::default(),
         };
         #[cfg(test)]
         if let Some((auth, _)) = &self.endpoints {
@@ -166,7 +179,9 @@ impl FcmConfigService {
     }
 
     pub fn status(&self) -> FcmConfigStatus {
-        self.runtime.read().unwrap().status.clone()
+        let mut status = self.runtime.read().unwrap().status.clone();
+        status.mobile = self.mobile_configs();
+        status
     }
 
     fn sender(&self) -> Result<Arc<FcmPushSender>, FcmConfigError> {
@@ -197,9 +212,8 @@ impl FcmConfigService {
             .map_err(|_| FcmConfigError::SaveFailed)?;
         persist_private(&self.path, encrypted.as_bytes())?;
         runtime.status.last_verified_at = Some(time::OffsetDateTime::now_utc().unix_timestamp());
-        let status = runtime.status.clone();
         *self.runtime.write().unwrap() = runtime;
-        Ok(status)
+        Ok(self.status())
     }
 
     pub async fn check(&self) -> Result<FcmConfigStatus, FcmConfigError> {
@@ -208,7 +222,8 @@ impl FcmConfigService {
         let mut runtime = self.runtime.write().unwrap();
         runtime.status.last_verified_at = Some(time::OffsetDateTime::now_utc().unix_timestamp());
         runtime.status.error = None;
-        Ok(runtime.status.clone())
+        drop(runtime);
+        Ok(self.status())
     }
 
     pub async fn test_device(
@@ -315,7 +330,7 @@ fn validate_account(document: &Value) -> Result<ServiceAccount, FcmConfigError> 
     Ok(account)
 }
 
-fn persist_private(path: &std::path::Path, bytes: &[u8]) -> Result<(), FcmConfigError> {
+pub(super) fn persist_private(path: &std::path::Path, bytes: &[u8]) -> Result<(), FcmConfigError> {
     use std::io::Write;
     let result = (|| -> std::io::Result<()> {
         if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {

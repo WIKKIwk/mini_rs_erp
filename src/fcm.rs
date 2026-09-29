@@ -1,5 +1,6 @@
 mod auth;
 pub mod config;
+pub mod mobile_config;
 mod payload;
 mod token_cleanup;
 
