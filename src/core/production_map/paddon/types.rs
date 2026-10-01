@@ -19,7 +19,7 @@ pub struct PaddonReceiveWrite {
     pub receipt: PaddonReceipt,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PaddonSummary {
     pub id: String,
     pub code: String,
@@ -34,6 +34,11 @@ pub struct PaddonSummary {
     pub created_at_unix: i64,
     pub updated_at_unix: i64,
     pub item_count: i64,
+    /// Product weights only; pallet tare is excluded. None means incomplete knowledge.
+    #[serde(default)]
+    pub total_gross_kg: Option<f64>,
+    #[serde(default)]
+    pub total_net_kg: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

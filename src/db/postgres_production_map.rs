@@ -47,6 +47,8 @@ mod order_control_helpers;
 mod order_query_helpers;
 #[path = "postgres_production_map/paddon/helpers.rs"]
 mod paddon_helpers;
+#[path = "postgres_production_map/paddon/weights.rs"]
+mod paddon_weights;
 #[path = "postgres_production_map/paddon/delete.rs"]
 mod paddon_delete;
 #[path = "postgres_production_map/paddon/active.rs"]

@@ -51,6 +51,7 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
             id: code.clone(), code: code.clone(), location: input.location, note: input.note,
             created_by_ref: input.actor_ref, created_by_display_name: input.actor_display_name,
             created_at_unix: 0, updated_at_unix: 0, item_count: 0,
+            total_gross_kg: Some(0.0), total_net_kg: Some(0.0),
         };
         paddons.insert(code, paddon.clone());
         Ok(paddon)

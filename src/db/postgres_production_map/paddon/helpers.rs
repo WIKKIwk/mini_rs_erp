@@ -7,7 +7,8 @@ use crate::core::production_map::{
     WipProgressBatchQuery,
 };
 
-use super::order_query_helpers::load_progress_batch;
+use super::paddon_weights::{load_batches, correction_gross};
+use crate::core::production_map::{OrderProgressBatchWipStatus, paddon_weights::set_totals};
 use super::wip_query_helpers::load_unassigned_wip_progress_batches;
 
 #[derive(FromRow)]
@@ -45,10 +46,11 @@ fn summary_from_row(row: PaddonRow) -> PaddonSummary {
         created_at_unix: row.created_at_unix,
         updated_at_unix: row.updated_at_unix,
         item_count: row.item_count,
+        total_gross_kg: None, total_net_kg: None,
     }
 }
 
-async fn load_summary_by_code(
+async fn load_raw_summary_by_code(
     pool: &PgPool,
     code: &str,
 ) -> Result<Option<PaddonSummary>, ProductionMapError> {
@@ -75,7 +77,7 @@ pub(super) async fn load_paddon_summary(
     pool: &PgPool,
     code: &str,
 ) -> Result<Option<PaddonSummary>, ProductionMapError> {
-    load_summary_by_code(pool, code).await
+    Ok(load_snapshot_by_code(pool, code, false).await?.map(|s| s.paddon))
 }
 
 async fn load_snapshot_by_code(
@@ -83,7 +85,7 @@ async fn load_snapshot_by_code(
     code: &str,
     include_available_items: bool,
 ) -> Result<Option<PaddonSnapshot>, ProductionMapError> {
-    let Some(paddon) = load_summary_by_code(pool, code).await? else {
+    let Some(mut paddon) = load_raw_summary_by_code(pool, code).await? else {
         return Ok(None);
     };
     let batch_ids = sqlx::query_scalar::<_, String>(
@@ -96,12 +98,19 @@ async fn load_snapshot_by_code(
     .fetch_all(pool)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
-    let mut items = Vec::with_capacity(batch_ids.len());
-    for batch_id in batch_ids {
-        let batch = load_progress_batch(pool, &batch_id)
-            .await?
-            .ok_or(ProductionMapError::ProgressBatchNotFound)?;
-        items.push(batch);
+    let items = load_batches(pool, &batch_ids).await?;
+    paddon.item_count = i64::try_from(items.len()).unwrap_or(i64::MAX);
+    let corrections = correction_gross(pool, &items).await?;
+    set_totals(
+        &mut paddon,
+        items
+            .iter()
+            .filter(|b| b.wip_status == OrderProgressBatchWipStatus::Waiting)
+            .map(|b| (b, corrections.get(&b.batch_id).copied())),
+    );
+    if let Some(receipt) = super::paddon_receipts::load(pool, code).await? {
+        paddon.total_gross_kg = receipt.paddon.total_gross_kg;
+        paddon.total_net_kg = receipt.paddon.total_net_kg;
     }
     let available_items = if include_available_items {
         load_unassigned_wip_progress_batches(
@@ -132,6 +141,7 @@ pub(super) async fn load_paddons(
                 COUNT(i.id) FILTER (WHERE i.removed_at IS NULL)::bigint AS item_count
          FROM mini_paddons AS p
          LEFT JOIN mini_paddon_items AS i ON i.paddon_id = p.id
+         WHERE p.id IN (SELECT id FROM mini_paddons ORDER BY updated_at DESC, code ASC LIMIT $1)
          GROUP BY p.id
          ORDER BY p.updated_at DESC, p.code ASC
          LIMIT $1",
@@ -140,7 +150,49 @@ pub(super) async fn load_paddons(
     .fetch_all(pool)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
-    Ok(rows.into_iter().map(summary_from_row).collect())
+    let mut summaries: Vec<_> = rows.into_iter().map(summary_from_row).collect();
+    // One membership read for the entire page, with no per-pallet item limit.
+    let paddon_ids: Vec<_> = summaries.iter().map(|p| p.id.clone()).collect();
+    let members = sqlx::query_as::<_, (String, String)>(
+        "SELECT paddon_id, progress_batch_id FROM mini_paddon_items
+         WHERE paddon_id = ANY($1) AND removed_at IS NULL",
+    )
+    .bind(&paddon_ids)
+    .fetch_all(pool)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    let ids: Vec<_> = members.iter().map(|(_, id)| id.clone()).collect();
+    let batches = load_batches(pool, &ids).await?;
+    let corrections = correction_gross(pool, &batches).await?;
+    let batches: std::collections::BTreeMap<_, _> =
+        batches.iter().map(|b| (b.batch_id.as_str(), b)).collect();
+    for summary in &mut summaries {
+        let summary_id = summary.id.clone();
+        set_totals(
+            summary,
+            members
+                .iter()
+                .filter(|(id, _)| id == &summary_id)
+                .filter_map(|(_, id)| batches.get(id.as_str()).copied())
+                .filter(|b| b.wip_status == OrderProgressBatchWipStatus::Waiting)
+                .map(|b| (b, corrections.get(&b.batch_id).copied())),
+        );
+    }
+    let receipts = sqlx::query_as::<_, (String, serde_json::Value)>(
+        "SELECT id, receipt_json FROM mini_paddons WHERE id = ANY($1) AND receipt_json IS NOT NULL",
+    )
+    .bind(&paddon_ids)
+    .fetch_all(pool)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    for (id, value) in receipts {
+        let receipt = super::paddon_weights::enrich_receipt(pool, value).await?;
+        if let Some(summary) = summaries.iter_mut().find(|p| p.id == id) {
+            summary.total_gross_kg = receipt.paddon.total_gross_kg;
+            summary.total_net_kg = receipt.paddon.total_net_kg;
+        }
+    }
+    Ok(summaries)
 }
 
 pub(super) async fn create_paddon(
@@ -181,7 +233,7 @@ pub(super) async fn create_paddon(
     tx.commit()
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
-    load_summary_by_code(pool, &created.code)
+    load_paddon_summary(pool, &created.code)
         .await?
         .ok_or(ProductionMapError::StoreFailed)
 }

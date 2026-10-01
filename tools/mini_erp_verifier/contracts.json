@@ -89,6 +89,7 @@
     }
   ],
   "cases": [
+    {"name":"paddon_create_known_zero_weight_totals","request":{"method":"POST","uri":"/v1/mobile/admin/production-maps/paddons/create","role":"admin","body":{"location":"Cutting"}},"expect":{"status":200,"body":{"ok":true,"paddon":{"item_count":0,"total_gross_kg":0,"total_net_kg":0}}}},
     {"name":"qolip_order_products_anonymous","request":{"method":"POST","uri":"/v1/mobile/qolip/order-products","body":{"order_ids":[]}},"expect":{"status":401}},
     {"name":"qolip_order_products_customer","request":{"method":"POST","uri":"/v1/mobile/qolip/order-products","role":"customer","body":{"order_ids":[]}},"expect":{"status":403}},
     {"name":"qolip_order_products_qolipchi","request":{"method":"POST","uri":"/v1/mobile/qolip/order-products","role":"qolipchi","body":{"order_ids":[]}},"expect":{"status":200,"body":{"ok":true,"orders":[]}}},

@@ -429,6 +429,15 @@ next stage:
 This lets the system track not only that an order moved forward, but which
 physical intermediate output moved to the next apparatus.
 
+Paddon list, detail, QR and warehouse previews expose nullable `total_gross_kg`
+and `total_net_kg` product weights, excluding pallet tare. Only active, available
+assigned rolls count. Gross prefers explicit measured `gross_qty`, then measured
+`finished_goods_kg`; net subtracts known `bobina_kg`. Missing measurements remain
+unknown, while an empty pallet has zero totals. Quantities use six-decimal integer
+arithmetic. Actual audited kg changes override stale historical gross only through
+the loaded batch revision; core, meter and description edits preserve independent
+gross. Legacy receipt totals are enriched from their frozen items and revisions.
+
 #### Production Action Contract
 
 | Action | Preconditions | Persisted effects |

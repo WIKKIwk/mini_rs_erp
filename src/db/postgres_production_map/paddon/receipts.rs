@@ -7,23 +7,43 @@ use super::{
 use crate::core::production_map::{
     validate_receipt_retry, PaddonReceipt, PaddonReceiveWrite, ProductionMapError,
 };
-use sqlx::{Executor, PgPool, Postgres};
+use sqlx::{Executor, PgConnection, PgPool, Postgres};
 
-pub(super) async fn load<'e, E: Executor<'e, Database = Postgres>>(
-    db: E,
+pub(super) async fn load(
+    pool: &PgPool,
     code: &str,
 ) -> Result<Option<PaddonReceipt>, ProductionMapError> {
-    let value = sqlx::query_scalar::<_, Option<serde_json::Value>>(
+    let mut connection = pool
+        .acquire()
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    load_tx(&mut connection, code).await
+}
+
+async fn load_tx(
+    connection: &mut PgConnection,
+    code: &str,
+) -> Result<Option<PaddonReceipt>, ProductionMapError> {
+    match load_value(&mut *connection, code).await? {
+        Some(value) => super::paddon_weights::enrich_receipt(&mut *connection, value)
+            .await
+            .map(Some),
+        None => Ok(None),
+    }
+}
+
+async fn load_value<'e, E: Executor<'e, Database = Postgres>>(
+    db: E,
+    code: &str,
+) -> Result<Option<serde_json::Value>, ProductionMapError> {
+    sqlx::query_scalar::<_, Option<serde_json::Value>>(
         "SELECT receipt_json FROM mini_paddons WHERE code = $1",
     )
     .bind(code.trim())
     .fetch_optional(db)
     .await
-    .map_err(|_| ProductionMapError::StoreFailed)?
-    .flatten();
-    value
-        .map(|v| serde_json::from_value(v).map_err(|_| ProductionMapError::StoreFailed))
-        .transpose()
+    .map(|value| value.flatten())
+    .map_err(|_| ProductionMapError::StoreFailed)
 }
 
 pub(super) async fn commit(
@@ -65,7 +85,7 @@ pub(super) async fn commit(
             .ok_or(ProductionMapError::PaddonNotFound)?;
     let mut expected: Vec<_> = write.originals.iter().map(|b| b.batch_id.clone()).collect();
     expected.sort();
-    if let Some(receipt) = load(&mut *tx, code).await? {
+    if let Some(receipt) = load_tx(&mut tx, code).await? {
         validate_receipt_retry(&receipt, &write.receipt.warehouse, &expected)?;
         return Ok(receipt);
     }

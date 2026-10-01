@@ -497,6 +497,19 @@ impl OrderProgressBatch {
         corrected.finished_goods_meter = input.finished_goods_meter;
         corrected.diameter = input.diameter;
         corrected.description = input.description.trim().to_string();
+        // Synchronize measured gross only when the audited kg value actually changes.
+        // A core, meter or description edit must preserve independently measured gross.
+        if crate::core::production_map::paddon_weights::audited_kg_changed(
+            &self.correction_values(),
+            &corrected.correction_values(),
+        ) {
+            if !corrected.payload_json.is_object() {
+                corrected.payload_json = serde_json::json!({});
+            }
+            corrected.payload_json["gross_qty"] = serde_json::json!(
+                crate::core::production_map::paddon_weights::kg_from_values(&corrected.correction_values())
+            );
+        }
         corrected.sync_correction_payload();
         corrected
     }

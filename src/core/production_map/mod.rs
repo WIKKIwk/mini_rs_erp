@@ -55,6 +55,8 @@ mod service_progress_metrics;
 mod service_progress_support;
 #[path = "paddon/service.rs"]
 mod service_paddon;
+#[path = "paddon/weights.rs"]
+pub(crate) mod paddon_weights;
 #[path = "paddon/receive.rs"]
 mod service_paddon_receive;
 pub(crate) use service_paddon_receive::{validate_receipt_retry, paddon_snapshot_token};

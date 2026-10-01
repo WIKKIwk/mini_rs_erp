@@ -14,6 +14,8 @@ use crate::db::postgres::{
 use crate::db::postgres_production_map::PostgresProductionMapStore;
 
 use super::seed_standard_canonical_apparatus;
+#[path = "paddon_weights.rs"]
+mod paddon_weights;
 #[path = "paddon_receipt.rs"]
 mod paddon_receipt;
 #[path = "paddon_delete.rs"]
