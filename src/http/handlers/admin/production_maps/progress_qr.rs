@@ -147,26 +147,20 @@ pub async fn production_map_progress_qr_report(
     .await
     .map_err(super::super::training::training_workspace_error)?
     {
-        let mut progress_batches =
-            super::super::training::training_progress_batches_for_order(&state, &batch.order_id)
-                .await
-                .map_err(super::super::training::training_workspace_error)?;
-        if !progress_batches
-            .iter()
-            .any(|item| item.batch_id.eq_ignore_ascii_case(&batch.batch_id))
-        {
-            progress_batches.insert(0, batch.clone());
-        }
         return Ok(json_response(serde_json::json!({
             "ok": true,
             "scanned_batch": batch.clone(),
             "current_batch": batch.clone(),
+            "current_batches": [batch.clone()],
+            "history_scope": "batch_lineage",
+            "lineage_complete": false,
+            "lineage_edges": [],
             "is_stale": false,
             "stale_reason": "",
             "queue_states": {},
             "logs": [],
             "corrections": [],
-            "progress_batches": progress_batches,
+            "progress_batches": [batch],
             "run_sessions": [],
             "active_sessions": [],
         })));
@@ -180,6 +174,10 @@ pub async fn production_map_progress_qr_report(
         "ok": true,
         "scanned_batch": report.scanned_batch,
         "current_batch": report.current_batch,
+        "current_batches": report.current_batches,
+        "history_scope": report.history_scope,
+        "lineage_complete": report.lineage_complete,
+        "lineage_edges": report.lineage_edges,
         "is_stale": report.is_stale,
         "stale_reason": report.stale_reason,
         "order": report.order,

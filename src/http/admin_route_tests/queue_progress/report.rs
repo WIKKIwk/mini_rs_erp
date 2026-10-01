@@ -239,7 +239,12 @@ async fn progress_qr_report_marks_processed_qr_as_stale_and_returns_order_flow()
             .get("zakaz-qr-unrelated")
             .is_none()
     );
-    assert_eq!(report_body["logs"].as_array().expect("logs").len(), 4);
+    assert_eq!(report_body["history_scope"], "batch_lineage");
+    assert_eq!(report_body["lineage_complete"], true);
+    assert_eq!(report_body["lineage_edges"].as_array().expect("edges").len(), 1);
+    assert_eq!(report_body["current_batches"].as_array().expect("frontier").len(), 1);
+    // Start logs have no persisted occurrence link; completion report IDs do.
+    assert_eq!(report_body["logs"].as_array().expect("logs").len(), 2);
     assert!(
         report_body["corrections"]
             .as_array()
@@ -260,7 +265,7 @@ async fn progress_qr_report_marks_processed_qr_as_stale_and_returns_order_flow()
             .len(),
         2
     );
-    assert_eq!(report_body["opened_by"]["actor_ref"], "worker-qr-report");
+    assert!(report_body["opened_by"].is_null(), "missing persisted start actor must not be inferred from order logs");
 }
 
 #[tokio::test]

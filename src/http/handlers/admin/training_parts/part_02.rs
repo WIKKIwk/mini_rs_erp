@@ -239,18 +239,6 @@ pub(super) async fn training_progress_batch_for_qr(
     }
 }
 
-pub(super) async fn training_progress_batches_for_order(
-    state: &AppState,
-    order_id: &str,
-) -> Result<Vec<OrderProgressBatch>, TrainingWorkspaceError> {
-    state
-        .training_workspace
-        .as_ref()
-        .ok_or(TrainingWorkspaceError::StoreFailed)?
-        .training_progress_batches_for_order(order_id)
-        .await
-}
-
 pub(super) async fn worker_training_overlay(
     state: &AppState,
     principal: &Principal,

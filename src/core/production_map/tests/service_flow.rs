@@ -37,6 +37,8 @@ mod qr_usage_errors;
 mod cold_glue_workflow;
 #[path = "service_flow_wip_route_continuity.rs"]
 mod wip_route_continuity;
+#[path = "progress_qr_lineage.rs"]
+mod progress_qr_lineage;
 
 const FLOW_REZKA_ID: &str = "apparatus:test:flow-rezka";
 const FLOW_PECHAT_ID: &str = "apparatus:test:flow-pechat";
@@ -5458,7 +5460,8 @@ async fn progress_qr_report_keeps_lineage_when_order_has_more_than_500_batches()
             .map(|batch| batch.qr_payload.as_str()),
         Some("QR-LONG-NEW")
     );
-    assert!(report.progress_batches.len() > 500);
+    assert_eq!(report.progress_batches.len(), 2);
+    assert_eq!(report.current_batches.len(), 1);
 }
 
 #[tokio::test]

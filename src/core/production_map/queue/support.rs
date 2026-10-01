@@ -7,33 +7,6 @@ use super::progress::queue_action_event_id;
 use super::store_port::ApparatusQueueStateMap;
 
 
-pub(super) fn current_progress_batch_for_report<'a>(
-    scanned_batch: &'a OrderProgressBatch,
-    progress_batches: &'a [OrderProgressBatch],
-) -> Option<OrderProgressBatch> {
-    let mut latest_by_parent = BTreeMap::new();
-    for batch in progress_batches {
-        let parent_batch_id = batch.parent_batch_id.trim();
-        let key = progress_batch_order_key(batch);
-        if latest_by_parent
-            .get(parent_batch_id)
-            .is_none_or(|(_, best_key)| key >= *best_key)
-        {
-            latest_by_parent.insert(parent_batch_id, (batch, key));
-        }
-    }
-
-    let mut current = scanned_batch;
-    let mut seen = BTreeSet::from([current.batch_id.trim()]);
-    while let Some((next, _)) = latest_by_parent.get(current.batch_id.trim()) {
-        if !seen.insert(next.batch_id.trim()) {
-            break;
-        }
-        current = next;
-    }
-    Some(current.clone())
-}
-
 pub(super) fn validate_queue_action_request(
     apparatus: &str,
     order_id: &str,
@@ -490,16 +463,6 @@ pub(super) fn mark_finished_goods_batch_received(
     batch.payload_json["received_at_unix"] = serde_json::json!(now);
     batch.payload_json["finished_goods_stock_id"] = serde_json::json!(stock.id);
     batch.refresh_status_detail();
-}
-
-fn progress_batch_order_key(batch: &OrderProgressBatch) -> (u128, &str) {
-    let stamp = batch
-        .batch_id
-        .split(':')
-        .nth(1)
-        .and_then(|value| value.parse::<u128>().ok())
-        .unwrap_or_default();
-    (stamp, batch.batch_id.trim())
 }
 
 pub(super) fn queue_states_for_order(

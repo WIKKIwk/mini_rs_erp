@@ -6,13 +6,16 @@ use super::progress::unix_seconds;
 use super::service_progress_support::normalize_self_consumed_wip_history;
 use super::service_queue_support::*;
 
+#[path = "qr_lineage.rs"]
+mod qr_lineage;
+
 impl ProductionMapService {
     pub async fn progress_qr_report(
         &self,
         progress_batch_id: &str,
         qr_payload: &str,
     ) -> Result<ProductionQrReport, ProductionMapError> {
-        let scanned_batch = self
+        let mut scanned_batch = self
             .progress_batch_for_qr(progress_batch_id, qr_payload)
             .await?;
         let order_id = scanned_batch.order_id.trim().to_string();
@@ -21,8 +24,8 @@ impl ProductionMapService {
             mut progress_batches,
             all_queue_states,
             mut logs_by_order,
-            corrections,
-            run_sessions,
+            mut corrections,
+            mut run_sessions,
             order_status,
         ) = tokio::try_join!(
             self.raw_map(&order_id),
@@ -30,8 +33,7 @@ impl ProductionMapService {
             self.store.apparatus_queue_states(),
             self.store
                 .queue_action_logs_for_orders(std::slice::from_ref(&order_id)),
-            self.store
-                .progress_batch_corrections_for_order(&order_id),
+            self.store.progress_batch_corrections_for_order(&order_id),
             self.store.order_run_sessions_for_order(&order_id),
             self.order_status_detail(&order_id),
         )?;
@@ -39,14 +41,41 @@ impl ProductionMapService {
         for batch in &mut progress_batches {
             batch.refresh_status_detail();
         }
-        if progress_batches.is_empty() {
+        if !progress_batches
+            .iter()
+            .any(|batch| batch.batch_id == scanned_batch.batch_id)
+        {
             progress_batches.push(scanned_batch.clone());
         }
-        let current_batch = current_progress_batch_for_report(&scanned_batch, &progress_batches);
+        let lineage = qr_lineage::batch_lineage(&scanned_batch, &progress_batches, &run_sessions);
+        for batch in &mut progress_batches {
+            // The nominal parent can be the last mounted merge input. Only
+            // verified per-output parents belong in this read-only projection.
+            if !lineage.edges.iter().any(|edge| {
+                edge.child_batch_id == batch.batch_id
+                    && edge.parent_batch_id == batch.parent_batch_id
+            }) {
+                batch.parent_batch_id.clear();
+            }
+        }
+        if let Some(batch) = progress_batches
+            .iter()
+            .find(|batch| batch.batch_id == scanned_batch.batch_id)
+        {
+            scanned_batch = batch.clone();
+        }
+        let current_batches = progress_batches
+            .iter()
+            .filter(|batch| lineage.frontier_ids.contains(batch.batch_id.trim()))
+            .cloned()
+            .collect::<Vec<_>>();
+        let current_batch = if current_batches.len() == 1 {
+            current_batches.first().cloned()
+        } else {
+            None
+        };
         let is_stale = scanned_batch.wip_status == OrderProgressBatchWipStatus::Processed
-            || current_batch
-                .as_ref()
-                .is_some_and(|batch| batch.batch_id.trim() != scanned_batch.batch_id.trim());
+            || lineage.descendant_ids.len() > 1;
         let stale_reason = if !is_stale {
             String::new()
         } else if scanned_batch.wip_status == OrderProgressBatchWipStatus::Processed {
@@ -54,14 +83,74 @@ impl ProductionMapService {
         } else {
             "superseded_by_new_qr".to_string()
         };
-        let queue_states = queue_states_for_order(&all_queue_states, &order_id);
-        let logs = logs_by_order.remove(&order_id).unwrap_or_default();
-        let opened_by = logs.first().map(|entry| ProductionQrOpenedBy {
-            actor_role: entry.actor_role.clone(),
-            actor_ref: entry.actor_ref.clone(),
-            actor_display_name: entry.actor_display_name.clone(),
-            opened_at_unix: entry.created_at_unix,
+        progress_batches.retain(|batch| lineage.batch_ids.contains(batch.batch_id.trim()));
+        corrections.retain(|entry| lineage.batch_ids.contains(entry.batch_id.trim()));
+        run_sessions.retain(|session| lineage.session_ids.contains(session.session_id.trim()));
+        let report_event_ids = run_sessions
+            .iter()
+            .filter_map(super::stage_execution::work_report)
+            .map(|report| report.report_id)
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut logs = logs_by_order.remove(&order_id).unwrap_or_default();
+        logs.retain(|entry| {
+            report_event_ids.contains(entry.event_id.trim())
+                || entry.transfer.as_ref().is_some_and(|transfer| {
+                    lineage
+                        .batch_ids
+                        .contains(transfer.progress_batch_id.trim())
+                })
+                || entry.freeze.as_ref().is_some_and(|freeze| {
+                    lineage
+                        .session_ids
+                        .contains(freeze.target_session_id.trim())
+                })
         });
+        // Queue state is order-level context even on a scoped machine. Per-roll
+        // status is carried by the batches/sessions, never inferred from it.
+        let mut queue_states = queue_states_for_order(&all_queue_states, &order_id);
+        queue_states.retain(|apparatus, _| {
+            progress_batches
+                .iter()
+                .any(|batch| batch.apparatus == *apparatus)
+                || run_sessions
+                    .iter()
+                    .any(|session| session.apparatus == *apparatus)
+        });
+        let roots = progress_batches
+            .iter()
+            .filter(|batch| {
+                !lineage
+                    .edges
+                    .iter()
+                    .any(|edge| edge.child_batch_id == batch.batch_id)
+            })
+            .collect::<Vec<_>>();
+        let opened_by = if roots.len() == 1 {
+            roots
+                .first()
+                .and_then(|batch| {
+                    run_sessions
+                        .iter()
+                        .find(|session| session.session_id == batch.session_id)
+                })
+                .and_then(|session| {
+                    let actor = serde_json::from_value::<QueueActionActor>(
+                        session.payload_json.get("started_by")?.clone(),
+                    )
+                    .ok()?;
+                    Some(ProductionQrOpenedBy {
+                        actor_role: actor.role,
+                        actor_ref: actor.ref_,
+                        actor_display_name: actor.display_name,
+                        opened_at_unix: session.started_at_unix,
+                    })
+                })
+        } else {
+            None
+        };
+        for session in &mut run_sessions {
+            qr_lineage::scope_session_payload(session, &lineage.batch_ids);
+        }
         let active_sessions = run_sessions
             .iter()
             .filter(|session| {
@@ -75,6 +164,10 @@ impl ProductionMapService {
         Ok(ProductionQrReport {
             scanned_batch,
             current_batch,
+            current_batches,
+            history_scope: "batch_lineage".to_string(),
+            lineage_complete: lineage.complete,
+            lineage_edges: lineage.edges,
             is_stale,
             stale_reason,
             order,

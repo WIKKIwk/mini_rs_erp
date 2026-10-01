@@ -555,10 +555,19 @@ pub struct ProductionQrOpenedBy {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProductionQrLineageEdge {
+    pub parent_batch_id: String,
+    pub child_batch_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProductionQrReport {
     pub scanned_batch: OrderProgressBatch,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub current_batch: Option<OrderProgressBatch>,
+    pub current_batches: Vec<OrderProgressBatch>,
+    pub history_scope: String,
+    pub lineage_complete: bool,
+    pub lineage_edges: Vec<ProductionQrLineageEdge>,
     pub is_stale: bool,
     pub stale_reason: String,
     #[serde(skip_serializing_if = "Option::is_none")]
