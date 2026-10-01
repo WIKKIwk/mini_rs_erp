@@ -560,6 +560,78 @@ pub struct ProductionQrLineageEdge {
     pub child_batch_id: String,
 }
 
+/// Actual material scanned at this run's start. `source_qty` is the whole
+/// mounted stock snapshot, never consumption or an allocation to an output.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProductionQrRawMaterial {
+    pub barcode: String,
+    pub item_code: String,
+    pub item_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stock_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_qty: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uom: Option<String>,
+}
+
+pub(crate) const START_RESOURCES_PAYLOAD_FIELD: &str = "start_resources";
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ProductionQrSessionResources {
+    pub session_id: String,
+    pub raw_materials: Vec<ProductionQrRawMaterial>,
+    pub raw_materials_available: bool,
+    pub qolip_codes: Vec<String>,
+    pub qolip_available: bool,
+}
+
+impl ProductionQrSessionResources {
+    pub(crate) fn recorded(session: &OrderRunSession) -> Option<Self> {
+        let resources: Self = serde_json::from_value(
+            session
+                .payload_json
+                .get(START_RESOURCES_PAYLOAD_FIELD)?
+                .clone(),
+        )
+        .ok()?;
+        if resources.session_id != session.session_id
+            || (!resources.raw_materials_available && !resources.raw_materials.is_empty())
+            || (!resources.qolip_available && !resources.qolip_codes.is_empty())
+        {
+            return None;
+        }
+        let mut barcodes = std::collections::BTreeSet::new();
+        if resources.raw_materials.iter().any(|material| {
+            material.barcode.trim().is_empty()
+                || material.item_code.trim().is_empty()
+                || !barcodes.insert(material.barcode.trim().to_ascii_uppercase())
+                || material
+                    .source_qty
+                    .is_some_and(|qty| !qty.is_finite() || qty < 0.0)
+        }) || resources
+            .qolip_codes
+            .iter()
+            .any(|code| code.trim().is_empty())
+        {
+            return None;
+        }
+        Some(resources)
+    }
+
+    pub(crate) fn for_session(session: &OrderRunSession) -> Self {
+        Self::recorded(session).unwrap_or_else(|| Self {
+            session_id: session.session_id.clone(),
+            ..Default::default()
+        })
+    }
+
+    pub(crate) fn write_to_session(&self, session: &mut OrderRunSession) {
+        ensure_payload_object(&mut session.payload_json);
+        session.payload_json[START_RESOURCES_PAYLOAD_FIELD] = serde_json::json!(self);
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProductionQrReport {
     pub scanned_batch: OrderProgressBatch,
@@ -568,6 +640,7 @@ pub struct ProductionQrReport {
     pub history_scope: String,
     pub lineage_complete: bool,
     pub lineage_edges: Vec<ProductionQrLineageEdge>,
+    pub session_resources: Vec<ProductionQrSessionResources>,
     pub is_stale: bool,
     pub stale_reason: String,
     #[serde(skip_serializing_if = "Option::is_none")]

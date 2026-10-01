@@ -12,7 +12,7 @@ use super::queue_state;
 use super::service_maps::compile_saved_maps;
 use super::{
     ApparatusQueueActionResult, OrderControlState, PreparedApparatusQueueAction,
-    ProductionMapError, ProductionMapSaved, ProductionMapService,
+    ProductionMapError, ProductionMapSaved, ProductionMapService, ProductionQrRawMaterial,
     ProductionOrderLifecycleStatus, QueueActionActor, QueueProgressInput, chain,
 };
 
@@ -625,6 +625,38 @@ impl ProductionMapService {
             )
             .await?;
         prepared.material_scan_skipped = skip_material_scan;
+        if action == queue_state::ApparatusQueueAction::Start && !skip_material_scan {
+            // Capture only the validated scans for this occurrence. Assignment
+            // lists are plans; unscanned materials must never become use history.
+            let scans = material_barcodes
+                .iter()
+                .map(|barcode| normalize_barcode(barcode))
+                .collect::<BTreeSet<_>>();
+            if scans.is_empty() {
+                prepared.attach_start_materials(Vec::new());
+            } else if let Ok(assignments) = self
+                .raw_material_assignments_for_order_apparatus(order_id, &apparatus_id)
+                .await
+            {
+                let materials = assignments
+                    .into_iter()
+                    .filter(|assignment| scans.contains(&normalize_barcode(&assignment.barcode)))
+                    .map(|assignment| ProductionQrRawMaterial {
+                        barcode: assignment.barcode,
+                        item_code: assignment.item_code,
+                        item_name: assignment.item_name,
+                        stock_id: None,
+                        source_qty: None,
+                        uom: None,
+                    })
+                    .collect::<Vec<_>>();
+                // Preserve existing Start acceptance semantics. If metadata cannot
+                // be proven, leave history unavailable rather than changing validation.
+                if materials.len() == scans.len() {
+                    prepared.attach_start_materials(materials);
+                }
+            }
+        }
         Ok(prepared)
     }
 

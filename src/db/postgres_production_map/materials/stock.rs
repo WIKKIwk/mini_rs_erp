@@ -4,7 +4,7 @@ use sqlx::{Postgres, Transaction};
 
 use crate::core::apparatus_standard::ApparatusId;
 use crate::core::production_map::{
-    ProductionMapError, QueueActionActor, RawMaterialStockTransition,
+    ProductionMapError, ProductionQrRawMaterial, QueueActionActor, RawMaterialStockTransition,
     RawMaterialStockTransitionKind,
 };
 use crate::db::postgres_raw_material_events::{
@@ -15,6 +15,7 @@ use crate::db::postgres_raw_material_events::{
 pub(super) struct RawMaterialStockTransitionOutcome {
     pub(super) warehouses: Vec<String>,
     pub(super) unused_unlinks: Vec<UnusedRawMaterialUnlink>,
+    pub(super) started_materials: Vec<ProductionQrRawMaterial>,
 }
 
 #[derive(Debug, Clone)]
@@ -35,6 +36,7 @@ pub(super) async fn apply_raw_material_stock_transitions_tx(
         .map_err(|_| ProductionMapError::RawMaterialInvalidInput)?;
     let mut warehouses = BTreeSet::new();
     let mut unused_unlinks = Vec::new();
+    let mut started_materials = Vec::new();
     for transition in transitions {
         if transition.is_empty() {
             continue;
@@ -91,6 +93,9 @@ pub(super) async fn apply_raw_material_stock_transitions_tx(
             }
         };
         for row in &rows {
+            if transition.kind == RawMaterialStockTransitionKind::InUse {
+                started_materials.push(row.start_material_snapshot());
+            }
             let previous = before.get(&stock_key(&row.barcode));
             let owner = owners.get(&stock_key(&row.barcode));
             insert_raw_material_event_tx(
@@ -117,6 +122,7 @@ pub(super) async fn apply_raw_material_stock_transitions_tx(
     Ok(RawMaterialStockTransitionOutcome {
         warehouses: warehouses.into_iter().collect(),
         unused_unlinks,
+        started_materials,
     })
 }
 
@@ -319,6 +325,19 @@ struct RawMaterialStockTransitionRow {
     status: String,
     reserved_order_id: String,
     source_receipt_id: String,
+}
+
+impl RawMaterialStockTransitionRow {
+    fn start_material_snapshot(&self) -> ProductionQrRawMaterial {
+        ProductionQrRawMaterial {
+            barcode: self.barcode.clone(),
+            item_code: self.item_code.clone(),
+            item_name: self.item_name.clone(),
+            stock_id: Some(self.id.clone()),
+            source_qty: Some(self.qty),
+            uom: Some(self.uom.clone()),
+        }
+    }
 }
 
 struct RawMaterialOwner {

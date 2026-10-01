@@ -86,6 +86,7 @@ impl ProductionMapService {
         progress_batches.retain(|batch| lineage.batch_ids.contains(batch.batch_id.trim()));
         corrections.retain(|entry| lineage.batch_ids.contains(entry.batch_id.trim()));
         run_sessions.retain(|session| lineage.session_ids.contains(session.session_id.trim()));
+        let session_resources = run_sessions.iter().map(qr_lineage::session_resources).collect();
         let report_event_ids = run_sessions
             .iter()
             .filter_map(super::stage_execution::work_report)
@@ -168,6 +169,7 @@ impl ProductionMapService {
             history_scope: "batch_lineage".to_string(),
             lineage_complete: lineage.complete,
             lineage_edges: lineage.edges,
+            session_resources,
             is_stale,
             stale_reason,
             order,

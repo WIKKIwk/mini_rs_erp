@@ -14,7 +14,7 @@ use crate::core::production_map::{
     PaddonCreateInput, PaddonSnapshot, PaddonSummary, ProductionMapApparatusTransferRecord,
     ProductionMapApparatusTransferWrite, ProductionMapDefinition, ProductionMapError,
     ProductionMapStorePort, ProductionOrderLifecycleRecord, ProductionOrderLifecycleStatus,
-    ProductionOrderLogEntry, ProgressBatchCorrectionInput, ProgressBatchCorrectionRecord,
+    ProductionOrderLogEntry, ProductionQrSessionResources, ProgressBatchCorrectionInput, ProgressBatchCorrectionRecord,
     QueueActionActor, QueueActionProgressWrite, QueueActionProgressWriteResult,
     RawMaterialAssignment, RawMaterialStockTransition, RawMaterialStockTransitionKind,
     RezkaAstatkaReport, WipProgressBatchQuery, validate_queue_progress_write,
@@ -1192,6 +1192,22 @@ impl PostgresProductionMapStore {
         }
         if let Some(session) = &write.session {
             let mut stored_session = session.clone();
+            if event.action == crate::core::production_map::queue_state::ApparatusQueueAction::Start
+                && let Some(mut resources) = ProductionQrSessionResources::recorded(session)
+                && resources.raw_materials_available
+                && !raw_material_outcome.started_materials.is_empty()
+                && resources.raw_materials.len() == raw_material_outcome.started_materials.len()
+                && resources.raw_materials.iter().all(|material| {
+                    raw_material_outcome.started_materials.iter().any(|stock| {
+                        stock.barcode.trim().eq_ignore_ascii_case(material.barcode.trim())
+                    })
+                })
+            {
+                // Metadata from the exact locked stock rows used by this Start,
+                // in its existing transaction. No new consumption is recorded.
+                resources.raw_materials = raw_material_outcome.started_materials;
+                resources.write_to_session(&mut stored_session);
+            }
             if event.payload_json.get("stage_work_report_submitted").and_then(serde_json::Value::as_bool) == Some(true) {
                 stage_execution::stamp_report_tx(&mut tx, &mut stored_session, &event.event_id, &event.actor).await?;
             }

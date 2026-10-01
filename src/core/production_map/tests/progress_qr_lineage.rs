@@ -304,3 +304,270 @@ async fn progress_qr_report_accepts_single_session_input_evidence_and_flags_cycl
     assert!(report.current_batches.is_empty());
     assert!(report.current_batch.is_none());
 }
+
+fn raw_material(barcode: &str, name: &str) -> ProductionQrRawMaterial {
+    ProductionQrRawMaterial {
+        barcode: barcode.to_string(),
+        item_code: format!("item-{barcode}"),
+        item_name: name.to_string(),
+        stock_id: None,
+        source_qty: None,
+        uom: None,
+    }
+}
+
+#[tokio::test]
+async fn qr_resources_follow_exact_merge_sessions_without_other_outputs_or_live_assignments() {
+    let a = batch("a", FLOW_PECHAT_ID, "");
+    let b = batch("b", FLOW_PECHAT_ID, "");
+    let unrelated = batch("unrelated", FLOW_PECHAT_ID, "");
+    let mut merged = batch("merged", LAMINATION_1_ID, "b");
+    set_sources(&mut merged, &["a", "b"]);
+    let mut sessions: Vec<_> = [&a, &b, &unrelated, &merged]
+        .into_iter()
+        .map(|batch| session(batch, &batch.parent_batch_id))
+        .collect();
+    for (index, name) in ["Original film A", "Original film B", "Unrelated film"]
+        .into_iter()
+        .enumerate()
+    {
+        let resources = ProductionQrSessionResources {
+            session_id: sessions[index].session_id.clone(),
+            raw_materials: vec![raw_material("reused-barcode", name)],
+            raw_materials_available: true,
+            qolip_codes: vec![format!("plate-{index}")],
+            qolip_available: true,
+        };
+        resources.write_to_session(&mut sessions[index]);
+    }
+    // An inherited plate code on a later apparatus is roll context, not usage.
+    sessions[3].payload_json["qolip_codes"] = serde_json::json!(["plate-0", "plate-1"]);
+    let (service, store) = fixture(vec![a, b, unrelated, merged], sessions).await;
+    store
+        .put_raw_material_assignment(RawMaterialAssignment {
+            order_id: ORDER.to_string(),
+            apparatus_id: ApparatusId::new(FLOW_PECHAT_ID).unwrap(),
+            apparatus: FLOW_PECHAT_ID.to_string(),
+            barcode: "reused-barcode".to_string(),
+            item_code: "changed-plan".to_string(),
+            item_name: "Live order assignment must not replace history".to_string(),
+            item_group: String::new(),
+            assigned_by_role: String::new(),
+            assigned_by_ref: String::new(),
+            assigned_by_display_name: String::new(),
+            assigned_at: String::new(),
+        })
+        .await
+        .unwrap();
+    let report = service.progress_qr_report("merged", "").await.unwrap();
+    assert_eq!(report.session_resources.len(), 3);
+    let names = report
+        .session_resources
+        .iter()
+        .flat_map(|resources| &resources.raw_materials)
+        .map(|material| material.item_name.as_str())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        names,
+        BTreeSet::from(["Original film A", "Original film B"])
+    );
+    let downstream = report
+        .session_resources
+        .iter()
+        .find(|resources| resources.session_id == "session-merged")
+        .unwrap();
+    assert!(!downstream.raw_materials_available);
+    assert!(!downstream.qolip_available);
+    assert!(downstream.qolip_codes.is_empty());
+}
+
+#[tokio::test]
+async fn qr_resources_mark_legacy_materials_unavailable_and_reject_wrong_session_snapshot() {
+    let root = batch("legacy-root", FLOW_PECHAT_ID, "");
+    let output = batch("output", LAMINATION_1_ID, "legacy-root");
+    let mut root_session = session(&root, "");
+    root_session.payload_json["qolip_code"] = serde_json::json!("ACTUAL-PLATE");
+    let mut output_session = session(&output, "legacy-root");
+    ProductionQrSessionResources {
+        session_id: "different-session".to_string(),
+        raw_materials: vec![raw_material("wrong-roll", "Must not leak")],
+        raw_materials_available: true,
+        qolip_codes: vec!["WRONG-PLATE".to_string()],
+        qolip_available: true,
+    }
+    .write_to_session(&mut output_session);
+    let (service, _) = fixture(vec![root, output], vec![root_session, output_session]).await;
+    let report = service.progress_qr_report("output", "").await.unwrap();
+    let root = report
+        .session_resources
+        .iter()
+        .find(|resources| resources.session_id == "session-legacy-root")
+        .unwrap();
+    assert!(!root.raw_materials_available);
+    assert_eq!(root.qolip_codes, ["ACTUAL-PLATE"]);
+    assert!(root.qolip_available);
+    let output = report
+        .session_resources
+        .iter()
+        .find(|resources| resources.session_id == "session-output")
+        .unwrap();
+    assert!(!output.raw_materials_available);
+    assert!(!output.qolip_available);
+    assert!(output.raw_materials.is_empty());
+    assert!(output.qolip_codes.is_empty());
+}
+
+#[tokio::test]
+async fn qr_resources_survive_validated_start_pause_resume_and_complete() {
+    use queue_state::ApparatusQueueAction as Action;
+    const ORDER: &str = "zakaz-qr-resources";
+    let store = Arc::new(MemoryProductionMapStore::new());
+    let (service, apparatus_service) =
+        service_with_apparatus_store(store.clone(), &[(FLOW_PECHAT_ID, "Print")]).await;
+    service
+        .upsert_map(two_stage_map(ORDER, FLOW_PECHAT_ID, LAMINATION_1_ID))
+        .await
+        .unwrap();
+    set_test_material_rule(
+        &apparatus_service,
+        ApparatusMaterialRuleUpsert {
+            apparatus: FLOW_PECHAT_ID.to_string(),
+            requires_material: true,
+            start_policy: RawMaterialStartPolicy::StateAll,
+            item_groups: vec!["Film".to_string()],
+            requirement_groups: Vec::new(),
+        },
+    )
+    .await
+    .unwrap();
+    let actor = QueueActionActor {
+        role: "aparatchi".to_string(),
+        ref_: "worker-resources".to_string(),
+        ..Default::default()
+    };
+    for barcode in ["ACTUAL-RAW", "UNSCANNED-RAW"] {
+        service
+            .assign_raw_material_to_order(
+                RawMaterialAssignmentInput {
+                    order_id: ORDER.to_string(),
+                    apparatus: FLOW_PECHAT_ID.to_string(),
+                    barcode: barcode.to_string(),
+                    item_code: "FILM".to_string(),
+                    item_name: "Actual film".to_string(),
+                    item_group: "Film".to_string(),
+                    item_group_path: Vec::new(),
+                },
+                &actor,
+            )
+            .await
+            .unwrap();
+    }
+    let assigned = [FLOW_PECHAT_ID.to_string()];
+    let scans = ["ACTUAL-RAW".to_string()];
+    let plate_codes = ["ACTUAL-PLATE".to_string()];
+    let mut prepared = service
+        .prepare_apparatus_queue_action_with_material_scan_and_progress(
+            MaterialScanProgressAction {
+                apparatus: FLOW_PECHAT_ID,
+                order_id: ORDER,
+                action: Action::Start,
+                assigned_apparatus: &assigned,
+                actor: actor.clone(),
+                material_barcodes: &scans,
+                state_material_barcodes: &scans,
+                progress: QueueProgressInput::default(),
+                qolip_validation: TrustedQolipStartValidation::from_preparations(
+                    &ApparatusId::new(FLOW_PECHAT_ID).unwrap(),
+                    ORDER,
+                    &[QolipOrderStartPreparation {
+                        spec: QolipProductSpec {
+                            qolip_code: plate_codes[0].clone(),
+                            ..Default::default()
+                        },
+                        checkout: None,
+                    }],
+                ),
+            },
+        )
+        .await
+        .unwrap();
+    prepared.attach_qolip_codes(&plate_codes);
+    let started = service
+        .commit_prepared_queue_action(prepared)
+        .await
+        .unwrap()
+        .session
+        .unwrap();
+    let expected = ProductionQrSessionResources::recorded(&started).unwrap();
+    assert_eq!(expected.raw_materials.len(), 1);
+    assert_eq!(expected.raw_materials[0].barcode, "ACTUAL-RAW");
+    assert_eq!(expected.raw_materials[0].item_code, "FILM");
+    assert_eq!(expected.raw_materials[0].item_name, "Actual film");
+    assert!(expected.raw_materials_available);
+    assert!(expected.qolip_available);
+    assert_eq!(expected.qolip_codes, plate_codes);
+    let before_assignments = store
+        .raw_material_assignments_for_order(ORDER)
+        .await
+        .unwrap();
+    let mut last_batch = None;
+    for action in [Action::Pause, Action::Resume, Action::Complete] {
+        let progress = if action == Action::Resume {
+            QueueProgressInput::default()
+        } else {
+            QueueProgressInput {
+                produced_qty: Some(12.0),
+                uom: "kg".to_string(),
+                return_ink_kg: Some(0.1),
+                total_waste: Some(0.1),
+                finished_goods_kg: Some(12.0),
+                finished_goods_meter: Some(120.0),
+                ..Default::default()
+            }
+        };
+        let result = service
+            .apply_apparatus_queue_action_with_progress(
+                FLOW_PECHAT_ID,
+                ORDER,
+                action,
+                &assigned,
+                actor.clone(),
+                progress,
+            )
+            .await
+            .unwrap();
+        let current = result.session.unwrap();
+        assert_eq!(current.session_id, started.session_id);
+        assert_eq!(
+            ProductionQrSessionResources::recorded(&current),
+            Some(expected.clone())
+        );
+        let stored = store
+            .order_run_sessions_for_order(ORDER)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|session| session.session_id == started.session_id)
+            .unwrap();
+        assert_eq!(
+            ProductionQrSessionResources::recorded(&stored),
+            Some(expected.clone())
+        );
+        if result.progress_batch.is_some() {
+            last_batch = result.progress_batch;
+        }
+    }
+    let report = service
+        .progress_qr_report(&last_batch.unwrap().batch_id, "")
+        .await
+        .unwrap();
+    assert_eq!(report.session_resources, vec![expected]);
+    assert_eq!(
+        store
+            .raw_material_assignments_for_order(ORDER)
+            .await
+            .unwrap(),
+        before_assignments,
+        "reading history never changes materials"
+    );
+}

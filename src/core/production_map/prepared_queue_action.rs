@@ -3,7 +3,8 @@ use std::collections::BTreeMap;
 use super::progress::QolipLineage;
 use super::{
     ApparatusQueueActionEvent, OpeningWipBatch, OrderControlRecord, OrderProgressBatch,
-    OrderProgressEvent, OrderRunSession, ProductionMapDefinition,
+    OrderProgressEvent, OrderRunSession, ProductionMapDefinition, ProductionQrRawMaterial,
+    ProductionQrSessionResources,
 };
 
 pub(super) struct QueueProgressRecords {
@@ -72,6 +73,15 @@ impl PreparedApparatusQueueAction {
         self.material_scan_skipped
     }
 
+    pub(crate) fn attach_start_materials(&mut self, materials: Vec<ProductionQrRawMaterial>) {
+        if let Some(session) = &mut self.session {
+            let mut resources = ProductionQrSessionResources::for_session(session);
+            resources.raw_materials = materials;
+            resources.raw_materials_available = true;
+            resources.write_to_session(session);
+        }
+    }
+
     pub fn attach_qolip_codes(&mut self, qolip_codes: &[String]) {
         let Some(lineage) = QolipLineage::from_codes(qolip_codes) else {
             return;
@@ -79,6 +89,10 @@ impl PreparedApparatusQueueAction {
         if let Some(session) = &mut self.session {
             lineage.write_to_payload(&mut session.payload_json);
             session.payload_json["qolip_lock_owner"] = serde_json::Value::Bool(true);
+            let mut resources = ProductionQrSessionResources::for_session(session);
+            resources.qolip_codes = lineage.qolip_codes.clone();
+            resources.qolip_available = true;
+            resources.write_to_session(session);
         }
         lineage.write_to_payload(&mut self.event.payload_json);
         if let Some(progress_event) = &mut self.progress_event {

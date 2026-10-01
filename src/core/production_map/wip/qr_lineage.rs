@@ -263,6 +263,27 @@ pub(super) fn batch_lineage(
     }
 }
 
+/// Resources belong to the exact start occurrence, never to an order-wide plan.
+pub(super) fn session_resources(session: &OrderRunSession) -> ProductionQrSessionResources {
+    let mut resources = ProductionQrSessionResources::for_session(session);
+    // Historical roots carry the actual attached plate lineage. Later sessions
+    // inherit that lineage, which does not prove plate use at their apparatus.
+    if !resources.qolip_available
+        && session
+            .payload_json
+            .get("input_progress_batch_id")
+            .and_then(|value| value.as_str())
+            .is_some_and(|id| id.trim().is_empty())
+        && order_run_input_links_from_payload(&session.payload_json)
+            .is_ok_and(|links| links.is_empty())
+        && let Some(lineage) = QolipLineage::from_payload(&session.payload_json)
+    {
+        resources.qolip_codes = lineage.qolip_codes;
+        resources.qolip_available = true;
+    }
+    resources
+}
+
 /// Session totals/output lists may span several sibling rolls. Keep occurrence
 /// identity and verified input provenance; measured roll quantities live on batches.
 pub(super) fn scope_session_payload(session: &mut OrderRunSession, batch_ids: &BTreeSet<String>) {

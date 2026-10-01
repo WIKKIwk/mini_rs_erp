@@ -243,6 +243,11 @@ async fn progress_qr_report_marks_processed_qr_as_stale_and_returns_order_flow()
     assert_eq!(report_body["lineage_complete"], true);
     assert_eq!(report_body["lineage_edges"].as_array().expect("edges").len(), 1);
     assert_eq!(report_body["current_batches"].as_array().expect("frontier").len(), 1);
+    let resources = report_body["session_resources"].as_array().expect("session resources");
+    assert_eq!(resources.len(), 2);
+    let sessions = report_body["run_sessions"].as_array().expect("run sessions");
+    assert!(resources.iter().all(|resource| sessions.iter().any(|session| session["session_id"] == resource["session_id"])));
+    assert!(resources.iter().all(|resource| resource["raw_materials"].as_array().expect("materials").is_empty()));
     // Start logs have no persisted occurrence link; completion report IDs do.
     assert_eq!(report_body["logs"].as_array().expect("logs").len(), 2);
     assert!(

@@ -745,6 +745,7 @@ pub(super) fn preserve_qolip_lineage(
         replacement = serde_json::json!({});
     }
     for field in [
+        START_RESOURCES_PAYLOAD_FIELD,
         INPUT_LINEAGE_PAYLOAD_FIELD,
         REZKA_ACTIVE_PARTIAL_ROLLS_PAYLOAD_FIELD,
         "rezka_output_report",
