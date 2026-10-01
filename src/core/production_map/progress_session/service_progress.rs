@@ -1160,6 +1160,7 @@ impl ProductionMapService {
                 if index > 0 && progress.rezka_frames.is_empty() {
                     clear_rezka_duplicate_metrics(&mut batch);
                 }
+                crate::core::production_map::paddon_weights::validate_batch_bobina(&batch)?;
             }
             batches.push(batch);
         }

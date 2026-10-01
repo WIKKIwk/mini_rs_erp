@@ -33,6 +33,9 @@ impl ProductionMapService {
         if current.revision != input.expected_revision {
             return Err(ProductionMapError::ProgressBatchCorrectionConflict);
         }
+        crate::core::production_map::paddon_weights::validate_batch_bobina(
+            &current.corrected(&input),
+        )?;
         if progress_batch_correction_is_unchanged(&current, &input) {
             return Err(ProductionMapError::ProgressBatchCorrectionUnchanged);
         }

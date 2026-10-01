@@ -245,6 +245,76 @@ async fn default_service_with_store(store: Arc<MemoryProductionMapStore>) -> Pro
 }
 
 #[tokio::test]
+async fn rezka_bobina_validation_checks_the_batch_before_persisting() {
+    let store = Arc::new(MemoryProductionMapStore::new());
+    let service = default_service_with_store(store.clone()).await;
+    let order_id = "zakaz-rezka-bobina-bound";
+    let actor = QueueActionActor {
+        role: "aparatchi".to_string(),
+        ref_: "worker-bobina-bound".to_string(),
+        display_name: "Bobina Bound Worker".to_string(),
+    };
+    let assigned = [REZKA_ID.to_string()];
+    service
+        .upsert_map(canonical_apparatus_stage_map(order_id, REZKA_ID, "Rezka"))
+        .await
+        .expect("production map");
+    service
+        .apply_apparatus_queue_action_with_progress(
+            REZKA_ID,
+            order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &assigned,
+            actor.clone(),
+            QueueProgressInput::default(),
+        )
+        .await
+        .expect("start cutting");
+
+    // Legacy global gross is not saved as per-frame gross. Validate the actual
+    // resulting batch's 40 kg, even though the raw request's gross is 55 kg.
+    let mut progress = QueueProgressInput {
+        produced_qty: Some(100.0),
+        gross_qty: Some(55.0),
+        finished_goods_kg: Some(40.0),
+        bobina_kg: Some(50.0),
+        diameter: Some(45.0),
+        uom: "m".to_string(),
+        ..QueueProgressInput::default()
+    };
+    let result = service
+        .apply_apparatus_queue_action_with_progress(
+            REZKA_ID,
+            order_id,
+            queue_state::ApparatusQueueAction::Pause,
+            &assigned,
+            actor.clone(),
+            progress.clone(),
+        )
+        .await;
+    assert!(matches!(result, Err(ProductionMapError::BobinaExceedsGross)));
+    assert!(store.progress_batches_for_order(order_id).await.unwrap().is_empty());
+
+    progress.bobina_kg = Some(40.0);
+    let result = service
+        .apply_apparatus_queue_action_with_progress(
+            REZKA_ID,
+            order_id,
+            queue_state::ApparatusQueueAction::Pause,
+            &assigned,
+            actor,
+            progress,
+        )
+        .await
+        .expect("tare equal to saved gross is valid");
+    let batch = result.progress_batch.expect("saved roll");
+    assert_eq!(
+        crate::core::production_map::paddon_weights::product_weights(&batch, None),
+        (Some(40_000_000), Some(0)),
+    );
+}
+
+#[tokio::test]
 async fn live_snapshot_reads_active_sessions_in_one_batch() {
     let memory = Arc::new(MemoryProductionMapStore::new());
     let probe = Arc::new(SnapshotSessionReadProbeStore::new(memory.clone()));

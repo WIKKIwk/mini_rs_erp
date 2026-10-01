@@ -381,6 +381,7 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
             bad_request("raw_material_roll_size_mismatch")
         }
         ProductionMapError::ProgressInputInvalid => bad_request("progress_input_invalid"),
+        ProductionMapError::BobinaExceedsGross => bad_request("bobina_exceeds_gross"),
         ProductionMapError::ProgressQrRequired => bad_request("progress_qr_required"),
         ProductionMapError::MergeInputRequired => bad_request("merge_input_required"),
         ProductionMapError::MergeInputSame => conflict("merge_input_same"),

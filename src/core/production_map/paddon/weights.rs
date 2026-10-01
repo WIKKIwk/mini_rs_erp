@@ -1,10 +1,30 @@
 use super::{OrderProgressBatch, PaddonSummary};
+use crate::core::production_map::ProductionMapError;
 use crate::core::quantity::{erp_quantity_from_units, erp_quantity_to_units};
 use serde_json::Value;
 use std::collections::BTreeSet;
 
 fn units(value: Option<f64>) -> Option<i64> {
     value.filter(|v| *v >= 0.0).and_then(erp_quantity_to_units)
+}
+
+fn validate_bobina_units(gross: Option<i64>, bobina: Option<i64>) -> Result<(), ProductionMapError> {
+    if gross.zip(bobina).is_some_and(|(gross, bobina)| bobina > gross) {
+        return Err(ProductionMapError::BobinaExceedsGross);
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_bobina_weight(
+    gross: Option<f64>,
+    bobina: Option<f64>,
+) -> Result<(), ProductionMapError> {
+    validate_bobina_units(units(gross), units(bobina))
+}
+
+/// Validate the resulting batch so tare-only corrections keep measured gross.
+pub(crate) fn validate_batch_bobina(batch: &OrderProgressBatch) -> Result<(), ProductionMapError> {
+    validate_bobina_units(product_weights(batch, None).0, units(batch.bobina_kg))
 }
 
 pub(crate) fn kg_from_values(value: &Value) -> Option<f64> {
@@ -86,6 +106,48 @@ mod tests {
             product_weights(&batch(), None),
             (Some(12_000_000), Some(11_500_000))
         );
+    }
+    #[test]
+    fn bobina_validation_uses_stored_precision_and_preserves_unknowns() {
+        for (gross, bobina) in [
+            (Some(55.0), Some(0.808)),
+            (Some(55.0), Some(55.0)),
+            (Some(55.0000001), Some(55.0000002)),
+            (Some(55.0), None),
+            (None, Some(808.0)),
+        ] {
+            assert!(validate_bobina_weight(gross, bobina).is_ok());
+        }
+        for (gross, bobina) in [(55.0, 808.0), (55.0, 55.000001)] {
+            assert!(matches!(
+                validate_bobina_weight(Some(gross), Some(bobina)),
+                Err(ProductionMapError::BobinaExceedsGross)
+            ));
+        }
+    }
+
+    #[test]
+    fn correction_bobina_validation_uses_resulting_measured_gross() {
+        let b = batch(); // measured gross 12, finished_goods_kg 10
+        let mut values = b.correction_values();
+        values["batch_id"] = json!(b.batch_id);
+        values["expected_revision"] = json!(b.revision);
+        values["reason"] = json!("Corrected tare");
+        let mut input: crate::core::production_map::ProgressBatchCorrectionInput =
+            serde_json::from_value(values).unwrap();
+        input.bobina_kg = Some(11.0);
+        let corrected = b.corrected(&input);
+        assert!(validate_batch_bobina(&corrected).is_ok());
+        assert_eq!(product_weights(&corrected, None).1, Some(1_000_000));
+        input.bobina_kg = Some(12.0);
+        assert!(validate_batch_bobina(&b.corrected(&input)).is_ok());
+        input.bobina_kg = Some(13.0);
+        assert!(matches!(validate_batch_bobina(&b.corrected(&input)),
+            Err(ProductionMapError::BobinaExceedsGross)));
+        input.bobina_kg = Some(11.0);
+        input.finished_goods_kg = Some(9.0);
+        assert!(matches!(validate_batch_bobina(&b.corrected(&input)),
+            Err(ProductionMapError::BobinaExceedsGross)));
     }
     #[test]
     fn missing_gross_or_core_is_unknown_independently() {

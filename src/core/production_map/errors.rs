@@ -174,6 +174,8 @@ pub enum ProductionMapError {
     RawMaterialRollSizeMismatch,
     #[error("progress input is invalid")]
     ProgressInputInvalid,
+    #[error("bobina weight cannot exceed measured gross weight")]
+    BobinaExceedsGross,
     #[error("previous stage progress qr is required")]
     ProgressQrRequired,
     #[error("merge input qr is required")]

@@ -225,6 +225,12 @@ fn validate_progress_metrics(
 ) -> Result<(), ProductionMapError> {
     let is_complete = action == queue_state::ApparatusQueueAction::Complete;
     let is_rezka = apparatus::is_rezka_apparatus(canonical);
+    if is_rezka {
+        crate::core::production_map::paddon_weights::validate_bobina_weight(
+            rezka_gross_qty,
+            metrics.bobina_kg,
+        )?;
+    }
     if is_complete
         && pechat::is_pechat_apparatus(canonical)
         && !bosma_completion_metrics_are_complete(
@@ -402,5 +408,29 @@ mod tests {
             ),
             Err(ProductionMapError::RezkaProgressMetricsRequired)
         ));
+    }
+
+    #[test]
+    fn rezka_output_rejects_bobina_above_effective_gross() {
+        let canonical = rezka_canonical();
+        let mut input = rezka_pause_progress(Some(45.5));
+        input.gross_qty = Some(55.0);
+        input.finished_goods_kg = Some(40.0);
+        for bobina in [None, Some(0.808), Some(55.0), Some(55.0000002)] {
+            input.bobina_kg = bobina;
+            assert!(validated_progress_metrics(&canonical,
+                queue_state::ApparatusQueueAction::Pause, &input, false).is_ok());
+        }
+        for bobina in [808.0, 55.000001] {
+            input.bobina_kg = Some(bobina);
+            assert!(matches!(validated_progress_metrics(&canonical,
+                queue_state::ApparatusQueueAction::Pause, &input, false),
+                Err(ProductionMapError::BobinaExceedsGross)));
+        }
+        input.gross_qty = None;
+        input.bobina_kg = Some(41.0);
+        assert!(matches!(validated_progress_metrics(&canonical,
+            queue_state::ApparatusQueueAction::Pause, &input, false),
+            Err(ProductionMapError::BobinaExceedsGross)));
     }
 }
