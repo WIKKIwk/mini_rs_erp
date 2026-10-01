@@ -74,6 +74,12 @@ pub(super) fn order_run_session_was_requeued(session: &OrderRunSession) -> bool 
 }
 
 pub(super) fn progress_batch_next_stage_node_id(batch: &OrderProgressBatch) -> &str {
+    if let Some(stage) = batch.payload_json.get("wip_route_binding")
+        .and_then(|value| value.get("stage_node_id"))
+        .and_then(serde_json::Value::as_str)
+    {
+        return stage.trim();
+    }
     batch
         .payload_json
         .get("next_stage_node_id")
@@ -94,13 +100,9 @@ pub(super) fn waiting_reentry_stage_node_id(
         {
             return None;
         }
-        let stage_node_id = progress_batch_next_stage_node_id(batch);
-        if stage_node_id.is_empty()
-            || chain::work_stage_for_station(map, apparatus, stage_node_id).is_none()
-        {
-            return None;
-        }
-        Some(stage_node_id.to_string())
+        let route = super::wip_route::resolve_wip_input_route(map, batch).ok()?;
+        route.consumer_apparatus_ids.iter().any(|id| id == apparatus)
+            .then_some(route.stage_node_id)
     })
 }
 

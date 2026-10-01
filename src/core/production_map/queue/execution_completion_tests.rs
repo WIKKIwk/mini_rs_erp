@@ -99,8 +99,23 @@ fn downstream_stage_end_includes_output_from_both_alternative_producers() {
 }
 
 #[test]
-fn another_concrete_target_occurrence_is_not_counted_as_this_stages_input() {
-    let map = map();
-    let other_stage = batch(PRESS, "press", LAM2, "removed-or-later-lamination");
+fn another_existing_concrete_target_is_not_counted_as_this_stages_input() {
+    let mut map = map();
+    map.nodes.push(serde_json::from_value(serde_json::json!({
+        "id": "later-lamination", "kind": "apparatus", "title": "Later", "apparatus_id": LAM2
+    })).unwrap());
+    map.edges.retain(|edge| edge.from != "rezka");
+    map.edges.extend([
+        ProductionMapEdge { from: "rezka".into(), to: "later-lamination".into(), branch: String::new() },
+        ProductionMapEdge { from: "later-lamination".into(), to: "end".into(), branch: String::new() },
+    ]);
+    let other_stage = batch(PRESS, "press", LAM2, "later-lamination");
     assert!(!unfinished(&map, LAM2, "lam2", &[other_stage]));
+}
+
+#[test]
+fn removed_target_with_one_canonical_successor_is_still_outstanding_input() {
+    let map = map();
+    let remapped = batch(PRESS, "press", LAM2, "removed-lamination");
+    assert!(unfinished(&map, LAM2, "lam2", &[remapped]));
 }

@@ -174,7 +174,7 @@ pub(super) fn progress_links_from_batch(batch: &OrderProgressBatch) -> SessionPr
         qr_payload: batch.qr_payload.clone(),
         apparatus: batch.apparatus.clone(),
         source_kind: "progress_batch".to_string(),
-        stage_node_id: json_string_field(&batch.payload_json, "next_stage_node_id"),
+        stage_node_id: super::service_queue_support::progress_batch_next_stage_node_id(batch).to_string(),
         contained_kadr_count: json_positive_usize_field(
             &batch.payload_json,
             "contained_kadr_count",

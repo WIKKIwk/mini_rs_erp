@@ -35,6 +35,8 @@ mod resume_work_session;
 mod qr_usage_errors;
 #[path = "cold_glue_workflow.rs"]
 mod cold_glue_workflow;
+#[path = "service_flow_wip_route_continuity.rs"]
+mod wip_route_continuity;
 
 const FLOW_REZKA_ID: &str = "apparatus:test:flow-rezka";
 const FLOW_PECHAT_ID: &str = "apparatus:test:flow-pechat";

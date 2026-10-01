@@ -1,6 +1,7 @@
 use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::core::apparatus_standard::ApparatusId;
+use crate::core::production_map::wip_route::validate_map_wip_routes;
 use crate::core::production_map::{
     ProductionMapDefinition, ProductionMapError, ProductionMapNodeKind,
 };
@@ -30,6 +31,7 @@ pub(super) async fn put_map_inner_tx(
     let mut stored_map = map.clone();
     stored_map.roll_count = map.roll_count.filter(|value| *value > 0);
     stored_map.width_mm = map.width_mm.and_then(positive_erp_quantity);
+    validate_outstanding_wip_routes_tx(tx, &stored_map).await?;
     let payload = serde_json::to_value(&stored_map).map_err(|_| ProductionMapError::StoreFailed)?;
     sqlx::query(
         "INSERT INTO mini_production_maps
@@ -60,6 +62,48 @@ pub(super) async fn put_map_inner_tx(
     .map_err(|_| ProductionMapError::StoreFailed)?;
     mirror_map_graph_tx(tx, map).await?;
     Ok(())
+}
+
+/// Map saves and input claims share the order lock. Re-read both the graph and
+/// its outstanding inputs here, so a service-layer preview cannot race with a
+/// roll being claimed in another application process.
+async fn validate_outstanding_wip_routes_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    next: &ProductionMapDefinition,
+) -> Result<(), ProductionMapError> {
+    let previous = sqlx::query_scalar::<_, serde_json::Value>(
+        "SELECT map_json FROM mini_production_maps WHERE id = $1 FOR UPDATE",
+    )
+    .bind(next.id.trim())
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    let Some(previous) = previous else {
+        return Ok(());
+    };
+    let previous = serde_json::from_value::<ProductionMapDefinition>(previous)
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    if previous == *next {
+        return Ok(());
+    }
+    let ids = sqlx::query_scalar::<_, String>(
+        "SELECT batch_id FROM mini_progress_batches
+         WHERE order_id = $1 AND wip_status IN ('waiting', 'in_use')
+         ORDER BY batch_id FOR UPDATE",
+    )
+    .bind(next.id.trim())
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    let mut batches = Vec::with_capacity(ids.len());
+    for id in ids {
+        batches.push(
+            super::order_query_helpers::load_progress_batch(&mut **tx, &id)
+                .await?
+                .ok_or(ProductionMapError::WipRouteChanged)?,
+        );
+    }
+    validate_map_wip_routes(&previous, next, &batches)
 }
 
 async fn mirror_map_graph_tx(

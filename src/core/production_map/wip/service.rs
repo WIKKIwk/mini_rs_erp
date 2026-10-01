@@ -215,11 +215,8 @@ impl ProductionMapService {
                 maps_by_id
                     .get(batch.order_id.trim())
                     .is_some_and(|map| {
-                        chain::stage_ids_match_for_map(
-                            map,
-                            &batch.next_apparatus,
-                            &requested_next_apparatus,
-                        )
+                        super::wip_route::resolve_wip_input_route(map, batch).is_ok_and(|route|
+                            route.consumer_apparatus_ids.iter().any(|id| id == &requested_next_apparatus))
                     })
             });
         }

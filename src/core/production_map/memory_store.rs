@@ -745,6 +745,28 @@ impl MemoryProductionMapStore {
                 return Err(ProductionMapError::RezkaOutputCycleConflict);
             }
         }
+        if let Some(expected) = write.event.payload_json.get("wip_input_expected_batch") {
+            let expected: OrderProgressBatch = serde_json::from_value(expected.clone())
+                .map_err(|_| ProductionMapError::WipRouteChanged)?;
+            let current = self.progress_batch(&expected.batch_id).await?
+                .ok_or(ProductionMapError::WipRouteChanged)?;
+            let map = self.map_by_id(&write.event.order_id).await?
+                .ok_or(ProductionMapError::WipRouteChanged)?;
+            if current != expected || write.event.payload_json.get("wip_input_map_fingerprint")
+                .and_then(serde_json::Value::as_str)
+                != Some(super::wip_route::production_map_fingerprint(&map).as_str())
+            {
+                return Err(ProductionMapError::WipRouteChanged);
+            }
+            let route = super::wip_route::resolve_wip_input_route(&map,
+                &super::wip_route::normalized_route_batch(&current))?;
+            if !route.consumer_apparatus_ids.iter().any(|id| id == &write.apparatus)
+                || write.session.as_ref().is_none_or(|session|
+                    !super::chain::stage_node_ids_match_for_map(&map, &route.stage_node_id, &session.stage_node_id))
+            {
+                return Err(ProductionMapError::WipRouteChanged);
+            }
+        }
         let mut write = write.clone();
         {
             let batches = self.order_progress_batches.read().await;

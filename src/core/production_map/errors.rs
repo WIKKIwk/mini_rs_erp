@@ -215,6 +215,14 @@ pub enum ProductionMapError {
     ProgressBatchNotFound,
     #[error("progress batch does not match previous stage")]
     ProgressBatchNotAccepted,
+    #[error("the WIP producer occurrence cannot be resolved")]
+    WipRouteSourceUnresolved,
+    #[error("the WIP destination occurrence cannot be resolved")]
+    WipRouteDestinationUnresolved,
+    #[error("the WIP route has more than one possible stage occurrence")]
+    WipRouteAmbiguous,
+    #[error("the WIP route changed; scan the unchanged QR again")]
+    WipRouteChanged,
     #[error("progress batch was already used at {apparatus_name}")]
     ProgressBatchAlreadyUsed { apparatus_name: String },
     #[error("progress batch is in use at {apparatus_name}")]

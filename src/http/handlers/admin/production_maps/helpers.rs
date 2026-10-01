@@ -418,6 +418,10 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         ProductionMapError::RezkaFinalRollRequired => bad_request("rezka_final_roll_required"),
         ProductionMapError::ProgressBatchNotFound => not_found("progress_batch_not_found"),
         ProductionMapError::ProgressBatchNotAccepted => bad_request("progress_batch_not_accepted"),
+        ProductionMapError::WipRouteSourceUnresolved => bad_request("wip_route_source_unresolved"),
+        ProductionMapError::WipRouteDestinationUnresolved => bad_request("wip_route_destination_unresolved"),
+        ProductionMapError::WipRouteAmbiguous => bad_request("wip_route_ambiguous"),
+        ProductionMapError::WipRouteChanged => conflict("wip_route_changed"),
         ProductionMapError::ProgressBatchAlreadyUsed { apparatus_name } => {
             let mut body = AdminErrorResponse::new("progress_batch_already_used");
             body.apparatus_name = Some(apparatus_name);

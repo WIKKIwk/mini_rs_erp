@@ -70,6 +70,8 @@ mod store_port;
 pub(crate) mod stage_execution;
 pub use stage_execution::{StageAstatkaReport, StageWorkControl, StageWorkReport, StageWorkStatus};
 mod types;
+pub(crate) mod wip_route;
+pub use wip_route::WipInputRoute;
 
 #[cfg(test)]
 pub(crate) use apparatus_resolver::TestCanonicalApparatusResolver;

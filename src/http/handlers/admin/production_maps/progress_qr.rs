@@ -98,12 +98,21 @@ pub async fn production_map_progress_qr_lookup(
             .await
     }
     .map_err(production_map_error)?;
+    let (input_route, input_route_error) = if batch.wip_status == OrderProgressBatchWipStatus::Waiting {
+        match state.production_maps.progress_batch_input_route(&batch).await {
+            Ok(route) => (Some(route), None),
+            Err(error) if !scoped => (None, Some(crate::core::production_map::wip_route::route_error_code(&error))),
+            Err(error) => return Err(production_map_error(error)),
+        }
+    } else { (None, None) };
     Ok(json_response(serde_json::json!({
         "ok": true,
         "validated_apparatus": input.apparatus.trim(),
         "validated_order_id": input.order_id.trim(),
         "can_resume": batch.status.is_resumable(),
         "batch": batch,
+        "input_route": input_route,
+        "input_route_error": input_route_error,
     })))
 }
 

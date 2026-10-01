@@ -154,6 +154,7 @@ pub(crate) struct StageWorkInput {
 }
 
 pub(crate) fn work_inputs(
+    map: &ProductionMapDefinition,
     batches: &[OrderProgressBatch],
     opening: &[OpeningWipRecord],
 ) -> Vec<StageWorkInput> {
@@ -166,12 +167,9 @@ pub(crate) fn work_inputs(
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or_default()
                 .into(),
-            target_node: b
-                .payload_json
-                .get("next_stage_node_id")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default()
-                .into(),
+            target_node: super::wip_route::resolve_wip_input_route(map, b)
+                .map(|route| route.stage_node_id)
+                .unwrap_or_else(|_| super::service_queue_support::progress_batch_next_stage_node_id(b).to_string()),
             source_apparatus: b.apparatus.clone(),
             target_apparatus: b.next_apparatus.clone(),
             available: b.wip_status == OrderProgressBatchWipStatus::Waiting,

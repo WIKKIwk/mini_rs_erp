@@ -396,7 +396,7 @@ impl ProductionMapService {
                 {
                     let sessions = self.store.order_run_sessions_for_order(order_id).await?;
                     let statuses = super::super::stage_execution::stage_work_statuses(order_map, &sessions,
-                        &super::super::stage_execution::work_inputs(&read_snapshot.progress_batches, &read_snapshot.opening_wip_records), &all_states, &[]);
+                        &super::super::stage_execution::work_inputs(order_map, &read_snapshot.progress_batches, &read_snapshot.opening_wip_records), &all_states, &[]);
                     super::super::stage_execution::work_control(order_map, &storage_key, &active_stage_node_id, &statuses, &sessions)
                         .map(|s| s.upstream_closed)
                 },
@@ -432,6 +432,15 @@ impl ProductionMapService {
             // same transaction as output and WIP ownership changes.
             if local_report_submitted {
                 event.payload_json["stage_work_report_submitted"] = serde_json::json!(true);
+            }
+        }
+        if matches!(queue_action, queue_state::ApparatusQueueAction::Start | queue_state::ApparatusQueueAction::Merge)
+            && let Some(input_event) = &progress.progress_event
+        {
+            for key in ["wip_input_map_fingerprint", "wip_input_expected_batch"] {
+                if let Some(value) = input_event.payload_json.get(key) {
+                    event.payload_json[key] = value.clone();
+                }
             }
         }
         if let Some(batch_id) = &closing_output_batch_id {
@@ -961,7 +970,9 @@ fn has_unprocessed_previous_wips_from_batches<'a>(
         .filter(|batch| {
             let source_node = batch.payload_json.get("stage_node_id")
                 .and_then(serde_json::Value::as_str).unwrap_or_default().trim();
-            let target_node = progress_batch_next_stage_node_id(batch);
+            let route = super::super::wip_route::resolve_wip_input_route(order_map, batch).ok();
+            let target_node = route.as_ref().map(|r| r.stage_node_id.as_str())
+                .unwrap_or_else(|| progress_batch_next_stage_node_id(batch));
             batch.order_id.trim() == order_id.trim()
                 // A preceding operation may have produced its output on more
                 // than one alternative. Concrete stage history outranks the

@@ -278,7 +278,9 @@ impl ProductionMapService {
         for session in self.store.order_run_sessions_for_order(order_id).await? {
             insert_apparatus_id(&mut started_apparatus, &session.apparatus);
         }
-        for batch in self.store.progress_batches_for_order(order_id).await? {
+        let batches = self.store.progress_batches_for_order(order_id).await?;
+        super::wip_route::validate_map_wip_routes(&previous, next, &batches)?;
+        for batch in batches {
             insert_apparatus_id(&mut started_apparatus, &batch.apparatus);
             insert_apparatus_id(&mut started_apparatus, &batch.current_apparatus);
             insert_apparatus_id(&mut started_apparatus, &batch.used_by_apparatus);

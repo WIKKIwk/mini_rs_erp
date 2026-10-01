@@ -117,17 +117,14 @@ pub(super) fn queue_control_stage_projection(
         if has_waiting_previous_stage_wip {
             continue;
         }
-        let Some(previous_stage) = previous_stage else {
+        let Some(_) = previous_stage else {
             continue;
         };
         if batch.order_id.trim() == order_id.trim()
-            && chain::stage_ids_match_for_map(map, &batch.apparatus, previous_stage)
-            && batch.action.records_progress_output()
-            && (batch.next_apparatus.trim().is_empty()
-                || chain::stage_ids_match_for_map(map, &batch.next_apparatus, apparatus))
-            && (next_stage_node_id.is_empty()
-                || chain::stage_node_ids_match_for_map(map, next_stage_node_id, stage_node_id))
-            && batch.wip_status == OrderProgressBatchWipStatus::Waiting
+            && super::wip_route::actionable_wip(batch)
+            && super::wip_route::resolve_wip_input_route(map, batch).is_ok_and(|route|
+                route.consumer_apparatus_ids.iter().any(|id| id == apparatus)
+                    && chain::stage_node_ids_match_for_map(map, &route.stage_node_id, stage_node_id))
         {
             has_waiting_previous_stage_wip = true;
         }

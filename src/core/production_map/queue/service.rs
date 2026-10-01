@@ -525,7 +525,7 @@ impl ProductionMapService {
             let batches = progress_batches_by_order.get(&map.id).map(Vec::as_slice).unwrap_or_default();
             let opening = opening_wip_records.iter().filter(|r| r.intake.order_id == map.id).cloned().collect::<Vec<_>>();
             (map.id.clone(), super::super::stage_execution::stage_work_statuses(map, sessions,
-                &super::super::stage_execution::work_inputs(batches, &opening), all_states, &[]))
+                &super::super::stage_execution::work_inputs(map, batches, &opening), all_states, &[]))
         }).collect::<BTreeMap<_, _>>();
         let mut active_sessions_by_order_apparatus =
             HashMap::<(&str, &str), &OrderRunSession>::new();

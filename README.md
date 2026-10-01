@@ -35,6 +35,9 @@ as a legacy compatibility name for the warehouse/operator flow. Do not rename it
 casually: it is part of the mobile contract and appears in persisted keys such
 as `werka:werka`.
 
+Produced-roll eligibility after map edits is documented in
+[WIP route continuity](docs/wip-route-continuity.md).
+
 ## Runtime Model
 
 ```mermaid
