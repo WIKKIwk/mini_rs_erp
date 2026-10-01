@@ -296,7 +296,7 @@ pub async fn production_map_finished_goods_receive(
     })))
 }
 
-async fn assigned_finished_goods_warehouse(
+pub(super) async fn assigned_finished_goods_warehouse(
     state: &AppState,
     principal: &Principal,
     warehouse: &str,

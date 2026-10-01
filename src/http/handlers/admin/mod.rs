@@ -28,7 +28,7 @@ pub use production_maps::{
     production_map_order_alert,
     production_map_paddon_delete,
     material_link_requests,
-    werka_paddon_preview, werka_paddon_receive,
+    werka_paddon_preview, werka_paddon_receive, werka_qr_preview, werka_wip_receive,
     production_map_apparatus_transfer, production_map_audit, production_map_capacity,
     production_map_capacity_downtime, production_map_closed_orders,
     production_map_completed_orders, production_map_completion_request_decision,

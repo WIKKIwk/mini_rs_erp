@@ -68,6 +68,7 @@ mod queue_helpers;
 #[path = "postgres_production_map/materials/stock.rs"]
 mod raw_material_stock_helpers;
 mod transaction_locks;
+mod warehouse_wip;
 pub mod material_link_requests;
 
 pub(crate) async fn save_edited_map_tx(

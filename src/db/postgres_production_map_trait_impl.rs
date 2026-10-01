@@ -16,6 +16,12 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         paddon_receipts::load(&self.pool, code).await
     }
 
+    async fn warehouse_wip_snapshot(&self, qr: &str) -> Result<Option<crate::core::production_map::WarehouseWipSnapshot>, ProductionMapError> {
+        warehouse_wip::load(&self.pool, qr).await
+    }
+    async fn receive_warehouse_wip(&self, write: crate::core::production_map::WarehouseWipReceiveWrite) -> Result<(), ProductionMapError> {
+        warehouse_wip::commit(&self.pool, write).await
+    }
     async fn receive_paddon(&self, write: crate::core::production_map::PaddonReceiveWrite) -> Result<crate::core::production_map::PaddonReceipt, ProductionMapError> {
         paddon_receipts::commit(&self.pool, write).await
     }

@@ -758,6 +758,12 @@ pub trait ProductionMapStorePort: Send + Sync {
     ) -> StoreResult<ProductionMapApparatusTransferRecord> {
         Err(ProductionMapError::StoreFailed)
     }
+    async fn warehouse_wip_snapshot(&self, _qr_payload: &str) -> StoreResult<Option<super::WarehouseWipSnapshot>> {
+        Err(ProductionMapError::StoreFailed)
+    }
+    async fn receive_warehouse_wip(&self, _write: super::WarehouseWipReceiveWrite) -> StoreResult<()> {
+        Err(ProductionMapError::StoreFailed)
+    }
     async fn receive_finished_goods_batch(
         &self,
         batch: OrderProgressBatch,

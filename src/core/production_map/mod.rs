@@ -68,6 +68,9 @@ mod service_queue_support;
 mod service_transfer;
 #[path = "wip/service.rs"]
 mod service_wip;
+#[path = "wip/warehouse.rs"]
+mod warehouse_wip;
+pub use warehouse_wip::{WarehouseWipSnapshot, WarehouseWipReceiveWrite, WarehouseWipReceipt};
 mod store_port;
 pub(crate) mod stage_execution;
 pub use stage_execution::{StageAstatkaReport, StageWorkControl, StageWorkReport, StageWorkStatus};

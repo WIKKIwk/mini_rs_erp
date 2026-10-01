@@ -213,6 +213,10 @@ pub enum ProductionMapError {
     RezkaOutputCycleConflict,
     #[error("rezka final roll is required")]
     RezkaFinalRollRequired,
+    #[error("QR matches more than one production item")]
+    WarehouseQrAmbiguous,
+    #[error("warehouse WIP changed; scan again")]
+    WarehouseWipConflict,
     #[error("progress batch not found")]
     ProgressBatchNotFound,
     #[error("progress batch does not match previous stage")]

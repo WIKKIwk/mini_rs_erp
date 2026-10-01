@@ -227,6 +227,24 @@ async fn postgres_werka_paddon_receipt_atomic_retry_and_locks() {
             .await
             .is_err()
     );
+    // A fresh pallet must also reject received stock, even though its own
+    // receipt_json is empty. Attachment revalidates after its batch row lock.
+    let fresh = service.create_paddon("Rezka", "", &actor).await.unwrap();
+    assert_eq!(service.add_paddon_items(&fresh.code, &ids, &actor).await,
+        Err(ProductionMapError::PaddonItemAlreadyAssigned));
+    let mut individual = preview.items[0].clone();
+    individual.batch_id = "standalone-warehouse-roll".into();
+    individual.qr_payload = "PROGRESS:standalone-warehouse-roll".into();
+    individual.current_apparatus = station.clone();
+    individual.current_location = "Rezka".into();
+    store.put_order_progress_batch(individual.clone()).await.unwrap();
+    let scan = service.warehouse_wip_snapshot(&individual.qr_payload).await.unwrap().unwrap();
+    assert_eq!(scan.receive_blocked_reason(), None);
+    service.receive_warehouse_wip(&individual.batch_id, &individual.qr_payload,
+        "WH-1", &scan.snapshot_token(), actor.clone()).await.unwrap();
+    assert_eq!(service.add_paddon_items(&fresh.code, &[individual.batch_id], &actor).await,
+        Err(ProductionMapError::ProgressBatchNotAccepted));
+    assert!(service.paddon_scan_snapshot(&fresh.code).await.unwrap().items.is_empty());
     // An old single-roll write must not change a committed pallet receipt.
     let mut stale_stock = receipt.stocks[0].clone();
     stale_stock.warehouse = "WH-2".into();

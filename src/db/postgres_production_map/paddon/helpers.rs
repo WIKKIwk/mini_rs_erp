@@ -301,19 +301,21 @@ pub(super) async fn add_paddon_items(
         .map_err(|_| ProductionMapError::StoreFailed)?;
     let paddon = lock_paddon(&mut tx, code).await?;
     let mut changed = false;
-    for progress_batch_id in progress_batch_ids {
-        let progress_batch_id = progress_batch_id.trim();
-        let batch_exists = sqlx::query_scalar::<_, String>(
-            "SELECT batch_id FROM mini_progress_batches WHERE batch_id = $1",
+    let mut batch_ids: Vec<_> = progress_batch_ids.iter().map(|id| id.trim()).collect();
+    batch_ids.sort_unstable();
+    batch_ids.dedup();
+    for progress_batch_id in batch_ids {
+        // The receipt path holds the same batch row lock. Re-read eligibility
+        // after waiting, so an attachment that loses to receipt cannot commit
+        // membership for stock that has already been accepted.
+        let (status, payload) = sqlx::query_as::<_, (String, serde_json::Value)>(
+            "SELECT wip_status, payload_json FROM mini_progress_batches WHERE batch_id = $1 FOR UPDATE",
         )
         .bind(progress_batch_id)
         .fetch_optional(&mut *tx)
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?
-        .is_some();
-        if !batch_exists {
-            return Err(ProductionMapError::ProgressBatchNotFound);
-        }
+        .ok_or(ProductionMapError::ProgressBatchNotFound)?;
         let active_paddon = sqlx::query_scalar::<_, String>(
             "SELECT paddon_id
              FROM mini_paddon_items
@@ -329,6 +331,12 @@ pub(super) async fn add_paddon_items(
                 return Err(ProductionMapError::PaddonItemAlreadyAssigned);
             }
             continue;
+        }
+        if status != "waiting"
+            || payload.get("finished_goods_stock_id").and_then(|v| v.as_str()).is_some_and(|id| !id.is_empty())
+            || payload.get("received_warehouse").and_then(|v| v.as_str()).is_some_and(|name| !name.is_empty())
+        {
+            return Err(ProductionMapError::ProgressBatchNotAccepted);
         }
         sqlx::query(
             "INSERT INTO mini_paddon_items (

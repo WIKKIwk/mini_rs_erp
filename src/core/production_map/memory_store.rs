@@ -9,6 +9,7 @@ mod queue;
 mod runs;
 mod state;
 mod transfers;
+mod warehouse_wip;
 
 use super::*;
 

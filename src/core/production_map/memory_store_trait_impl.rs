@@ -675,6 +675,12 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
             .await
     }
 
+    async fn warehouse_wip_snapshot(&self, qr: &str) -> Result<Option<WarehouseWipSnapshot>, ProductionMapError> {
+        MemoryProductionMapStore::warehouse_wip_snapshot(self, qr).await
+    }
+    async fn receive_warehouse_wip(&self, write: WarehouseWipReceiveWrite) -> Result<(), ProductionMapError> {
+        MemoryProductionMapStore::receive_warehouse_wip(self, write).await
+    }
     async fn receive_finished_goods_batch(
         &self,
         batch: OrderProgressBatch,
