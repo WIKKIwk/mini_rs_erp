@@ -88,7 +88,7 @@ async fn batch_product_spec_save_is_atomic() {
 }
 
 #[tokio::test]
-async fn order_start_accepts_catalog_qolip_without_inventing_checkout() {
+async fn order_start_accepts_slash_code_without_inventing_checkout() {
     let store = std::sync::Arc::new(MemoryQolipStore::new());
     store
         .seed_products(vec![QolipProduct {
@@ -113,7 +113,7 @@ async fn order_start_accepts_catalog_qolip_without_inventing_checkout() {
                 item_code: "ITEM-ORDER".to_string(),
                 item_name: "Order product".to_string(),
                 item_group: "Tayyor mahsulot".to_string(),
-                qolip_code: "QOLIP-NO-LOCATION".to_string(),
+                qolip_code: "Milano Premium 30/40".to_string(),
                 previous_qolip_code: String::new(),
                 size: 42,
                 color: String::new(),
@@ -125,7 +125,7 @@ async fn order_start_accepts_catalog_qolip_without_inventing_checkout() {
 
     let preparation = service
         .prepare_qolip_code_for_order_start(
-            "QOLIP-NO-LOCATION",
+            "Milano Premium 30/40",
             "ITEM-ORDER",
             "Order product",
             "worker-1",
@@ -135,8 +135,12 @@ async fn order_start_accepts_catalog_qolip_without_inventing_checkout() {
         .await
         .expect("a catalog qolip for the order product must be accepted");
 
-    assert_eq!(preparation.spec.qolip_code, "QOLIP-NO-LOCATION");
+    assert_eq!(preparation.spec.qolip_code, "Milano Premium 30/40");
     assert!(preparation.checkout.is_none());
+    assert_eq!(
+        service.product_spec_by_qolip_code("40").await.unwrap(),
+        None,
+    );
 }
 
 #[tokio::test]

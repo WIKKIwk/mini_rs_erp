@@ -33,6 +33,7 @@ pub async fn production_map_qolip_validate(
         return Err(method_not_allowed());
     }
     let input: QolipStartValidationRequest = parse_json(&body)?;
+    let qolip_code = crate::core::qolip::qolip_scan_code_from_qr(&input.qolip_code);
     let apparatus = input.apparatus.trim();
     let order_id = input.order_id.trim();
     if apparatus.is_empty() || order_id.is_empty() {
@@ -77,7 +78,7 @@ pub async fn production_map_qolip_validate(
             .iter()
             .map(required_qolip_payload)
             .collect::<Vec<_>>();
-        if input.qolip_code.trim().is_empty() {
+        if qolip_code.is_empty() {
             return Ok(json_response(serde_json::json!({
                 "ok": true,
                 "qolip": {
@@ -90,7 +91,7 @@ pub async fn production_map_qolip_validate(
         }
         let spec = state
             .qolip
-            .product_spec_by_qolip_code(&input.qolip_code)
+            .product_spec_by_qolip_code(&qolip_code)
             .await
             .map_err(qolip_queue_error)?
             .ok_or_else(|| qolip_queue_error(crate::core::qolip::QolipError::QolipCodeNotFound))?;
@@ -137,7 +138,7 @@ pub async fn production_map_qolip_validate(
         .iter()
         .map(required_qolip_payload)
         .collect::<Vec<_>>();
-    if input.qolip_code.trim().is_empty() {
+    if qolip_code.is_empty() {
         return Ok(json_response(serde_json::json!({
             "ok": true,
             "qolip": {
@@ -148,11 +149,11 @@ pub async fn production_map_qolip_validate(
             }
         })));
     }
-    reject_qolip_in_use(&state, &apparatus, order_id, &input.qolip_code).await?;
+    reject_qolip_in_use(&state, &apparatus, order_id, &qolip_code).await?;
     let preparation = state
         .qolip
         .prepare_qolip_code_for_order_start(
-            &input.qolip_code,
+            &qolip_code,
             &map.product_code,
             &map.title,
             &principal.ref_,

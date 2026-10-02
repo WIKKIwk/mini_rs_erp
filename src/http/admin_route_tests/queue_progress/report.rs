@@ -300,6 +300,7 @@ async fn progress_qr_history_lists_own_batches_and_reprints_existing_qr() {
     let admin_token = session(&state, PrincipalRole::Admin).await;
     let worker_a_token = session_for(&state, PrincipalRole::Aparatchi, "worker-qr-history-a").await;
     let worker_b_token = session_for(&state, PrincipalRole::Aparatchi, "worker-qr-history-b").await;
+    let werka_token = session_for(&state, PrincipalRole::Werka, "werka-qr-reprint").await;
     let router = build_router(state);
 
     let mut other_qr = String::new();
@@ -543,11 +544,37 @@ async fn progress_qr_history_lists_own_batches_and_reprints_existing_qr() {
     assert_eq!(reprinted_body["ok"], true);
     assert_eq!(reprinted_body["batch"]["qr_payload"], own_qr);
     assert_eq!(reprinted_body["print"]["status"], "printed");
-    wait_for_progress_print_request_count(&print_requests, 3).await;
+
+    let warehouse_reprinted = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/progress-qr/reprint",
+            &werka_token,
+            &format!(r#"{{"qr_payload":"{other_qr}"}}"#),
+        ))
+        .await
+        .expect("werka reprints another worker's qr");
+    let warehouse_reprinted_status = warehouse_reprinted.status();
+    let warehouse_reprinted_body = json_body(warehouse_reprinted).await;
+    assert_eq!(
+        warehouse_reprinted_status,
+        StatusCode::OK,
+        "{warehouse_reprinted_body:?}"
+    );
+    assert_eq!(warehouse_reprinted_body["ok"], true);
+    assert_eq!(warehouse_reprinted_body["batch"]["qr_payload"], other_qr);
+    assert_eq!(warehouse_reprinted_body["print"]["status"], "printed");
+
+    wait_for_progress_print_request_count(&print_requests, 4).await;
     let printed = print_requests.lock().await;
-    assert_eq!(printed.len(), 3);
+    assert_eq!(printed.len(), 4);
     assert!(printed.iter().any(|request| request.epc == own_qr));
-    let reprint_request = printed.last().expect("reprint request");
+    assert!(printed.iter().any(|request| request.epc == other_qr));
+    let reprint_request = printed
+        .iter()
+        .find(|request| request.epc == own_qr)
+        .expect("reprint request");
     assert_eq!(reprint_request.epc, own_qr);
     assert!(reprint_request.item_name.contains("tayyor mahsulot"));
     assert!(!reprint_request.item_name.contains("yarim tayyor mahsulot"));

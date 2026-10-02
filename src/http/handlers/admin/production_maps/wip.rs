@@ -215,10 +215,33 @@ pub async fn werka_paddon_preview(
             Err(error) => return Err(production_map_error(error)),
         }
     };
+    let mut apparatus_names = std::collections::BTreeMap::new();
+    for batch in &snapshot.items {
+        for id in [
+            &batch.apparatus,
+            &batch.current_apparatus,
+            &batch.next_apparatus,
+        ] {
+            if id.trim().is_empty() || apparatus_names.contains_key(id) {
+                continue;
+            }
+            if let Ok(canonical) = state
+                .production_maps
+                .resolve_canonical_apparatus_text(id)
+                .await
+            {
+                apparatus_names.insert(
+                    id.clone(),
+                    canonical.runtime.display.display_name.clone(),
+                );
+            }
+        }
+    }
     Ok(json_response(serde_json::json!({
         "paddon": snapshot.paddon, "items": snapshot.items,
         "snapshot_token": crate::core::production_map::paddon_snapshot_token(&snapshot),
         "warehouses": warehouses, "can_receive": eligible, "receipt": receipt,
+        "apparatus_names": apparatus_names,
     })))
 }
 

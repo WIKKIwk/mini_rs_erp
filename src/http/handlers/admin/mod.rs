@@ -76,7 +76,10 @@ pub use system::{
     system_monitor, system_monitor_live, warehouse_assignments, warehouse_items,
     warehouse_item_rolls, warehouse_summaries, warehouses, werka_code_regenerate,
 };
-use system::{authorize_any_capability, authorize_capability, require_capability};
+use system::{
+    authorize_any_capability, authorize_any_capability_or_werka, authorize_capability,
+    require_capability,
+};
 pub use system_users::{system_user_code_regenerate, system_user_detail, system_users};
 pub use telegram::{
     invite as telegram_invite, settings as telegram_settings,

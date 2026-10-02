@@ -28,6 +28,27 @@ pub(in crate::http::handlers::admin) async fn authorize_any_capability(
     Err(forbidden())
 }
 
+pub(in crate::http::handlers::admin) async fn authorize_any_capability_or_werka(
+    state: &AppState,
+    headers: &HeaderMap,
+    capabilities: &[Capability],
+) -> Result<Principal, AdminError> {
+    let principal = authenticated_principal(state, headers).await?;
+    if principal.role == crate::core::auth::models::PrincipalRole::Werka {
+        return Ok(principal);
+    }
+    for capability in capabilities {
+        if state
+            .admin
+            .principal_has_capability(&principal, *capability)
+            .await
+        {
+            return Ok(principal);
+        }
+    }
+    Err(forbidden())
+}
+
 pub(in crate::http::handlers::admin) async fn require_capability(
     state: &AppState,
     principal: &Principal,

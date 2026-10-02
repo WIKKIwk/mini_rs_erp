@@ -9,7 +9,8 @@ pub async fn scan(
     }
     let principal = authenticated_principal(&state, &headers).await?;
     ensure_qolip_access(&state, &principal).await?;
-    let qr = query.qr.as_deref().unwrap_or("").trim();
+    let qr = crate::core::qolip::qolip_scan_code_from_qr(query.qr.as_deref().unwrap_or(""));
+    let qr = qr.as_str();
     if qr.is_empty() {
         return Err(bad_request("qr_required"));
     }
@@ -79,7 +80,8 @@ pub async fn cell_qr(
     }
     let principal = authenticated_principal(&state, &headers).await?;
     ensure_qolip_access(&state, &principal).await?;
-    let qr = query.qr.as_deref().unwrap_or("").trim();
+    let qr = crate::core::qolip::qolip_scan_code_from_qr(query.qr.as_deref().unwrap_or(""));
+    let qr = qr.as_str();
     if qr.is_empty() {
         return Err(bad_request("qr_required"));
     }

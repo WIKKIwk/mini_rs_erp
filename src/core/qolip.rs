@@ -15,5 +15,6 @@ pub use models::{
     QolipProductSpecBatchUpsert, QolipProductSpecDelete, QolipProductSpecUpsert,
 };
 pub use normalize::role_code;
+pub use normalize_qr::qolip_scan_code_from_qr;
 pub use ports::QolipStorePort;
 pub use service::QolipService;

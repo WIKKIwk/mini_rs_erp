@@ -24,6 +24,8 @@ fn customer_user_list_entry(
         name: entry.name,
         phone: entry.phone,
         avatar_url: String::new(),
+        apparatus_display: String::new(),
+        apparatus_id: String::new(),
         role_label,
         blocked: false,
         status: "active".to_string(),
@@ -54,6 +56,8 @@ fn material_taminotchi_user_list_entry(
         name: entry.name,
         phone: entry.phone,
         avatar_url: String::new(),
+        apparatus_display: String::new(),
+        apparatus_id: String::new(),
         role_label,
         blocked: state.blocked,
         status: if state.blocked {
@@ -105,6 +109,8 @@ fn werka_user_list_entry(
         },
         phone: werka_phone.trim().to_string(),
         avatar_url: String::new(),
+        apparatus_display: String::new(),
+        apparatus_id: String::new(),
         role_label: role_labels
             .get(&role_assignment_key(&PrincipalRole::Werka, "werka"))
             .cloned()

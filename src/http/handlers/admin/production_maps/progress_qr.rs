@@ -293,7 +293,7 @@ pub async fn production_map_progress_qr_reprint(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, AdminError> {
-    let principal = authorize_any_capability(
+    let principal = authorize_any_capability_or_werka(
         &state,
         &headers,
         &[
@@ -301,6 +301,7 @@ pub async fn production_map_progress_qr_reprint(
             Capability::ProductionMapManage,
             Capability::ApparatusQueueRead,
             Capability::ApparatusQueueManage,
+            Capability::WerkaAccess,
         ],
     )
     .await?;
@@ -405,6 +406,7 @@ fn principal_can_reprint_progress_batch(
 ) -> bool {
     let principal_ref = principal.ref_.trim();
     principal.role == PrincipalRole::Admin
+        || principal.role == PrincipalRole::Werka
         || (!principal_ref.is_empty() && batch.worker_ref.trim() == principal_ref)
         || (batch.order_id.trim().starts_with("training-")
             && batch

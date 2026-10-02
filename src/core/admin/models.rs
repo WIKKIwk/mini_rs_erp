@@ -172,6 +172,10 @@ pub struct AdminUserListEntry {
     #[serde(default)]
     pub avatar_url: String,
     pub role_label: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub apparatus_display: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub apparatus_id: String,
     pub blocked: bool,
     pub status: String,
 }

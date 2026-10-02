@@ -117,7 +117,7 @@ async fn qolip_cell_qr_lookup_forbidden_block_does_not_create_qr_row() {
 }
 
 #[tokio::test]
-async fn qolip_code_qr_print_uses_code_as_stable_payload() {
+async fn qolip_code_qr_print_scan_and_validate_preserve_slash_code() {
     let print_requests = Arc::new(Mutex::new(Vec::<ScaleDriverPrintRequest>::new()));
     let mut state = test_state();
     state.gscale = GscaleService::new().with_driver(Arc::new(FakeProgressDriver {
@@ -136,7 +136,7 @@ async fn qolip_code_qr_print_uses_code_as_stable_payload() {
                 "item_code":"ITEM-001",
                 "item_name":"Kross qolip",
                 "item_group":"Qolip",
-                "qolip_code":"QOLIP-0007",
+                "qolip_code":"Milano Premium 30/40",
                 "size":42
             }"#,
         ))
@@ -144,13 +144,13 @@ async fn qolip_code_qr_print_uses_code_as_stable_payload() {
         .expect("save product spec");
     assert_eq!(save.status(), StatusCode::OK);
 
-    let print = build_router(state)
+    let print = build_router(state.clone())
         .oneshot(request_with_body(
             "POST",
             "/v1/mobile/qolip/code-qr/print",
             &token,
             r#"{
-                "qolip_code":"QOLIP-0007",
+                "qolip_code":"Milano Premium 30/40",
                 "driver_url":"http://127.0.0.1:39117",
                 "printer":"zebra",
                 "print_mode":"rfid"
@@ -160,13 +160,78 @@ async fn qolip_code_qr_print_uses_code_as_stable_payload() {
         .expect("print qolip code qr");
     assert_eq!(print.status(), StatusCode::OK);
     let body = json_body(print).await;
-    assert_eq!(body["qolip_qr"]["qolip_code"], "QOLIP-0007");
-    assert_eq!(body["qolip_qr"]["qr_payload"], "QOLIP-0007");
+    assert_eq!(body["qolip_qr"]["qolip_code"], "Milano Premium 30/40");
+    assert_eq!(body["qolip_qr"]["qr_payload"], "Milano Premium 30/40");
+
+    let map = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &token,
+            &production_order_map_json_with_product(
+                "zakaz-slash-qolip",
+                "Kross qolip",
+                "ITEM-001",
+                "0115",
+                "apparatus:default:bosma_7",
+                7,
+                1250.0,
+            ),
+        ))
+        .await
+        .expect("save map for slash code validation");
+    assert_eq!(map.status(), StatusCode::OK);
+
+    for qr in [
+        "Milano Premium 30/40",
+        "https://erp.example/scan?qr=Milano%20Premium%2030%2F40",
+        "https://erp.example/qolip/Milano%20Premium%2030%2F40",
+    ] {
+        let response = build_router(state.clone())
+            .oneshot(request(
+                "GET",
+                &format!("/v1/mobile/qolip/scan?qr={}", urlencoding::encode(qr)),
+                &token,
+            ))
+            .await
+            .expect("scan full qolip code");
+        assert_eq!(response.status(), StatusCode::OK, "{qr}");
+        assert_eq!(
+            json_body(response).await["product"]["qolip_code"],
+            "Milano Premium 30/40",
+        );
+        let validation = build_router(state.clone())
+            .oneshot(request_with_body(
+                "POST",
+                "/v1/mobile/admin/production-maps/qolip-validate",
+                &token,
+                &serde_json::json!({
+                    "apparatus": "apparatus:default:bosma_7",
+                    "order_id": "zakaz-slash-qolip",
+                    "qolip_code": qr,
+                })
+                .to_string(),
+            ))
+            .await
+            .expect("validate full qolip code for order start");
+        assert_eq!(validation.status(), StatusCode::OK, "{qr}");
+        let validation = json_body(validation).await;
+        assert_eq!(validation["qolip"]["qolip_code"], "Milano Premium 30/40");
+        assert_eq!(
+            validation["qolip"]["required_qolip_codes"],
+            serde_json::json!(["Milano Premium 30/40"]),
+        );
+    }
+    let shortened = build_router(state)
+        .oneshot(request("GET", "/v1/mobile/qolip/scan?qr=40", &token))
+        .await
+        .expect("scan wrong shortened code");
+    assert_eq!(shortened.status(), StatusCode::BAD_REQUEST);
 
     let printed = print_requests.lock().await;
     assert_eq!(printed.len(), 1);
-    assert_eq!(printed[0].epc, "QOLIP-0007");
-    assert_eq!(printed[0].item_code, "QOLIP-0007");
+    assert_eq!(printed[0].epc, "Milano Premium 30/40");
+    assert_eq!(printed[0].item_code, "Milano Premium 30/40");
     assert_eq!(printed[0].item_name, "Kross qolip");
     assert_eq!(printed[0].label_kind, "qolip_code");
 }

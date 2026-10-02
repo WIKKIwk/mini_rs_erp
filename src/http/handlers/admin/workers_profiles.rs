@@ -111,12 +111,128 @@ pub(super) async fn worker_user_list_page(
         .await
         .map_err(worker_error)?;
     let has_more = workers.len() > offset.saturating_add(limit);
-    let items = state
+    let mut items = state
         .admin
         .worker_user_list_entries(workers.into_iter().skip(offset).take(limit).collect())
         .await
         .map_err(|_| server_error("worker detail failed"))?;
+    enrich_worker_list_with_apparatus(state, &mut items).await;
     Ok(AdminUserListPage { items, has_more })
+}
+
+async fn enrich_worker_list_with_apparatus(
+    state: &AppState,
+    items: &mut [crate::core::admin::models::AdminUserListEntry],
+) {
+    if items.is_empty() {
+        return;
+    }
+    // worker_id (trimmed) -> (canonical apparatus id, snapshot display)
+    let mut group_map: BTreeMap<String, (String, String)> = BTreeMap::new();
+    if let Ok(groups) = state.worker_groups.worker_groups(None).await {
+        for group in groups {
+            let apparatus_id = group.apparatus_id.as_str().trim().to_string();
+            if apparatus_id.is_empty() {
+                continue;
+            }
+            let snapshot = group.apparatus.trim().to_string();
+            for worker_id in group.worker_ids {
+                let key = worker_id.trim().to_string();
+                if key.is_empty() {
+                    continue;
+                }
+                // Duplicate workers across groups are rejected at write time,
+                // first mapping wins deterministically.
+                group_map
+                    .entry(key)
+                    .or_insert_with(|| (apparatus_id.clone(), snapshot.clone()));
+            }
+        }
+    }
+    // Fallback: role assignments (Aparatchi -> assigned_apparatus canonical IDs).
+    let mut assignment_map: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    if let Ok(assignments) = state.admin.role_assignments().await {
+        for assignment in assignments {
+            if assignment.principal_role != PrincipalRole::Aparatchi {
+                continue;
+            }
+            let key = assignment.principal_ref.trim().to_string();
+            if key.is_empty() {
+                continue;
+            }
+            let mut ids = assignment
+                .assigned_apparatus
+                .into_iter()
+                .map(|id| id.trim().to_string())
+                .filter(|id| !id.is_empty())
+                .collect::<Vec<_>>();
+            if ids.is_empty() {
+                continue;
+            }
+            ids.sort();
+            ids.dedup();
+            assignment_map.entry(key).or_insert(ids);
+        }
+    }
+    // Canonical ID -> fresh display name. Never expose raw IDs in the list.
+    let mut display_by_id: BTreeMap<String, String> = BTreeMap::new();
+    if let Ok(projections) = state.apparatus.list_runtime_projections().await {
+        for projection in projections {
+            let display = projection.display.display_name.trim().to_string();
+            if display.is_empty() {
+                continue;
+            }
+            display_by_id.insert(
+                projection.apparatus_id.as_str().trim().to_string(),
+                display,
+            );
+        }
+    }
+
+    for entry in items.iter_mut() {
+        let worker_key = entry.entity_ref.trim().to_string();
+        if worker_key.is_empty() {
+            continue;
+        }
+        let mut canonical_id = String::new();
+        let mut snapshot = String::new();
+        if let Some((group_id, group_snapshot)) = group_map.get(&worker_key) {
+            canonical_id = group_id.clone();
+            snapshot = group_snapshot.clone();
+        } else if let Some(ids) = assignment_map.get(&worker_key) {
+            // Deterministic single choice for the list line.
+            if let Some(first) = ids.first() {
+                canonical_id = first.clone();
+            }
+        }
+        if canonical_id.is_empty() {
+            continue;
+        }
+        let mut display = display_by_id
+            .get(&canonical_id)
+            .cloned()
+            .unwrap_or_default();
+        if display.is_empty() {
+            let snap = snapshot.trim();
+            // Snapshot is display-only; never show canonical IDs like
+            // `apparatus:default:asset-010` in the user list.
+            if !snap.is_empty() && !snap.starts_with("apparatus:") {
+                display = snap.to_string();
+            }
+        }
+        let display = display.trim().to_string();
+        if display.is_empty() {
+            continue;
+        }
+        entry.apparatus_display = display.clone();
+        entry.apparatus_id = canonical_id;
+        let level = entry.role_label.trim().to_string();
+        if level.is_empty() {
+            entry.role_label = display;
+        } else if !level.to_lowercase().starts_with(&display.to_lowercase()) {
+            entry.role_label = format!("{display} {level}");
+        }
+    }
 }
 
 pub async fn worker_code_regenerate(

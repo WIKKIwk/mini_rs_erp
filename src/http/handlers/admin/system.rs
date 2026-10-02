@@ -16,7 +16,10 @@ use super::*;
 pub use apparatus::{apparatus, apparatus_detail, apparatus_options};
 pub use apparatus_aasx::{MAX_AASX_UPLOAD_BYTES, apparatus_aasx};
 pub use apparatus_collections::{apparatus_collection, apparatus_collections};
-pub(super) use auth::{authorize_any_capability, authorize_capability, require_capability};
+pub(super) use auth::{
+    authorize_any_capability, authorize_any_capability_or_werka, authorize_capability,
+    require_capability,
+};
 pub use catalog::items_bulk_move_group;
 pub use emergency_reset::reset_orders;
 pub use factory_locations::{factory_location, factory_location_apparatus, factory_locations};

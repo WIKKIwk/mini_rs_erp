@@ -3,6 +3,38 @@ use crate::core::auth::models::Principal;
 use super::models::{QolipBlock, QolipCellQr};
 use super::normalize::{compact_key, role_code};
 
+/// Extract a code only from an absolute QR link. Plain codes are opaque:
+/// slashes, punctuation and percent signs must not alter their identity.
+pub fn qolip_scan_code_from_qr(raw: &str) -> String {
+    let value = raw.trim();
+    let Some((scheme, _)) = value.split_once("://") else {
+        return value.to_string();
+    };
+    let Ok(url) = reqwest::Url::parse(value) else {
+        return value.to_string();
+    };
+    if !scheme.eq_ignore_ascii_case(url.scheme()) || url.host_str().is_none_or(str::is_empty) {
+        return value.to_string();
+    }
+    for key in ["barcode", "epc", "qr"] {
+        if let Some((_, candidate)) = url.query_pairs().find(|(name, _)| name == key) {
+            let candidate = candidate.trim();
+            if !candidate.is_empty() {
+                return candidate.to_string();
+            }
+        }
+    }
+    if let Some(last) = url.path_segments().and_then(|segments| segments.last()) {
+        if let Ok(code) = urlencoding::decode(last) {
+            let code = code.trim();
+            if !code.is_empty() {
+                return code.to_string();
+            }
+        }
+    }
+    value.to_string()
+}
+
 pub(super) fn qolip_cell_id(
     warehouse: &str,
     block: &str,
@@ -121,4 +153,52 @@ fn fnv1a64_extend(mut hash: u64, value: &[u8]) -> u64 {
 
 fn fnv1a64(value: &str) -> u64 {
     fnv1a64_extend(0xcbf2_9ce4_8422_2325_u64, value.trim().as_bytes())
+}
+
+#[cfg(test)]
+mod scan_code_tests {
+    use super::qolip_scan_code_from_qr;
+
+    #[test]
+    fn preserves_opaque_qolip_codes() {
+        for code in [
+            "Milano Premium 30/40",
+            "Milano Premium 30/40-1",
+            "Milano Premium 25/35+5",
+            "QOLIP:30/40?qr=OTHER#black",
+            "https:30/40",
+            "/QOLIP/30/40",
+            "//QOLIP/30/40",
+            "QOLIP-0007",
+            "QOLIP%2F30%2F40",
+            "400118DA2F17C3617F59DD00",
+        ] {
+            assert_eq!(qolip_scan_code_from_qr(&format!("  {code}  ")), code);
+        }
+        assert_eq!(qolip_scan_code_from_qr("  "), "");
+    }
+
+    #[test]
+    fn extracts_complete_codes_from_absolute_qr_links() {
+        for key in ["barcode", "epc", "qr"] {
+            assert_eq!(
+                qolip_scan_code_from_qr(&format!(
+                    "https://erp.example/scan?{key}=Milano%20Premium%2030%2F40"
+                )),
+                "Milano Premium 30/40",
+            );
+        }
+        assert_eq!(
+            qolip_scan_code_from_qr("https://erp.example/qolip/Milano%20Premium%2030%2F40"),
+            "Milano Premium 30/40",
+        );
+        assert_eq!(
+            qolip_scan_code_from_qr("accord://scan?qr=QOLIP%2F30%2F40"),
+            "QOLIP/30/40",
+        );
+        assert_eq!(
+            qolip_scan_code_from_qr("https://erp.example/qr/RM-001"),
+            "RM-001",
+        );
+    }
 }
