@@ -8,6 +8,14 @@ pub struct ProductionMapSequenceQuery {
     order_id: String,
     #[serde(default)]
     worker_scope: bool,
+    #[serde(default)]
+    if_epoch: String,
+    #[serde(default)]
+    if_rev: Option<u64>,
+    #[serde(default)]
+    if_scope: String,
+    #[serde(default)]
+    wait_ms: u64,
 }
 
 pub async fn production_map_sequence(
@@ -39,6 +47,14 @@ pub async fn production_map_sequence(
             {
                 return Err(bad_request("canonical apparatus and order_id are required together"));
             }
+            if query.worker_scope && apparatus.is_empty() && query.if_rev.is_some()
+                && worker_snapshot::snapshot_unchanged(&state, &principal,
+                    &query.if_epoch, query.if_rev, &query.if_scope, query.wait_ms).await?
+            {
+                return Ok(Response::builder().status(StatusCode::NOT_MODIFIED)
+                    .header("Cache-Control", "no-store")
+                    .body(axum::body::Body::empty()).expect("empty conditional response"));
+            }
             // Canonical initial snapshot: same authority as the live stream
             // (`ProductionMapLiveSnapshot` + monotonic revision + maps).
             // Additive only: old mobiles ignore `rev`/`maps`.
@@ -52,19 +68,25 @@ pub async fn production_map_sequence(
             )
             .await
             .map_err(super::training::training_workspace_error)?;
-            let (snapshot, scope) = if query.worker_scope {
+            let (snapshot, scope, completed, requests, decisions) = if query.worker_scope {
                 let actor = queue_action_actor(&principal);
-                let (completed, decisions) = tokio::try_join!(
+                let (completed, requests, decisions) = tokio::try_join!(
                     state.production_maps.completed_queue_orders_for_actor(&actor.ref_, 200),
+                    async {
+                        if matches!(principal.role, PrincipalRole::Admin) {
+                            state.production_maps.completion_requests(200).await
+                        } else { Ok(Vec::new()) }
+                    },
                     state.production_maps.completion_request_decisions_for_actor(&actor.ref_, 200),
                 ).map_err(production_map_error)?;
-                worker_snapshot::project_for_principal(
+                let (snapshot, scope) = worker_snapshot::project_for_principal(
                     &state, &principal, snapshot,
-                    completed.into_iter().map(|order| order.order_id)
-                        .chain(decisions.into_iter().map(|decision| decision.order_id)),
-                ).await?
+                    completed.iter().map(|order| order.order_id.clone())
+                        .chain(decisions.iter().map(|decision| decision.order_id.clone())),
+                ).await?;
+                (snapshot, scope, completed, requests, decisions)
             } else {
-                (snapshot, String::new())
+                (snapshot, String::new(), Vec::new(), Vec::new(), Vec::new())
             };
             if !apparatus.is_empty() {
                 // Same canonical snapshot and authorization as the full GET;
@@ -91,7 +113,7 @@ pub async fn production_map_sequence(
                 })));
             }
             let order_customers = production_map_order_customers(&state, &snapshot.maps).await;
-            Ok(json_response(serde_json::json!({
+            let mut payload = serde_json::json!({
                 "ok": true,
                 "rev": revision,
                 "epoch": state.production_maps.snapshot_epoch(),
@@ -109,7 +131,13 @@ pub async fn production_map_sequence(
                 "order_controls": &snapshot.order_controls,
                 "frozen_orders_by_apparatus": &snapshot.frozen_orders_by_apparatus,
                 "order_customers": order_customers,
-            })))
+            });
+            if query.worker_scope {
+                payload["completed_orders"] = serde_json::json!(completed);
+                payload["completion_requests"] = serde_json::json!(requests);
+                payload["completion_request_decisions"] = serde_json::json!(decisions);
+            }
+            Ok(json_response(payload))
         }
         Method::POST => {
             authorize_any_capability(&state, &headers,

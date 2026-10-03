@@ -310,6 +310,10 @@ impl ProductionMapService {
         &self.snapshot_cache.epoch
     }
 
+    pub fn snapshot_revision(&self) -> u64 {
+        self.snapshot_cache.revision.load(Ordering::Acquire)
+    }
+
     pub(super) fn notify_print_preflight(&self) {
         let revision = self.snapshot_cache.revision.fetch_add(1, Ordering::AcqRel) + 1;
         let _ = self

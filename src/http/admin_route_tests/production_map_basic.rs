@@ -1,6 +1,52 @@
 use super::*;
 
 #[tokio::test]
+async fn worker_conditional_snapshot_checks_revision_scope_and_authentication() {
+    let state = test_state();
+    let assignment = |apparatus: &str| crate::core::authz::RoleAssignmentUpsert {
+        principal_role: PrincipalRole::Aparatchi,
+        principal_ref: "conditional-worker".into(), role_id: "aparatchi".into(),
+        assigned_apparatus: vec![apparatus.into()], assigned_item_groups: vec![],
+    };
+    state.admin.upsert_role_assignment(assignment("apparatus:default:bosma_7")).await.unwrap();
+    let token = session_for(&state, PrincipalRole::Aparatchi, "conditional-worker").await;
+    let router = build_router(state.clone());
+    let base = "/v1/mobile/admin/production-maps/sequence?worker_scope=true";
+    let response = router.clone().oneshot(request("GET", base, &token)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let first = json_body(response).await;
+    assert!(first["completed_orders"].is_array());
+    let uri = format!("{base}&if_epoch={}&if_rev={}&if_scope={}&wait_ms=10",
+        first["epoch"].as_str().unwrap(), first["rev"], first["scope"].as_str().unwrap());
+    let unchanged = router.clone().oneshot(request("GET", &uri, &token)).await.unwrap();
+    assert_eq!(unchanged.status(), StatusCode::NOT_MODIFIED);
+    assert_eq!(unchanged.headers()["cache-control"], "no-store");
+    assert!(to_bytes(unchanged.into_body(), 100).await.unwrap().is_empty());
+
+    // An event during the long poll must produce the new authoritative view.
+    let wait_uri = uri.replace("wait_ms=10", "wait_ms=6000");
+    let (changed, ()) = tokio::join!(
+        router.clone().oneshot(request("GET", &wait_uri, &token)),
+        async { tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            state.production_maps.notify_live(); },
+    );
+    let changed = changed.unwrap();
+    assert_eq!(changed.status(), StatusCode::OK);
+    let changed = json_body(changed).await;
+    assert!(changed["rev"].as_u64().unwrap() > first["rev"].as_u64().unwrap());
+    let current_uri = format!("{base}&if_epoch={}&if_rev={}&if_scope={}",
+        changed["epoch"].as_str().unwrap(), changed["rev"], changed["scope"].as_str().unwrap());
+    state.admin.upsert_role_assignment(assignment("apparatus:default:bosma_9")).await.unwrap();
+    let moved = router.clone().oneshot(request("GET", &current_uri, &token)).await.unwrap();
+    assert_eq!(moved.status(), StatusCode::OK);
+    let moved = json_body(moved).await;
+    assert_eq!(moved["rev"], changed["rev"]);
+    assert_ne!(moved["scope"], changed["scope"]);
+    let unauthorized = router.oneshot(request("GET", &current_uri, "invalid-token")).await.unwrap();
+    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
 async fn production_map_nodes_preserve_alternative_group_metadata() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;

@@ -4,6 +4,33 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+fn cursor_matches(epoch: &str, revision: u64, scope: &str,
+    client_epoch: &str, client_revision: Option<u64>, client_scope: &str) -> bool {
+    !client_epoch.is_empty() && !client_scope.is_empty()
+        && epoch == client_epoch && Some(revision) == client_revision && scope == client_scope
+}
+
+/// A confirmed unchanged cursor needs no snapshot build/history queries/JSON.
+/// Subscribe first so a commit during the cursor check wakes the bounded wait.
+pub(super) async fn snapshot_unchanged(
+    state: &AppState, principal: &Principal, epoch: &str, revision: Option<u64>,
+    scope: &str, wait_ms: u64,
+) -> Result<bool, AdminError> {
+    let mut events = state.production_maps.subscribe_live();
+    let (_, current_scope) = scope_token(state, principal).await?;
+    if !cursor_matches(state.production_maps.snapshot_epoch(),
+        state.production_maps.snapshot_revision(), &current_scope, epoch, revision, scope) {
+        return Ok(false);
+    }
+    if wait_ms > 0 {
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(wait_ms.min(6000)),
+            events.recv()).await;
+    }
+    let (_, current_scope) = scope_token(state, principal).await?;
+    Ok(cursor_matches(state.production_maps.snapshot_epoch(),
+        state.production_maps.snapshot_revision(), &current_scope, epoch, revision, scope))
+}
+
 pub(super) async fn scope_token(
     state: &AppState,
     principal: &Principal,
@@ -119,6 +146,18 @@ pub(super) async fn project_for_principal(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn conditional_read_requires_exact_epoch_revision_and_assignment_scope() {
+        assert!(cursor_matches("epoch", 8, "scope", "epoch", Some(8), "scope"));
+        for (epoch, revision, scope) in [
+            ("old", Some(8), "scope"), ("epoch", Some(7), "scope"),
+            ("epoch", None, "scope"), ("epoch", Some(8), "other"),
+            ("", Some(8), ""),
+        ] {
+            assert!(!cursor_matches("epoch", 8, "scope", epoch, revision, scope));
+        }
+    }
 
     #[test]
     fn worker_projection_preserves_route_and_history_but_removes_other_orders() {

@@ -44,6 +44,7 @@ measurements, not measured post-change performance.
    current map definition is identical, including legacy code normalization.
    Changed formulas are recompiled. Exact consecutive colour-only notifications
    reuse completion history lists; coalesced or delayed events reread them.
+   ERP `3861c8f`.
 
 This stage deliberately uses the existing epoch/global snapshot revision. It does
 not claim durable colour-event replay: a disconnected client or restarted server
@@ -54,10 +55,17 @@ available to the legacy sequence protocol.
    rewriting actor/time or emitting a new invalidation. Wrong order/apparatus
    retries are rejected. On a lost colour response, mobile clears old controls
    and reconciles by GET; it never automatically replays the POST.
+   ERP `8aa1c7f`, mobile `edd99395`.
 
-## Next stages
-
-- Add a bounded conditional HTTP fallback for networks that cannot sustain WS.
+7. WS outages start one conditional HTTP fallback. Authorization and the current
+   assignment scope are checked before accepting an epoch/revision cursor. An
+   unchanged view returns empty `304` with `no-store`, before snapshot compilation
+   or history queries. The optional long poll is capped at 6 seconds, within the
+   mobile 10 second read timeout. Reads remain single-flight, with a minimum 2
+   second interval after success and jitter/backoff after failure. Healthy WS,
+   backgrounding, disposal or fatal authorization/contract errors stop fallback.
+   Worker HTTP views carry history and decisions atomically, avoiding two extra
+   bootstrap requests and allowing notification recovery without WS.
 
 ## Verification
 
@@ -71,6 +79,11 @@ its database work. No production database was used or deployed.
 Stage 5: compiler reuse and exact colour-history revision guards passed. Worker
 widget checks passed (34 cases); two admin order re-entry tests failed identically
 on the pre-change mobile checkpoint `e5befea`, so they are existing failures.
+Stage 6: three core colour tests and ten Flutter state/colour parser tests passed.
+Stage 7: conditional route test covers empty 304, commit wakeup, assignment
+changes at the same revision and invalid authentication. All 36 production-map
+handler unit tests passed. Flutter API/delta checks passed (27 cases), worker
+action/activity/recovery checks passed (31 cases). Focused analysis passed.
 
 Bandwidth targets and real weak-network/tablet latency still require runtime
 measurement after these changes are deployed to an authorized test environment.
