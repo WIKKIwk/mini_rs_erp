@@ -29,6 +29,14 @@ measurements, not measured post-change performance.
    A gap, broadcast lag or patch over 64 KiB triggers HTTP reconciliation.
    Legacy clients retain their previous protocol. Client retries use jitter and a
    30 second cap; socket outages do not start a second full-read retry loop.
+   ERP `face566`, mobile `637e695f`.
+4. Worker bootstrap and live snapshots contain assigned apparatus orders plus
+   the worker's own completion history/decisions. Cross-machine states and
+   permissions for those orders remain present. An opaque assignment scope
+   accompanies the epoch/revision; a changed assignment requires a fresh view
+   even at the same revision. Scope is checked again on live heartbeats.
+   Large HTTP JSON decoding and typed model construction run in one isolate;
+   large native WS frames are decoded in order with source backpressure.
 
 This stage deliberately uses the existing epoch/global snapshot revision. It does
 not claim durable colour-event replay: a disconnected client or restarted server
@@ -37,9 +45,6 @@ available to the legacy sequence protocol.
 
 ## Next stages
 
-- Project bootstrap/reconciliation and live views to the worker's authorized
-  apparatus orders, retaining cross-stage state needed by those orders.
-- Decode and construct large HTTP snapshot models away from the UI isolate.
 - Reduce repeated server compilation/control evaluation without changing business
   predicates or removing queue/database locks.
 
@@ -47,7 +52,9 @@ available to the legacy sequence protocol.
 
 Stage 1: `cargo check --locked` and focused Dart analysis passed.
 Stage 3: four Rust patch tests and fifteen Flutter delta/regression tests passed;
-focused Dart analysis passed. A broader print-preflight test filter also selected
+focused Dart analysis passed. Stage 4: worker route/history projection and 23
+Flutter parser/delta/API regression tests passed. Two core colour workflow tests
+passed. A broader print-preflight test filter also selected
 a PostgreSQL integration test; it failed at local database authentication before
 its database work. No production database was used or deployed.
 

@@ -16,6 +16,8 @@ const MAX_STATE_DELTA_BYTES: usize = 64 * 1024;
 struct LiveView {
     snapshot: Arc<ProductionMapLiveSnapshot>,
     revision: u64,
+    epoch: String,
+    scope: String,
     customers: BTreeMap<String, String>,
     completed: Vec<CompletedQueueOrder>,
     requests: Vec<CompletionRequestNotification>,
@@ -26,6 +28,7 @@ async fn read_view(
     state: &AppState,
     principal: &Principal,
     include_requests: bool,
+    worker_scope: bool,
 ) -> Result<LiveView, AdminError> {
     let service = &state.production_maps;
     let (snapshot, revision) = service
@@ -49,10 +52,26 @@ async fn read_view(
         service.completion_request_decisions_for_actor(&actor.ref_, 200),
     )
     .map_err(production_map_error)?;
+    let (snapshot, scope) = if worker_scope {
+        super::worker_snapshot::project_for_principal(
+            state,
+            principal,
+            snapshot,
+            completed
+                .iter()
+                .map(|order| order.order_id.clone())
+                .chain(decisions.iter().map(|decision| decision.order_id.clone())),
+        )
+        .await?
+    } else {
+        (snapshot, String::new())
+    };
     let customers = production_map_order_customers(state, &snapshot.maps).await;
     Ok(LiveView {
         snapshot,
         revision,
+        epoch: service.snapshot_epoch().to_string(),
+        scope,
         customers,
         completed,
         requests,
@@ -206,15 +225,17 @@ pub(super) fn production_map_state_live_socket(
     include_requests: bool,
     client_epoch: String,
     client_revision: Option<u64>,
+    worker_scope: bool,
+    client_scope: String,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
     Box::pin(async move {
         // Subscribe before reading: updates during bootstrap must not be lost.
         let mut events = state.production_maps.subscribe_live();
-        let epoch = state.production_maps.snapshot_epoch().to_string();
-        let mut baseline = match read_view(&state, &principal, include_requests).await {
+        let mut baseline = match read_view(&state, &principal, include_requests, worker_scope).await
+        {
             Ok(view) => view,
-            Err(_) => {
-                let _ = send(&mut socket, json!({"ok": false, "error": "store_failed"})).await;
+            Err(error) => {
+                let _ = send(&mut socket, json!(error.1.0)).await;
                 return;
             }
         };
@@ -223,8 +244,9 @@ pub(super) fn production_map_state_live_socket(
         if !send(
             &mut socket,
             json!({
-                "ok": true, "type": "state_ready", "epoch": epoch, "rev": baseline.revision,
-                "resync": client_epoch != epoch || client_revision != Some(baseline.revision),
+            "ok": true, "type": "state_ready", "epoch": baseline.epoch, "rev": baseline.revision,
+            "scope": baseline.scope,
+            "resync": client_epoch != baseline.epoch || client_revision != Some(baseline.revision) || client_scope != baseline.scope,
             }),
         )
         .await
@@ -244,23 +266,39 @@ pub(super) fn production_map_state_live_socket(
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => true,
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     };
-                    let next = match read_view(&state, &principal, include_requests).await {
+                    let next = match read_view(&state, &principal, include_requests, worker_scope).await {
                         Ok(view) => view,
-                        Err(_) => { let _ = send(&mut socket, json!({"ok": false, "error": "store_failed"})).await; break; }
+                        Err(error) => { let _ = send(&mut socket, json!(error.1.0)).await; break; }
                     };
                     let patch = view_patch(&baseline, &next);
                     if !lagged && patch.is_empty() && baseline.revision == next.revision { continue; }
+                    let scope_changed = baseline.scope != next.scope;
                     let payload = json!({
-                        "ok": true, "type": "state_delta", "epoch": epoch,
+                        "ok": true, "type": "state_delta", "epoch": next.epoch,
                         "base_rev": baseline.revision, "rev": next.revision, "patch": patch,
+                        "scope": next.scope,
                     });
                     let too_large = serde_json::to_vec(&payload).map_or(true, |bytes| bytes.len() > MAX_STATE_DELTA_BYTES);
-                    if lagged || too_large {
-                        if !send(&mut socket, json!({"ok": true, "type": "state_resync", "epoch": epoch, "rev": next.revision})).await { break; }
+                    if lagged || too_large || scope_changed {
+                        if !send(&mut socket, json!({"ok": true, "type": "state_resync", "epoch": next.epoch, "rev": next.revision, "scope": next.scope})).await { break; }
                     } else if !send(&mut socket, payload).await { break; }
                     baseline = next;
                 },
                 _ = heartbeat.tick() => {
+                    if worker_scope {
+                        match super::worker_snapshot::scope_token(&state, &principal).await {
+                            Ok((_, scope)) if scope != baseline.scope => {
+                                let next = match read_view(&state, &principal, include_requests, worker_scope).await {
+                                    Ok(view) => view,
+                                    Err(error) => { let _ = send(&mut socket, json!(error.1.0)).await; break; }
+                                };
+                                if !send(&mut socket, json!({"ok": true, "type": "state_resync", "epoch": next.epoch, "rev": next.revision, "scope": next.scope})).await { break; }
+                                baseline = next;
+                            }
+                            Err(_) => { let _ = send(&mut socket, json!({"ok": false, "error": "forbidden"})).await; break; }
+                            _ => {}
+                        }
+                    }
                     if !timeout(Duration::from_secs(15), socket.send(Message::Ping(Vec::new().into())))
                         .await.is_ok_and(|result| result.is_ok()) { break; }
                 }

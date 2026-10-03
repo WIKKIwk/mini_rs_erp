@@ -43,6 +43,8 @@ pub async fn production_map_live(
                     include_completion_requests,
                     query.epoch,
                     query.rev,
+                    query.worker_scope,
+                    query.scope,
                 );
             }
             // Box both protocol futures to retain the legacy wire contract.
@@ -70,6 +72,10 @@ pub struct ProductionMapLiveQuery {
     epoch: String,
     #[serde(default)]
     rev: Option<u64>,
+    #[serde(default)]
+    worker_scope: bool,
+    #[serde(default)]
+    scope: String,
 }
 
 async fn authenticated_principal_for_live(

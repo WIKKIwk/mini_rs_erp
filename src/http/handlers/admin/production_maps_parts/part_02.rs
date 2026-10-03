@@ -6,6 +6,8 @@ pub struct ProductionMapSequenceQuery {
     apparatus: String,
     #[serde(default)]
     order_id: String,
+    #[serde(default)]
+    worker_scope: bool,
 }
 
 pub async fn production_map_sequence(
@@ -50,6 +52,20 @@ pub async fn production_map_sequence(
             )
             .await
             .map_err(super::training::training_workspace_error)?;
+            let (snapshot, scope) = if query.worker_scope {
+                let actor = queue_action_actor(&principal);
+                let (completed, decisions) = tokio::try_join!(
+                    state.production_maps.completed_queue_orders_for_actor(&actor.ref_, 200),
+                    state.production_maps.completion_request_decisions_for_actor(&actor.ref_, 200),
+                ).map_err(production_map_error)?;
+                worker_snapshot::project_for_principal(
+                    &state, &principal, snapshot,
+                    completed.into_iter().map(|order| order.order_id)
+                        .chain(decisions.into_iter().map(|decision| decision.order_id)),
+                ).await?
+            } else {
+                (snapshot, String::new())
+            };
             if !apparatus.is_empty() {
                 // Same canonical snapshot and authorization as the full GET;
                 // only its wire projection is smaller. No maps, compilation
@@ -58,6 +74,7 @@ pub async fn production_map_sequence(
                     "ok": true,
                     "rev": revision,
                     "epoch": state.production_maps.snapshot_epoch(),
+                    "scope": scope,
                     "maps": [],
                     "sequences": { apparatus: snapshot.sequences.get(apparatus).cloned().unwrap_or_default() },
                     "sequence_versions": { apparatus: snapshot.sequence_versions.get(apparatus) },
@@ -78,6 +95,7 @@ pub async fn production_map_sequence(
                 "ok": true,
                 "rev": revision,
                 "epoch": state.production_maps.snapshot_epoch(),
+                "scope": scope,
                 "maps": &snapshot.maps,
                 "sequences": &snapshot.sequences,
                 "sequence_versions": &snapshot.sequence_versions,
