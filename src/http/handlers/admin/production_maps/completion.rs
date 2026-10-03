@@ -32,15 +32,30 @@ pub async fn production_map_live(
     require_any_live_capability(&state, &principal).await?;
     let include_completion_requests = matches!(principal.role, PrincipalRole::Admin);
     let delta_enabled = query.protocol.as_deref() == Some("delta");
+    let state_delta_enabled = query.protocol.as_deref() == Some("state_delta_v1");
     Ok(ws
         .on_upgrade(move |socket| {
-            production_map_live_socket(
-                state,
-                socket,
-                principal,
-                include_completion_requests,
-                delta_enabled,
-            )
+            if state_delta_enabled {
+                return super::live_delta::production_map_state_live_socket(
+                    state,
+                    socket,
+                    principal,
+                    include_completion_requests,
+                    query.epoch,
+                    query.rev,
+                );
+            }
+            // Box both protocol futures to retain the legacy wire contract.
+            Box::pin(async move {
+                production_map_live_socket(
+                    state,
+                    socket,
+                    principal,
+                    include_completion_requests,
+                    delta_enabled,
+                )
+                .await
+            })
         })
         .into_response())
 }
@@ -51,6 +66,10 @@ pub struct ProductionMapLiveQuery {
     token: String,
     #[serde(default)]
     protocol: Option<String>,
+    #[serde(default)]
+    epoch: String,
+    #[serde(default)]
+    rev: Option<u64>,
 }
 
 async fn authenticated_principal_for_live(

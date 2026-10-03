@@ -1,0 +1,330 @@
+use super::*;
+use crate::core::production_map::{
+    CompletedQueueOrder, CompletionRequestDecisionNotification, CompletionRequestNotification,
+    ProductionMapLiveEvent, ProductionMapLiveSnapshot,
+};
+use axum::extract::ws::{Message, WebSocket};
+use serde::Serialize;
+use serde_json::{Map, Value, json};
+use std::collections::BTreeMap;
+use std::sync::Arc;
+use tokio::time::{Duration, timeout};
+
+// A slow client gets a compressed HTTP resync, never an unbounded WS frame.
+const MAX_STATE_DELTA_BYTES: usize = 64 * 1024;
+
+struct LiveView {
+    snapshot: Arc<ProductionMapLiveSnapshot>,
+    revision: u64,
+    customers: BTreeMap<String, String>,
+    completed: Vec<CompletedQueueOrder>,
+    requests: Vec<CompletionRequestNotification>,
+    decisions: Vec<CompletionRequestDecisionNotification>,
+}
+
+async fn read_view(
+    state: &AppState,
+    principal: &Principal,
+    include_requests: bool,
+) -> Result<LiveView, AdminError> {
+    let service = &state.production_maps;
+    let (snapshot, revision) = service
+        .live_snapshot_shared_with_revision()
+        .await
+        .map_err(production_map_error)?;
+    let snapshot =
+        super::super::training::merge_worker_training_snapshot_shared(state, principal, snapshot)
+            .await
+            .map_err(super::super::training::training_workspace_error)?;
+    let actor = queue_action_actor(principal);
+    let (completed, requests, decisions) = tokio::try_join!(
+        service.completed_queue_orders_for_actor(&actor.ref_, 200),
+        async {
+            if include_requests {
+                service.completion_requests(200).await
+            } else {
+                Ok(Vec::new())
+            }
+        },
+        service.completion_request_decisions_for_actor(&actor.ref_, 200),
+    )
+    .map_err(production_map_error)?;
+    let customers = production_map_order_customers(state, &snapshot.maps).await;
+    Ok(LiveView {
+        snapshot,
+        revision,
+        customers,
+        completed,
+        requests,
+        decisions,
+    })
+}
+
+// Values are compared before serialization. In particular, unchanged maps
+// and compiled programs are never cloned/serialized into a colour update.
+fn map_patch<T: PartialEq + Serialize>(
+    before: &BTreeMap<String, T>,
+    after: &BTreeMap<String, T>,
+) -> Option<Value> {
+    let upsert = after
+        .iter()
+        .filter(|(key, value)| before.get(*key) != Some(*value))
+        .map(|(key, value)| (key.clone(), json!(value)))
+        .collect::<Map<_, _>>();
+    let remove = before
+        .keys()
+        .filter(|key| !after.contains_key(*key))
+        .collect::<Vec<_>>();
+    (!upsert.is_empty() || !remove.is_empty()).then(|| json!({"upsert": upsert, "remove": remove}))
+}
+
+fn nested_patch<T: PartialEq + Serialize>(
+    before: &BTreeMap<String, BTreeMap<String, T>>,
+    after: &BTreeMap<String, BTreeMap<String, T>>,
+) -> Option<Value> {
+    let empty = BTreeMap::new();
+    let scopes = after
+        .iter()
+        .filter_map(|(scope, values)| {
+            let patch = map_patch(before.get(scope).unwrap_or(&empty), values).or_else(|| {
+                (!before.contains_key(scope)).then(|| json!({"upsert": {}, "remove": []}))
+            });
+            patch.map(|patch| (scope.clone(), patch))
+        })
+        .collect::<Map<_, _>>();
+    let remove = before
+        .keys()
+        .filter(|scope| !after.contains_key(*scope))
+        .collect::<Vec<_>>();
+    (!scopes.is_empty() || !remove.is_empty()).then(|| json!({"scopes": scopes, "remove": remove}))
+}
+
+fn view_patch(before: &LiveView, after: &LiveView) -> Map<String, Value> {
+    let mut patch = Map::new();
+    let old = &before.snapshot;
+    let new = &after.snapshot;
+    macro_rules! field {
+        ($field:ident) => {
+            if let Some(value) = map_patch(&old.$field, &new.$field) {
+                patch.insert(stringify!($field).into(), value);
+            }
+        };
+    }
+    macro_rules! nested {
+        ($field:ident) => {
+            if let Some(value) = nested_patch(&old.$field, &new.$field) {
+                patch.insert(stringify!($field).into(), value);
+            }
+        };
+    }
+    field!(sequences);
+    field!(sequence_versions);
+    field!(sequence_revisions);
+    field!(visible_order_ids);
+    field!(order_statuses);
+    field!(order_controls);
+    field!(frozen_orders_by_apparatus);
+    nested!(queue_states);
+    nested!(stage_states);
+    nested!(queue_action_controls);
+    let old_maps = old
+        .maps
+        .iter()
+        .map(|saved| (saved.map.id.clone(), saved))
+        .collect();
+    let new_maps = new
+        .maps
+        .iter()
+        .map(|saved| (saved.map.id.clone(), saved))
+        .collect();
+    if let Some(value) = map_patch(&old_maps, &new_maps) {
+        patch.insert("maps".into(), value);
+    }
+    if old
+        .maps
+        .iter()
+        .map(|saved| &saved.map.id)
+        .ne(new.maps.iter().map(|saved| &saved.map.id))
+    {
+        patch.insert(
+            "map_order".into(),
+            json!(
+                new.maps
+                    .iter()
+                    .map(|saved| &saved.map.id)
+                    .collect::<Vec<_>>()
+            ),
+        );
+    }
+    let old_policies = old
+        .queue_policies
+        .iter()
+        .map(|p| (p.apparatus_id.to_string(), p))
+        .collect();
+    let new_policies = new
+        .queue_policies
+        .iter()
+        .map(|p| (p.apparatus_id.to_string(), p))
+        .collect();
+    if let Some(value) = map_patch(&old_policies, &new_policies) {
+        patch.insert("queue_policies".into(), value);
+    }
+    if let Some(value) = map_patch(&before.customers, &after.customers) {
+        patch.insert("order_customers".into(), value);
+    }
+    if before.completed != after.completed {
+        patch.insert("completed_orders".into(), json!(after.completed));
+    }
+    if before.requests != after.requests {
+        patch.insert("completion_requests".into(), json!(after.requests));
+    }
+    if before.decisions != after.decisions {
+        patch.insert(
+            "completion_request_decisions".into(),
+            json!(after.decisions),
+        );
+    }
+    patch
+}
+
+async fn send(socket: &mut WebSocket, value: Value) -> bool {
+    match serde_json::to_string(&value) {
+        Ok(json) => timeout(
+            Duration::from_secs(15),
+            socket.send(Message::Text(json.into())),
+        )
+        .await
+        .is_ok_and(|result| result.is_ok()),
+        Err(_) => false,
+    }
+}
+
+pub(super) fn production_map_state_live_socket(
+    state: AppState,
+    mut socket: WebSocket,
+    principal: Principal,
+    include_requests: bool,
+    client_epoch: String,
+    client_revision: Option<u64>,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+    Box::pin(async move {
+        // Subscribe before reading: updates during bootstrap must not be lost.
+        let mut events = state.production_maps.subscribe_live();
+        let epoch = state.production_maps.snapshot_epoch().to_string();
+        let mut baseline = match read_view(&state, &principal, include_requests).await {
+            Ok(view) => view,
+            Err(_) => {
+                let _ = send(&mut socket, json!({"ok": false, "error": "store_failed"})).await;
+                return;
+            }
+        };
+        // Workers have already loaded the gzip HTTP snapshot. No duplicate
+        // multi-megabyte initial frame; cursor mismatch requests HTTP resync.
+        if !send(
+            &mut socket,
+            json!({
+                "ok": true, "type": "state_ready", "epoch": epoch, "rev": baseline.revision,
+                "resync": client_epoch != epoch || client_revision != Some(baseline.revision),
+            }),
+        )
+        .await
+        {
+            return;
+        }
+        let mut heartbeat = tokio::time::interval(Duration::from_secs(25));
+        loop {
+            tokio::select! {
+                inbound = socket.recv() => match inbound {
+                    Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                    _ => {}
+                },
+                received = events.recv() => {
+                    let lagged = match received {
+                        Ok(ProductionMapLiveEvent::Invalidate | ProductionMapLiveEvent::Delta(_)) => false,
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => true,
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    };
+                    let next = match read_view(&state, &principal, include_requests).await {
+                        Ok(view) => view,
+                        Err(_) => { let _ = send(&mut socket, json!({"ok": false, "error": "store_failed"})).await; break; }
+                    };
+                    let patch = view_patch(&baseline, &next);
+                    if !lagged && patch.is_empty() && baseline.revision == next.revision { continue; }
+                    let payload = json!({
+                        "ok": true, "type": "state_delta", "epoch": epoch,
+                        "base_rev": baseline.revision, "rev": next.revision, "patch": patch,
+                    });
+                    let too_large = serde_json::to_vec(&payload).map_or(true, |bytes| bytes.len() > MAX_STATE_DELTA_BYTES);
+                    if lagged || too_large {
+                        if !send(&mut socket, json!({"ok": true, "type": "state_resync", "epoch": epoch, "rev": next.revision})).await { break; }
+                    } else if !send(&mut socket, payload).await { break; }
+                    baseline = next;
+                },
+                _ = heartbeat.tick() => {
+                    if !timeout(Duration::from_secs(15), socket.send(Message::Ping(Vec::new().into())))
+                        .await.is_ok_and(|result| result.is_ok()) { break; }
+                }
+            }
+        }
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unchanged_fields_do_not_allocate_wire_updates() {
+        let values = BTreeMap::from([("order".to_string(), json!({"state": "pending"}))]);
+        assert!(map_patch(&values, &values).is_none());
+    }
+
+    #[test]
+    fn nested_state_patch_only_contains_changed_order_and_removals() {
+        let before = BTreeMap::from([(
+            "apparatus".into(),
+            BTreeMap::from([
+                ("changed".into(), "pending"),
+                ("unchanged".into(), "pending"),
+                ("deleted".into(), "pending"),
+            ]),
+        )]);
+        let after = BTreeMap::from([(
+            "apparatus".into(),
+            BTreeMap::from([
+                ("changed".into(), "print_preflight"),
+                ("unchanged".into(), "pending"),
+            ]),
+        )]);
+        assert_eq!(
+            nested_patch(&before, &after),
+            Some(json!({
+                "scopes": {"apparatus": {"upsert": {"changed": "print_preflight"}, "remove": ["deleted"]}},
+                "remove": [],
+            }))
+        );
+    }
+
+    #[test]
+    fn deleted_apparatus_is_explicitly_removed() {
+        let before = BTreeMap::from([(
+            "apparatus".into(),
+            BTreeMap::from([("order".into(), "pending")]),
+        )]);
+        assert_eq!(
+            nested_patch(&before, &BTreeMap::new()),
+            Some(json!({"scopes": {}, "remove": ["apparatus"]}))
+        );
+    }
+
+    #[test]
+    fn new_empty_scope_is_preserved() {
+        let after = BTreeMap::from([("new".into(), BTreeMap::<String, String>::new())]);
+        assert_eq!(
+            nested_patch(&BTreeMap::new(), &after),
+            Some(json!({
+                "scopes": {"new": {"upsert": {}, "remove": []}}, "remove": [],
+            }))
+        );
+    }
+}

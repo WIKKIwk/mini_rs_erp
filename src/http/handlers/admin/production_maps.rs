@@ -27,6 +27,7 @@ use crate::google_sheets::is_sheet_order_map;
 
 mod astatka;
 mod completion;
+mod live_delta;
 mod helpers;
 mod move_run;
 mod opening_wip;
