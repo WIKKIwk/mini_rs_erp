@@ -15,3 +15,6 @@ pub mod http;
 pub mod rps;
 pub mod store;
 pub mod telegram;
+
+#[cfg(feature = "mcp-readonly-prototype")]
+pub mod mcp_readonly;
