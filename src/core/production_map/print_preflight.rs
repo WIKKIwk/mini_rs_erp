@@ -203,14 +203,28 @@ impl ProductionMapService {
         let now = progress::unix_seconds();
         if hold.order_id.trim() != order_id
             || !queue_state::apparatus_ids_match(&hold.apparatus, apparatus)
-            || !hold.is_live_at(now)
         {
+            return Err(ProductionMapError::PrintPreflightNotReady);
+        }
+        let action = action.trim().to_ascii_lowercase();
+        // A lost response may be retried after the transition committed. Return
+        // that same result without rewriting its actor/time or broadcasting it.
+        if matches!(
+            (action.as_str(), hold.status),
+            ("start", PrintPreflightStatus::Running)
+                | ("passed", PrintPreflightStatus::Passed)
+                | ("failed", PrintPreflightStatus::Failed)
+                | ("cancel", PrintPreflightStatus::Cancelled)
+        ) {
+            return Ok(hold);
+        }
+        if !hold.is_live_at(now) {
             return Err(ProductionMapError::PrintPreflightNotReady);
         }
         if self.order_control_state(order_id).await?.state == OrderControlState::FreezeRequested {
             return Err(ProductionMapError::OrderFreezeRequested);
         }
-        let next_status = match (action.trim().to_ascii_lowercase().as_str(), hold.status) {
+        let next_status = match (action.as_str(), hold.status) {
             ("start", PrintPreflightStatus::Held) => PrintPreflightStatus::Running,
             ("passed", PrintPreflightStatus::Running) => PrintPreflightStatus::Passed,
             ("failed", PrintPreflightStatus::Held | PrintPreflightStatus::Running) => {
@@ -219,10 +233,6 @@ impl ProductionMapService {
             ("cancel", PrintPreflightStatus::Held | PrintPreflightStatus::Running) => {
                 PrintPreflightStatus::Cancelled
             }
-            ("start", PrintPreflightStatus::Running)
-            | ("passed", PrintPreflightStatus::Passed)
-            | ("failed", PrintPreflightStatus::Failed)
-            | ("cancel", PrintPreflightStatus::Cancelled) => hold.status,
             _ => return Err(ProductionMapError::PrintPreflightActionNotAllowed),
         };
         hold.status = next_status;

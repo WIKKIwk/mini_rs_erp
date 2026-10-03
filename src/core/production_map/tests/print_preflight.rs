@@ -15,6 +15,39 @@ fn actor() -> QueueActionActor {
 }
 
 #[tokio::test]
+async fn repeated_colour_transition_returns_committed_hold_without_invalidation() {
+    for action in ["start", "passed", "failed", "cancel"] {
+        let store = Arc::new(MemoryProductionMapStore::new());
+        let service = service_with_default_apparatus(store).await;
+        let order_id = "zakaz-colour-retry";
+        service.upsert_map(canonical_apparatus_stage_map(
+            order_id, PRINT_ID, "7 ta rangli bosma aparat",
+        )).await.unwrap();
+        let hold = service.begin_print_preflight(
+            PRINT_ID, order_id, "colour-retry", "colour-retry", actor(),
+        ).await.unwrap();
+        let committed = service.advance_print_preflight(
+            PRINT_ID, order_id, &hold.hold_id, action, actor(),
+        ).await.unwrap();
+        let revision = service.live_snapshot_shared_with_revision().await.unwrap().1;
+        let mut stream = service.subscribe_live();
+        let mut retry_actor = actor();
+        retry_actor.ref_ = "another-worker".into();
+        let repeated = service.advance_print_preflight(
+            PRINT_ID, order_id, &hold.hold_id, action, retry_actor,
+        ).await.unwrap();
+        assert_eq!(repeated, committed);
+        assert_eq!(service.live_snapshot_shared_with_revision().await.unwrap().1, revision);
+        assert!(stream.try_recv().is_err());
+        for (apparatus, order) in [(PRINT_ID, "other-order"), ("apparatus:default:bosma_8", order_id)] {
+            assert!(matches!(service.advance_print_preflight(
+                apparatus, order, &hold.hold_id, action, actor(),
+            ).await, Err(ProductionMapError::PrintPreflightNotReady)));
+        }
+    }
+}
+
+#[tokio::test]
 async fn another_orders_preflight_blocks_start_with_a_distinct_reason() {
     let store = Arc::new(MemoryProductionMapStore::new());
     let service = service_with_default_apparatus(store.clone()).await;

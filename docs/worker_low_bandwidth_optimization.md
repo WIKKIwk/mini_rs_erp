@@ -50,9 +50,13 @@ not claim durable colour-event replay: a disconnected client or restarted server
 reconciles with authoritative HTTP state. Existing durable sequence replay remains
 available to the legacy sequence protocol.
 
+6. Duplicate colour transitions return the original committed hold without
+   rewriting actor/time or emitting a new invalidation. Wrong order/apparatus
+   retries are rejected. On a lost colour response, mobile clears old controls
+   and reconciles by GET; it never automatically replays the POST.
+
 ## Next stages
 
-- Improve uncertain colour-response handling and duplicate terminal responses.
 - Add a bounded conditional HTTP fallback for networks that cannot sustain WS.
 
 ## Verification
@@ -64,6 +68,9 @@ Flutter parser/delta/API regression tests passed. Two core colour workflow tests
 passed. A broader print-preflight test filter also selected
 a PostgreSQL integration test; it failed at local database authentication before
 its database work. No production database was used or deployed.
+Stage 5: compiler reuse and exact colour-history revision guards passed. Worker
+widget checks passed (34 cases); two admin order re-entry tests failed identically
+on the pre-change mobile checkpoint `e5befea`, so they are existing failures.
 
 Bandwidth targets and real weak-network/tablet latency still require runtime
 measurement after these changes are deployed to an authorized test environment.
