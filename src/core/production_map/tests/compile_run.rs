@@ -6,6 +6,31 @@ use crate::core::production_map::*;
 use super::fixtures::{condition_map, sample_map};
 
 #[test]
+fn snapshot_program_reuse_preserves_legacy_normalization_and_recompiles_changed_formulas() {
+    use super::super::service_maps::{compile_saved_maps, compile_saved_maps_reusing_programs};
+    let mut map = sample_map();
+    map.code.clear();
+    map.order_number = "legacy-code".into();
+    let before = compile_saved_maps([map.clone()]);
+    assert_eq!(
+        compile_saved_maps_reusing_programs([map.clone()], Some(&before)),
+        before
+    );
+    map.nodes
+        .iter_mut()
+        .find(|node| node.id == "formula")
+        .unwrap()
+        .formula
+        .as_mut()
+        .unwrap()
+        .expression = "order_qty * 1.25".into();
+    let expected = compile_saved_maps([map.clone()]);
+    let next = compile_saved_maps_reusing_programs([map], Some(&before));
+    assert_eq!(next, expected);
+    assert_ne!(next[0].program, before[0].program);
+}
+
+#[test]
 fn compile_map_turns_visual_nodes_into_ordered_operations() {
     let map = sample_map();
     let program = compile_map(&map).expect("compile");

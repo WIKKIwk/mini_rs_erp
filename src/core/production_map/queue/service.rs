@@ -16,7 +16,8 @@ use super::super::progress::{
 use super::super::service::QueueProgressRecords;
 use super::super::service_progress::ProgressBuildReadSnapshot;
 use super::super::service_progress_support::{
-    bosma_closing_output, validate_bosma_closing_metrics, session_progress_links, wip_batch_was_consumed_by_producer,
+    bosma_closing_output, session_progress_links, validate_bosma_closing_metrics,
+    wip_batch_was_consumed_by_producer,
 };
 use super::super::service_queue_support::*;
 use super::super::store_port::{ApparatusQueueStateMap, OrderControlMap};
@@ -442,6 +443,29 @@ impl ProductionMapService {
         BTreeMap<String, BTreeMap<String, ApparatusQueueOrderActionControl>>,
         ProductionMapError,
     > {
+        self.queue_action_controls_in_scope(None).await
+    }
+
+    pub(crate) async fn queue_action_controls_for_apparatus(
+        &self,
+        apparatus: &str,
+    ) -> Result<
+        BTreeMap<String, BTreeMap<String, ApparatusQueueOrderActionControl>>,
+        ProductionMapError,
+    > {
+        if !queue_state::is_canonical_apparatus_id(apparatus) {
+            return Err(ProductionMapError::QueueActionNotAllowed);
+        }
+        self.queue_action_controls_in_scope(Some(apparatus)).await
+    }
+
+    async fn queue_action_controls_in_scope(
+        &self,
+        only_apparatus: Option<&str>,
+    ) -> Result<
+        BTreeMap<String, BTreeMap<String, ApparatusQueueOrderActionControl>>,
+        ProductionMapError,
+    > {
         let (maps, sequences, all_states, order_controls, canonical_apparatuses) = tokio::join!(
             self.store.maps(),
             self.store.apparatus_sequences(),
@@ -454,12 +478,13 @@ impl ProductionMapService {
         let all_states = all_states?;
         let order_controls = order_controls?;
         let canonical_apparatuses = canonical_apparatuses?;
-        self.queue_action_controls_for_snapshot(
+        self.queue_action_controls_for_snapshot_scope(
             &maps,
             &sequences,
             &all_states,
             &order_controls,
             &canonical_apparatuses,
+            only_apparatus,
         )
         .await
     }
@@ -479,10 +504,47 @@ impl ProductionMapService {
         BTreeMap<String, BTreeMap<String, ApparatusQueueOrderActionControl>>,
         ProductionMapError,
     > {
+        self.queue_action_controls_for_snapshot_scope(
+            maps,
+            sequences,
+            all_states,
+            order_controls,
+            canonical_apparatuses,
+            None,
+        )
+        .await
+    }
+
+    async fn queue_action_controls_for_snapshot_scope(
+        &self,
+        maps: &[ProductionMapDefinition],
+        sequences: &BTreeMap<String, Vec<String>>,
+        all_states: &ApparatusQueueStateMap,
+        order_controls: &OrderControlMap,
+        canonical_apparatuses: &[std::sync::Arc<
+            crate::core::apparatus_standard::RuntimeApparatusConfiguration,
+        >],
+        only_apparatus: Option<&str>,
+    ) -> Result<
+        BTreeMap<String, BTreeMap<String, ApparatusQueueOrderActionControl>>,
+        ProductionMapError,
+    > {
+        let scoped_order_ids = only_apparatus.map(|apparatus| {
+            queue_order_ids_by_apparatus(maps)
+                .remove(apparatus)
+                .unwrap_or_default()
+                .into_iter()
+                .collect::<BTreeSet<_>>()
+        });
         let order_ids = maps
             .iter()
             .map(|map| map.id.trim())
-            .filter(|order_id| !order_id.is_empty())
+            .filter(|order_id| {
+                !order_id.is_empty()
+                    && scoped_order_ids
+                        .as_ref()
+                        .is_none_or(|orders| orders.contains(*order_id))
+            })
             .map(str::to_string)
             .collect::<Vec<_>>();
         let mut maps_by_order_id = HashMap::new();
@@ -520,7 +582,8 @@ impl ProductionMapService {
             .filter(|hold| hold.is_live_at(now))
             .map(|hold| (hold.apparatus.trim().to_string(), hold))
             .collect::<HashMap<_, _>>();
-        let stage_work_by_order = maps.iter().map(|map| {
+        let stage_work_by_order = maps.iter().filter(|map| scoped_order_ids.as_ref()
+            .is_none_or(|orders| orders.contains(map.id.trim()))).map(|map| {
             let sessions = active_sessions_by_order.get(&map.id).map(Vec::as_slice).unwrap_or_default();
             let batches = progress_batches_by_order.get(&map.id).map(Vec::as_slice).unwrap_or_default();
             let opening = opening_wip_records.iter().filter(|r| r.intake.order_id == map.id).cloned().collect::<Vec<_>>();
@@ -544,6 +607,12 @@ impl ProductionMapService {
         let mut material_assignments_by_order =
             HashMap::<String, Vec<RawMaterialAssignment>>::new();
         for assignment in material_assignments {
+            if scoped_order_ids
+                .as_ref()
+                .is_some_and(|orders| !orders.contains(assignment.order_id.trim()))
+            {
+                continue;
+            }
             material_assignments_by_order
                 .entry(assignment.order_id.trim().to_string())
                 .or_default()
@@ -551,6 +620,12 @@ impl ProductionMapService {
         }
         let mut opening_wip_by_order = HashMap::<String, Vec<OpeningWipRecord>>::new();
         for record in opening_wip_records {
+            if scoped_order_ids
+                .as_ref()
+                .is_some_and(|orders| !orders.contains(record.intake.order_id.trim()))
+            {
+                continue;
+            }
             opening_wip_by_order
                 .entry(record.intake.order_id.trim().to_string())
                 .or_default()
@@ -596,6 +671,9 @@ impl ProductionMapService {
 
         for apparatus in &known_keys {
             let storage_key = apparatus.trim().to_string();
+            if only_apparatus.is_some_and(|expected| expected != storage_key) {
+                continue;
+            }
             // Snapshot reads must stay fail-soft: one map referencing a deleted or
             // deactivated apparatus must not take the whole live stream down for
             // every operator. Write paths keep their strict validation.

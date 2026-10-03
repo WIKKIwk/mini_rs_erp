@@ -156,7 +156,8 @@ async fn production_map_live_socket(
             }
             received = rx.recv() => {
                 match received {
-                    Ok(crate::core::production_map::ProductionMapLiveEvent::Invalidate) => {
+                    Ok(crate::core::production_map::ProductionMapLiveEvent::Invalidate
+                        | crate::core::production_map::ProductionMapLiveEvent::PrintPreflight { .. }) => {
                         if !send_production_map_live_snapshot(
                             &state,
                             &mut socket,

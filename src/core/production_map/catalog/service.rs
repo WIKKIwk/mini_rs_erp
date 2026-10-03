@@ -35,6 +35,36 @@ pub(super) fn compile_saved_maps(
     saved
 }
 
+/// Reuse only a program compiled from an identical complete map definition.
+/// Queue permissions/state are still rebuilt from current database data.
+pub(super) fn compile_saved_maps_reusing_programs(
+    maps: impl IntoIterator<Item = ProductionMapDefinition>,
+    previous: Option<&[ProductionMapSaved]>,
+) -> Vec<ProductionMapSaved> {
+    let previous = previous
+        .unwrap_or_default()
+        .iter()
+        .map(|saved| (saved.map.id.as_str(), saved))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let mut result = Vec::new();
+    for mut map in maps {
+        if map.code.trim().is_empty() && !map.order_number.trim().is_empty() {
+            map.code = map.order_number.trim().to_string();
+        }
+        if let Some(saved) = previous
+            .get(map.id.as_str())
+            .filter(|saved| saved.map == map)
+        {
+            result.push(ProductionMapSaved {
+                map,
+                program: saved.program.clone(),
+            });
+        } else {
+            result.extend(compile_saved_maps([map]));
+        }
+    }
+    result
+}
 
 impl ProductionMapService {
     pub async fn next_order_number(&self) -> Result<String, ProductionMapError> {

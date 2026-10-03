@@ -53,8 +53,22 @@ async fn another_orders_preflight_blocks_start_with_a_distinct_reason() {
         }
         let snapshot = service.live_snapshot().await.unwrap();
         let controls = &snapshot.queue_action_controls[PRINT_ID];
+        let scoped = service
+            .queue_action_controls_for_apparatus(PRINT_ID)
+            .await
+            .unwrap();
+        assert_eq!(scoped.len(), 1);
         assert_eq!(
-            controls[first].print_preflight.as_ref().unwrap().status.as_str(),
+            &scoped[PRINT_ID], controls,
+            "scoped evaluation must preserve every business predicate"
+        );
+        assert_eq!(
+            controls[first]
+                .print_preflight
+                .as_ref()
+                .unwrap()
+                .status
+                .as_str(),
             status
         );
         assert_eq!(

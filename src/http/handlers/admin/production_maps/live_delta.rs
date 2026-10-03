@@ -24,11 +24,16 @@ struct LiveView {
     decisions: Vec<CompletionRequestDecisionNotification>,
 }
 
+fn colour_history_unchanged(before_revision: u64, revision: u64, event_revision: u64) -> bool {
+    event_revision == revision && before_revision.checked_add(1) == Some(revision)
+}
+
 async fn read_view(
     state: &AppState,
     principal: &Principal,
     include_requests: bool,
     worker_scope: bool,
+    reuse_history: Option<(&LiveView, u64)>,
 ) -> Result<LiveView, AdminError> {
     let service = &state.production_maps;
     let (snapshot, revision) = service
@@ -40,18 +45,31 @@ async fn read_view(
             .await
             .map_err(super::super::training::training_workspace_error)?;
     let actor = queue_action_actor(principal);
-    let (completed, requests, decisions) = tokio::try_join!(
-        service.completed_queue_orders_for_actor(&actor.ref_, 200),
-        async {
-            if include_requests {
-                service.completion_requests(200).await
-            } else {
-                Ok(Vec::new())
-            }
-        },
-        service.completion_request_decisions_for_actor(&actor.ref_, 200),
-    )
-    .map_err(production_map_error)?;
+    // Colour trials do not write completion history/request events. Reuse
+    // those lists only for this exact next revision, not coalesced writes.
+    let reusable = reuse_history.filter(|(before, expected)| {
+        colour_history_unchanged(before.revision, revision, *expected)
+    });
+    let (completed, requests, decisions) = if let Some((before, _)) = reusable {
+        (
+            before.completed.clone(),
+            before.requests.clone(),
+            before.decisions.clone(),
+        )
+    } else {
+        tokio::try_join!(
+            service.completed_queue_orders_for_actor(&actor.ref_, 200),
+            async {
+                if include_requests {
+                    service.completion_requests(200).await
+                } else {
+                    Ok(Vec::new())
+                }
+            },
+            service.completion_request_decisions_for_actor(&actor.ref_, 200),
+        )
+        .map_err(production_map_error)?
+    };
     let (snapshot, scope) = if worker_scope {
         super::worker_snapshot::project_for_principal(
             state,
@@ -231,14 +249,14 @@ pub(super) fn production_map_state_live_socket(
     Box::pin(async move {
         // Subscribe before reading: updates during bootstrap must not be lost.
         let mut events = state.production_maps.subscribe_live();
-        let mut baseline = match read_view(&state, &principal, include_requests, worker_scope).await
-        {
-            Ok(view) => view,
-            Err(error) => {
-                let _ = send(&mut socket, json!(error.1.0)).await;
-                return;
-            }
-        };
+        let mut baseline =
+            match read_view(&state, &principal, include_requests, worker_scope, None).await {
+                Ok(view) => view,
+                Err(error) => {
+                    let _ = send(&mut socket, json!(error.1.0)).await;
+                    return;
+                }
+            };
         // Workers have already loaded the gzip HTTP snapshot. No duplicate
         // multi-megabyte initial frame; cursor mismatch requests HTTP resync.
         if !send(
@@ -261,12 +279,14 @@ pub(super) fn production_map_state_live_socket(
                     _ => {}
                 },
                 received = events.recv() => {
-                    let lagged = match received {
-                        Ok(ProductionMapLiveEvent::Invalidate | ProductionMapLiveEvent::Delta(_)) => false,
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => true,
+                    let (lagged, colour_revision) = match received {
+                        Ok(ProductionMapLiveEvent::Invalidate | ProductionMapLiveEvent::Delta(_)) => (false, None),
+                        Ok(ProductionMapLiveEvent::PrintPreflight { revision }) => (false, Some(revision)),
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => (true, None),
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     };
-                    let next = match read_view(&state, &principal, include_requests, worker_scope).await {
+                    let next = match read_view(&state, &principal, include_requests, worker_scope,
+                        colour_revision.map(|revision| (&baseline, revision))).await {
                         Ok(view) => view,
                         Err(error) => { let _ = send(&mut socket, json!(error.1.0)).await; break; }
                     };
@@ -288,7 +308,7 @@ pub(super) fn production_map_state_live_socket(
                     if worker_scope {
                         match super::worker_snapshot::scope_token(&state, &principal).await {
                             Ok((_, scope)) if scope != baseline.scope => {
-                                let next = match read_view(&state, &principal, include_requests, worker_scope).await {
+                                let next = match read_view(&state, &principal, include_requests, worker_scope, None).await {
                                     Ok(view) => view,
                                     Err(error) => { let _ = send(&mut socket, json!(error.1.0)).await; break; }
                                 };
@@ -310,6 +330,14 @@ pub(super) fn production_map_state_live_socket(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn colour_history_reuse_rejects_coalesced_or_delayed_events() {
+        assert!(colour_history_unchanged(10, 11, 11));
+        assert!(!colour_history_unchanged(10, 12, 11));
+        assert!(!colour_history_unchanged(10, 12, 12));
+        assert!(!colour_history_unchanged(11, 12, 10));
+    }
 
     #[test]
     fn unchanged_fields_do_not_allocate_wire_updates() {

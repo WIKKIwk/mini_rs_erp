@@ -110,7 +110,7 @@ impl ProductionMapService {
                     self.store
                         .update_print_preflight_hold(running.clone())
                         .await?;
-                    self.notify_live();
+                    self.notify_print_preflight();
                     return Ok(running);
                 }
                 return Ok(existing);
@@ -137,7 +137,7 @@ impl ProductionMapService {
                     self.store
                         .update_print_preflight_hold(running.clone())
                         .await?;
-                    self.notify_live();
+                    self.notify_print_preflight();
                     return Ok(running);
                 }
                 return Ok(existing.clone());
@@ -145,7 +145,7 @@ impl ProductionMapService {
             return Err(ProductionMapError::PrintPreflightActive);
         }
 
-        let controls = self.queue_action_controls().await?;
+        let controls = self.queue_action_controls_for_apparatus(&canonical_id).await?;
         let control = controls
             .get(&canonical_id)
             .and_then(|items| items.get(order_id))
@@ -179,7 +179,7 @@ impl ProductionMapService {
             expires_at_unix: 0,
         };
         self.store.put_print_preflight_hold(hold.clone()).await?;
-        self.notify_live();
+        self.notify_print_preflight();
         Ok(hold)
     }
 
@@ -229,7 +229,7 @@ impl ProductionMapService {
         hold.actor = actor;
         hold.updated_at_unix = now;
         self.store.update_print_preflight_hold(hold.clone()).await?;
-        self.notify_live();
+        self.notify_print_preflight();
         Ok(hold)
     }
 

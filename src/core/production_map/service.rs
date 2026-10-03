@@ -8,7 +8,7 @@ use super::apparatus_resolver::CanonicalApparatusResolver;
 pub use super::prepared_queue_action::PreparedApparatusQueueAction;
 pub(super) use super::prepared_queue_action::QueueProgressRecords;
 use super::progress::effective_apparatus_queue_policy_record;
-use super::service_maps::compile_saved_maps;
+use super::service_maps::compile_saved_maps_reusing_programs;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, OwnedMutexGuard, RwLock, broadcast};
 
@@ -154,6 +154,7 @@ fn stage_states_for_snapshot(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProductionMapLiveEvent {
     Invalidate,
+    PrintPreflight { revision: u64 },
     Delta(std::sync::Arc<ProductionMapLiveDelta>),
 }
 
@@ -307,6 +308,13 @@ impl ProductionMapService {
 
     pub fn snapshot_epoch(&self) -> &str {
         &self.snapshot_cache.epoch
+    }
+
+    pub(super) fn notify_print_preflight(&self) {
+        let revision = self.snapshot_cache.revision.fetch_add(1, Ordering::AcqRel) + 1;
+        let _ = self
+            .live_notify
+            .send(ProductionMapLiveEvent::PrintPreflight { revision });
     }
 
     pub async fn queue_events_replay(
@@ -481,7 +489,17 @@ impl ProductionMapService {
         }
         let frozen_orders_by_apparatus =
             Self::frozen_orders_by_apparatus(&order_controls, &queue_logs_by_order);
-        let maps = compile_saved_maps(raw_maps);
+        let previous = self
+            .snapshot_cache
+            .snapshot
+            .read()
+            .await
+            .as_ref()
+            .map(|entry| entry.snapshot.clone());
+        let maps = compile_saved_maps_reusing_programs(
+            raw_maps,
+            previous.as_ref().map(|snapshot| snapshot.maps.as_slice()),
+        );
 
         Ok(ProductionMapLiveSnapshot {
             sequence_versions,

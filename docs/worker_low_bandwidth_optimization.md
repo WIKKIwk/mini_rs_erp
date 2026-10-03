@@ -37,6 +37,13 @@ measurements, not measured post-change performance.
    even at the same revision. Scope is checked again on live heartbeats.
    Large HTTP JSON decoding and typed model construction run in one isolate;
    large native WS frames are decoded in order with source backpressure.
+   ERP `bf9baab`, mobile `85014235`.
+5. Colour validation evaluates the assigned apparatus's controls with the same
+   predicates and full cross-stage state. Session/progress queries are restricted
+   to that queue's orders. Compiled programs are reused only when the complete
+   current map definition is identical, including legacy code normalization.
+   Changed formulas are recompiled. Exact consecutive colour-only notifications
+   reuse completion history lists; coalesced or delayed events reread them.
 
 This stage deliberately uses the existing epoch/global snapshot revision. It does
 not claim durable colour-event replay: a disconnected client or restarted server
@@ -45,8 +52,8 @@ available to the legacy sequence protocol.
 
 ## Next stages
 
-- Reduce repeated server compilation/control evaluation without changing business
-  predicates or removing queue/database locks.
+- Improve uncertain colour-response handling and duplicate terminal responses.
+- Add a bounded conditional HTTP fallback for networks that cannot sustain WS.
 
 ## Verification
 
