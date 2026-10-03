@@ -16,7 +16,7 @@ mod training;
 mod warehouse_live;
 mod workers;
 
-pub use calculate_materials::calculate_materials;
+pub use calculate_materials::{calculate_material_sequence, calculate_materials};
 pub use customers::{
     activity, customer_code_regenerate, customer_detail, customer_item_add, customer_item_remove,
     customer_list, customer_phone, customer_remove, customers, item_group_tree, item_groups, items,
@@ -84,6 +84,7 @@ pub use system_users::{system_user_code_regenerate, system_user_detail, system_u
 pub use telegram::{
     invite as telegram_invite, settings as telegram_settings,
     userbot_settings as telegram_userbot_settings,
+    alert_settings as telegram_alert_settings,
     qr_start as telegram_qr_start, qr_login as telegram_qr_login,
     user as telegram_user,
 };

@@ -119,6 +119,22 @@ fn connected_admin_can_pick_groups_and_unconnected_user_keeps_login_options() {
     );
 }
 
+#[test]
+fn alert_sender_invite_exposes_login_button_and_connected_profile_exposes_alert_settings() {
+    let mut user = qr_account(TelegramAccountRole::AlertSender);
+    user.user_profile_connected = false;
+    let guide = account_guide(&user);
+    assert!(guide.contains("Ogohlantiruvchi"));
+    assert!(guide.contains("/login"));
+    assert!(!guide.contains("/new_order"));
+    assert_eq!(account_guide_keyboard(&user).unwrap()["inline_keyboard"][0][0]["callback_data"], "login:start");
+    assert_eq!(parse_command("/login@accord_bot").unwrap().0, "login");
+    user.user_profile_connected = true;
+    assert!(account_guide(&user).contains("/alerts"));
+    assert_eq!(account_guide_keyboard(&user).unwrap()["inline_keyboard"][0][0]["callback_data"], "alert:home");
+    assert!(!account_guide(&user).contains("/groups"));
+}
+
 #[tokio::test]
 async fn start_reaches_profile_recognition_while_order_draft_is_open() {
     let dir = tempfile::tempdir().unwrap();

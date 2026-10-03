@@ -33,6 +33,30 @@ impl OrderAlertKind {
             "№{order} orderga {item} biriktirib bering.\nApparat: {apparatus}\nIshchi: {worker}"
         )
     }
+
+    fn telegram_message(self, order: &str, title: &str, apparatus: &str, worker: &str) -> String {
+        let item = match self {
+            Self::RawMaterial => "homashyo",
+            Self::Qolip => "qolip",
+        };
+        let title = title.split_whitespace().collect::<Vec<_>>().join(" ");
+        let order = order.trim().trim_start_matches('№');
+        let order = if title.is_empty() {
+            format!("№{order}")
+        } else {
+            format!("№{order} {title}")
+        };
+        let worker = worker.trim();
+        let worker = if worker.to_lowercase().ends_with(" aka") {
+            worker.to_string()
+        } else {
+            format!("{worker} aka")
+        };
+        format!(
+            "{order} buyurtmasiga {item} biriktirib bering, {}'dagi {worker} kutyapti",
+            apparatus.trim(),
+        )
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -86,9 +110,6 @@ pub async fn production_map_order_alert(
         return Err(forbidden());
     }
     let recipients = alert_recipients(&state, command.kind).await?;
-    if recipients.is_empty() {
-        return Err(bad_request("order_alert_no_recipients"));
-    }
     let order = if map.order_number.trim().is_empty() {
         &map.id
     } else {
@@ -130,9 +151,41 @@ pub async fn production_map_order_alert(
             .await
             .map_err(alert_delivery_error)?;
     }
-    Ok(json_response(
-        serde_json::json!({"ok": true, "recipient_count": recipient_count}),
+    let kind = match command.kind {
+        OrderAlertKind::RawMaterial => crate::telegram::alerts::AlertKind::RawMaterial,
+        OrderAlertKind::Qolip => crate::telegram::alerts::AlertKind::Qolip,
+    };
+    let telegram_id = serde_json::to_string(&(
+        &principal.ref_,
+        apparatus.id.as_str(),
+        &map.id,
+        kind.code(),
+        request_id,
     ))
+    .map_err(|_| server_error("order_alert_send_failed"))?;
+    let telegram_queued = state
+        .telegram
+        .enqueue_order_alert(
+            telegram_id,
+            kind,
+            command.kind.telegram_message(
+                order,
+                &map.title,
+                &apparatus.display_name,
+                &principal.display_name,
+            ),
+        )
+        .await
+        .map_err(|error| {
+            tracing::warn!(%error, "Telegram order alert was not queued");
+            server_error("order_alert_send_failed")
+        })?;
+    if recipient_count == 0 && !telegram_queued {
+        return Err(bad_request("order_alert_no_recipients"));
+    }
+    Ok(json_response(serde_json::json!({
+        "ok": true, "recipient_count": recipient_count, "telegram_queued": telegram_queued,
+    })))
 }
 
 async fn alert_recipients(
@@ -199,4 +252,46 @@ async fn alert_recipients(
 fn alert_delivery_error(error: ChatError) -> AdminError {
     tracing::warn!(%error, "order alert delivery failed");
     server_error("order_alert_send_failed")
+}
+
+#[cfg(test)]
+mod message_tests {
+    use super::OrderAlertKind;
+
+    #[test]
+    fn telegram_alert_is_a_plain_sentence_with_order_title_apparatus_and_worker() {
+        for (kind, item) in [
+            (OrderAlertKind::RawMaterial, "homashyo"),
+            (OrderAlertKind::Qolip, "qolip"),
+        ] {
+            assert_eq!(
+                kind.telegram_message(
+                    "0023",
+                    "guruch alanga arzon 1kg",
+                    "8 ta rangli bosma aparat",
+                    "Nuriddin",
+                ),
+                format!(
+                    "№0023 guruch alanga arzon 1kg buyurtmasiga {item} biriktirib bering, 8 ta rangli bosma aparat'dagi Nuriddin aka kutyapti"
+                ),
+            );
+        }
+    }
+
+    #[test]
+    fn telegram_alert_trims_title_and_avoids_duplicate_number_prefix_or_honorific() {
+        assert_eq!(
+            OrderAlertKind::RawMaterial.telegram_message(
+                " №0023 ",
+                " guruch\n alanga ",
+                " Bosma ",
+                " Nuriddin aka "
+            ),
+            "№0023 guruch alanga buyurtmasiga homashyo biriktirib bering, Bosma'dagi Nuriddin aka kutyapti",
+        );
+        assert_eq!(
+            OrderAlertKind::Qolip.telegram_message("0023", "", "Bosma", "Nuriddin"),
+            "№0023 buyurtmasiga qolip biriktirib bering, Bosma'dagi Nuriddin aka kutyapti",
+        );
+    }
 }

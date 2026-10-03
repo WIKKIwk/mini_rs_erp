@@ -10,6 +10,10 @@ fn material_routes() -> Router<AppState> {
             any(admin::calculate_materials),
         )
         .route(
+            "/v1/mobile/admin/calculate-materials/sequence",
+            any(admin::calculate_material_sequence),
+        )
+        .route(
             "/v1/mobile/admin/raw-material-start-requirements",
             any(admin::raw_material_start_requirements),
         )

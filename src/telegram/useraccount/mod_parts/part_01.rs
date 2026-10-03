@@ -60,6 +60,7 @@ const RESEND_COOLDOWN_SECONDS: u64 = 60;
 pub(crate) struct TelegramUserAccountService {
     store: Arc<TelegramStore>,
     pending_logins: Arc<Mutex<BTreeMap<String, PendingLogin>>>,
+    lookup_cache: Arc<lookup::LookupCache>,
 }
 
 impl TelegramUserAccountService {
@@ -67,6 +68,7 @@ impl TelegramUserAccountService {
         Self {
             store,
             pending_logins: Arc::new(Mutex::new(BTreeMap::new())),
+            lookup_cache: Arc::new(lookup::LookupCache::default()),
         }
     }
 
@@ -296,6 +298,7 @@ impl TelegramUserAccountService {
         telegram_user_id: &str,
     ) -> Result<TelegramUserAccount, UserAccountError> {
         self.cancel_login(telegram_user_id).await;
+        self.clear_lookup_cache(telegram_user_id).await;
         self.store
             .delete_user_account(telegram_user_id)
             .await
@@ -306,10 +309,7 @@ impl TelegramUserAccountService {
         &self,
         telegram_user_id: &str,
     ) -> Result<Vec<TelegramUserGroup>, UserAccountError> {
-        let (client, shutdown) = self.authorized_client(telegram_user_id).await?;
-        let result = list_writable_groups(&client).await;
-        shutdown.cancel();
-        result
+        self.cached_writable_groups(telegram_user_id).await
     }
 
     pub(crate) async fn select_group(
@@ -391,10 +391,12 @@ impl TelegramUserAccountService {
             .ok_or(UserAccountError::NotAuthorized)?;
         let (api_id, api_hash) = api_credentials(&self.store).await?;
         let (client, shutdown) = connect_client(api_id, &api_hash, Some(&session)).await?;
+        let disconnect = shutdown.clone().drop_guard();
         if !client.is_authorized().await.map_err(map_transport)? {
             shutdown.cancel();
             return Err(UserAccountError::NotAuthorized);
         }
+        disconnect.disarm();
         Ok((client, shutdown))
     }
 

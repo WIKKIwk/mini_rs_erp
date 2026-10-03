@@ -183,6 +183,7 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/v1/mobile/qolip/products", any(qolip::products))
         .route("/v1/mobile/qolip/order-products", any(qolip::order_products))
         .route("/v1/mobile/qolip/product-specs", any(qolip::product_specs))
+        .route("/v1/mobile/qolip/product-transfer", any(qolip::product_transfer))
         .route(
             "/v1/mobile/qolip/product-specs/batch",
             any(qolip::product_specs_batch),

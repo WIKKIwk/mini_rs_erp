@@ -19,6 +19,8 @@ use super::models::{TelegramDeliveryMode, TelegramUserGroup};
 use super::store::{TelegramStore, TelegramStoreError};
 
 pub(crate) mod qr;
+pub(crate) mod alerts;
+mod lookup;
 
 include!("mod_parts/part_01.rs");
 include!("mod_parts/part_02.rs");

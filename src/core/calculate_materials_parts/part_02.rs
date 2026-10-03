@@ -3,6 +3,90 @@
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn sequence_keeps_hidden_materials_fixed_and_survives_edits() {
+        let store = MemoryCalculateMaterialStore::new();
+        store
+            .upsert(CalculateMaterialUpsert {
+                id: "builtin-bopp".into(),
+                name: "BOPP".into(),
+                active: false,
+                density_g_cm3: DEFAULT_PP_FILM_DENSITY_G_CM3,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let before = store.list().await.unwrap();
+        assert_eq!(before.last().unwrap().id, "builtin-bopp");
+        let ids: Vec<_> = before
+            .iter()
+            .filter(|item| item.active)
+            .rev()
+            .map(|item| item.id.clone())
+            .collect();
+        let saved = store.reorder(ids.clone()).await.unwrap();
+        assert_eq!(
+            saved
+                .iter()
+                .filter(|item| item.active)
+                .map(|item| item.id.clone())
+                .collect::<Vec<_>>(),
+            ids
+        );
+        assert_eq!(saved.last().unwrap().id, "builtin-bopp");
+        let edited = store
+            .upsert(CalculateMaterialUpsert {
+                id: ids[0].clone(),
+                name: "ZZZ renamed material".into(),
+                density_g_cm3: 0.94,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(edited.sort_order, Some(0));
+        assert_eq!(store.list().await.unwrap()[0].id, ids[0]);
+        let current = store.list().await.unwrap();
+        let mut duplicate = ids.clone();
+        duplicate[1] = duplicate[0].clone();
+        let mut hidden = ids.clone();
+        hidden[0] = "builtin-bopp".into();
+        let mut unknown = ids.clone();
+        unknown[0] = "unknown".into();
+        for invalid in [duplicate, hidden, unknown, ids[..ids.len() - 1].to_vec()] {
+            assert!(store.reorder(invalid).await.is_err());
+            assert_eq!(store.list().await.unwrap(), current);
+        }
+        store
+            .upsert(CalculateMaterialUpsert {
+                id: ids[0].clone(),
+                name: edited.name,
+                active: false,
+                density_g_cm3: edited.density_g_cm3,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let catalog = store.list().await.unwrap();
+        assert_eq!(catalog.last().unwrap().id, ids[0]);
+        assert_eq!(catalog[catalog.len() - 2].id, "builtin-bopp");
+        assert!(catalog[..catalog.len() - 2].iter().all(|item| item.active));
+        assert!(catalog[catalog.len() - 2..].iter().all(|item| !item.active));
+    }
+
+    #[test]
+    fn legacy_payloads_without_sort_order_keep_alphabetical_defaults() {
+        let mut payload = serde_json::to_value(builtin("legacy", "Legacy", 0.94, vec![])).unwrap();
+        payload.as_object_mut().unwrap().remove("sort_order");
+        let material: CalculateMaterial = serde_json::from_value(payload).unwrap();
+        assert_eq!(material.sort_order, None);
+        let materials = merge_default_calculate_materials(vec![material]);
+        assert!(
+            materials
+                .windows(2)
+                .all(|pair| normalize_key(&pair[0].name) <= normalize_key(&pair[1].name))
+        );
+    }
+
     #[test]
     fn normalizes_density_and_sorts_material_variants() {
         let material = normalize_material(CalculateMaterialUpsert {
@@ -65,6 +149,7 @@ mod tests {
             id: "existing-pe-oq".to_string(),
             name: "PE oq".to_string(),
             active: true,
+            sort_order: None,
             density_g_cm3: 0.93,
             variants: density_variants(&[30], 0.93),
         };
@@ -86,6 +171,7 @@ mod tests {
             id: "builtin-pe-qora".to_string(),
             name: "PE qora".to_string(),
             active: true,
+            sort_order: None,
             density_g_cm3: DEFAULT_PE_DENSITY_G_CM3,
             variants: density_variants(&[30], DEFAULT_PE_DENSITY_G_CM3),
         };

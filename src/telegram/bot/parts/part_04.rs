@@ -301,6 +301,7 @@ async fn delete_message(
     let response = service
         .http_client()
         .post(bot_url(token, "deleteMessage"))
+        .timeout(Duration::from_secs(2))
         .json(&body)
         .send()
         .await
@@ -325,6 +326,7 @@ async fn answer_callback_query(
     let response = service
         .http_client()
         .post(bot_url(token, "answerCallbackQuery"))
+        .timeout(Duration::from_secs(2))
         .json(&body)
         .send()
         .await
@@ -340,15 +342,27 @@ async fn answer_inline_query(
     inline_query_id: &str,
     results: Vec<serde_json::Value>,
 ) -> Result<(), TelegramError> {
+    answer_inline_query_page(service, token, inline_query_id, results, "").await
+}
+
+async fn answer_inline_query_page(
+    service: &TelegramService,
+    token: &str,
+    inline_query_id: &str,
+    results: Vec<serde_json::Value>,
+    next_offset: &str,
+) -> Result<(), TelegramError> {
     let body = serde_json::json!({
         "inline_query_id": inline_query_id,
         "results": results,
         "cache_time": 0,
         "is_personal": true,
+        "next_offset": next_offset,
     });
     let response = service
         .http_client()
         .post(bot_url(token, "answerInlineQuery"))
+        .timeout(Duration::from_secs(3))
         .json(&body)
         .send()
         .await
@@ -377,6 +391,11 @@ async fn send_inline_login_prompt(
     .await
 }
 fn role_guide_keyboard(role: TelegramAccountRole) -> Option<serde_json::Value> {
+    if role == TelegramAccountRole::AlertSender {
+        return Some(serde_json::json!({"inline_keyboard": [[{
+            "text": "👤 Telegram profilini ulash", "callback_data": "login:start"
+        }]]}));
+    }
     (role == TelegramAccountRole::SalesManager).then(delivery_mode_keyboard)
 }
 
@@ -384,11 +403,16 @@ fn account_guide_keyboard(account: &TelegramUserAccount) -> Option<serde_json::V
     if !account.user_profile_connected {
         return role_guide_keyboard(account.role);
     }
+    if account.role == TelegramAccountRole::AlertSender {
+        return Some(serde_json::json!({"inline_keyboard": [[{
+            "text": "🔔 Guruh va mas’ullarni tanlash", "callback_data": "alert:home"
+        }]]}));
+    }
     Some(serde_json::json!({
         "inline_keyboard": [[{
             "text": "👥 Guruh tanlash",
             "callback_data": "user_groups"
-        }]]
+        }], [{"text": "🔔 Ogohlantirishlar", "callback_data": "alert:home"}]]
     }))
 }
 

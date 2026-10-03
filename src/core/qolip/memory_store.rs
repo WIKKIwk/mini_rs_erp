@@ -6,7 +6,7 @@ use crate::core::auth::models::Principal;
 
 use super::models::{
     QolipBlock, QolipCellQr, QolipCheckout, QolipError, QolipLocation, QolipLocationMove,
-    QolipProduct, QolipProductSpec,
+    QolipProduct, QolipProductSpec, QolipProductTransfer,
 };
 use super::normalize::{
     location_from_checkout, location_from_checkout_target, location_identity_matches,
@@ -22,6 +22,7 @@ pub struct MemoryQolipStore {
     locations: RwLock<Vec<QolipLocation>>,
     cell_qrs: RwLock<BTreeMap<String, QolipCellQr>>,
     checkouts: RwLock<Vec<QolipCheckout>>,
+    transfers: RwLock<BTreeMap<String, (QolipProductTransfer, Vec<QolipProductSpec>)>>,
 }
 
 impl MemoryQolipStore {
@@ -90,6 +91,7 @@ include!("memory_store_impl_parts/part_02.rs");
 include!("memory_store_impl_parts/part_03.rs");
 
 include!("memory_store_trait_impl.rs");
+include!("memory_product_transfer.rs");
 
 fn apply_memory_location_move(
     locations: &mut Vec<QolipLocation>,

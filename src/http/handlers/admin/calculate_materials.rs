@@ -10,6 +10,33 @@ use crate::http::handlers::material_catalog::ROLL_MATERIAL_ITEM_GROUP;
 
 const RAW_MATERIAL_ITEM_GROUP: &str = "Homashyo";
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CalculateMaterialSequenceInput {
+    material_ids: Vec<String>,
+}
+
+pub async fn calculate_material_sequence(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AdminError> {
+    authorize_any_capability(&state, &headers, &[Capability::AdminAccess]).await?;
+    if method != Method::PUT {
+        return Err(method_not_allowed());
+    }
+    let input: CalculateMaterialSequenceInput = parse_json(&body)?;
+    let materials = state
+        .calculate_materials
+        .reorder(input.material_ids)
+        .await
+        .map_err(calculate_material_store_error)?;
+    Ok(json_response(
+        serde_json::json!({"ok": true, "materials": materials}),
+    ))
+}
+
 pub async fn calculate_materials(
     State(state): State<AppState>,
     method: Method,

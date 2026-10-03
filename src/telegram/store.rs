@@ -13,6 +13,9 @@ use super::models::{
 };
 use super::order::TelegramOrderDraft;
 
+#[path = "store_alerts.rs"]
+mod alerts;
+
 #[derive(Debug, thiserror::Error)]
 pub enum TelegramStoreError {
     #[error("telegram store read failed")]
@@ -33,6 +36,10 @@ pub enum TelegramStoreError {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct TelegramStoreData {
+    #[serde(default)]
+    alert_settings: super::alerts::TelegramAlertSettings,
+    #[serde(default)]
+    alert_jobs: BTreeMap<String, super::alerts::models::AlertJob>,
     #[serde(default)]
     bot_username: String,
     #[serde(default)]
@@ -178,6 +185,10 @@ impl TelegramStore {
             .ok_or(TelegramStoreError::UserNotFound)?;
         updated.user_sessions.remove(telegram_user_id);
         updated.order_drafts.remove(telegram_user_id);
+        if updated.alert_settings.sender_user_id.as_deref() == Some(telegram_user_id) {
+            updated.alert_settings = Default::default();
+        }
+        updated.alert_jobs.retain(|_, job| job.sender_user_id != telegram_user_id);
         self.persist(&updated).await?;
         *data = updated;
         Ok(user)
@@ -204,14 +215,19 @@ impl TelegramStore {
         Ok(data.chats.values().cloned().collect())
     }
 
-    pub async fn update_offset(&self) -> Result<i64, TelegramStoreError> {
+    pub(crate) async fn polling_state(&self) -> (String, i64) {
         let data = self.data.lock().await;
-        Ok(data.update_offset)
+        (data.bot_token.clone(), data.update_offset)
     }
 
-    pub async fn set_update_offset(&self, update_offset: i64) -> Result<(), TelegramStoreError> {
+    pub(crate) async fn set_update_offset(
+        &self,
+        token: &str,
+        update_offset: i64,
+    ) -> Result<(), TelegramStoreError> {
         let mut data = self.data.lock().await;
-        if update_offset <= data.update_offset {
+        // An in-flight response from the previous bot must not advance the new bot.
+        if token != data.bot_token || update_offset <= data.update_offset {
             return Ok(());
         }
         data.update_offset = update_offset;
@@ -226,6 +242,9 @@ impl TelegramStore {
         let mut data = self.data.lock().await;
         data.bot_username = bot_username;
         if let Some(bot_token) = bot_token {
+            if bot_token != data.bot_token {
+                data.update_offset = 0;
+            }
             data.bot_token = bot_token;
         }
         self.persist(&data).await
@@ -266,6 +285,7 @@ impl TelegramStore {
         updated
             .users
             .insert(user.telegram_user_id.clone(), user.clone());
+        alerts::activate_alert_sender(&mut updated, &user);
         self.persist(&updated).await?;
         *data = updated;
         Ok(Some(user))
@@ -299,19 +319,25 @@ impl TelegramStore {
         // read-only fallbacks for previously stored sessions (see user_session).
         let key = self.session_key()?;
         let mut data = self.data.lock().await;
+        let mut updated = data.clone();
         let user = {
-            let user = data
+            let user = updated
                 .users
                 .get_mut(telegram_user_id)
                 .ok_or(TelegramStoreError::UserNotFound)?;
             user.phone_number = phone_number;
             user.user_profile_connected = true;
+            if user.role == TelegramAccountRole::AlertSender {
+                user.delivery_mode = TelegramDeliveryMode::UserProfile;
+            }
             user.clone()
         };
         let encrypted_session = encrypt_session(&session_string, &key)?;
-        data.user_sessions
+        updated.user_sessions
             .insert(telegram_user_id.to_string(), encrypted_session);
-        self.persist(&data).await?;
+        alerts::activate_alert_sender(&mut updated, &user);
+        self.persist(&updated).await?;
+        *data = updated;
         Ok(user)
     }
 
@@ -479,10 +505,11 @@ impl TelegramStore {
                 .as_ref()
                 .map(|existing| existing.phone_number.clone())
                 .unwrap_or_default(),
-            delivery_mode: existing
-                .as_ref()
-                .map(|existing| existing.delivery_mode)
-                .unwrap_or_default(),
+            delivery_mode: if role == TelegramAccountRole::AlertSender {
+                TelegramDeliveryMode::UserProfile
+            } else {
+                existing.as_ref().map(|existing| existing.delivery_mode).unwrap_or_default()
+            },
             user_profile_connected: existing
                 .as_ref()
                 .is_some_and(|existing| existing.user_profile_connected),
@@ -501,6 +528,7 @@ impl TelegramStore {
             .ok_or(TelegramStoreError::InviteNotFound)?
             .claimed_by = Some(telegram_user_id.clone());
         data.users.insert(telegram_user_id, user.clone());
+        alerts::activate_alert_sender(&mut data, &user);
         self.persist(&data).await?;
         Ok(user)
     }

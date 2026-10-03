@@ -389,8 +389,48 @@ apparatus and the apparatus must belong to the order. Active employees of the
 corresponding role receive a normal chat message containing the order number,
 apparatus, and worker. Existing chat persistence and push delivery handle the
 notification. Reuse `request_id` when retrying to avoid duplicate chat messages.
-No recipients or failed persistence returns an error. Mobile device tokens use
+No configured recipients or failed persistence returns an error. Mobile device tokens use
 `/v1/mobile/chat/device-token`, which supports these employee roles.
+
+Telegram production alerts use a separate sender/group configuration from order
+delivery. Mobile Admin → Telegram → Send an invite includes the dedicated
+`alert_sender` (Ogohlantiruvchi) role, with invite-link sharing and QR login.
+Opening its invite link and pressing Start registers that role; the bot offers
+the "Telegram profilini ulash" button, and `/login` also starts profile linking
+with the existing own-contact and inline code/2FA flow. A successful notifier
+login or notifier QR registration automatically selects that profile as the
+alert sender. The selected sender can also be changed in mobile
+(`PUT /v1/mobile/admin/telegram/alert-settings`, `{sender_user_id}`; null
+disables new Telegram alerts). In the bot's private chat, `/alerts` lets a linked
+Telegram admin or the selected sender choose a writable group and toggle its
+members as material suppliers or mold operators (up to 30 per role). The sender
+must be able to see the group's members. Changing sender/group clears these
+member selections; order delivery's selected group remains independent.
+
+The alert panel opens inline searches for groups, material suppliers, and mold
+operators. Search by name or username, send a result, then confirm selection or
+membership removal on its button. Results paginate in batches of 20. Lookups
+reuse a profile connection for five minutes and cache lists for 60 seconds;
+opening `/alerts` warms the first lists in the background. Inline searches run
+with bounded concurrency and an eight-second deadline, independently of polling.
+Login code/password updates remain ordered. Bot API requests have deadlines,
+and failed callback acknowledgements do not discard the selected action.
+
+Only one polling backend may use a given bot token. Telegram's `409 Conflict`
+means another `getUpdates` poller is using the same token; stop the duplicate or
+configure a separate bot token for local use. Changing the token resets its
+saved update offset, and an in-flight response from the old bot cannot advance it.
+
+The existing order-alert button also queues a message from that user profile,
+mentioning only members selected for the requested kind, including users without
+usernames. The response includes `telegram_queued`; this confirms durable queueing,
+not live delivery. Missing Telegram configuration does not prevent internal chat
+alerts; configured Telegram recipients can receive an alert even when no internal
+employees have that role. Jobs and settings persist in the Telegram JSON store;
+restart/network errors retry with the same MTProto `random_id`, and repeated
+`request_id` does not enqueue another job. Queued jobs keep the destination and
+members selected at the time of the request. Removing the linked sender removes
+its jobs. Test builds do not start the delivery worker.
 
 #### Queue and WIP Flow
 

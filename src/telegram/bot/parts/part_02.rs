@@ -8,6 +8,24 @@ async fn handle_inline_query(
         answer_inline_query(service, token, &inline_query.id, Vec::new()).await?;
         return Ok(());
     };
+    if let Some(search) = parse_alert_inline_query(&inline_query.query) {
+        let (results, next_offset) = match alert_inline_results(
+            service,
+            &telegram_user_id,
+            search,
+            &inline_query.offset,
+        )
+        .await
+        {
+            Ok(page) => page,
+            Err(error) => {
+                tracing::warn!(?error, "telegram alert inline search failed");
+                (Vec::new(), String::new())
+            }
+        };
+        answer_inline_query_page(service, token, &inline_query.id, results, &next_offset).await?;
+        return Ok(());
+    }
     if account.user_profile_connected && parse_group_inline_query(&inline_query.query).is_some() {
         let results = match group_inline_results(service, &telegram_user_id, &inline_query.query).await {
             Ok(results) => results,
@@ -52,7 +70,7 @@ async fn handle_inline_query(
             service,
             token,
             &chat_id,
-            "Login jarayoni topilmadi. Avval /user_mode orqali user profile ulashni boshlang.",
+            "Login jarayoni topilmadi. Avval /login orqali Telegram profilingizni ulashni boshlang.",
             None,
         )
         .await?;
@@ -82,7 +100,7 @@ async fn handle_inline_query(
                     .await?;
                 }
                 Ok(CodeOutcome::Authorized) => {
-                    send_user_group_picker(service, token, &chat_id).await?;
+                    send_login_destination(service, token, &chat_id, &telegram_user_id).await?;
                 }
                 Err(error) => {
                     send_inline_login_prompt(
@@ -103,7 +121,7 @@ async fn handle_inline_query(
                 .await
             {
                 Ok(_) => {
-                    send_user_group_picker(service, token, &chat_id).await?;
+                    send_login_destination(service, token, &chat_id, &telegram_user_id).await?;
                 }
                 Err(error) => {
                     send_inline_login_prompt(
@@ -141,6 +159,18 @@ async fn handle_private_text(
     match command {
         // /start must reach account recognition even while an order draft exists.
         Some("start") => return Ok(false),
+        Some("login") => {
+            begin_bot_profile_login(service, token, &chat_id, &telegram_user_id).await?;
+            return Ok(true);
+        }
+        Some("alerts") if account.role == TelegramAccountRole::AlertSender && !account.user_profile_connected => {
+            begin_bot_profile_login(service, token, &chat_id, &telegram_user_id).await?;
+            return Ok(true);
+        }
+        Some("alerts") => {
+            show_alert_panel(service, token, &chat_id, &telegram_user_id, None).await?;
+            return Ok(true);
+        }
         Some("new_order") if account.role == TelegramAccountRole::SalesManager => {
             start_new_order(service, token, &telegram_user_id, &chat_id).await?;
             return Ok(true);

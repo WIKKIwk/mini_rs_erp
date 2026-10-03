@@ -75,6 +75,18 @@ pub struct QolipProductSpecDelete {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QolipProductTransfer {
+    #[serde(default)]
+    pub request_id: String,
+    #[serde(default)]
+    pub from_item_code: String,
+    #[serde(default)]
+    pub to_item_code: String,
+    #[serde(default)]
+    pub qolip_codes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QolipLocation {
     pub id: String,
     pub block: String,
@@ -217,6 +229,10 @@ pub struct QolipLocationUpsert {
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum QolipError {
+    #[error("qolip access denied")]
+    AccessDenied,
+    #[error("qolip product transfer conflicts with current state")]
+    ProductTransferConflict,
     #[error("block is required")]
     MissingBlock,
     #[error("item is required")]

@@ -82,6 +82,25 @@ pub async fn userbot_settings(
         .map_err(telegram_error)
 }
 
+pub async fn alert_settings(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AdminError> {
+    authorize_capability(&state, &headers, Capability::AdminSettingsManage).await?;
+    if method != Method::PUT {
+        return Err(method_not_allowed());
+    }
+    let input: crate::telegram::alerts::AlertSenderUpdate = parse_json(&body)?;
+    state
+        .telegram
+        .update_alert_sender(input)
+        .await
+        .map(json_response)
+        .map_err(telegram_error)
+}
+
 fn telegram_error(error: TelegramError) -> AdminError {
     match error {
         TelegramError::BotUsernameRequired => bad_request("telegram bot username is required"),

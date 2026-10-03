@@ -16,8 +16,10 @@ use crate::core::warehouses::{WarehouseDeleteRequest, WarehouseUpsert};
 
 mod support;
 mod order_products;
+mod product_transfer;
 
 pub use order_products::order_products;
+pub use product_transfer::product_transfer;
 
 use self::support::*;
 pub use self::support::{

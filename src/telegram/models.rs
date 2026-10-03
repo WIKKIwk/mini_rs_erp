@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub enum TelegramAccountRole {
     Admin,
     SalesManager,
+    AlertSender,
 }
 
 impl TelegramAccountRole {
@@ -12,6 +13,7 @@ impl TelegramAccountRole {
         match self {
             Self::Admin => "Admin",
             Self::SalesManager => "Sotuv manageri",
+            Self::AlertSender => "Ogohlantiruvchi",
         }
     }
 }
@@ -98,6 +100,7 @@ pub struct TelegramAdminOverview {
     pub userbot: TelegramUserbotSettings,
     pub users: Vec<TelegramUserAccount>,
     pub chats: Vec<TelegramChat>,
+    pub alerts: super::alerts::TelegramAlertSettings,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]

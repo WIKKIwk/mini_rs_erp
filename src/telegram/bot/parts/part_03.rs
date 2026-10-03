@@ -102,7 +102,7 @@ async fn handle_contact(
             .await?;
         }
         Ok(LoginOutcome::Authorized) => {
-            send_user_group_picker(service, token, &chat_id).await?;
+            send_login_destination(service, token, &chat_id, &user.id.to_string()).await?;
         }
         Err(error) => {
             send_message(
@@ -123,7 +123,10 @@ async fn handle_callback_query(
     token: &str,
     callback: TelegramCallbackQuery,
 ) -> Result<(), TelegramError> {
-    answer_callback_query(service, token, &callback.id, None, false).await?;
+    // A stale callback acknowledgement must not discard the user's actual action.
+    answer_callback_query(service, token, &callback.id, None, false)
+        .await
+        .ok();
     let Some(data) = callback.data.as_deref() else {
         return Ok(());
     };
@@ -133,6 +136,20 @@ async fn handle_callback_query(
         .as_ref()
         .map(|message| message.chat.id.to_string())
         .unwrap_or_else(|| telegram_user_id.clone());
+    if data.starts_with("alert:") {
+        if alert_callback_is_allowed(&callback) {
+            handle_alert_callback(
+                service,
+                token,
+                &chat_id,
+                &telegram_user_id,
+                data,
+                callback.message.as_ref().map(|m| m.message_id),
+            )
+            .await?;
+        }
+        return Ok(());
+    }
     if data.starts_with("order:") {
         handle_order_callback(
             service,
@@ -147,6 +164,11 @@ async fn handle_callback_query(
         return Ok(());
     }
     match data {
+        "login:start" => {
+            if callback.message.as_ref().is_some_and(|m| m.chat.chat_type == "private") {
+                begin_bot_profile_login(service, token, &chat_id, &telegram_user_id).await?;
+            }
+        }
         "login:resend" => match service.resend_user_profile_code(&telegram_user_id).await {
             Ok(ResendOutcome::Resent) => {
                 send_code_sent_prompt(
@@ -158,7 +180,7 @@ async fn handle_callback_query(
                 .await?;
             }
             Ok(ResendOutcome::Authorized) => {
-                send_user_group_picker(service, token, &chat_id).await?;
+                send_login_destination(service, token, &chat_id, &telegram_user_id).await?;
             }
             Err(error) => {
                 send_message(

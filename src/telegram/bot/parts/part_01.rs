@@ -1,26 +1,37 @@
 pub(crate) async fn run_polling(service: TelegramService) {
-    let mut offset = service.update_offset().await.unwrap_or_default();
+    let mut active_token = String::new();
+    let mut offset = 0;
+    let searches = std::sync::Arc::new(tokio::sync::Semaphore::new(16));
     loop {
-        let (_, token) = match service.bot_credentials().await {
-            Ok(credentials) => credentials,
-            Err(error) => {
-                tracing::warn!(?error, "telegram bot settings unavailable");
-                tokio::time::sleep(Duration::from_secs(10)).await;
-                continue;
-            }
-        };
+        let (token, saved_offset) = service.polling_state().await;
+        if token != active_token {
+            active_token = token.clone();
+            offset = saved_offset;
+        }
         if token.trim().is_empty() {
             tokio::time::sleep(Duration::from_secs(10)).await;
             continue;
         }
         match get_updates(&service, &token, offset).await {
             Ok(updates) => {
-                for update in updates {
+                if service.polling_state().await.0 != token {
+                    continue;
+                }
+                for mut update in updates {
                     offset = offset.max(update.update_id.saturating_add(1));
-                    if let Err(error) = handle_update(&service, &token, update).await {
+                    if update.inline_query.as_ref().is_some_and(is_inline_search) {
+                        // Searches do not change login/order state; slow MTProto lookups
+                        // must not hold the polling loop or another user's commands.
+                        spawn_inline_search(
+                            service.clone(),
+                            token.clone(),
+                            update.inline_query.take().unwrap(),
+                            searches.clone(),
+                        );
+                    } else if let Err(error) = handle_update(&service, &token, update).await {
                         tracing::warn!(?error, "telegram update handling failed");
                     }
-                    if let Err(error) = service.set_update_offset(offset).await {
+                    if let Err(error) = service.set_update_offset(&token, offset).await {
                         tracing::warn!(?error, offset, "telegram update offset persist failed");
                     }
                 }
@@ -33,6 +44,45 @@ pub(crate) async fn run_polling(service: TelegramService) {
     }
 }
 
+fn is_inline_search(query: &TelegramInlineQuery) -> bool {
+    parse_alert_inline_query(&query.query).is_some()
+        || parse_group_inline_query(&query.query).is_some()
+        || parse_order_inline_query(&query.query).is_some()
+}
+
+async fn limited_inline_search<T>(
+    permits: std::sync::Arc<tokio::sync::Semaphore>,
+    work: impl std::future::Future<Output = Result<T, TelegramError>>,
+) -> Result<T, TelegramError> {
+    tokio::time::timeout(Duration::from_secs(8), async {
+        let _permit = permits
+            .acquire_owned()
+            .await
+            .map_err(|_| TelegramError::Store)?;
+        work.await
+    })
+    .await
+    .map_err(|_| TelegramError::Transport("inline search timed out".into()))?
+}
+
+fn spawn_inline_search(
+    service: TelegramService,
+    token: String,
+    query: TelegramInlineQuery,
+    permits: std::sync::Arc<tokio::sync::Semaphore>,
+) {
+    tokio::spawn(async move {
+        let id = query.id.clone();
+        if let Err(error) =
+            limited_inline_search(permits, handle_inline_query(&service, &token, query)).await
+        {
+            tracing::warn!(?error, "telegram inline search failed");
+            answer_inline_query(&service, &token, &id, vec![])
+                .await
+                .ok();
+        }
+    });
+}
 async fn get_updates(
     service: &TelegramService,
     token: &str,
@@ -163,6 +213,11 @@ async fn handle_update(
                     let text = format!("Ulanish amalga oshmadi: {}", start_error_message(&error));
                     send_message(service, token, &chat_id, &text, None).await?;
                 }
+            }
+        }
+        "login" if is_private => {
+            if let Some(user) = message.from.as_ref() {
+                begin_bot_profile_login(service, token, &chat_id, &user.id.to_string()).await?;
             }
         }
         "help" | "commands" => {

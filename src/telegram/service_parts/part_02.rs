@@ -5,8 +5,13 @@ impl TelegramService {
             useraccount: TelegramUserAccountService::new(store.clone()),
             qr_logins: super::useraccount::qr::QrLoginService::new(store.clone()),
             store,
-            http: reqwest::Client::new(),
+            http: reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(5))
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .expect("Telegram HTTP client"),
             worker_started: Arc::new(AtomicBool::new(false)),
+            alert_worker_started: Arc::new(AtomicBool::new(false)),
             order_catalog: None,
             pending_orders: None,
             automatic_orders: None,
@@ -167,6 +172,7 @@ impl TelegramService {
             userbot,
             users,
             chats,
+            alerts: self.store.alert_settings().await,
         })
     }
 
@@ -225,6 +231,7 @@ impl TelegramService {
     }
 
     pub async fn start_bot_worker_if_configured(&self) {
+        self.start_alert_worker();
         if cfg!(test) {
             return;
         }
@@ -611,13 +618,17 @@ impl TelegramService {
         Ok(delivered)
     }
 
-    pub(crate) async fn update_offset(&self) -> Result<i64, TelegramError> {
-        self.store.update_offset().await.map_err(map_store)
+    pub(crate) async fn polling_state(&self) -> (String, i64) {
+        self.store.polling_state().await
     }
 
-    pub(crate) async fn set_update_offset(&self, offset: i64) -> Result<(), TelegramError> {
+    pub(crate) async fn set_update_offset(
+        &self,
+        token: &str,
+        offset: i64,
+    ) -> Result<(), TelegramError> {
         self.store
-            .set_update_offset(offset)
+            .set_update_offset(token, offset)
             .await
             .map_err(map_store)
     }

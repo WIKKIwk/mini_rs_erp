@@ -1,6 +1,6 @@
 use super::queue_actions::progress_print_failure_json;
 use super::*;
-use crate::core::production_map::ProgressBatchCorrectionInput;
+use crate::core::production_map::{OrderControlState, ProgressBatchCorrectionInput};
 
 #[derive(serde::Deserialize)]
 struct ProgressQrLookupRequest {
@@ -14,6 +14,8 @@ struct ProgressQrLookupRequest {
     apparatus: String,
     #[serde(default)]
     order_id: String,
+    #[serde(default)]
+    require_active_order: bool,
 }
 
 pub async fn production_map_progress_qr_lookup(
@@ -78,11 +80,36 @@ pub async fn production_map_progress_qr_lookup(
             "validated_apparatus": input.apparatus.trim(),
             "validated_order_id": input.order_id.trim(),
             "can_resume": batch.status.is_resumable(),
+            "active_order_validated": input.require_active_order,
             "batch": batch,
         })));
     }
-    let batch = if scoped {
-        state
+    // Identify the scanned roll before checking its route. A freeze applies
+    // to the whole order, including waiting output from an earlier apparatus.
+    let mut batch = state
+        .production_maps
+        .progress_batch_for_qr(&input.progress_batch_id, qr_payload)
+        .await
+        .map_err(production_map_error)?;
+    if input.require_active_order {
+        match state
+            .production_maps
+            .order_control_state(&batch.order_id)
+            .await
+            .map_err(production_map_error)?
+            .state
+        {
+            OrderControlState::Frozen => {
+                return Err(production_map_error(ProductionMapError::OrderFrozen));
+            }
+            OrderControlState::FreezeRequested => {
+                return Err(production_map_error(ProductionMapError::OrderFreezeRequested));
+            }
+            OrderControlState::Active => {}
+        }
+    }
+    if scoped {
+        batch = state
             .production_maps
             .start_input_for_qr(
                 &input.apparatus,
@@ -91,13 +118,8 @@ pub async fn production_map_progress_qr_lookup(
                 qr_payload,
             )
             .await
-    } else {
-        state
-            .production_maps
-            .progress_batch_for_qr(&input.progress_batch_id, qr_payload)
-            .await
+            .map_err(production_map_error)?;
     }
-    .map_err(production_map_error)?;
     let (input_route, input_route_error) = if batch.wip_status == OrderProgressBatchWipStatus::Waiting {
         match state.production_maps.progress_batch_input_route(&batch).await {
             Ok(route) => (Some(route), None),
@@ -110,6 +132,7 @@ pub async fn production_map_progress_qr_lookup(
         "validated_apparatus": input.apparatus.trim(),
         "validated_order_id": input.order_id.trim(),
         "can_resume": batch.status.is_resumable(),
+        "active_order_validated": input.require_active_order,
         "batch": batch,
         "input_route": input_route,
         "input_route_error": input_route_error,

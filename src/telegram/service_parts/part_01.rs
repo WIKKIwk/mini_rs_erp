@@ -53,11 +53,12 @@ pub enum TelegramError {
 
 #[derive(Clone)]
 pub struct TelegramService {
-    store: Arc<TelegramStore>,
-    useraccount: TelegramUserAccountService,
+    pub(crate) store: Arc<TelegramStore>,
+    pub(crate) useraccount: TelegramUserAccountService,
     pub(crate) qr_logins: super::useraccount::qr::QrLoginService,
     http: reqwest::Client,
     worker_started: Arc<AtomicBool>,
+    pub(crate) alert_worker_started: Arc<AtomicBool>,
     order_catalog: Option<Arc<TelegramOrderCatalog>>,
     pending_orders: Option<Arc<dyn crate::core::pending_orders::PendingOrderStore>>,
     automatic_orders: Option<super::automatic_orders::AutomaticOrders>,

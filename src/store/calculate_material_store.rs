@@ -3,11 +3,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, TransactionBehavior, params};
 
 use crate::core::calculate_materials::{
     CalculateMaterial, CalculateMaterialError, CalculateMaterialStorePort, CalculateMaterialUpsert,
-    ensure_unique_name, merge_default_calculate_materials, normalize_material,
+    merge_default_calculate_materials, normalize_material, prepare_material_upsert,
+    reorder_calculate_materials,
 };
 
 #[derive(Clone)]
@@ -52,11 +53,7 @@ impl CalculateMaterialStore {
         })
     }
 
-    fn list_overrides(&self) -> Result<Vec<CalculateMaterial>, CalculateMaterialError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|_| CalculateMaterialError::StoreFailed)?;
+    fn list_on(conn: &Connection) -> Result<Vec<CalculateMaterial>, CalculateMaterialError> {
         let mut stmt = conn
             .prepare("SELECT payload_json FROM calculate_materials ORDER BY lower_name")
             .map_err(|_| CalculateMaterialError::StoreFailed)?;
@@ -67,30 +64,18 @@ impl CalculateMaterialStore {
                     .map_err(|error| rusqlite::Error::ToSqlConversionFailure(error.into()))
             })
             .map_err(|_| CalculateMaterialError::StoreFailed)?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|_| CalculateMaterialError::StoreFailed)
-    }
-}
-
-#[async_trait]
-impl CalculateMaterialStorePort for CalculateMaterialStore {
-    async fn list(&self) -> Result<Vec<CalculateMaterial>, CalculateMaterialError> {
-        Ok(merge_default_calculate_materials(self.list_overrides()?))
-    }
-
-    async fn upsert(
-        &self,
-        input: CalculateMaterialUpsert,
-    ) -> Result<CalculateMaterial, CalculateMaterialError> {
-        let material = normalize_material(input)?;
-        let all = merge_default_calculate_materials(self.list_overrides()?);
-        ensure_unique_name(&all, &material)?;
-        let payload =
-            serde_json::to_string(&material).map_err(|_| CalculateMaterialError::StoreFailed)?;
-        let conn = self
-            .conn
-            .lock()
+        let overrides = rows
+            .collect::<Result<Vec<_>, _>>()
             .map_err(|_| CalculateMaterialError::StoreFailed)?;
+        Ok(merge_default_calculate_materials(overrides))
+    }
+
+    fn save_on(
+        conn: &Connection,
+        material: &CalculateMaterial,
+    ) -> Result<(), CalculateMaterialError> {
+        let payload =
+            serde_json::to_string(material).map_err(|_| CalculateMaterialError::StoreFailed)?;
         conn.execute(
             "INSERT INTO calculate_materials (id, lower_name, payload_json)
              VALUES (?1, lower(?2), ?3)
@@ -100,7 +85,63 @@ impl CalculateMaterialStorePort for CalculateMaterialStore {
             params![material.id, material.name, payload],
         )
         .map_err(|_| CalculateMaterialError::StoreFailed)?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl CalculateMaterialStorePort for CalculateMaterialStore {
+    async fn list(&self) -> Result<Vec<CalculateMaterial>, CalculateMaterialError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| CalculateMaterialError::StoreFailed)?;
+        Self::list_on(&conn)
+    }
+
+    async fn upsert(
+        &self,
+        input: CalculateMaterialUpsert,
+    ) -> Result<CalculateMaterial, CalculateMaterialError> {
+        let mut material = normalize_material(input)?;
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|_| CalculateMaterialError::StoreFailed)?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| CalculateMaterialError::StoreFailed)?;
+        let all = Self::list_on(&tx)?;
+        if let Some(pinned) = prepare_material_upsert(&all, &mut material)? {
+            for item in &pinned {
+                Self::save_on(&tx, item)?;
+            }
+        } else {
+            Self::save_on(&tx, &material)?;
+        }
+        tx.commit()
+            .map_err(|_| CalculateMaterialError::StoreFailed)?;
         Ok(material)
+    }
+
+    async fn reorder(
+        &self,
+        material_ids: Vec<String>,
+    ) -> Result<Vec<CalculateMaterial>, CalculateMaterialError> {
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|_| CalculateMaterialError::StoreFailed)?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| CalculateMaterialError::StoreFailed)?;
+        let materials = reorder_calculate_materials(Self::list_on(&tx)?, &material_ids)?;
+        for material in &materials {
+            Self::save_on(&tx, material)?;
+        }
+        tx.commit()
+            .map_err(|_| CalculateMaterialError::StoreFailed)?;
+        Ok(materials)
     }
 }
 
@@ -108,6 +149,55 @@ impl CalculateMaterialStorePort for CalculateMaterialStore {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn sequence_is_persisted_and_failed_writes_roll_back() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("sequence.sqlite");
+        let store = CalculateMaterialStore::new(&path);
+        let ids: Vec<_> = store
+            .list()
+            .await
+            .unwrap()
+            .iter()
+            .rev()
+            .map(|item| item.id.clone())
+            .collect();
+        let saved = store.reorder(ids.clone()).await.unwrap();
+        drop(store);
+        let store = CalculateMaterialStore::new(&path);
+        assert_eq!(store.list().await.unwrap(), saved);
+        let edited = store
+            .upsert(CalculateMaterialUpsert {
+                id: ids[1].clone(),
+                name: "ZZZ custom name".into(),
+                density_g_cm3: 0.92,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(edited.sort_order, Some(1));
+        assert_eq!(store.list().await.unwrap()[1].id, ids[1]);
+        let before_failure = store.list().await.unwrap();
+        // The second write fails, after the first row has already been updated.
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute_batch(&format!(
+                "CREATE TRIGGER fail_sequence BEFORE UPDATE ON calculate_materials
+             WHEN OLD.id = '{}' BEGIN SELECT RAISE(ABORT, 'write failed'); END;",
+                ids[ids.len() - 2]
+            ))
+            .unwrap();
+        assert!(
+            store
+                .reorder(ids.into_iter().rev().collect())
+                .await
+                .is_err()
+        );
+        assert_eq!(store.list().await.unwrap(), before_failure);
+    }
 
     #[tokio::test]
     async fn local_store_keeps_defaults_and_custom_materials() {

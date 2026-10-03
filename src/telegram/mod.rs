@@ -5,6 +5,7 @@
 //! when Telegram is not configured.
 
 pub mod bot;
+pub mod alerts;
 mod models;
 mod order;
 mod order_catalog;

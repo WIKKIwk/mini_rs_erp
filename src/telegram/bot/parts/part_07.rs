@@ -110,13 +110,18 @@ fn general_guide() -> &'static str {
 
 📘 Commandlar:
 /help — bot imkoniyatlari va role qo‘llanmasini ko‘rsatadi.
+/alerts — admin yoki ogohlantiruvchi profil uchun ogohlantirish guruhi va mas’ullar.
 /start — invite link orqali tizimga kirish.
+/login — Telegram profilingizni ulash.
 /connect — bot turgan guruhni orderlar uchun ulash; bu command guruh ichida yuboriladi."#
 }
 
 fn account_guide(account: &TelegramUserAccount) -> String {
     if !account.user_profile_connected {
         return role_guide(account.role);
+    }
+    if account.role == TelegramAccountRole::AlertSender {
+        return "✅ Telegram profilingiz ogohlantiruvchi sifatida ulandi.\n/alerts yoki pastdagi tugma orqali guruh, material ta’minotchilar va Qolipchilarni tanlang.\n/login — profil ulanishi.\n/help — qo‘llanma.".into();
     }
     let group = match account
         .selected_chat_title
@@ -132,13 +137,16 @@ fn account_guide(account: &TelegramUserAccount) -> String {
         ""
     };
     format!(
-        "✅ Siz User profile orqali login qilgansiz.\nSizning rolingiz: {}\nHozirgi yuborish usuli: {}.\n\n{}\n/groups yuboring yoki pastdagi «Guruh tanlash» tugmasini bosing. Tanlangan guruhga orderlar userbot orqali yuboriladi.{}\n/help — qo‘llanmani ko‘rsatish.",
+        "✅ Siz User profile orqali login qilgansiz.\nSizning rolingiz: {}\nHozirgi yuborish usuli: {}.\n\n{}\n/groups yuboring yoki pastdagi «Guruh tanlash» tugmasini bosing. Tanlangan guruhga orderlar userbot orqali yuboriladi.{}\n/alerts — admin yoki tanlangan ogohlantiruvchi uchun ogohlantirish guruhi va mas’ullar.\n/help — qo‘llanmani ko‘rsatish.",
         account.role.label(), account.delivery_mode.label(), group, order_command,
     )
 }
 
 fn role_guide(role: TelegramAccountRole) -> String {
     let role_label = role.label();
+    if role == TelegramAccountRole::AlertSender {
+        return "✅ Siz Ogohlantiruvchi sifatida ro‘yxatdan o‘tdingiz.\n\nPastdagi «Telegram profilini ulash» tugmasini bosing yoki /login yuboring. O‘zingizning contact’ingizni yuborib, Telegram loginini tugating. Kod va 2FA parol faqat bot ko‘rsatgan inline tugmalar orqali kiritiladi.\n\nProfil ulangach, siz avtomatik ogohlantiruvchi qilib tanlanasiz. /alerts orqali guruh va mas’ullarni belgilang.\n/cancel — loginni bekor qilish.".into();
+    }
     let role_details = match role {
         TelegramAccountRole::Admin => {
             r#"🛠 Admin vazifalari:
@@ -153,6 +161,7 @@ fn role_guide(role: TelegramAccountRole) -> String {
 • Yangi orderlar yuborilgan guruhni kuzatish.
 • Order tafsilotlarini ishlab chiqarish jamoasiga yetkazish."#
         }
+        TelegramAccountRole::AlertSender => unreachable!("handled above"),
     };
     let role_commands = match role {
         TelegramAccountRole::Admin => {
@@ -169,6 +178,7 @@ fn role_guide(role: TelegramAccountRole) -> String {
 /code yoki /password — login kod/parol uchun inline yuborish tugmasini chiqarish.
 /cancel — joriy login jarayonini bekor qilish."#
         }
+        TelegramAccountRole::AlertSender => unreachable!("handled above"),
     };
     format!(
         r#"✅ Ulanish muvaffaqiyatli!

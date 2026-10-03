@@ -1,5 +1,5 @@
 
-fn map_user_account(error: UserAccountError) -> TelegramError {
+pub(crate) fn map_user_account(error: UserAccountError) -> TelegramError {
     match error {
         UserAccountError::NotConfigured => TelegramError::UserAccountNotConfigured,
         UserAccountError::NotAuthorized | UserAccountError::LoginNotPending => {

@@ -386,6 +386,11 @@ async fn request_json<T: for<'de> Deserialize<'de> + Default, P: Serialize>(
     let response = service
         .http_client()
         .post(bot_url(token, method))
+        .timeout(Duration::from_secs(if method == "getUpdates" {
+            POLL_TIMEOUT_SECONDS + 10
+        } else {
+            10
+        }))
         .json(payload)
         .send()
         .await

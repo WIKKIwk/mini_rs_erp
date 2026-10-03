@@ -4,11 +4,19 @@ use crate::core::auth::models::Principal;
 
 use super::models::{
     QolipBlock, QolipCellQr, QolipCheckout, QolipError, QolipLocation, QolipLocationMove,
-    QolipProduct, QolipProductSpec,
+    QolipProduct, QolipProductSpec, QolipProductTransfer,
 };
 
 #[async_trait]
 pub trait QolipStorePort: Send + Sync {
+    async fn transfer_product_specs(
+        &self,
+        _input: &QolipProductTransfer,
+        _principal: &Principal,
+        _allowed_warehouses: &[String],
+    ) -> Result<Vec<QolipProductSpec>, QolipError> {
+        Err(QolipError::StoreFailed)
+    }
     /// Exact catalog identities and global QR readiness, without returning mold inventory.
     async fn order_products(&self, _item_codes: &[String]) -> Result<Vec<QolipProduct>, QolipError> {
         Err(QolipError::StoreFailed)

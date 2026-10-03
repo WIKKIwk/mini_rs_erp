@@ -1,5 +1,13 @@
 #[async_trait]
 impl QolipStorePort for MemoryQolipStore {
+    async fn transfer_product_specs(
+        &self,
+        input: &QolipProductTransfer,
+        principal: &Principal,
+        allowed_warehouses: &[String],
+    ) -> Result<Vec<QolipProductSpec>, QolipError> {
+        self.transfer_specs(input, principal, allowed_warehouses).await
+    }
     async fn order_products(&self, item_codes: &[String]) -> Result<Vec<QolipProduct>, QolipError> {
         let products = self.products.read().await.clone();
         let mut result = Vec::new();

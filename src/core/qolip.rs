@@ -13,6 +13,7 @@ pub use models::{
     QolipCheckoutReturn, QolipError, QolipLocation, QolipLocationMove, QolipLocationMoveBatch,
     QolipLocationUpsert, QolipOrderStartPreparation, QolipProduct, QolipProductSpec,
     QolipProductSpecBatchUpsert, QolipProductSpecDelete, QolipProductSpecUpsert,
+    QolipProductTransfer,
 };
 pub use normalize::role_code;
 pub use normalize_qr::qolip_scan_code_from_qr;

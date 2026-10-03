@@ -22,6 +22,8 @@ pub struct CalculateMaterial {
     pub name: String,
     #[serde(default = "default_active")]
     pub active: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sort_order: Option<u32>,
     #[serde(default)]
     pub density_g_cm3: f64,
     pub variants: Vec<CalculateMaterialVariant>,
@@ -69,6 +71,10 @@ pub trait CalculateMaterialStorePort: Send + Sync {
         &self,
         input: CalculateMaterialUpsert,
     ) -> Result<CalculateMaterial, CalculateMaterialError>;
+    async fn reorder(
+        &self,
+        material_ids: Vec<String>,
+    ) -> Result<Vec<CalculateMaterial>, CalculateMaterialError>;
 }
 
 #[derive(Clone)]
@@ -79,7 +85,7 @@ pub struct MemoryCalculateMaterialStore {
 impl MemoryCalculateMaterialStore {
     pub fn new() -> Self {
         Self {
-            materials: Arc::new(RwLock::new(default_calculate_materials())),
+            materials: Arc::new(RwLock::new(merge_default_calculate_materials(Vec::new()))),
         }
     }
 }
@@ -103,13 +109,15 @@ impl CalculateMaterialStorePort for MemoryCalculateMaterialStore {
         &self,
         input: CalculateMaterialUpsert,
     ) -> Result<CalculateMaterial, CalculateMaterialError> {
-        let material = normalize_material(input)?;
+        let mut material = normalize_material(input)?;
         let mut materials = self
             .materials
             .write()
             .map_err(|_| CalculateMaterialError::StoreFailed)?;
-        ensure_unique_name(&materials, &material)?;
-        if let Some(current) = materials
+        let pinned = prepare_material_upsert(&materials, &mut material)?;
+        if let Some(pinned) = pinned {
+            *materials = pinned;
+        } else if let Some(current) = materials
             .iter_mut()
             .find(|current| current.id == material.id)
         {
@@ -117,8 +125,21 @@ impl CalculateMaterialStorePort for MemoryCalculateMaterialStore {
         } else {
             materials.push(material.clone());
         }
-        materials.sort_by_key(|item| normalize_key(&item.name));
+        sort_calculate_materials(&mut materials);
         Ok(material)
+    }
+
+    async fn reorder(
+        &self,
+        material_ids: Vec<String>,
+    ) -> Result<Vec<CalculateMaterial>, CalculateMaterialError> {
+        let mut materials = self
+            .materials
+            .write()
+            .map_err(|_| CalculateMaterialError::StoreFailed)?;
+        let reordered = reorder_calculate_materials(materials.clone(), &material_ids)?;
+        *materials = reordered.clone();
+        Ok(reordered)
     }
 }
 
@@ -195,6 +216,7 @@ pub fn normalize_material(
         },
         name,
         active: input.active,
+        sort_order: None,
         density_g_cm3,
         variants,
     })
@@ -339,8 +361,82 @@ pub fn merge_default_calculate_materials(
             materials.push(override_material);
         }
     }
-    materials.sort_by_key(|item| normalize_key(&item.name));
+    sort_calculate_materials(&mut materials);
     materials
+}
+
+pub fn sort_calculate_materials(materials: &mut [CalculateMaterial]) {
+    materials.sort_by_cached_key(|item| {
+        (
+            !item.active,
+            item.sort_order.unwrap_or(u32::MAX),
+            normalize_key(&item.name),
+            item.id.clone(),
+        )
+    });
+}
+
+/// When visibility is turned off, append the material after all existing hidden
+/// rows. Persist the resulting ranks together with the visibility change.
+pub fn prepare_material_upsert(
+    current: &[CalculateMaterial],
+    material: &mut CalculateMaterial,
+) -> Result<Option<Vec<CalculateMaterial>>, CalculateMaterialError> {
+    ensure_unique_name(current, material)?;
+    let previous = current.iter().find(|item| item.id == material.id);
+    material.sort_order = previous.and_then(|item| item.sort_order);
+    if material.active || previous.is_some_and(|item| !item.active) {
+        return Ok(None);
+    }
+    let mut pinned: Vec<_> = current
+        .iter()
+        .filter(|item| item.id != material.id)
+        .cloned()
+        .collect();
+    pinned.push(material.clone());
+    for (index, item) in pinned.iter_mut().enumerate() {
+        item.sort_order =
+            Some(u32::try_from(index).map_err(|_| CalculateMaterialError::StoreFailed)?);
+    }
+    material.sort_order = pinned.last().and_then(|item| item.sort_order);
+    Ok(Some(pinned))
+}
+
+/// Only visible materials participate in sequencing. Hidden rows keep their
+/// relative order after the visible rows and cannot be submitted as drag targets.
+pub fn reorder_calculate_materials(
+    mut materials: Vec<CalculateMaterial>,
+    material_ids: &[String],
+) -> Result<Vec<CalculateMaterial>, CalculateMaterialError> {
+    let active_ids: std::collections::HashSet<_> = materials
+        .iter()
+        .filter(|material| material.active)
+        .map(|material| material.id.as_str())
+        .collect();
+    let positions: std::collections::HashMap<_, _> = material_ids
+        .iter()
+        .enumerate()
+        .map(|(index, id)| (id.as_str(), index))
+        .collect();
+    if material_ids.len() != active_ids.len()
+        || positions.len() != material_ids.len()
+        || positions.keys().any(|id| !active_ids.contains(id))
+    {
+        return Err(CalculateMaterialError::InvalidInput(
+            "Xomashyo ro'yxati o'zgargan. Ro'yxatni yangilab, qayta urinib ko'ring.".to_string(),
+        ));
+    }
+    materials.sort_by_key(|material| {
+        positions
+            .get(material.id.as_str())
+            .copied()
+            .unwrap_or(usize::MAX)
+    });
+    for (index, material) in materials.iter_mut().enumerate() {
+        material.sort_order =
+            Some(u32::try_from(index).map_err(|_| CalculateMaterialError::StoreFailed)?);
+    }
+    Ok(materials)
 }
 
 fn builtin(
@@ -353,6 +449,7 @@ fn builtin(
         id: id.to_string(),
         name: name.to_string(),
         active: true,
+        sort_order: None,
         density_g_cm3,
         variants,
     }

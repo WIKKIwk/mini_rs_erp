@@ -247,6 +247,8 @@ struct TelegramInlineQuery {
     from: TelegramUser,
     #[serde(default)]
     query: String,
+    #[serde(default)]
+    offset: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -263,7 +265,12 @@ include!("parts/part_04.rs");
 include!("parts/part_05.rs");
 include!("parts/part_06.rs");
 include!("parts/part_07.rs");
+include!("alerts.rs");
+include!("alerts_picker.rs");
 include!("inline_tests.rs");
 
 #[cfg(test)]
 mod user_profile_tests;
+
+#[cfg(test)]
+mod alerts_inline_tests;

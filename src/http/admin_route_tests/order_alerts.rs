@@ -12,8 +12,11 @@ async fn fixture() -> (
     String,
     Arc<RecordingChatStore>,
     Arc<FakeAdminStatePort>,
+    tempfile::TempDir,
 ) {
     let mut state = test_state();
+    let telegram_dir = tempfile::tempdir().unwrap();
+    state.telegram = crate::telegram::TelegramService::new(telegram_dir.path().join("telegram.json"));
     let admin_state = Arc::new(FakeAdminStatePort::new());
     state.admin = AdminService::new(&state.config)
         .with_read_port(Arc::new(FakeAdminReadPort))
@@ -49,7 +52,7 @@ async fn fixture() -> (
         json_body(saved).await
     );
     let worker = session_for(&state, PrincipalRole::Aparatchi, "alert-worker").await;
-    (state, worker, chat, admin_state)
+    (state, worker, chat, admin_state, telegram_dir)
 }
 
 fn command(kind: &str) -> String {
@@ -73,7 +76,7 @@ async fn add_qolipchi(state: &AppState, id: &str, phone: &str) {
 
 #[tokio::test]
 async fn order_alert_material_routes_by_role_and_reuses_retry_id() {
-    let (state, worker, chat, _) = fixture().await;
+    let (state, worker, chat, _, _telegram_dir) = fixture().await;
     for _ in 0..2 {
         let response = build_router(state.clone())
             .oneshot(request_with_body(
@@ -108,7 +111,7 @@ async fn order_alert_material_routes_by_role_and_reuses_retry_id() {
 
 #[tokio::test]
 async fn order_alert_qolip_skips_blocked_and_removed_recipients() {
-    let (state, worker, chat, admin_state) = fixture().await;
+    let (state, worker, chat, admin_state, _telegram_dir) = fixture().await;
     for (id, phone) in [
         ("active", "+998901111111"),
         ("blocked", "+998901111112"),
@@ -165,7 +168,7 @@ async fn order_alert_qolip_skips_blocked_and_removed_recipients() {
 
 #[tokio::test]
 async fn order_alert_partial_failure_can_retry_without_duplicate_messages() {
-    let (state, worker, chat, _) = fixture().await;
+    let (state, worker, chat, _, _telegram_dir) = fixture().await;
     add_qolipchi(&state, "a-first", "+998901111111").await;
     add_qolipchi(&state, "z-second", "+998901111112").await;
     *chat.fail_recipient.lock().await = Some("z-second".into());
@@ -201,7 +204,7 @@ async fn order_alert_partial_failure_can_retry_without_duplicate_messages() {
 
 #[tokio::test]
 async fn order_alert_reports_missing_recipients_and_rejects_invalid_targets() {
-    let (state, worker, chat, _) = fixture().await;
+    let (state, worker, chat, _, _telegram_dir) = fixture().await;
     let other = session_for(&state, PrincipalRole::Aparatchi, "other-worker").await;
     let admin = session(&state, PrincipalRole::Admin).await;
     for token in [other, admin] {
@@ -255,4 +258,194 @@ async fn order_alert_reports_missing_recipients_and_rejects_invalid_targets() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     assert!(chat.messages.lock().await.is_empty());
+}
+
+async fn configure_telegram_alerts(state: &AppState) {
+    use crate::telegram::alerts::models::AlertMember;
+    use crate::telegram::alerts::{AlertKind, AlertSenderUpdate};
+    use crate::telegram::{TelegramUserAccount, TelegramUserGroup};
+    let user: TelegramUserAccount = serde_json::from_value(serde_json::json!({
+        "telegram_user_id":"101", "username":"notifier", "display_name":"Notifier",
+        "role":"sales_manager", "invite_token":"", "joined_at_unix":1,
+        "delivery_mode":"user_profile", "user_profile_connected":true
+    }))
+    .unwrap();
+    state
+        .telegram
+        .store
+        .register_qr_user(user, "test-session".into())
+        .await
+        .unwrap();
+    state
+        .telegram
+        .update_alert_sender(AlertSenderUpdate {
+            sender_user_id: Some("101".into()),
+        })
+        .await
+        .unwrap();
+    state
+        .telegram
+        .store
+        .set_alert_group(
+            "101",
+            TelegramUserGroup {
+                chat_id: "111".into(),
+                title: "Printing".into(),
+                chat_type: "supergroup".into(),
+                username: String::new(),
+            },
+        )
+        .await
+        .unwrap();
+    let settings = state.telegram.store.alert_settings().await;
+    for (kind, id) in [(AlertKind::RawMaterial, 201), (AlertKind::Qolip, 301)] {
+        state
+            .telegram
+            .store
+            .toggle_alert_member(
+                &settings,
+                kind,
+                AlertMember {
+                    user_id: id,
+                    display_name: format!("Member {id}"),
+                    username: String::new(),
+                    access_hash: Some(id + 100),
+                },
+            )
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn order_alert_queues_telegram_by_role_with_dedup_and_internal_delivery() {
+    let (mut state, worker, chat, _, _telegram_dir) = fixture().await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("telegram.json");
+    state.telegram = crate::telegram::TelegramService::new(path.clone());
+    configure_telegram_alerts(&state).await;
+    for kind in ["raw_material", "raw_material", "qolip"] {
+        let response = build_router(state.clone())
+            .oneshot(request_with_body("POST", ENDPOINT, &worker, &command(kind)))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = json_body(response).await;
+        assert_eq!(body["telegram_queued"], true);
+        assert_eq!(
+            body["recipient_count"],
+            if kind == "raw_material" { 1 } else { 0 }
+        );
+    }
+    assert_eq!(chat.messages.lock().await.len(), 1);
+    let persisted: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let jobs = persisted["alert_jobs"].as_object().unwrap();
+    assert_eq!(jobs.len(), 2);
+    for job in jobs.values() {
+        assert_eq!(job["sender_user_id"], "101");
+        assert_eq!(job["group"]["chat_id"], "111");
+        assert_eq!(job["members"].as_array().unwrap().len(), 1);
+        let message = job["message"].as_str().unwrap();
+        let item = if message.contains("homashyo") { "homashyo" } else { "qolip" };
+        assert!(message.starts_with(&format!(
+            "№123 Alert order buyurtmasiga {item} biriktirib bering, "
+        )));
+        assert!(message.ends_with("'dagi Admin aka kutyapti"));
+        assert!(!message.contains('\n'));
+        assert_eq!(
+            job["members"][0]["user_id"],
+            if job["message"].as_str().unwrap().contains("homashyo") {
+                201
+            } else {
+                301
+            }
+        );
+    }
+}
+
+#[tokio::test]
+async fn telegram_alert_sender_endpoint_requires_admin_settings_permission() {
+    let (mut state, worker, _, _, _telegram_dir) = fixture().await;
+    let dir = tempfile::tempdir().unwrap();
+    state.telegram = crate::telegram::TelegramService::new(dir.path().join("telegram.json"));
+    configure_telegram_alerts(&state).await;
+    let endpoint = "/v1/mobile/admin/telegram/alert-settings";
+    let body = "{\"sender_user_id\":null}";
+    let denied = build_router(state.clone())
+        .oneshot(request_with_body("PUT", endpoint, &worker, body))
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    let admin = session(&state, PrincipalRole::Admin).await;
+    let invalid = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            endpoint,
+            &admin,
+            "{\"sender_user_id\":\"unknown\"}",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        state
+            .telegram
+            .store
+            .alert_settings()
+            .await
+            .sender_user_id
+            .as_deref(),
+        Some("101")
+    );
+    let saved = build_router(state.clone())
+        .oneshot(request_with_body("PUT", endpoint, &admin, body))
+        .await
+        .unwrap();
+    assert_eq!(saved.status(), StatusCode::OK);
+    assert!(json_body(saved).await["alerts"]["sender_user_id"].is_null());
+    assert!(state.telegram.store.alert_settings().await.group.is_none());
+}
+
+#[tokio::test]
+async fn telegram_alert_sender_invite_endpoint_returns_dedicated_role_link() {
+    let mut state = test_state();
+    let dir = tempfile::tempdir().unwrap();
+    state.telegram = crate::telegram::TelegramService::new(dir.path().join("telegram.json"));
+    state
+        .telegram
+        .update_bot_settings(crate::telegram::TelegramBotSettingsUpdate {
+            bot_username: "accord_bot".into(),
+            bot_token: "test".into(),
+        })
+        .await
+        .unwrap();
+    let admin = session(&state, PrincipalRole::Admin).await;
+    let response = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/telegram/invites",
+            &admin,
+            "{\"role\":\"alert_sender\"}",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    assert_eq!(body["role"], "alert_sender");
+    let link = body["invite_url"].as_str().unwrap();
+    assert!(link.starts_with("https://t.me/accord_bot?start="));
+    let user = state
+        .telegram
+        .register_bot_start(crate::telegram::TelegramStartRequest {
+            invite_token: link.split_once("start=").unwrap().1.into(),
+            telegram_user_id: "501".into(),
+            telegram_chat_id: "501".into(),
+            username: String::new(),
+            display_name: "Notifier".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(user.role, crate::telegram::TelegramAccountRole::AlertSender);
+    assert!(!user.user_profile_connected);
 }
