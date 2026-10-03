@@ -66,6 +66,10 @@ available to the legacy sequence protocol.
    backgrounding, disposal or fatal authorization/contract errors stop fallback.
    Worker HTTP views carry history and decisions atomically, avoiding two extra
    bootstrap requests and allowing notification recovery without WS.
+   ERP `c650ed7`, mobile `3b29f020`.
+8. State deltas are serialized once for both the 64 KiB limit and socket send.
+   Colour widget checks cover both buttons, duplicate same-frame clicks, a valid
+   control ACK with zero additional GETs, legacy controls and lost responses.
 
 ## Verification
 
@@ -84,6 +88,13 @@ Stage 7: conditional route test covers empty 304, commit wakeup, assignment
 changes at the same revision and invalid authentication. All 36 production-map
 handler unit tests passed. Flutter API/delta checks passed (27 cases), worker
 action/activity/recovery checks passed (31 cases). Focused analysis passed.
+Stage 8: six colour button widget cases passed. A synthetic 285-map test confirms
+unchanged maps/programs are absent from a queue/stage state patch: its full
+fixture snapshot is 217,835 bytes and that two-field patch is 207 bytes. This
+does not represent the complete real colour message or measured device latency.
+Final worker/colour/sequence/recovery widget run passed 41 cases; together with
+the 27 API/delta checks, 68 focused Flutter cases passed. `cargo check --locked`,
+all six Rust state-patch tests and focused Dart analysis passed.
 
 Bandwidth targets and real weak-network/tablet latency still require runtime
 measurement after these changes are deployed to an authorized test environment.

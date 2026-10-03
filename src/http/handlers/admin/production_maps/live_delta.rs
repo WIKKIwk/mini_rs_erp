@@ -226,14 +226,14 @@ fn view_patch(before: &LiveView, after: &LiveView) -> Map<String, Value> {
 
 async fn send(socket: &mut WebSocket, value: Value) -> bool {
     match serde_json::to_string(&value) {
-        Ok(json) => timeout(
-            Duration::from_secs(15),
-            socket.send(Message::Text(json.into())),
-        )
-        .await
-        .is_ok_and(|result| result.is_ok()),
+        Ok(json) => send_text(socket, json).await,
         Err(_) => false,
     }
+}
+
+async fn send_text(socket: &mut WebSocket, json: String) -> bool {
+    timeout(Duration::from_secs(15), socket.send(Message::Text(json.into())))
+        .await.is_ok_and(|result| result.is_ok())
 }
 
 pub(super) fn production_map_state_live_socket(
@@ -298,10 +298,11 @@ pub(super) fn production_map_state_live_socket(
                         "base_rev": baseline.revision, "rev": next.revision, "patch": patch,
                         "scope": next.scope,
                     });
-                    let too_large = serde_json::to_vec(&payload).map_or(true, |bytes| bytes.len() > MAX_STATE_DELTA_BYTES);
+                    let serialized = serde_json::to_string(&payload).ok();
+                    let too_large = serialized.as_ref().is_none_or(|json| json.len() > MAX_STATE_DELTA_BYTES);
                     if lagged || too_large || scope_changed {
                         if !send(&mut socket, json!({"ok": true, "type": "state_resync", "epoch": next.epoch, "rev": next.revision, "scope": next.scope})).await { break; }
-                    } else if !send(&mut socket, payload).await { break; }
+                    } else if !send_text(&mut socket, serialized.expect("bounded serialized patch")).await { break; }
                     baseline = next;
                 },
                 _ = heartbeat.tick() => {
@@ -330,6 +331,51 @@ pub(super) fn production_map_state_live_socket(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn colour_state_patch_does_not_repeat_285_unchanged_maps() {
+        use crate::core::production_map::{ProductionMapDefinition, ProductionMapSaved, compile_map};
+        let maps = (0..285).map(|id| {
+            let map: ProductionMapDefinition = serde_json::from_value(json!({
+                "id": format!("order-{id}"), "product_code": format!("PRODUCT-{id}"),
+                "title": "Production order",
+                "nodes": [{"id":"start", "kind":"start", "title":"Start"},
+                    {"id":"work", "kind":"task", "title":"Work"},
+                    {"id":"end", "kind":"end", "title":"End"}],
+                "edges": [{"from":"start", "to":"work"}, {"from":"work", "to":"end"}],
+            })).unwrap();
+            let program = compile_map(&map).unwrap();
+            ProductionMapSaved { map, program }
+        }).collect();
+        let snapshot = ProductionMapLiveSnapshot {
+            maps, sequences: BTreeMap::new(), sequence_versions: BTreeMap::new(),
+            sequence_revisions: BTreeMap::new(), visible_order_ids: BTreeMap::new(),
+            queue_states: BTreeMap::new(), stage_states: BTreeMap::new(),
+            queue_policies: vec![], queue_action_controls: BTreeMap::new(),
+            order_statuses: BTreeMap::new(), order_controls: BTreeMap::new(),
+            frozen_orders_by_apparatus: BTreeMap::new(),
+        };
+        let full_bytes = serde_json::to_vec(&snapshot).unwrap().len();
+        let view = |snapshot, revision| LiveView {
+            snapshot: Arc::new(snapshot), revision, epoch: "epoch".into(),
+            scope: "scope".into(), customers: BTreeMap::new(), completed: vec![],
+            requests: vec![], decisions: vec![],
+        };
+        let before = view(snapshot.clone(), 8);
+        let mut changed = snapshot;
+        changed.queue_states.insert("apparatus".into(),
+            BTreeMap::from([("order-0".into(), "print_preflight".into())]));
+        changed.stage_states.insert("order-0".into(),
+            BTreeMap::from([("print".into(), "print_preflight".into())]));
+        let after = view(changed, 9);
+        let patch = view_patch(&before, &after);
+        assert!(!patch.contains_key("maps"));
+        assert!(!patch.contains_key("map_order"));
+        let delta_bytes = serde_json::to_vec(&patch).unwrap().len();
+        assert!(delta_bytes < 1024);
+        assert!(full_bytes > delta_bytes * 100);
+        eprintln!("synthetic 285-map snapshot: {full_bytes} bytes; colour state patch: {delta_bytes} bytes");
+    }
 
     #[test]
     fn colour_history_reuse_rejects_coalesced_or_delayed_events() {
