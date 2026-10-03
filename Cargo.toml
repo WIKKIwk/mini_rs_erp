@@ -19,6 +19,7 @@ resolver = "3"
 
 [features]
 default = []
+mcp-readonly-prototype = []
 verification = ["dep:tower"]
 
 [dependencies]
@@ -79,3 +80,8 @@ required-features = ["verification"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
+
+[[example]]
+name = "mcp_readonly_fixture"
+path = "examples/mcp_readonly_fixture.rs"
+required-features = ["mcp-readonly-prototype"]
