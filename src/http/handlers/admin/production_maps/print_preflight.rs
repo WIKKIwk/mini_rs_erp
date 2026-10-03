@@ -12,6 +12,8 @@ struct PrintPreflightRequest {
     #[serde(default)]
     idempotency_key: String,
     action: String,
+    #[serde(default)]
+    include_control: bool,
 }
 
 pub async fn production_map_print_preflight(
@@ -89,8 +91,45 @@ pub async fn production_map_print_preflight(
         }
         _ => return Err(bad_request("print_preflight_action_invalid")),
     };
+    // The mutation has committed. A failed presentation read must not turn a
+    // successful write into an apparent failure (and invite a second write).
+    let control_state = if input.include_control {
+        match state
+            .production_maps
+            .live_snapshot_shared_with_revision()
+            .await
+        {
+            Ok((snapshot, revision)) => snapshot
+                .queue_action_controls
+                .get(apparatus.id.as_str())
+                .and_then(|controls| controls.get(order_id))
+                .map(|control| {
+                    serde_json::json!({
+                        "apparatus": apparatus.id.as_str(),
+                        "order_id": order_id,
+                        "rev": revision,
+                        "epoch": state.production_maps.snapshot_epoch(),
+                        "control": control,
+                        "queue_state": control.state.as_str(),
+                        "stage_states": snapshot.stage_states.get(order_id),
+                        "order_control": snapshot.order_controls.get(order_id)
+                            .map(|record| record.state.as_str()).unwrap_or("active"),
+                    })
+                }),
+            Err(error) => {
+                tracing::warn!(
+                    ?error,
+                    "print preflight committed; control refresh deferred"
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
     Ok(json_response(serde_json::json!({
         "ok": true,
         "hold": hold,
+        "control_state": control_state,
     })))
 }
