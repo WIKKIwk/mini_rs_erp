@@ -48,7 +48,8 @@ impl ProductionMapService {
         if code.len() > 128 { return Err(ProductionMapError::PaddonInvalidInput); }
         let code = (!code.is_empty()).then_some(code);
         self.store.set_active_rezka_paddon(apparatus.trim(), actor, code).await?;
-        self.notify_live();
+        // Actor-scoped selection is absent from production snapshots/controls.
+        // Its GET reads the store; output assignment re-reads it in its transaction.
         Ok(code.map(str::to_string))
     }
 

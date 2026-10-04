@@ -98,3 +98,30 @@ all six Rust state-patch tests and focused Dart analysis passed.
 
 Bandwidth targets and real weak-network/tablet latency still require runtime
 measurement after these changes are deployed to an authorized test environment.
+
+## Active cutting-pallet selection
+
+Changing the actor's active pallet no longer invalidates the shared production
+snapshot. That selection is absent from the snapshot and its action controls;
+the live subscribers only read production views/history. The mobile picker owns
+its selection GET polling and fresh GET after PUT, independently of those live
+events. Selection validation, storage, actor-role/reference/apparatus scope, and
+GET/PUT responses are unchanged. PostgreSQL output assignment still locks the
+selection scope and reads it inside the output transaction; that boundary was
+source-reviewed, not exercised against a PostgreSQL database in this check.
+
+Focused regression command (real library and Router, isolated memory domain
+stores; no legacy `--lib` suite):
+
+```bash
+CARGO_BUILD_JOBS=1 CARGO_PROFILE_TEST_DEBUG=0 CARGO_PROFILE_DEV_DEBUG=0 \
+  cargo test --locked --features verification --test active_paddon_snapshot_cache
+```
+
+All four tests passed. They cover set/change/repeat/clear, exact selection
+responses and storage, unchanged snapshot content/revision/shared Arc, scoped selection and
+rejected writes, plus a real map mutation that must still invalidate and rebuild.
+The pre-change implementation performed six canonical snapshot builds for the
+initial read plus five selection writes, despite identical snapshot content;
+the optimized invariant is one build. These are deterministic fixture counters,
+not measured production CPU or latency improvements.
