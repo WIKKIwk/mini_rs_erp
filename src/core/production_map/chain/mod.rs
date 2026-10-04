@@ -158,6 +158,8 @@ pub fn work_stage_for_station(
     station_id: &str,
     preferred_node_id: &str,
 ) -> Option<ChainStage> {
+    #[cfg(feature = "verification")]
+    super::verification_stage_work::count_resolution();
     let stages = linear_work_stages(map);
     let preferred_node_id = preferred_node_id.trim();
     if !preferred_node_id.is_empty() {

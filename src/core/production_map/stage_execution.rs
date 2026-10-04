@@ -239,12 +239,10 @@ pub(crate) fn stage_work_statuses(
         key_by_node.insert(stage.node_id.as_str(), key.clone());
         operations.entry(key).or_default().push(stage);
     }
-    let mut local_done = BTreeMap::new();
-    let mut statuses = BTreeMap::new();
-    let mut predecessors = BTreeMap::<String, BTreeSet<String>>::new();
-    for (key, candidates) in &operations {
-        let matches = |node: &str| candidates.iter().any(|s| s.node_id == node);
-        let mut latest = BTreeMap::<&str, &OrderRunSession>::new();
+    // Resolve immutable session topology once per call, retaining source order.
+    // The per-operation reduction below must still keep the first exact tie.
+    let mut resolved_sessions = Vec::new();
+    if !operations.is_empty() {
         for session in sessions.iter().filter(|s| s.order_id == map.id) {
             // Missing occurrence metadata is not evidence for either of two
             // repeated uses of the same physical machine.
@@ -259,7 +257,19 @@ pub(crate) fn stage_work_statuses(
             }
             let node =
                 chain::work_stage_for_station(map, &session.apparatus, &session.stage_node_id);
-            if node.as_ref().is_none_or(|s| !matches(&s.node_id)) {
+            if let Some(node) = node {
+                resolved_sessions.push((session, node.node_id));
+            }
+        }
+    }
+    let mut local_done = BTreeMap::new();
+    let mut statuses = BTreeMap::new();
+    let mut predecessors = BTreeMap::<String, BTreeSet<String>>::new();
+    for (key, candidates) in &operations {
+        let matches = |node: &str| candidates.iter().any(|s| s.node_id == node);
+        let mut latest = BTreeMap::<&str, &OrderRunSession>::new();
+        for &(session, ref node_id) in &resolved_sessions {
+            if !matches(node_id) {
                 continue;
             }
             let old = latest.entry(&session.apparatus).or_insert(session);

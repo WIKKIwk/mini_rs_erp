@@ -120,3 +120,7 @@ pub use types::*;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(feature = "verification")]
+#[doc(hidden)]
+pub mod verification_stage_work;
