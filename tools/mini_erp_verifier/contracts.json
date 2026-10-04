@@ -1,8 +1,8 @@
 {
   "protocol": 1,
   "route_snapshot": {
-    "count": 295,
-    "sha256": "43d12ca282da4503dc14a83e3a2c063f60bba84585df82cad6a9d3d17c99a4f6"
+    "count": 299,
+    "sha256": "1164b739c8c2f91c28134e7ea3cc8c101053f37e17f4fe69201d641af7ce202c"
   },
   "access_matrices": [
     {
@@ -222,6 +222,13 @@
 {"name":"raw_material_split_print_wrong_method","request":{"method":"GET","uri":"/v1/mobile/raw-material-split/print","role":"homashyo_rezkachi"},"expect":{"status":405}},
 {"name":"raw_material_split_has_no_legacy_rezka_permission","request":{"method":"GET","uri":"/v1/mobile/rezka/source?barcode=parent","role":"homashyo_rezkachi"},"expect":{"status":403}},
 {"name":"raw_material_split_me_role","request":{"method":"GET","uri":"/v1/mobile/me","role":"homashyo_rezkachi"},"expect":{"status":200,"body":{"role":"homashyo_rezkachi"}}},
+    {"name":"order_scan_bootstrap_requires_auth","request":{"method":"GET","uri":"/v1/mobile/admin/production-maps/order-scan-bootstrap?apparatus=apparatus:test:latency&order_id=zakaz-latency"},"expect":{"status":401,"body":{"error":"unauthorized"},"headers":{"cache-control":{"equals":"no-store"}}}},
+    {"name":"order_scan_bootstrap_requires_capability","request":{"method":"GET","uri":"/v1/mobile/admin/production-maps/order-scan-bootstrap?apparatus=apparatus:test:latency&order_id=zakaz-latency","role":"supplier"},"expect":{"status":403,"body":{"error":"forbidden"},"headers":{"cache-control":{"equals":"no-store"}}}},
+    {"name":"order_scan_bootstrap_get_only","request":{"method":"POST","uri":"/v1/mobile/admin/production-maps/order-scan-bootstrap?apparatus=apparatus:test:latency&order_id=zakaz-latency","role":"admin"},"expect":{"status":405,"body":{"error":"method not allowed"},"headers":{"cache-control":{"equals":"no-store"}}}},
+    {"name":"order_scan_bootstrap_requires_both_ids","request":{"method":"GET","uri":"/v1/mobile/admin/production-maps/order-scan-bootstrap?apparatus=apparatus:test:latency","role":"admin"},"expect":{"status":400,"body":{"error":"canonical apparatus and order_id are required"},"headers":{"cache-control":{"equals":"no-store"}}}},
+    {"name":"order_scan_bootstrap_rejects_display_identity","request":{"method":"GET","uri":"/v1/mobile/admin/production-maps/order-scan-bootstrap?apparatus=Bosma&order_id=zakaz-latency","role":"admin"},"expect":{"status":400,"body":{"error":"canonical apparatus and order_id are required"},"headers":{"cache-control":{"equals":"no-store"}}}},
+    {"name":"order_scan_bootstrap_rejects_training","request":{"method":"GET","uri":"/v1/mobile/admin/production-maps/order-scan-bootstrap?apparatus=apparatus:test:latency&order_id=training-1","role":"admin"},"expect":{"status":400,"body":{"error":"training_order_scan_bootstrap_unsupported"},"headers":{"cache-control":{"equals":"no-store"}}}},
+    {"name":"order_scan_bootstrap_missing_order_is_domain_error","request":{"method":"GET","uri":"/v1/mobile/admin/production-maps/order-scan-bootstrap?apparatus=apparatus:test:latency&order_id=zakaz-latency","role":"admin"},"expect":{"status":404,"body":{"error":"order_not_available"},"headers":{"cache-control":{"equals":"no-store"}}}},
     {
       "name": "worker_scoped_queue_snapshot_requires_auth",
       "request": {"method": "GET", "uri": "/v1/mobile/admin/production-maps/sequence?apparatus=apparatus:test:latency&order_id=zakaz-latency"},

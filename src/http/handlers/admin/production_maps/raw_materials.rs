@@ -76,6 +76,16 @@ pub struct RawMaterialStartRequirementsQuery {
     material_barcodes: String,
 }
 
+impl RawMaterialStartRequirementsQuery {
+    pub(super) fn for_bootstrap(order_id: &str, apparatus: &str, material_barcodes: &str) -> Self {
+        Self {
+            order_id: order_id.to_string(),
+            apparatus: apparatus.to_string(),
+            material_barcodes: material_barcodes.to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Default, serde::Deserialize)]
 pub struct RawMaterialAssignmentsQuery {
     #[serde(default)]

@@ -112,6 +112,10 @@ fn production_routes() -> Router<AppState> {
             any(admin::production_map_apparatus_transfer),
         )
         .route(
+            "/v1/mobile/admin/production-maps/order-scan-bootstrap",
+            any(admin::production_map_order_scan_bootstrap),
+        )
+        .route(
             "/v1/mobile/admin/production-maps/sequence",
             any(admin::production_map_sequence),
         )

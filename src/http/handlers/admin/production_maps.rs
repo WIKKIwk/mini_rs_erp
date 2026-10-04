@@ -33,6 +33,7 @@ mod helpers;
 mod move_run;
 mod opening_wip;
 mod order_control;
+mod order_scan_bootstrap;
 mod order_alerts;
 pub use order_alerts::production_map_order_alert;
 mod order_image;
@@ -69,6 +70,7 @@ pub use self::opening_wip::{
     production_map_opening_wip_print, production_map_opening_wip_qr_report,
 };
 pub use self::order_control::production_map_order_control;
+pub use self::order_scan_bootstrap::production_map_order_scan_bootstrap;
 pub use self::order_image::production_map_order_image_view;
 pub use self::paddons::{
     production_map_paddon_delete,

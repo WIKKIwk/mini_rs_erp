@@ -25,7 +25,7 @@ pub use customers::{
 };
 pub use items::{item_detail, item_uoms};
 pub use production_maps::{
-    production_map_order_alert,
+    production_map_order_alert, production_map_order_scan_bootstrap,
     production_map_paddon_delete,
     material_link_requests,
     werka_paddon_preview, werka_paddon_receive, werka_qr_preview, werka_wip_receive,
