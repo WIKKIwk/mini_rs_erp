@@ -485,6 +485,7 @@ impl ProductionMapService {
             &order_controls,
             &canonical_apparatuses,
             only_apparatus,
+            None,
         )
         .await
     }
@@ -500,6 +501,7 @@ impl ProductionMapService {
         canonical_apparatuses: &[
             std::sync::Arc<crate::core::apparatus_standard::RuntimeApparatusConfiguration>
         ],
+        active_print_preflight_holds: Vec<PrintPreflightHold>,
     ) -> Result<
         BTreeMap<String, BTreeMap<String, ApparatusQueueOrderActionControl>>,
         ProductionMapError,
@@ -511,10 +513,13 @@ impl ProductionMapService {
             order_controls,
             canonical_apparatuses,
             None,
+            Some(active_print_preflight_holds),
         )
         .await
     }
 
+    // Keep rebuild-local holds separate from the independently scoped inputs.
+    #[allow(clippy::too_many_arguments)]
     async fn queue_action_controls_for_snapshot_scope(
         &self,
         maps: &[ProductionMapDefinition],
@@ -525,6 +530,7 @@ impl ProductionMapService {
             crate::core::apparatus_standard::RuntimeApparatusConfiguration,
         >],
         only_apparatus: Option<&str>,
+        snapshot_print_preflight_holds: Option<Vec<PrintPreflightHold>>,
     ) -> Result<
         BTreeMap<String, BTreeMap<String, ApparatusQueueOrderActionControl>>,
         ProductionMapError,
@@ -570,7 +576,14 @@ impl ProductionMapService {
             self.store.order_run_sessions_for_orders(&order_ids),
             self.store.progress_batches_for_orders(&order_ids),
             self.store.opening_wip_records(opening_wip_query),
-            self.store.active_print_preflight_holds(),
+            async {
+                // Reuse only the holds loaded by this canonical snapshot rebuild.
+                // Standalone/scoped controls retain a fresh, concurrent store read.
+                match snapshot_print_preflight_holds {
+                    Some(holds) => Ok(holds),
+                    None => self.store.active_print_preflight_holds().await,
+                }
+            },
         );
         let material_assignments = material_assignments?;
         let active_sessions_by_order = active_sessions_by_order?;

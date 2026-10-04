@@ -448,6 +448,7 @@ impl ProductionMapService {
                 &queue_states,
                 &order_controls,
                 &canonical_apparatuses,
+                holds,
             ),
             self.store.queue_action_logs_for_orders(&order_ids),
             self.store.production_order_lifecycles(&order_ids),
