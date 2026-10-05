@@ -229,6 +229,7 @@ fn positive_u64_from_raw(key: &'static str, raw: &str) -> Result<u64, AppError> 
 }
 
 fn validate_runtime_env() -> Result<(), AppError> {
+    worker_show_all_apparatus_tabs_from_env()?;
     for key in [
         "MOBILE_API_SESSION_STORE_BACKEND",
         "MOBILE_API_PROFILE_STORE_BACKEND",
@@ -275,6 +276,16 @@ fn validate_runtime_env() -> Result<(), AppError> {
     }
     validate_positive_usize("MOBILE_API_LISTENER_COUNT")?;
     Ok(())
+}
+
+pub(crate) fn worker_show_all_apparatus_tabs_from_env() -> Result<bool, AppError> {
+    const KEY: &str = "MOBILE_API_WORKER_SHOW_ALL_APPARATUS_TABS";
+    match read_env(KEY)? {
+        None => Ok(false),
+        Some(value) if value == "1" || value.eq_ignore_ascii_case("true") => Ok(true),
+        Some(value) if value == "0" || value.eq_ignore_ascii_case("false") => Ok(false),
+        Some(_) => Err(invalid_config(KEY, "must be true, false, 1 or 0")),
+    }
 }
 
 fn validate_backend(key: &'static str) -> Result<(), AppError> {

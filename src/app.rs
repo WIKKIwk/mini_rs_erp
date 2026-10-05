@@ -72,6 +72,7 @@ use self::order_sheets::*;
 pub struct AppState {
     #[cfg_attr(not(test), allow(dead_code))]
     pub config: Arc<AppConfig>,
+    pub worker_show_all_apparatus_tabs: bool,
     pub admin: AdminService,
     pub auth: AuthService,
     pub customer: CustomerService,
@@ -317,6 +318,9 @@ impl AppState {
             );
 
         Self {
+            worker_show_all_apparatus_tabs:
+                crate::config::worker_show_all_apparatus_tabs_from_env()
+                    .expect("validated worker apparatus tab configuration"),
             config: Arc::new(config),
             admin,
             auth,

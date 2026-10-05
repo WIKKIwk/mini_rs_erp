@@ -44,6 +44,7 @@ pub(super) async fn scope_token(
     }
     let mut digest = Sha256::new();
     digest.update(format!("{:?}\0{}\0", principal.role, principal.ref_));
+    digest.update([u8::from(state.worker_show_all_apparatus_tabs)]);
     for apparatus in &assigned {
         digest.update(apparatus.as_bytes());
         digest.update([0]);
@@ -137,6 +138,9 @@ pub(super) async fn project_for_principal(
     history_order_ids: impl IntoIterator<Item = String>,
 ) -> Result<(Arc<ProductionMapLiveSnapshot>, String), AdminError> {
     let (assigned, scope) = scope_token(state, principal).await?;
+    if state.worker_show_all_apparatus_tabs {
+        return Ok((snapshot, scope));
+    }
     Ok((
         Arc::new(project(&snapshot, &assigned, history_order_ids)),
         scope,

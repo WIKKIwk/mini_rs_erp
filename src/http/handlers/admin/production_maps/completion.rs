@@ -298,6 +298,7 @@ async fn send_production_map_live_snapshot(
                 // resync instead of sitting on stale state.
                 "rev": revision,
                 "epoch": service.snapshot_epoch(),
+                "worker_show_all_apparatus_tabs": state.worker_show_all_apparatus_tabs,
                 "maps": &snapshot.maps,
                 "sequences": &snapshot.sequences,
                 "sequence_versions": &snapshot.sequence_versions,
