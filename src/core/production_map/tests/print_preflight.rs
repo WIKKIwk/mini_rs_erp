@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use crate::core::production_map::*;
 
-use super::fixtures::{canonical_apparatus_stage_map, service_with_default_apparatus};
+use super::fixtures::{
+    canonical_apparatus_stage_map, canonical_two_stage_map, service_with_default_apparatus,
+};
 
 const PRINT_ID: &str = "apparatus:default:bosma_7";
 
@@ -12,6 +14,148 @@ fn actor() -> QueueActionActor {
         ref_: "print-preflight-test".to_string(),
         display_name: "Print preflight test".to_string(),
     }
+}
+
+#[tokio::test]
+async fn passed_colour_freeze_keeps_detail_controls_without_starting_production() {
+    const LAMINATION_ID: &str = "apparatus:default:asset-007";
+    let store = Arc::new(MemoryProductionMapStore::new());
+    let service = service_with_default_apparatus(store.clone()).await;
+    let order_id = "zakaz-passed-colour-freeze";
+    let next_id = "zakaz-after-passed-colour-freeze";
+    for id in [order_id, next_id] {
+        service
+            .upsert_map(canonical_two_stage_map(
+                id,
+                PRINT_ID,
+                "7 ta rangli bosma aparat",
+                LAMINATION_ID,
+                "Laminatsiya 1",
+            ))
+            .await
+            .unwrap();
+    }
+    for apparatus in [PRINT_ID, LAMINATION_ID] {
+        service
+            .set_apparatus_sequence(apparatus, vec![order_id.into(), next_id.into()])
+            .await
+            .unwrap();
+    }
+    let hold = service
+        .begin_print_preflight(
+            PRINT_ID,
+            order_id,
+            "colour-freeze",
+            "colour-freeze",
+            actor(),
+        )
+        .await
+        .unwrap();
+    service
+        .advance_print_preflight(PRINT_ID, order_id, &hold.hold_id, "passed", actor())
+        .await
+        .unwrap();
+    let admin = QueueActionActor {
+        role: "admin".into(),
+        ref_: "admin".into(),
+        display_name: "Admin".into(),
+    };
+    let frozen = service
+        .request_order_freeze(order_id, admin.clone())
+        .await
+        .unwrap();
+    assert_eq!(frozen.state, OrderControlState::Frozen);
+    assert!(
+        frozen
+            .freeze_request
+            .as_ref()
+            .unwrap()
+            .target_session_id
+            .is_empty()
+    );
+    assert!(
+        store
+            .order_run_sessions_for_order(order_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        store
+            .progress_batches_for_order(order_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    let snapshot = service.live_snapshot().await.unwrap();
+    assert_eq!(snapshot.stage_states[order_id]["apparatus"], "frozen");
+    assert_eq!(snapshot.stage_states[order_id]["second"], "pending");
+    for apparatus in [PRINT_ID, LAMINATION_ID] {
+        assert_eq!(snapshot.sequences[apparatus], vec![next_id.to_string()]);
+        assert!(snapshot.visible_order_ids[apparatus].contains(&order_id.to_string()));
+        let control = snapshot.queue_action_controls[apparatus]
+            .get(order_id)
+            .expect("frozen detail must retain its authoritative control");
+        assert_eq!(control.state, queue_state::ApparatusQueueOrderState::Frozen);
+        assert_eq!(snapshot.queue_states[apparatus][order_id], "frozen");
+        assert_eq!(
+            control.interaction.mode,
+            ApparatusQueueInteractionMode::Frozen
+        );
+        assert_eq!(control.interaction.blocking_reason_code, "order_frozen");
+        assert!(control.allowed_actions.is_empty());
+        assert!(!control.interaction.material_scan_required);
+        assert!(!control.interaction.material_intake_allowed);
+        assert_eq!(
+            control.interaction.opening_wip_mode,
+            ApparatusQueuePreviousWipMode::NotRequired
+        );
+        assert!(!control.print_preflight_allowed);
+        assert!(control.print_preflight.is_none());
+        let scoped = service
+            .queue_action_controls_for_apparatus(apparatus)
+            .await
+            .unwrap();
+        assert_eq!(&scoped[apparatus][order_id], control);
+    }
+    assert!(snapshot.queue_action_controls[PRINT_ID][next_id].print_preflight_allowed);
+    for apparatus in [PRINT_ID, LAMINATION_ID] {
+        assert!(matches!(
+            service
+                .prepare_apparatus_queue_action_with_progress(
+                    apparatus,
+                    order_id,
+                    queue_state::ApparatusQueueAction::Start,
+                    &[apparatus.to_string()],
+                    actor(),
+                    QueueProgressInput::default(),
+                )
+                .await,
+            Err(ProductionMapError::OrderFrozen)
+        ));
+    }
+
+    service.unfreeze_order(order_id, admin).await.unwrap();
+    let unfrozen = service.live_snapshot().await.unwrap();
+    assert_eq!(
+        unfrozen.sequences[PRINT_ID],
+        vec![next_id.to_string(), order_id.to_string()]
+    );
+    assert_eq!(unfrozen.queue_states[PRINT_ID][order_id], "pending");
+    assert_eq!(
+        unfrozen.queue_action_controls[PRINT_ID][order_id]
+            .interaction
+            .mode,
+        ApparatusQueueInteractionMode::FreshStartBlocked
+    );
+    assert!(
+        store
+            .order_run_sessions_for_order(order_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[tokio::test]

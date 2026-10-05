@@ -132,12 +132,11 @@ async fn worker_progress_qr_checks_global_freeze_before_downstream_route() {
         OrderControlState::Frozen
     );
     let snapshot = state.production_maps.live_snapshot().await.unwrap();
-    assert!(
-        snapshot
-            .queue_action_controls
-            .get(LAMINATION)
-            .is_none_or(|orders| !orders.contains_key(ORDER))
-    );
+    let control = &snapshot.queue_action_controls[LAMINATION][ORDER];
+    assert_eq!(control.state.as_str(), "frozen");
+    assert_eq!(control.interaction.blocking_reason_code, "order_frozen");
+    assert!(control.allowed_actions.is_empty());
+    assert_eq!(snapshot.stage_states[ORDER]["lamination"], "pending");
     // Read-only history lookup still works while the order is frozen.
     let response = router
         .clone()

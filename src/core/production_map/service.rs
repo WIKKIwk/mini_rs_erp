@@ -9,6 +9,7 @@ pub use super::prepared_queue_action::PreparedApparatusQueueAction;
 pub(super) use super::prepared_queue_action::QueueProgressRecords;
 use super::progress::effective_apparatus_queue_policy_record;
 use super::service_maps::compile_saved_maps_reusing_programs;
+use super::store_port::ApparatusQueueStateMap;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, OwnedMutexGuard, RwLock, broadcast};
 
@@ -57,6 +58,7 @@ fn stage_states_for_snapshot(
     maps: &[ProductionMapDefinition],
     controls: &BTreeMap<String, BTreeMap<String, ApparatusQueueOrderActionControl>>,
     logs_by_order: &BTreeMap<String, Vec<ProductionOrderLogEntry>>,
+    stored_queue_states: &ApparatusQueueStateMap,
 ) -> BTreeMap<String, BTreeMap<String, String>> {
     let mut result = BTreeMap::new();
     // queue_action_controls_for_snapshot already keys controls by canonical apparatus ID.
@@ -106,10 +108,22 @@ fn stage_states_for_snapshot(
             let Some(control) = control else {
                 continue;
             };
+            // Global freeze blocks every apparatus's controls without claiming
+            // that untouched downstream stages have started production.
+            let stage_state = if control.state == queue_state::ApparatusQueueOrderState::Frozen {
+                stored_queue_states
+                    .get(apparatus)
+                    .and_then(|orders| orders.get(order_id))
+                    .and_then(|state| queue_state::ApparatusQueueOrderState::parse(state))
+                    .unwrap_or(queue_state::ApparatusQueueOrderState::Pending)
+                    .as_str()
+            } else {
+                control.state.as_str()
+            };
             if occurrences.len() == 1 {
                 states.insert(
                     occurrences[0].node_id.trim().to_string(),
-                    control.state.as_str().to_string(),
+                    stage_state.to_string(),
                 );
                 continue;
             }
@@ -126,7 +140,7 @@ fn stage_states_for_snapshot(
                         .entry(stage_node_id)
                         .or_insert_with(|| "completed".to_string());
                 } else if index == current_index {
-                    states.insert(stage_node_id, control.state.as_str().to_string());
+                    states.insert(stage_node_id, stage_state.to_string());
                 } else {
                     states
                         .entry(stage_node_id)
@@ -454,14 +468,18 @@ impl ProductionMapService {
             self.store.production_order_lifecycles(&order_ids),
         )?;
 
+        let stage_states = stage_states_for_snapshot(
+            &raw_maps,
+            &queue_action_controls,
+            &queue_logs_by_order,
+            &queue_states,
+        );
         for (apparatus, controls) in &queue_action_controls {
             let states = queue_states.entry(apparatus.clone()).or_default();
             for (order_id, control) in controls {
                 states.insert(order_id.clone(), control.state.as_str().to_string());
             }
         }
-        let stage_states =
-            stage_states_for_snapshot(&raw_maps, &queue_action_controls, &queue_logs_by_order);
         let order_statuses =
             Self::order_status_details_from_lifecycles(&order_ids, &lifecycles, &order_controls)?;
         for (apparatus, orders) in &mut visible_order_ids {

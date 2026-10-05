@@ -1,6 +1,114 @@
 use super::*;
 
 #[tokio::test]
+async fn sequence_keeps_frozen_colour_detail_controls_in_full_and_scoped_reads() {
+    use crate::core::production_map::{ProductionMapDefinition, QueueActionActor};
+
+    const PRINT: &str = "apparatus:default:bosma_7";
+    const LAMINATION: &str = "apparatus:default:asset-007";
+    const ORDER: &str = "zakaz-frozen-colour-detail";
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+    let map: ProductionMapDefinition = serde_json::from_value(serde_json::json!({
+        "id": ORDER, "product_code": "COLOUR", "title": "Frozen colour detail",
+        "nodes": [
+            {"id":"start", "kind":"start", "title":"Start"},
+            {"id":"print", "kind":"apparatus", "title":"Bosma", "apparatus_id":PRINT},
+            {"id":"lamination", "kind":"apparatus", "title":"Laminatsiya", "apparatus_id":LAMINATION},
+            {"id":"end", "kind":"end", "title":"End"}
+        ],
+        "edges": [
+            {"from":"start", "to":"print"},
+            {"from":"print", "to":"lamination"},
+            {"from":"lamination", "to":"end"}
+        ]
+    }))
+    .unwrap();
+    state.production_maps.upsert_map(map).await.unwrap();
+    let actor = QueueActionActor {
+        role: "admin".into(),
+        ref_: "admin".into(),
+        display_name: "Admin".into(),
+    };
+    let hold = state
+        .production_maps
+        .begin_print_preflight(
+            PRINT,
+            ORDER,
+            "colour-detail",
+            "colour-detail",
+            actor.clone(),
+        )
+        .await
+        .unwrap();
+    state
+        .production_maps
+        .advance_print_preflight(PRINT, ORDER, &hold.hold_id, "passed", actor.clone())
+        .await
+        .unwrap();
+    state
+        .production_maps
+        .request_order_freeze(ORDER, actor)
+        .await
+        .unwrap();
+    let stored_states = state
+        .production_maps
+        .apparatus_queue_states()
+        .await
+        .unwrap();
+
+    let base = "/v1/mobile/admin/production-maps/sequence";
+    let router = build_router(state.clone());
+    for apparatus in [PRINT, LAMINATION] {
+        for path in [
+            base.to_string(),
+            format!(
+                "{base}?apparatus={}&order_id={ORDER}",
+                urlencoding::encode(apparatus)
+            ),
+        ] {
+            let response = router
+                .clone()
+                .oneshot(request("GET", &path, &token))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = json_body(response).await;
+            let control = &body["queue_action_controls"][apparatus][ORDER];
+            assert!(control.is_object(), "frozen detail control missing: {body}");
+            assert_eq!(control["state"], "frozen");
+            assert_eq!(control["interaction"]["mode"], "frozen");
+            assert_eq!(control["allowed_actions"], serde_json::json!([]));
+            assert_eq!(control["interaction"]["material_scan_required"], false);
+            assert!(control["previous_stage_ready"].is_boolean());
+            assert!(control["complete_requires_full_report"].is_boolean());
+            assert_eq!(body["order_controls"][ORDER]["state"], "frozen");
+            assert_eq!(body["queue_states"][apparatus][ORDER], "frozen");
+            assert_eq!(body["sequences"][apparatus], serde_json::json!([]));
+            assert_eq!(body["stage_states"][ORDER]["print"], "frozen");
+            assert_eq!(body["stage_states"][ORDER]["lamination"], "pending");
+        }
+    }
+    assert_eq!(
+        state
+            .production_maps
+            .apparatus_queue_states()
+            .await
+            .unwrap(),
+        stored_states,
+        "reading detail contracts must not persist projected downstream freeze states"
+    );
+    assert!(
+        state
+            .production_maps
+            .order_run_sessions_for_order(ORDER)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn live_sockets_answer_client_ping_while_queue_is_quiet() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let state = test_state();

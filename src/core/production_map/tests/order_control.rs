@@ -720,12 +720,16 @@ async fn worker_issue_freezes_bosma_without_completion_metrics_and_unfreeze_rest
             .map(|order| order.issue_note.as_str()),
         Some(issue_note)
     );
-    assert!(
-        !frozen_snapshot
-            .queue_action_controls
-            .get(apparatus)
-            .is_some_and(|controls| controls.contains_key(order_id))
+    let frozen_control = &frozen_snapshot.queue_action_controls[apparatus][order_id];
+    assert_eq!(
+        frozen_control.state,
+        queue_state::ApparatusQueueOrderState::Frozen
     );
+    assert_eq!(
+        frozen_control.interaction.mode,
+        ApparatusQueueInteractionMode::Frozen
+    );
+    assert!(frozen_control.allowed_actions.is_empty());
 
     let logs = service
         .queue_action_logs_for_order(order_id)

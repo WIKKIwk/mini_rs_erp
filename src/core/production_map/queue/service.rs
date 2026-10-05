@@ -712,8 +712,12 @@ impl ProductionMapService {
                 visible_order_ids,
                 &frozen_order_ids,
             );
-            let mut order_inputs = Vec::with_capacity(sequence.len());
-            for order_id in &sequence {
+            // Frozen orders leave the executable sequence, but their visible
+            // detail rows still need an authoritative, actionless contract.
+            let control_order_ids =
+                queue_state::effective_apparatus_sequence(stored_sequence, visible_order_ids);
+            let mut order_inputs = Vec::with_capacity(control_order_ids.len());
+            for order_id in &control_order_ids {
                 let Some(order_map) = maps_by_order_id.get(order_id.trim()).copied() else {
                     continue;
                 };
@@ -819,14 +823,18 @@ impl ProductionMapService {
                 let stage_work = super::super::stage_execution::work_control(order_map, &storage_key, &stage_node_id,
                     stage_work_by_order.get(order_id).map(Vec::as_slice).unwrap_or_default(),
                     active_sessions_by_order.get(order_id).map(Vec::as_slice).unwrap_or_default());
-                let state = effective_states
-                    .get(order_id.trim())
-                    .copied()
-                    .unwrap_or(queue_state::ApparatusQueueOrderState::Pending);
                 let order_control = order_controls.get(order_id.trim());
                 let control = order_control
                     .map(|control| control.state)
                     .unwrap_or(OrderControlState::Active);
+                let state = if control == OrderControlState::Frozen {
+                    queue_state::ApparatusQueueOrderState::Frozen
+                } else {
+                    effective_states
+                        .get(order_id.trim())
+                        .copied()
+                        .unwrap_or(queue_state::ApparatusQueueOrderState::Pending)
+                };
                 let previous_stage = chain::previous_work_stage_for_node(order_map, &stage_node_id)
                     .and_then(|stage| stage.apparatus_id);
                 let previous_stage_not_configured = apparatus::requires_previous_stage(canonical)
@@ -896,7 +904,11 @@ impl ProductionMapService {
                         queue_state::ApparatusQueueOrderState::InProgress
                             | queue_state::ApparatusQueueOrderState::Paused
                     ),
-                    opening_wip_mode,
+                    opening_wip_mode: if control == OrderControlState::Frozen {
+                        ApparatusQueuePreviousWipMode::NotRequired
+                    } else {
+                        opening_wip_mode
+                    },
                     ..ApparatusQueueWorkerInteraction::default()
                 };
                 let pending_actionable =
