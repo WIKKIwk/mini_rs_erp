@@ -486,6 +486,8 @@ impl ProductionMapService {
             &canonical_apparatuses,
             only_apparatus,
             None,
+            None,
+            None,
         )
         .await
     }
@@ -514,11 +516,30 @@ impl ProductionMapService {
             canonical_apparatuses,
             None,
             Some(active_print_preflight_holds),
+            None,
+            None,
         )
         .await
     }
 
     // Keep rebuild-local holds separate from the independently scoped inputs.
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::core::production_map) async fn queue_action_controls_for_snapshot_orders(
+        &self,
+        maps: &[ProductionMapDefinition],
+        sequences: &BTreeMap<String, Vec<String>>,
+        all_states: &ApparatusQueueStateMap,
+        order_controls: &OrderControlMap,
+        canonical_apparatuses: &[std::sync::Arc<crate::core::apparatus_standard::RuntimeApparatusConfiguration>],
+        holds: Vec<PrintPreflightHold>,
+        order_ids: &BTreeSet<String>,
+        apparatus_ids: &BTreeSet<String>,
+    ) -> Result<BTreeMap<String, BTreeMap<String, ApparatusQueueOrderActionControl>>, ProductionMapError> {
+        self.queue_action_controls_for_snapshot_scope(maps, sequences, all_states,
+            order_controls, canonical_apparatuses, None, Some(holds),
+            Some(order_ids), Some(apparatus_ids)).await
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn queue_action_controls_for_snapshot_scope(
         &self,
@@ -531,6 +552,8 @@ impl ProductionMapService {
         >],
         only_apparatus: Option<&str>,
         snapshot_print_preflight_holds: Option<Vec<PrintPreflightHold>>,
+        output_order_ids: Option<&BTreeSet<String>>,
+        output_apparatus_ids: Option<&BTreeSet<String>>,
     ) -> Result<
         BTreeMap<String, BTreeMap<String, ApparatusQueueOrderActionControl>>,
         ProductionMapError,
@@ -572,10 +595,18 @@ impl ProductionMapService {
             opening_wip_records,
             active_print_preflight_holds,
         ) = tokio::join!(
-            self.store.raw_material_assignments(),
+            async {
+                if output_order_ids.is_some() {
+                    self.store.raw_material_assignments_for_orders(&order_ids).await
+                } else { self.store.raw_material_assignments().await }
+            },
             self.store.order_run_sessions_for_orders(&order_ids),
             self.store.progress_batches_for_orders(&order_ids),
-            self.store.opening_wip_records(opening_wip_query),
+            async {
+                if output_order_ids.is_some() {
+                    self.store.opening_wip_records_for_orders(&order_ids).await
+                } else { self.store.opening_wip_records(opening_wip_query).await }
+            },
             async {
                 // Reuse only the holds loaded by this canonical snapshot rebuild.
                 // Standalone/scoped controls retain a fresh, concurrent store read.
@@ -595,13 +626,27 @@ impl ProductionMapService {
             .filter(|hold| hold.is_live_at(now))
             .map(|hold| (hold.apparatus.trim().to_string(), hold))
             .collect::<HashMap<_, _>>();
+        let mut opening_wip_by_order = HashMap::<String, Vec<OpeningWipRecord>>::new();
+        for record in opening_wip_records {
+            if scoped_order_ids
+                .as_ref()
+                .is_some_and(|orders| !orders.contains(record.intake.order_id.trim()))
+            {
+                continue;
+            }
+            opening_wip_by_order
+                .entry(record.intake.order_id.trim().to_string())
+                .or_default()
+                .push(record);
+        }
         let stage_work_by_order = maps.iter().filter(|map| scoped_order_ids.as_ref()
-            .is_none_or(|orders| orders.contains(map.id.trim()))).map(|map| {
+            .is_none_or(|orders| orders.contains(map.id.trim()))
+            && output_order_ids.is_none_or(|orders| orders.contains(map.id.trim()))).map(|map| {
             let sessions = active_sessions_by_order.get(&map.id).map(Vec::as_slice).unwrap_or_default();
             let batches = progress_batches_by_order.get(&map.id).map(Vec::as_slice).unwrap_or_default();
-            let opening = opening_wip_records.iter().filter(|r| r.intake.order_id == map.id).cloned().collect::<Vec<_>>();
+            let opening = opening_wip_by_order.get(&map.id).map(Vec::as_slice).unwrap_or_default();
             (map.id.clone(), super::super::stage_execution::stage_work_statuses(map, sessions,
-                &super::super::stage_execution::work_inputs(map, batches, &opening), all_states, &[]))
+                &super::super::stage_execution::work_inputs(map, batches, opening), all_states, &[]))
         }).collect::<BTreeMap<_, _>>();
         let mut active_sessions_by_order_apparatus =
             HashMap::<(&str, &str), &OrderRunSession>::new();
@@ -630,19 +675,6 @@ impl ProductionMapService {
                 .entry(assignment.order_id.trim().to_string())
                 .or_default()
                 .push(assignment);
-        }
-        let mut opening_wip_by_order = HashMap::<String, Vec<OpeningWipRecord>>::new();
-        for record in opening_wip_records {
-            if scoped_order_ids
-                .as_ref()
-                .is_some_and(|orders| !orders.contains(record.intake.order_id.trim()))
-            {
-                continue;
-            }
-            opening_wip_by_order
-                .entry(record.intake.order_id.trim().to_string())
-                .or_default()
-                .push(record);
         }
         let mut queue_orders_by_apparatus = queue_order_ids_by_apparatus(maps);
         apparatus::filter_unselected_print_orders(
@@ -685,6 +717,9 @@ impl ProductionMapService {
         for apparatus in &known_keys {
             let storage_key = apparatus.trim().to_string();
             if only_apparatus.is_some_and(|expected| expected != storage_key) {
+                continue;
+            }
+            if output_apparatus_ids.is_some_and(|ids| !ids.contains(&storage_key)) {
                 continue;
             }
             // Snapshot reads must stay fail-soft: one map referencing a deleted or
@@ -779,6 +814,9 @@ impl ProductionMapService {
 
             for input in &order_inputs {
                 let order_id = input.order_id;
+                if output_order_ids.is_some_and(|orders| !orders.contains(order_id)) {
+                    continue;
+                }
                 let order_map = input.order_map;
                 let batches = input.batches;
                 let active_session = input.active_session;

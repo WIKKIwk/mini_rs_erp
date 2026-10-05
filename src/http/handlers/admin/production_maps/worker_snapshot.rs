@@ -131,20 +131,31 @@ pub(super) fn project(
     }
 }
 
-pub(super) async fn project_for_principal(
+pub(super) async fn read_for_principal(
     state: &AppState,
     principal: &Principal,
-    snapshot: Arc<ProductionMapLiveSnapshot>,
     history_order_ids: impl IntoIterator<Item = String>,
-) -> Result<(Arc<ProductionMapLiveSnapshot>, String), AdminError> {
-    let (assigned, scope) = scope_token(state, principal).await?;
-    if state.worker_show_all_apparatus_tabs {
-        return Ok((snapshot, scope));
+) -> Result<(Arc<ProductionMapLiveSnapshot>, u64, String), AdminError> {
+    let history = history_order_ids.into_iter().collect::<Vec<_>>();
+    loop {
+        let (assigned, scope) = scope_token(state, principal).await?;
+        let (snapshot, revision) = if state.worker_show_all_apparatus_tabs {
+            state.production_maps.live_snapshot_shared_with_revision().await
+        } else {
+            state.production_maps.worker_snapshot_shared_with_revision(&assigned, &history).await
+        }.map_err(production_map_error)?;
+        let snapshot = super::super::training::merge_worker_training_snapshot_shared(
+            state, principal, snapshot,
+        ).await.map_err(super::super::training::training_workspace_error)?;
+        let (_, latest_scope) = scope_token(state, principal).await?;
+        if latest_scope != scope || state.production_maps.snapshot_revision() != revision {
+            continue;
+        }
+        let snapshot = if state.worker_show_all_apparatus_tabs {
+            snapshot
+        } else { Arc::new(project(&snapshot, &assigned, history.iter().cloned())) };
+        return Ok((snapshot, revision, scope));
     }
-    Ok((
-        Arc::new(project(&snapshot, &assigned, history_order_ids)),
-        scope,
-    ))
 }
 
 #[cfg(test)]

@@ -72,6 +72,21 @@ pub(super) async fn load_opening_wip_records(
     pool: &PgPool,
     query: OpeningWipQuery,
 ) -> Result<Vec<OpeningWipRecord>, ProductionMapError> {
+    load_opening_wip_records_scoped(pool, query, None).await
+}
+
+pub(super) async fn load_opening_wip_records_for_orders(
+    pool: &PgPool, order_ids: &[String],
+) -> Result<Vec<OpeningWipRecord>, ProductionMapError> {
+    if order_ids.is_empty() { return Ok(Vec::new()); }
+    load_opening_wip_records_scoped(pool, OpeningWipQuery {
+        order_id: String::new(), wip_status: None, limit: 100_000,
+    }, Some(order_ids)).await
+}
+
+async fn load_opening_wip_records_scoped(
+    pool: &PgPool, query: OpeningWipQuery, order_ids: Option<&[String]>,
+) -> Result<Vec<OpeningWipRecord>, ProductionMapError> {
     let status = query.wip_status.map(|status| status.as_str().to_string());
     let rows = sqlx::query_as::<_, OpeningWipIntakeRow>(
         "SELECT intake.intake_id, intake.idempotency_key, intake.request_fingerprint,
@@ -84,6 +99,7 @@ pub(super) async fn load_opening_wip_records(
                 EXTRACT(EPOCH FROM intake.updated_at)::BIGINT AS updated_at_unix
          FROM mini_opening_wip_intakes AS intake
          WHERE ($1 = '' OR intake.order_id = $1)
+           AND ($4::TEXT[] IS NULL OR intake.order_id = ANY($4::TEXT[]))
            AND ($2::TEXT IS NULL OR EXISTS (
                SELECT 1 FROM mini_opening_wip_batches AS batch
                WHERE batch.intake_id = intake.intake_id AND batch.wip_status = $2
@@ -94,14 +110,26 @@ pub(super) async fn load_opening_wip_records(
     .bind(query.order_id.trim())
     .bind(status)
     .bind(i64::try_from(query.limit.max(1)).unwrap_or(i64::MAX))
+    .bind(order_ids)
     .fetch_all(pool)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
-    let mut records = Vec::with_capacity(rows.len());
-    for row in rows {
-        records.push(load_opening_wip_record(pool, row).await?);
+    if rows.is_empty() { return Ok(Vec::new()); }
+    let intake_ids = rows.iter().map(|row| row.intake_id.clone()).collect::<Vec<_>>();
+    let batch_query = format!("{OPENING_WIP_BATCH_SELECT_PREFIX}
+        WHERE intake_id = ANY($1::TEXT[]) ORDER BY intake_id ASC, sequence_no ASC");
+    let batches = sqlx::query_as::<_, OpeningWipBatchRow>(&batch_query)
+        .bind(&intake_ids).fetch_all(pool).await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    let mut by_intake = std::collections::BTreeMap::<String, Vec<OpeningWipBatch>>::new();
+    for batch in batches {
+        by_intake.entry(batch.intake_id.clone()).or_default()
+            .push(opening_wip_batch_from_row(batch)?);
     }
-    Ok(records)
+    rows.into_iter().map(|row| {
+        let batches = by_intake.remove(&row.intake_id).unwrap_or_default();
+        Ok(OpeningWipRecord { intake: opening_wip_intake_from_row(row)?, batches })
+    }).collect()
 }
 
 pub(super) async fn load_opening_wip_batch(
@@ -456,7 +484,9 @@ async fn load_opening_wip_record(
     pool: &PgPool,
     intake_row: OpeningWipIntakeRow,
 ) -> Result<OpeningWipRecord, ProductionMapError> {
-    let batches = sqlx::query_as::<_, OpeningWipBatchRow>(OPENING_WIP_BATCH_SELECT)
+    let batch_query = format!("{OPENING_WIP_BATCH_SELECT_PREFIX}
+        WHERE intake_id = $1 ORDER BY sequence_no ASC");
+    let batches = sqlx::query_as::<_, OpeningWipBatchRow>(&batch_query)
         .bind(intake_row.intake_id.trim())
         .fetch_all(pool)
         .await
@@ -538,7 +568,7 @@ const OPENING_WIP_INTAKE_SELECT: &str =
      FROM mini_opening_wip_intakes
      WHERE idempotency_key = $1";
 
-const OPENING_WIP_BATCH_SELECT: &str =
+const OPENING_WIP_BATCH_SELECT_PREFIX: &str =
     "SELECT batch_id, intake_id, order_id, sequence_no, qr_payload,
             quantity::DOUBLE PRECISION AS quantity, uom,
             finished_goods_meter::DOUBLE PRECISION AS finished_goods_meter,
@@ -550,6 +580,4 @@ const OPENING_WIP_BATCH_SELECT: &str =
             processed_by_apparatus, label_item_code, label_item_name,
             EXTRACT(EPOCH FROM created_at)::BIGINT AS created_at_unix,
             EXTRACT(EPOCH FROM updated_at)::BIGINT AS updated_at_unix
-     FROM mini_opening_wip_batches
-     WHERE intake_id = $1
-     ORDER BY sequence_no ASC";
+     FROM mini_opening_wip_batches";

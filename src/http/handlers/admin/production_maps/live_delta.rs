@@ -36,65 +36,46 @@ async fn read_view(
     reuse_history: Option<(&LiveView, u64)>,
 ) -> Result<LiveView, AdminError> {
     let service = &state.production_maps;
-    let (snapshot, revision) = service
-        .live_snapshot_shared_with_revision()
-        .await
-        .map_err(production_map_error)?;
-    let snapshot =
-        super::super::training::merge_worker_training_snapshot_shared(state, principal, snapshot)
-            .await
-            .map_err(super::super::training::training_workspace_error)?;
-    let actor = queue_action_actor(principal);
-    // Colour trials do not write completion history/request events. Reuse
-    // those lists only for this exact next revision, not coalesced writes.
-    let reusable = reuse_history.filter(|(before, expected)| {
-        colour_history_unchanged(before.revision, revision, *expected)
-    });
-    let (completed, requests, decisions) = if let Some((before, _)) = reusable {
-        (
-            before.completed.clone(),
-            before.requests.clone(),
-            before.decisions.clone(),
-        )
-    } else {
-        tokio::try_join!(
-            service.completed_queue_orders_for_actor(&actor.ref_, 200),
-            async {
-                if include_requests {
-                    service.completion_requests(200).await
-                } else {
-                    Ok(Vec::new())
-                }
-            },
-            service.completion_request_decisions_for_actor(&actor.ref_, 200),
-        )
-        .map_err(production_map_error)?
-    };
-    let (snapshot, scope) = if worker_scope {
-        super::worker_snapshot::project_for_principal(
-            state,
-            principal,
-            snapshot,
-            completed
-                .iter()
-                .map(|order| order.order_id.clone())
-                .chain(decisions.iter().map(|decision| decision.order_id.clone())),
-        )
-        .await?
-    } else {
-        (snapshot, String::new())
-    };
-    let customers = production_map_order_customers(state, &snapshot.maps).await;
-    Ok(LiveView {
-        snapshot,
-        revision,
-        epoch: service.snapshot_epoch().to_string(),
-        scope,
-        customers,
-        completed,
-        requests,
-        decisions,
-    })
+    loop {
+        let started_revision = service.snapshot_revision();
+        let actor = queue_action_actor(principal);
+        // Reuse history only for an exact colour-only revision. Retry when a
+        // concurrent commit moves the revision while history/snapshot is read.
+        let reusable = reuse_history.filter(|(before, expected)| {
+            colour_history_unchanged(before.revision, started_revision, *expected)
+        });
+        let (completed, requests, decisions) = if let Some((before, _)) = reusable {
+            (before.completed.clone(), before.requests.clone(), before.decisions.clone())
+        } else {
+            tokio::try_join!(
+                service.completed_queue_orders_for_actor(&actor.ref_, 200),
+                async {
+                    if include_requests { service.completion_requests(200).await }
+                    else { Ok(Vec::new()) }
+                },
+                service.completion_request_decisions_for_actor(&actor.ref_, 200),
+            ).map_err(production_map_error)?
+        };
+        let (snapshot, revision, scope) = if worker_scope {
+            super::worker_snapshot::read_for_principal(state, principal,
+                completed.iter().map(|order| order.order_id.clone())
+                    .chain(decisions.iter().map(|decision| decision.order_id.clone())),
+            ).await?
+        } else {
+            let (snapshot, revision) = service.live_snapshot_shared_with_revision()
+                .await.map_err(production_map_error)?;
+            let snapshot = super::super::training::merge_worker_training_snapshot_shared(
+                state, principal, snapshot,
+            ).await.map_err(super::super::training::training_workspace_error)?;
+            (snapshot, revision, String::new())
+        };
+        if revision != started_revision { continue; }
+        let customers = production_map_order_customers(state, &snapshot.maps).await;
+        if service.snapshot_revision() != revision { continue; }
+        return Ok(LiveView { snapshot, revision,
+            epoch: service.snapshot_epoch().to_string(), scope,
+            customers, completed, requests, decisions });
+    }
 }
 
 // Values are compared before serialization. In particular, unchanged maps

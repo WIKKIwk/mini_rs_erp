@@ -85,7 +85,9 @@ async fn bootstrap(
     for _ in 0..SNAPSHOT_ATTEMPTS {
         let (snapshot, revision) = state
             .production_maps
-            .live_snapshot_shared_with_revision()
+            .worker_snapshot_shared_with_revision(
+                &[apparatus.to_string()], &[order_id.to_string()],
+            )
             .await
             .map_err(production_map_error)?;
         let control = snapshot

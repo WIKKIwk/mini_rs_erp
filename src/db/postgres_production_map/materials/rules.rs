@@ -19,12 +19,19 @@ pub(super) async fn load_raw_material_assignments_for_order(
     pool: &PgPool,
     order_id: &str,
 ) -> Result<Vec<RawMaterialAssignment>, ProductionMapError> {
-    load_raw_material_assignments_scoped(pool, Some(order_id.trim())).await
+    load_raw_material_assignments_scoped(pool, Some(&[order_id.trim().to_string()])).await
+}
+
+pub(super) async fn load_raw_material_assignments_for_orders(
+    pool: &PgPool, order_ids: &[String],
+) -> Result<Vec<RawMaterialAssignment>, ProductionMapError> {
+    if order_ids.is_empty() { return Ok(Vec::new()); }
+    load_raw_material_assignments_scoped(pool, Some(order_ids)).await
 }
 
 async fn load_raw_material_assignments_scoped(
     pool: &PgPool,
-    order_id: Option<&str>,
+    order_ids: Option<&[String]>,
 ) -> Result<Vec<RawMaterialAssignment>, ProductionMapError> {
     let mut query = sqlx::QueryBuilder::<Postgres>::new(
         "SELECT canonical_apparatus_id, payload_json
@@ -36,8 +43,8 @@ async fn load_raw_material_assignments_scoped(
                WHERE master.id = mini_raw_material_assignments.canonical_apparatus_id
            )",
     );
-    if let Some(order_id) = order_id {
-        query.push(" AND order_id = ").push_bind(order_id);
+    if let Some(order_ids) = order_ids {
+        query.push(" AND order_id = ANY(").push_bind(order_ids).push("::TEXT[])");
     }
     query.push(" ORDER BY updated_at DESC");
     let rows = query.build_query_as::<(String, serde_json::Value)>().fetch_all(pool)

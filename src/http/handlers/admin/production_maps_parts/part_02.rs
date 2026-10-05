@@ -58,40 +58,44 @@ pub async fn production_map_sequence(
             // Canonical initial snapshot: same authority as the live stream
             // (`ProductionMapLiveSnapshot` + monotonic revision + maps).
             // Additive only: old mobiles ignore `rev`/`maps`.
-            let (snapshot, revision) = state
-                .production_maps
-                .live_snapshot_shared_with_revision()
-                .await
-                .map_err(production_map_error)?;
-            let snapshot = super::training::merge_worker_training_snapshot_shared(
-                &state, &principal, snapshot,
-            )
-            .await
-            .map_err(super::training::training_workspace_error)?;
-            let (snapshot, scope, completed, requests, decisions) = if query.worker_scope {
-                let actor = queue_action_actor(&principal);
-                let (completed, requests, decisions) = tokio::try_join!(
-                    state.production_maps.completed_queue_orders_for_actor(&actor.ref_, 200),
-                    async {
-                        if matches!(principal.role, PrincipalRole::Admin) {
-                            state.production_maps.completion_requests(200).await
-                        } else { Ok(Vec::new()) }
-                    },
-                    state.production_maps.completion_request_decisions_for_actor(&actor.ref_, 200),
-                ).map_err(production_map_error)?;
-                let (snapshot, scope) = worker_snapshot::project_for_principal(
-                    &state, &principal, snapshot,
-                    completed.iter().map(|order| order.order_id.clone())
-                        .chain(decisions.iter().map(|decision| decision.order_id.clone())),
-                ).await?;
-                (snapshot, scope, completed, requests, decisions)
+            let (snapshot, revision, scope, completed, requests, decisions) = if query.worker_scope {
+                loop {
+                    let history_revision = state.production_maps.snapshot_revision();
+                    let actor = queue_action_actor(&principal);
+                    let (completed, requests, decisions) = tokio::try_join!(
+                        state.production_maps.completed_queue_orders_for_actor(&actor.ref_, 200),
+                        async {
+                            if matches!(principal.role, PrincipalRole::Admin) {
+                                state.production_maps.completion_requests(200).await
+                            } else { Ok(Vec::new()) }
+                        },
+                        state.production_maps.completion_request_decisions_for_actor(&actor.ref_, 200),
+                    ).map_err(production_map_error)?;
+                    let (snapshot, revision, scope) = worker_snapshot::read_for_principal(
+                        &state, &principal,
+                        completed.iter().map(|order| order.order_id.clone())
+                            .chain(decisions.iter().map(|decision| decision.order_id.clone())),
+                    ).await?;
+                    if revision != history_revision { continue; }
+                    break (snapshot, revision, scope, completed, requests, decisions);
+                }
             } else {
-                (snapshot, String::new(), Vec::new(), Vec::new(), Vec::new())
+                let (snapshot, revision) = if apparatus.is_empty() {
+                    state.production_maps.live_snapshot_shared_with_revision().await
+                } else {
+                    state.production_maps.worker_snapshot_shared_with_revision(
+                        &[apparatus.to_string()], &[order_id.to_string()],
+                    ).await
+                }.map_err(production_map_error)?;
+                let snapshot = super::training::merge_worker_training_snapshot_shared(
+                    &state, &principal, snapshot,
+                ).await.map_err(super::training::training_workspace_error)?;
+                (snapshot, revision, String::new(), Vec::new(), Vec::new(), Vec::new())
             };
             if !apparatus.is_empty() {
-                // Same canonical snapshot and authorization as the full GET;
-                // only its wire projection is smaller. No maps, compilation
-                // results or customer lookup on an action-control refresh.
+                // Same queue rules and authorization as the full GET. A cold
+                // scoped read computes the relevant orders; its response omits
+                // maps/programs and needs no customer lookup.
                 return Ok(json_response(serde_json::json!({
                     "ok": true,
                     "rev": revision,

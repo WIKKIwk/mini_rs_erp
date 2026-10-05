@@ -205,6 +205,14 @@ pub trait ProductionMapStorePort: Send + Sync {
     async fn maps_for_apparatus(&self, _apparatus: &str) -> StoreResult<Vec<ProductionMapDefinition>> {
         self.maps().await
     }
+    /// Ordered candidate maps for a worker and its explicit history/context.
+    /// Persistent stores filter before decoding definitions. Chain rules remain
+    /// authoritative in the service; the fallback is deliberately a superset.
+    async fn maps_for_snapshot_scope(
+        &self, _apparatus: &[String], _extra_order_ids: &[String],
+    ) -> StoreResult<Vec<ProductionMapDefinition>> {
+        self.maps().await
+    }
     async fn maps_by_lifecycle_statuses(
         &self,
         statuses: &[ProductionOrderLifecycleStatus],
@@ -856,6 +864,20 @@ pub trait ProductionMapStorePort: Send + Sync {
     async fn raw_material_assignments_for_order(&self, order_id: &str) -> StoreResult<Vec<RawMaterialAssignment>> {
         Ok(self.raw_material_assignments().await?.into_iter()
             .filter(|assignment| assignment.order_id.trim() == order_id.trim()).collect())
+    }
+    async fn raw_material_assignments_for_orders(&self, order_ids: &[String]) -> StoreResult<Vec<RawMaterialAssignment>> {
+        let requested = order_ids.iter().map(String::as_str).collect::<BTreeSet<_>>();
+        if requested.is_empty() { return Ok(Vec::new()); }
+        Ok(self.raw_material_assignments().await?.into_iter()
+            .filter(|assignment| requested.contains(assignment.order_id.trim())).collect())
+    }
+    async fn opening_wip_records_for_orders(&self, order_ids: &[String]) -> StoreResult<Vec<OpeningWipRecord>> {
+        let requested = order_ids.iter().map(String::as_str).collect::<BTreeSet<_>>();
+        if requested.is_empty() { return Ok(Vec::new()); }
+        Ok(self.opening_wip_records(OpeningWipQuery {
+            order_id: String::new(), wip_status: None, limit: 100_000,
+        }).await?.into_iter()
+            .filter(|record| requested.contains(record.intake.order_id.trim())).collect())
     }
     async fn put_raw_material_assignment(
         &self,

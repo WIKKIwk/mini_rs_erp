@@ -43,6 +43,20 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         catalog_helpers::load_maps_for_apparatus(&self.pool, apparatus).await
     }
 
+    async fn maps_for_snapshot_scope(&self, apparatus: &[String], extra_order_ids: &[String]) -> Result<Vec<ProductionMapDefinition>, ProductionMapError> {
+        #[cfg(test)]
+        if self.legacy_queue_reads { return self.maps().await; }
+        catalog_helpers::load_maps_for_snapshot_scope(&self.pool, apparatus, extra_order_ids).await
+    }
+
+    async fn raw_material_assignments_for_orders(&self, order_ids: &[String]) -> Result<Vec<RawMaterialAssignment>, ProductionMapError> {
+        material_helpers::load_raw_material_assignments_for_orders(&self.pool, order_ids).await
+    }
+
+    async fn opening_wip_records_for_orders(&self, order_ids: &[String]) -> Result<Vec<OpeningWipRecord>, ProductionMapError> {
+        opening_wip_helpers::load_opening_wip_records_for_orders(&self.pool, order_ids).await
+    }
+
     async fn order_control_by_id(&self, order_id: &str) -> Result<Option<OrderControlRecord>, ProductionMapError> {
         #[cfg(test)]
         if self.legacy_queue_reads { return Ok(self.order_control_states().await?.remove(order_id.trim())); }

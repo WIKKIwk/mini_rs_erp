@@ -105,6 +105,32 @@ pub(super) async fn load_maps_for_apparatus(
     }).collect())
 }
 
+pub(super) async fn load_maps_for_snapshot_scope(
+    pool: &PgPool,
+    apparatus: &[String],
+    extra_order_ids: &[String],
+) -> Result<Vec<ProductionMapDefinition>, ProductionMapError> {
+    if apparatus.is_empty() && extra_order_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows = sqlx::query_scalar::<_, serde_json::Value>(
+        "SELECT map_json FROM mini_production_maps
+         WHERE id = ANY($2::TEXT[]) OR id IN (
+             SELECT map_id FROM mini_production_map_nodes
+             WHERE canonical_apparatus_id = ANY($1::TEXT[])
+                OR canonical_alternative_apparatus_id = ANY($1::TEXT[])
+         ) ORDER BY updated_at DESC, id ASC",
+    ).bind(apparatus).bind(extra_order_ids).fetch_all(pool).await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    Ok(rows.into_iter().filter_map(|payload| match serde_json::from_value(payload) {
+        Ok(map) => Some(map),
+        Err(error) => {
+            tracing::warn!(?error, "skipping stored production map with invalid payload");
+            None
+        }
+    }).collect())
+}
+
 pub(super) async fn load_maps_by_lifecycle_statuses(
     pool: &PgPool,
     statuses: &[ProductionOrderLifecycleStatus],

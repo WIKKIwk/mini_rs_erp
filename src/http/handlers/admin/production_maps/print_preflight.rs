@@ -96,7 +96,9 @@ pub async fn production_map_print_preflight(
     let control_state = if input.include_control {
         match state
             .production_maps
-            .live_snapshot_shared_with_revision()
+            .worker_snapshot_shared_with_revision(
+                &[apparatus.id.to_string()], &[order_id.to_string()],
+            )
             .await
         {
             Ok((snapshot, revision)) => snapshot

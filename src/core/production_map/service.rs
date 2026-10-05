@@ -15,11 +15,16 @@ use tokio::sync::{Mutex, OwnedMutexGuard, RwLock, broadcast};
 
 const LIVE_NOTIFY_CAPACITY: usize = 256;
 
+#[path = "service_worker_snapshot.rs"]
+mod worker_snapshot;
+use worker_snapshot::WorkerSnapshotScope;
+
 struct ProductionSnapshotCache {
     epoch: String,
     revision: AtomicU64,
     snapshot: RwLock<Option<CachedProductionSnapshot>>,
     rebuild_lock: Mutex<()>,
+    worker_snapshots: Mutex<BTreeMap<WorkerSnapshotScope, std::sync::Arc<Mutex<Option<CachedProductionSnapshot>>>>>,
 }
 
 impl Default for ProductionSnapshotCache {
@@ -29,6 +34,7 @@ impl Default for ProductionSnapshotCache {
             revision: AtomicU64::new(0),
             snapshot: RwLock::new(None),
             rebuild_lock: Mutex::new(()),
+            worker_snapshots: Mutex::new(BTreeMap::new()),
         }
     }
 }
@@ -405,12 +411,28 @@ impl ProductionMapService {
     async fn build_production_snapshot(
         &self,
     ) -> Result<ProductionMapLiveSnapshot, ProductionMapError> {
-        let (raw_maps, (stored_sequences, sequence_revisions), mut queue_states, order_controls) = tokio::try_join!(
-            self.store.maps(),
-            self.store.apparatus_sequences_with_revisions(),
-            self.store.apparatus_queue_states(),
-            self.store.order_control_states(),
-        )?;
+        let previous = self.snapshot_cache.snapshot.read().await.as_ref()
+            .map(|entry| entry.snapshot.clone());
+        self.build_production_snapshot_in_scope(None, previous.as_deref()).await
+    }
+
+    async fn build_production_snapshot_in_scope(
+        &self,
+        scope: Option<&WorkerSnapshotScope>,
+        previous: Option<&ProductionMapLiveSnapshot>,
+    ) -> Result<ProductionMapLiveSnapshot, ProductionMapError> {
+        let (raw_maps, (stored_sequences, sequence_revisions), mut queue_states, order_controls, output_scope) =
+            if let Some(scope) = scope {
+                let inputs = self.worker_snapshot_inputs(scope).await?;
+                (inputs.maps, inputs.sequences, inputs.queue_states, inputs.order_controls,
+                    Some((inputs.order_ids, inputs.apparatus_ids)))
+            } else {
+                let (maps, sequences, states, controls) = tokio::try_join!(
+                    self.store.maps(), self.store.apparatus_sequences_with_revisions(),
+                    self.store.apparatus_queue_states(), self.store.order_control_states(),
+                )?;
+                (maps, sequences, states, controls, None)
+            };
         let canonical_apparatuses = self.snapshot_canonical_apparatuses().await;
 
         let mut visible_order_ids = visible_order_ids_by_apparatus(&raw_maps);
@@ -434,6 +456,9 @@ impl ProductionMapService {
         let mut sequence_versions = BTreeMap::new();
         for canonical in &canonical_apparatuses {
             let id = canonical.runtime.apparatus_id.as_str();
+            if scope.is_some_and(|scope| !scope.apparatus.iter().any(|assigned| assigned == id)) {
+                continue;
+            }
             let preflight = holds.iter().filter(|h| h.apparatus == id && h.is_live_at(0))
                 .map(|h| h.order_id.clone()).collect();
             let state = SequenceMoveState::from_data(canonical, &raw_maps,
@@ -452,24 +477,30 @@ impl ProductionMapService {
             .collect::<Vec<_>>();
         let order_ids = raw_maps
             .iter()
+            .filter(|map| output_scope.as_ref().is_none_or(|(ids, _)| ids.contains(&map.id)))
             .map(|map| map.id.trim().to_string())
             .filter(|order_id| !order_id.is_empty())
             .collect::<Vec<_>>();
         let (queue_action_controls, queue_logs_by_order, lifecycles) = tokio::try_join!(
-            self.queue_action_controls_for_snapshot(
-                &raw_maps,
-                &stored_sequences,
-                &queue_states,
-                &order_controls,
-                &canonical_apparatuses,
-                holds,
-            ),
+            async {
+                if let Some((ids, apparatus_ids)) = output_scope.as_ref() {
+                    self.queue_action_controls_for_snapshot_orders(&raw_maps,
+                        &stored_sequences, &queue_states, &order_controls,
+                        &canonical_apparatuses, holds, ids, apparatus_ids).await
+                } else {
+                    self.queue_action_controls_for_snapshot(&raw_maps,
+                        &stored_sequences, &queue_states, &order_controls,
+                        &canonical_apparatuses, holds).await
+                }
+            },
             self.store.queue_action_logs_for_orders(&order_ids),
             self.store.production_order_lifecycles(&order_ids),
         )?;
 
+        let output_maps = output_scope.as_ref().map(|(ids, _)| raw_maps.iter()
+            .filter(|map| ids.contains(&map.id)).cloned().collect::<Vec<_>>());
         let stage_states = stage_states_for_snapshot(
-            &raw_maps,
+            output_maps.as_deref().unwrap_or(&raw_maps),
             &queue_action_controls,
             &queue_logs_by_order,
             &queue_states,
@@ -512,19 +543,11 @@ impl ProductionMapService {
         }
         let frozen_orders_by_apparatus =
             Self::frozen_orders_by_apparatus(&order_controls, &queue_logs_by_order);
-        let previous = self
-            .snapshot_cache
-            .snapshot
-            .read()
-            .await
-            .as_ref()
-            .map(|entry| entry.snapshot.clone());
         let maps = compile_saved_maps_reusing_programs(
-            raw_maps,
-            previous.as_ref().map(|snapshot| snapshot.maps.as_slice()),
+            output_maps.unwrap_or(raw_maps),
+            previous.map(|snapshot| snapshot.maps.as_slice()),
         );
-
-        Ok(ProductionMapLiveSnapshot {
+        let mut snapshot = ProductionMapLiveSnapshot {
             sequence_versions,
             sequence_revisions,
             maps,
@@ -537,7 +560,27 @@ impl ProductionMapService {
             order_statuses,
             order_controls,
             frozen_orders_by_apparatus,
-        })
+        };
+        if let Some((ids, _)) = output_scope {
+            // Keep cross-machine route state for selected orders, and omit
+            // unrelated queues before putting the derived snapshot in memory.
+            for values in snapshot.queue_states.values_mut() {
+                values.retain(|order_id, _| ids.contains(order_id));
+            }
+            snapshot.order_controls.retain(|id, _| ids.contains(id));
+            for values in snapshot.frozen_orders_by_apparatus.values_mut() {
+                values.retain(|order| ids.contains(&order.order_id));
+            }
+            if let Some(scope) = scope {
+                let own = |id: &String| scope.apparatus.contains(id);
+                snapshot.sequences.retain(|id, _| own(id));
+                snapshot.visible_order_ids.retain(|id, _| own(id));
+                snapshot.sequence_versions.retain(|id, _| own(id));
+                snapshot.sequence_revisions.retain(|id, _| own(id));
+                snapshot.frozen_orders_by_apparatus.retain(|id, _| own(id));
+            }
+        }
+        Ok(snapshot)
     }
 
     fn frozen_orders_by_apparatus(
