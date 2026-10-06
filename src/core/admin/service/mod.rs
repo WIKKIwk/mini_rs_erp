@@ -23,6 +23,7 @@ use crate::core::admin::ports::{
 };
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::auth::service::normalize_phone;
+use crate::core::gscale::{epc::GscaleEpcGenerator, ports::EpcSource};
 use crate::core::authz::{
     Capability, MemoryRoleDefinitionStore, RoleAssignment, RoleAssignmentUpsert, RoleDefinition,
     RoleDefinitionStorePort, RoleDefinitionUpsert, capability_code, capability_codes_for_role,
@@ -49,6 +50,7 @@ pub struct AdminService {
     auth_config_sink: Option<Arc<dyn AdminAuthConfigSink>>,
     role_store: Arc<dyn RoleDefinitionStorePort>,
     profile_store: Option<Arc<dyn ProfileStorePort>>,
+    item_code_source: Arc<dyn EpcSource>,
 }
 
 #[derive(Debug, Clone)]
@@ -89,6 +91,7 @@ impl AdminService {
             auth_config_sink: None,
             role_store: Arc::new(MemoryRoleDefinitionStore::new()),
             profile_store: None,
+            item_code_source: Arc::new(GscaleEpcGenerator::new()),
         }
     }
 

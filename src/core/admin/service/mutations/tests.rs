@@ -74,11 +74,88 @@ async fn finished_goods_item_is_assigned_to_customer_on_create() {
             &customer.ref_,
         )
         .await
-        .expect_err("atomic create must preserve duplicate-code protection");
-    assert!(matches!(
-        duplicate,
-        AdminPortError::InvalidInput(message) if message == "item code already exists"
-    ));
+        .expect("another finished item gets its own code");
+    assert_ne!(item.code, "ITEM-FINISHED");
+    assert_ne!(duplicate.code, item.code);
+    for code in [&item.code, &duplicate.code] {
+        assert_eq!(code.len(), 24);
+        assert!(code.starts_with("30"));
+        assert!(code.bytes().all(|value| value.is_ascii_hexdigit()));
+    }
+}
+
+#[tokio::test]
+async fn finished_goods_code_retries_a_collision_and_preserves_customer_assignment() {
+    use crate::core::gscale::ports::EpcSource;
+
+    struct Codes(std::sync::Mutex<Vec<&'static str>>);
+    impl EpcSource for Codes {
+        fn next_epc(&self) -> String {
+            self.0
+                .lock()
+                .expect("codes")
+                .pop()
+                .expect("next code")
+                .to_string()
+        }
+    }
+
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let mut service = service_with_store(temp_dir.path());
+    let occupied_code = "300000000000000000000001";
+    let generated_code = "300000000000000000000003";
+    service
+        .create_item(occupied_code, "Existing", "Kg", "Products", "")
+        .await
+        .expect("existing item");
+    service.item_code_source = Arc::new(Codes(std::sync::Mutex::new(vec![
+        generated_code,
+        occupied_code,
+    ])));
+    let customer = service
+        .create_customer("Customer One", "+998901112233")
+        .await
+        .expect("customer");
+    let item = service
+        .create_item("", "Finished", "Dona", "Tayyor mahsulot", &customer.ref_)
+        .await
+        .expect("generated item");
+    assert_eq!(item.code, generated_code);
+    let detail = service.item_detail(&item.code).await.expect("detail");
+    assert_eq!(detail.customers.len(), 1);
+    assert_eq!(detail.customers[0].ref_, customer.ref_);
+    assert_eq!(
+        service
+            .item_detail(occupied_code)
+            .await
+            .expect("existing")
+            .name,
+        "Existing"
+    );
+}
+
+#[tokio::test]
+async fn automatic_finished_goods_code_requires_name_and_other_groups_require_code() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let service = service_with_store(temp_dir.path());
+    let customer = service
+        .create_customer("Customer One", "+998901112233")
+        .await
+        .expect("customer");
+    let error = service
+        .create_item("", " ", "Kg", "Tayyor mahsulot", &customer.ref_)
+        .await
+        .expect_err("finished item name is required");
+    assert!(
+        matches!(error, AdminPortError::InvalidInput(message) if message == "item name is required")
+    );
+    let error = service
+        .create_item("", "Raw material", "Kg", "Homashyo", "")
+        .await
+        .expect_err("other groups still require a manual code");
+    assert!(
+        matches!(error, AdminPortError::InvalidInput(message) if message == "item code is required")
+    );
 }
 
 #[tokio::test]
@@ -107,11 +184,12 @@ async fn nested_finished_goods_group_requires_customer_and_uses_same_detail_rule
         .create_customer("Customer One", "+998901112233")
         .await
         .expect("customer");
-    service
+    let item = service
         .create_item("PACK-001", "Package", "dona", "Paketlar", &customer.ref_)
         .await
         .expect("finished item with customer");
-    let detail = service.item_detail("PACK-001").await.expect("detail");
+    let detail = service.item_detail(&item.code).await.expect("detail");
+    assert_ne!(item.code, "PACK-001");
     assert!(detail.is_finished_goods);
     assert_eq!(detail.customers.len(), 1);
 
@@ -148,7 +226,7 @@ async fn last_finished_goods_customer_cannot_be_unassigned() {
         .create_customer("Second Customer", "+998901112244")
         .await
         .expect("second customer");
-    service
+    let item = service
         .create_item(
             "FIN-001",
             "Finished",
@@ -160,7 +238,7 @@ async fn last_finished_goods_customer_cannot_be_unassigned() {
         .expect("finished item");
 
     let error = service
-        .unassign_customer_item(&first.ref_, "FIN-001")
+        .unassign_customer_item(&first.ref_, &item.code)
         .await
         .expect_err("last customer must be protected");
     assert!(matches!(
@@ -169,14 +247,14 @@ async fn last_finished_goods_customer_cannot_be_unassigned() {
     ));
 
     service
-        .assign_customer_item(&second.ref_, "FIN-001")
+        .assign_customer_item(&second.ref_, &item.code)
         .await
         .expect("second assignment");
     service
-        .unassign_customer_item(&first.ref_, "FIN-001")
+        .unassign_customer_item(&first.ref_, &item.code)
         .await
         .expect("one of two customers can be removed");
-    let detail = service.item_detail("FIN-001").await.expect("detail");
+    let detail = service.item_detail(&item.code).await.expect("detail");
     assert_eq!(detail.customers.len(), 1);
     assert_eq!(detail.customers[0].ref_, second.ref_);
 }

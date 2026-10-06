@@ -37,7 +37,11 @@ pub async fn customer_phone(
         .update_customer_phone(ref_, &input.phone)
         .await
         .map(Json)
-        .map_err(|_| server_error("customer phone update failed"))
+        .map_err(|error| match error {
+            AdminPortError::InvalidInput(message) => bad_request(message),
+            AdminPortError::NotFound => not_found("customer not found"),
+            _ => server_error("customer phone update failed"),
+        })
 }
 
 pub async fn customer_code_regenerate(

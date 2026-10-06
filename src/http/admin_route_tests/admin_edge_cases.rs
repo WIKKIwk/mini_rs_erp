@@ -231,13 +231,16 @@ async fn admin_item_create_and_werka_regenerate_like_go() {
             "POST",
             "/v1/mobile/admin/items",
             &token,
-            r#"{"code":"ITEM-FINISHED","name":"Finished Item","uom":"Kg","item_group":"tayyor mahsulot","customer_ref":"CUST-001"}"#,
+            r#"{"name":"Finished Item","uom":"Kg","item_group":"tayyor mahsulot","customer_ref":"CUST-001"}"#,
         ))
         .await
         .expect("response");
     assert_eq!(finished_item.status(), StatusCode::OK);
     let value = json_body(finished_item).await;
-    assert_eq!(value["code"], "ITEM-FINISHED");
+    let code = value["code"].as_str().expect("generated code");
+    assert_eq!(code.len(), 24);
+    assert!(code.starts_with("30"));
+    assert!(code.bytes().all(|value| value.is_ascii_hexdigit()));
     assert_eq!(value["item_group"], "tayyor mahsulot");
 
     let settings = build_router(state)

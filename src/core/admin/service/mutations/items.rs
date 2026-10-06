@@ -16,7 +16,8 @@ impl AdminService {
     ) -> Result<SupplierItem, AdminPortError> {
         let customer_ref = customer_ref.trim();
         let groups = self.item_group_tree().await?;
-        if item_group_requires_customer(item_group, &groups) && customer_ref.is_empty() {
+        let is_finished_goods = item_group_requires_customer(item_group, &groups);
+        if is_finished_goods && customer_ref.is_empty() {
             return Err(AdminPortError::InvalidInput(
                 FINISHED_GOODS_CUSTOMER_REQUIRED.to_string(),
             ));
@@ -24,15 +25,36 @@ impl AdminService {
         if !customer_ref.is_empty() {
             self.read_port()?.customer_by_ref(customer_ref).await?;
         }
-        self.write_port()?
-            .create_item_with_customer(
-                code.trim(),
-                name.trim(),
-                uom.trim(),
-                item_group.trim(),
-                (!customer_ref.is_empty()).then_some(customer_ref),
-            )
-            .await
+        if is_finished_goods && name.trim().is_empty() {
+            return Err(AdminPortError::InvalidInput(
+                "item name is required".to_string(),
+            ));
+        }
+        for _ in 0..5 {
+            let code = if is_finished_goods {
+                self.item_code_source.next_epc()
+            } else {
+                code.trim().to_string()
+            };
+            let result = self
+                .write_port()?
+                .create_item_with_customer(
+                    &code,
+                    name.trim(),
+                    uom.trim(),
+                    item_group.trim(),
+                    (!customer_ref.is_empty()).then_some(customer_ref),
+                )
+                .await;
+            match result {
+                Err(AdminPortError::InvalidInput(message))
+                    if is_finished_goods && message == "item code already exists" => {}
+                result => return result,
+            }
+        }
+        Err(AdminPortError::InvalidInput(
+            "item code already exists".to_string(),
+        ))
     }
 
     pub async fn update_item(

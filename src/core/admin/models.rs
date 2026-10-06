@@ -121,6 +121,7 @@ pub struct AdminCreateSupplierRequest {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdminCreateCustomerRequest {
     pub name: String,
+    #[serde(default)]
     pub phone: String,
 }
 
@@ -271,6 +272,7 @@ pub struct AdminSupplierItemMutationRequest {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdminCreateItemRequest {
+    #[serde(default)]
     pub code: String,
     pub name: String,
     pub uom: String,

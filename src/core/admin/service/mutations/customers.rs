@@ -26,7 +26,17 @@ impl AdminService {
         name: &str,
         phone: &str,
     ) -> Result<CustomerDirectoryEntry, AdminPortError> {
-        let normalized = normalize_admin_phone(phone)?;
+        if phone.trim().is_empty() {
+            return self.create_customer_name_only(name).await;
+        }
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(AdminPortError::InvalidInput(
+                "customer name is required".to_string(),
+            ));
+        }
+        let normalized = normalize_admin_phone(phone)
+            .map_err(|_| AdminPortError::InvalidInput("invalid phone".to_string()))?;
         for query in phone_search_terms(phone, &normalized) {
             let existing = self.read_port()?.customers_page(&query, 50, 0).await?;
             if existing
@@ -39,7 +49,7 @@ impl AdminService {
             }
         }
         self.write_port()?
-            .create_customer(name.trim(), &normalized)
+            .create_customer(name, &normalized)
             .await
             .map(customer_directory_entry)
     }
@@ -49,7 +59,8 @@ impl AdminService {
         ref_: &str,
         phone: &str,
     ) -> Result<AdminCustomerDetail, AdminPortError> {
-        let normalized = normalize_admin_phone(phone)?;
+        let normalized = normalize_admin_phone(phone)
+            .map_err(|_| AdminPortError::InvalidInput("invalid phone".to_string()))?;
         self.write_port()?
             .update_customer_phone(ref_.trim(), &normalized)
             .await?;
