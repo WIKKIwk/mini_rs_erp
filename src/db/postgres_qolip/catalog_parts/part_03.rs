@@ -43,7 +43,7 @@ async fn save_product_spec_tx(
     .execute(&mut **tx)
     .await
     .map_err(|_| QolipError::StoreFailed)?;
-    spec.color = allocate_panton_color(tx, &spec.qolip_code, None, &spec.color).await?;
+    spec.color = spec.color.trim().to_string();
     let row = sqlx::query_as::<_, QolipProductSpecRow>(
         "INSERT INTO mini_qolip_product_specs (
              item_code, item_name, item_group, qolip_code, size,
@@ -73,66 +73,6 @@ async fn save_product_spec_tx(
     Ok(row_to_product_spec(row))
 }
 
-async fn allocate_panton_color(
-    tx: &mut Transaction<'_, Postgres>,
-    qolip_code: &str,
-    excluded_qolip_code: Option<&str>,
-    requested_color: &str,
-) -> Result<String, QolipError> {
-    let requested = requested_color.trim();
-    if !requested
-        .get(..6)
-        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("panton"))
-    {
-        return Ok(requested.to_string());
-    }
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtext('qolip-panton-global')::bigint)")
-        .execute(&mut **tx)
-        .await
-        .map_err(|_| QolipError::StoreFailed)?;
-    let colors = sqlx::query_scalar::<_, String>(
-        "SELECT color
-         FROM (
-             SELECT qolip_code, COALESCE(payload_json->>'color', '') AS color
-             FROM mini_qolip_product_specs
-             UNION ALL
-             SELECT qolip_code, COALESCE(payload_json->>'color', '') AS color
-             FROM mini_qolip_locations
-             UNION ALL
-             SELECT qolip_code, COALESCE(payload_json->>'color', '') AS color
-             FROM mini_qolip_checkouts
-         ) colors
-         WHERE ($1 = '' OR lower(qolip_code) <> lower($1))
-           AND ($2 = '' OR lower(qolip_code) <> lower($2))",
-    )
-    .bind(qolip_code.trim())
-    .bind(excluded_qolip_code.unwrap_or_default().trim())
-    .fetch_all(&mut **tx)
-    .await
-    .map_err(|_| QolipError::StoreFailed)?;
-    let used = colors
-        .iter()
-        .filter_map(|color| panton_number(color))
-        .collect::<std::collections::BTreeSet<_>>();
-    let requested_number = panton_number(requested);
-    let number = requested_number
-        .filter(|number| !used.contains(number))
-        .or_else(|| (1..=QOLIP_PANTON_MAX_NUMBER).find(|number| !used.contains(number)))
-        .ok_or(QolipError::PantonLimitExceeded)?;
-    Ok(format!("Panton {number}"))
-}
-
-fn panton_number(color: &str) -> Option<i32> {
-    let mut parts = color.split_whitespace();
-    if !parts.next()?.eq_ignore_ascii_case("panton") {
-        return None;
-    }
-    match parts.next()?.parse::<i32>().ok()? {
-        number @ 1..=QOLIP_PANTON_MAX_NUMBER if parts.next().is_none() => Some(number),
-        _ => None,
-    }
-}
-
 pub(super) async fn rename_product_spec(
     pool: &PgPool,
     previous_qolip_code: &str,
@@ -152,8 +92,7 @@ pub(super) async fn rename_product_spec(
             .bind(format!("qolip:{code}")).execute(&mut *tx).await
             .map_err(|_| QolipError::StoreFailed)?;
     }
-    spec.color =
-        allocate_panton_color(&mut tx, &spec.qolip_code, Some(&previous), &spec.color).await?;
+    spec.color = spec.color.trim().to_string();
     sqlx::query(
         "SELECT pg_advisory_xact_lock(hashtext(lock_key)::bigint)
          FROM (

@@ -1,6 +1,4 @@
 
-const QOLIP_PANTON_MAX_NUMBER: i32 = 100;
-
 pub(super) async fn load_assigned_warehouses(
     pool: &PgPool,
     principal: &Principal,
