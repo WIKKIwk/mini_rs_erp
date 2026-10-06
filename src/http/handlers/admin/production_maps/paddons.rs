@@ -231,11 +231,12 @@ pub async fn production_map_paddon_qr_print(
             }
         }
     }
-    let paddon = state
+    let snapshot = state
         .production_maps
-        .paddon_summary(&input.code)
+        .paddon_scan_snapshot(&input.code)
         .await
         .map_err(production_map_error)?;
+    let paddon = snapshot.paddon;
     let code = paddon.code.clone();
     let print_request = ProgressLabelPrintRequest {
         driver_url: input.driver_url,
@@ -272,6 +273,7 @@ pub async fn production_map_paddon_qr_print(
     Ok(json_response(serde_json::json!({
         "ok": true,
         "paddon": paddon,
+        "items": snapshot.items,
         "qr_payload": code,
         "print": print,
     })))
