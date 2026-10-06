@@ -203,6 +203,7 @@ pub async fn production_map_paddon_qr_print(
             Capability::ProductionMapManage,
             Capability::ApparatusQueueRead,
             Capability::ApparatusQueueManage,
+            Capability::WerkaAccess,
         ],
     )
     .await?;
@@ -210,6 +211,26 @@ pub async fn production_map_paddon_qr_print(
         return Err(method_not_allowed());
     }
     let input: PaddonQrPrintRequest = parse_json(&body)?;
+    if principal.role == PrincipalRole::Werka {
+        let warehouses = state
+            .warehouses
+            .assigned_warehouse_names(&principal)
+            .await
+            .map_err(warehouse_error)?;
+        if warehouses.is_empty() {
+            return Err(forbidden());
+        }
+        if let Some(receipt) = state
+            .production_maps
+            .paddon_receipt(&input.code)
+            .await
+            .map_err(production_map_error)?
+        {
+            if !warehouses.iter().any(|name| name == &receipt.warehouse) {
+                return Err(forbidden());
+            }
+        }
+    }
     let paddon = state
         .production_maps
         .paddon_summary(&input.code)
