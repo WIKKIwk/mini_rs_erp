@@ -300,6 +300,36 @@ pub struct InventoryActor {
     pub principal: Principal,
     pub is_admin: bool,
     pub assigned_warehouses: BTreeSet<String>,
+    pub delivery_receipt: Option<InventoryDeliveryReceipt>,
+}
+
+#[derive(Debug, Clone)]
+pub struct InventoryDeliveryReceipt {
+    pub order_id: String,
+    pub apparatus_id: String,
+    pub asset_ref: String,
+    pub source_location_id: String,
+    pub destination_location_id: String,
+    pub delivered_by: Principal,
+}
+
+impl InventoryActor {
+    pub fn delivery_receipt_payload(&self) -> serde_json::Value {
+        self.delivery_receipt.as_ref().map(|receipt| serde_json::json!({
+            "order_id": receipt.order_id,
+            "apparatus_id": receipt.apparatus_id,
+            "delivered_by": {
+                "role": receipt.delivered_by.role,
+                "ref": receipt.delivered_by.ref_,
+                "name": receipt.delivered_by.display_name,
+            },
+            "received_by": {
+                "role": self.principal.role,
+                "ref": self.principal.ref_,
+                "name": self.principal.display_name,
+            },
+        })).unwrap_or_else(|| serde_json::json!({}))
+    }
 }
 
 impl InventoryActor {
@@ -311,6 +341,7 @@ impl InventoryActor {
         Self {
             principal,
             is_admin,
+            delivery_receipt: None,
             assigned_warehouses: assigned_warehouses
                 .into_iter()
                 .map(|warehouse| warehouse.trim().to_ascii_lowercase())

@@ -55,11 +55,12 @@ async fn execute_queue_action(
         prepared.attach_active_paddon();
     }
     if !qolip_preparations.is_empty() {
-        prepared.attach_qolip_codes(
+        prepared.attach_qolip_set(
             &qolip_preparations
                 .iter()
                 .map(|preparation| preparation.spec.qolip_code.clone())
                 .collect::<Vec<_>>(),
+            &qolip_preparations[0].spec.set_id(),
         );
     }
     let qolip_checkouts = qolip_preparations

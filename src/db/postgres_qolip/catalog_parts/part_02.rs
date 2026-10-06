@@ -204,9 +204,11 @@ pub(super) async fn load_products(
             COALESCE(product.warehouse, '') AS warehouse,
             COALESCE(product.size, 0) AS size,
             COALESCE(product.color, '') AS color,
+            COALESCE(set_spec.payload_json->>'qolip_set_id', '') AS qolip_set_id,
             product.has_qolip_spec,
             in_use.code IS NOT NULL AS is_in_use
         FROM product_rows product
+        LEFT JOIN mini_qolip_product_specs set_spec ON lower(set_spec.qolip_code) = lower(product.qolip_code)
         LEFT JOIN customers_per_item customers ON customers.item_code = lower(product.code)
         LEFT JOIN in_use_qolips in_use ON in_use.code = lower(product.qolip_code)
         WHERE (NOT $4 OR product.has_qolip_spec)
@@ -233,6 +235,7 @@ pub(super) async fn load_products(
     Ok(rows
         .into_iter()
         .map(|row| QolipProduct {
+            qolip_set_id: row.qolip_set_id,
             warehouse: row.warehouse,
             code: row.code,
             name: row.name,
@@ -301,6 +304,8 @@ pub(super) async fn load_product_specs(
     let rows = sqlx::query_as::<_, QolipProductSpecRow>(
         r#"
         SELECT item_code, item_name, item_group, qolip_code, size, warehouse, color,
+               COALESCE((SELECT s.payload_json->>'qolip_set_id' FROM mini_qolip_product_specs s
+                         WHERE lower(s.qolip_code) = lower(candidates.qolip_code)), '') AS qolip_set_id,
                created_by_role, created_by_ref, created_by_name
         FROM (
             SELECT
@@ -389,6 +394,8 @@ pub(super) async fn load_product_spec_by_qolip_code(
     let row = sqlx::query_as::<_, QolipProductSpecRow>(
         r#"
         SELECT item_code, item_name, item_group, qolip_code, size, warehouse, color,
+               COALESCE((SELECT s.payload_json->>'qolip_set_id' FROM mini_qolip_product_specs s
+                         WHERE lower(s.qolip_code) = lower(candidates.qolip_code)), '') AS qolip_set_id,
                created_by_role, created_by_ref, created_by_name
         FROM (
             SELECT

@@ -262,6 +262,7 @@ struct MemoryInventoryState {
     transfers: BTreeMap<String, InventoryTransfer>,
     idempotency: BTreeMap<String, String>,
     relocation_idempotency: BTreeMap<String, (InventoryAssetKind, String, String)>,
+    delivery_receipts: BTreeMap<String, serde_json::Value>,
     relocation_batch_idempotency: BTreeMap<String, (Vec<(InventoryAssetKind, String)>, String)>,
     return_batch_idempotency: BTreeMap<String, Vec<(InventoryAssetKind, String)>>,
     action_idempotency: BTreeMap<String, (String, InventoryTransferActionKind)>,
@@ -275,6 +276,11 @@ pub struct MemoryInventoryMovementStore {
 impl MemoryInventoryMovementStore {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    #[cfg(test)]
+    pub async fn delivery_receipt_audit(&self, key: &str) -> Option<serde_json::Value> {
+        self.state.read().await.delivery_receipts.get(key).cloned()
     }
 
     #[cfg(test)]

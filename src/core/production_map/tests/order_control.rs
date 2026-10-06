@@ -172,6 +172,7 @@ async fn start_with_qolip(
         order_id,
         &[QolipOrderStartPreparation {
             spec: QolipProductSpec {
+                qolip_set_id: String::new(),
                 qolip_code: "QOLIP-ORDER-CONTROL-TEST".to_string(),
                 ..QolipProductSpec::default()
             },

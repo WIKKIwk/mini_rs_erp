@@ -50,7 +50,7 @@ pub use production_maps::{
     raw_material_assignment_diagnostics, raw_material_assignment_lookup,
     raw_material_assignment_orders, raw_material_assignments, raw_material_history,
     raw_material_intake, raw_material_intake_candidates, raw_material_rules,
-    raw_material_start_requirements, raw_material_stock, raw_material_stock_reprint_confirm,
+    raw_material_start_requirements, raw_material_start_receipt, raw_material_stock, raw_material_stock_reprint_confirm,
     raw_material_stock_reprint_prepare, werka_paddon_preview, werka_paddon_receive,
     werka_qr_preview, werka_wip_receive,
 };

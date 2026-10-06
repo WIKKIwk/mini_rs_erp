@@ -309,7 +309,7 @@ pub(super) async fn raw_material_usable_barcodes(
     Ok(usable)
 }
 
-async fn raw_material_execution_status(
+pub(super) async fn raw_material_execution_status(
     state: &AppState,
     assignment: &RawMaterialAssignment,
     stock: Option<&RawMaterialStockEntry>,

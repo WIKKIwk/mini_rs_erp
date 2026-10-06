@@ -48,11 +48,15 @@ pub async fn order_products(
         .iter()
         .filter_map(|(_, code)| code.clone())
         .collect::<Vec<_>>();
-    let products = state
+    let mut products = state
         .qolip
         .order_products(&codes)
         .await
         .map_err(qolip_error)?;
+    let is_admin = state.admin.principal_has_capability(&principal, Capability::AdminAccess).await;
+    if !is_admin && principal.role != crate::core::auth::models::PrincipalRole::MaterialTaminotchi {
+        products = state.qolip.visible_order_products(&codes, &principal).await.map_err(qolip_error)?;
+    }
     let orders = maps
         .into_iter()
         .map(|(id, code)| {

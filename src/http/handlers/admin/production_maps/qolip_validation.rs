@@ -178,5 +178,6 @@ fn required_qolip_payload(spec: &crate::core::qolip::QolipProductSpec) -> serde_
     serde_json::json!({
         "qolip_code": spec.qolip_code.as_str(),
         "color": spec.color.as_str(),
+        "qolip_set_id": spec.set_id(),
     })
 }

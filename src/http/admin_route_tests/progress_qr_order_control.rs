@@ -42,6 +42,7 @@ async fn worker_progress_qr_checks_global_freeze_before_downstream_route() {
         ORDER,
         &[QolipOrderStartPreparation {
             spec: QolipProductSpec {
+                qolip_set_id: String::new(),
                 qolip_code: "QOLIP-QR-FREEZE".into(),
                 ..Default::default()
             },

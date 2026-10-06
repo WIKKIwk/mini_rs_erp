@@ -928,6 +928,7 @@ impl QolipStorePort for FlippingCheckoutStore {
 
     async fn product_spec_by_qolip_code(&self, code: &str) -> Result<Option<QolipProductSpec>, QolipError> {
         Ok(Some(QolipProductSpec {
+            qolip_set_id: String::new(),
             warehouse: "Qolip ombor".to_string(),
             qolip_code: code.to_string(),
             ..QolipProductSpec::default()

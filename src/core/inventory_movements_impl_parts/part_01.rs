@@ -146,6 +146,8 @@ impl MemoryInventoryMovementStore {
             if *kind != input.asset_kind
                 || !asset_ref.eq_ignore_ascii_case(&input.asset_ref)
                 || location_id != &input.physical_location_id
+                || (actor.delivery_receipt.is_some()
+                    && state.delivery_receipts.get(&input.idempotency_key) != Some(&actor.delivery_receipt_payload()))
             {
                 return Err(InventoryMovementError::IdempotencyConflict);
             }
@@ -168,6 +170,16 @@ impl MemoryInventoryMovementStore {
             .assets
             .get_mut(&key)
             .ok_or(InventoryMovementError::AssetNotFound)?;
+        if let Some(receipt) = &actor.delivery_receipt {
+            if input.asset_kind != InventoryAssetKind::RawMaterial
+                || !receipt.asset_ref.eq_ignore_ascii_case(&asset.asset_ref)
+                || receipt.destination_location_id != input.physical_location_id
+                || (asset.physical_location.id != receipt.source_location_id
+                    && asset.physical_location.id != receipt.destination_location_id)
+            {
+                return Err(InventoryMovementError::AssetUnavailable);
+            }
+        }
         if !actor.can_manage_warehouse(&asset.custody_warehouse) {
             return Err(InventoryMovementError::WarehouseForbidden);
         }
@@ -195,6 +207,9 @@ impl MemoryInventoryMovementStore {
                 input.physical_location_id.clone(),
             ),
         );
+        if actor.delivery_receipt.is_some() {
+            state.delivery_receipts.insert(input.idempotency_key.clone(), actor.delivery_receipt_payload());
+        }
         Ok(saved)
     }
 

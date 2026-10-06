@@ -21,6 +21,7 @@ impl MemoryQolipStore {
             if product.first_qolip_code.trim().is_empty() {
                 product.first_qolip_code = spec.qolip_code.clone();
             }
+            product.qolip_set_id = spec.set_id();
             product.warehouse = spec.warehouse.clone();
             product.qolip_code = spec.qolip_code.clone();
             product.size = spec.size;
@@ -28,6 +29,7 @@ impl MemoryQolipStore {
             product.has_qolip_spec = true;
         } else {
             products.push(QolipProduct {
+                    qolip_set_id: spec.set_id(),
                     warehouse: spec.warehouse.clone(),
                 code: spec.item_code.clone(),
                 name: spec.item_name.clone(),
@@ -71,13 +73,15 @@ impl MemoryQolipStore {
                 if product.first_qolip_code.trim().is_empty() {
                     product.first_qolip_code = spec.qolip_code.clone();
                 }
-                product.warehouse = spec.warehouse.clone();
+                product.qolip_set_id = spec.set_id();
+            product.warehouse = spec.warehouse.clone();
             product.qolip_code = spec.qolip_code.clone();
                 product.size = spec.size;
                 product.color = spec.color.clone();
                 product.has_qolip_spec = true;
             } else {
                 products.push(QolipProduct {
+                    qolip_set_id: spec.set_id(),
                     warehouse: spec.warehouse.clone(),
                     code: spec.item_code.clone(),
                     name: spec.item_name.clone(),
@@ -143,6 +147,7 @@ impl MemoryQolipStore {
                 .trim()
                 .eq_ignore_ascii_case(previous_qolip_code)
         }) {
+            product.qolip_set_id = spec.set_id();
             product.warehouse = spec.warehouse.clone();
             product.qolip_code = spec.qolip_code.clone();
             product.size = spec.size;

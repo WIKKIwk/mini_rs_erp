@@ -232,6 +232,7 @@ struct MovementIdentityRow {
     asset_kind: String,
     asset_ref: String,
     to_location_id: String,
+    payload_json: serde_json::Value,
 }
 
 #[derive(sqlx::FromRow)]

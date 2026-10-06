@@ -22,6 +22,7 @@ impl QolipStorePort for MemoryQolipStore {
                     && !spec.qolip_code.trim().is_empty()
             });
             result.push(QolipProduct {
+                qolip_set_id: String::new(),
                 code: product.code, name: product.name, item_group: product.item_group,
                 has_qolip_spec, ..Default::default()
             });

@@ -155,10 +155,14 @@ async fn prepare_qolips_for_bosma_start(
         .iter()
         .map(|code| code.trim().to_lowercase())
         .collect::<std::collections::BTreeSet<_>>();
-    let required = required_qolips
-        .iter()
+    let selected_set = preparations.first().map(|p| p.spec.set_id());
+    let required = required_qolips.iter()
+        .filter(|spec| Some(spec.set_id()) == selected_set)
         .map(|spec| spec.qolip_code.trim().to_lowercase())
         .collect::<std::collections::BTreeSet<_>>();
+    if preparations.iter().any(|p| Some(p.spec.set_id()) != selected_set) {
+        return Err(bad_request("qolip_scan_mixed_sets"));
+    }
     if scanned != required {
         return Err(bad_request("qolip_scan_incomplete"));
     }

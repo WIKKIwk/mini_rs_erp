@@ -9,6 +9,8 @@ pub struct QolipBlock {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QolipProduct {
     #[serde(default)]
+    pub qolip_set_id: String,
+    #[serde(default)]
     pub warehouse: String,
     pub code: String,
     pub name: String,
@@ -29,6 +31,8 @@ pub struct QolipProduct {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QolipProductSpec {
     #[serde(default)]
+    pub qolip_set_id: String,
+    #[serde(default)]
     pub warehouse: String,
     pub item_code: String,
     pub item_name: String,
@@ -40,6 +44,16 @@ pub struct QolipProductSpec {
     pub created_by_role: String,
     pub created_by_ref: String,
     pub created_by_name: String,
+}
+
+impl QolipProductSpec {
+    pub fn set_id(&self) -> String {
+        if !self.qolip_set_id.trim().is_empty() {
+            return self.qolip_set_id.trim().to_string();
+        }
+        let item = self.item_code.trim().to_lowercase();
+        format!("legacy:{}:{}:{}", item.chars().count(), item, self.warehouse.trim().to_lowercase())
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]

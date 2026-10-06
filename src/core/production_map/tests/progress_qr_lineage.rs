@@ -481,6 +481,7 @@ async fn qr_resources_survive_validated_start_pause_resume_and_complete() {
                     ORDER,
                     &[QolipOrderStartPreparation {
                         spec: QolipProductSpec {
+                            qolip_set_id: String::new(),
                             qolip_code: plate_codes[0].clone(),
                             ..Default::default()
                         },

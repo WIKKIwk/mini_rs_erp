@@ -21,6 +21,24 @@ pub struct QolipService {
 }
 
 impl QolipService {
+    pub async fn visible_order_products(
+        &self, item_codes: &[String], principal: &Principal,
+    ) -> Result<Vec<QolipProduct>, QolipError> {
+        let allowed = self.warehouses_for_principal(principal, false).await?;
+        let mut products = self.store.order_products(item_codes).await?;
+        for product in &mut products {
+            product.has_qolip_spec = self.store.product_specs(&product.code).await?.iter().any(|spec| {
+                spec.item_code.trim().eq_ignore_ascii_case(product.code.trim())
+                    && spec.item_group.trim().eq_ignore_ascii_case(product.item_group.trim())
+                    && !spec.qolip_code.trim().is_empty()
+                    && !spec.warehouse.trim().is_empty() && allowed.iter().any(|warehouse| {
+                    warehouse.trim().eq_ignore_ascii_case(spec.warehouse.trim())
+                })
+            });
+        }
+        Ok(products)
+    }
+
     pub async fn order_products(&self, item_codes: &[String]) -> Result<Vec<QolipProduct>, QolipError> {
         self.store.order_products(item_codes).await
     }

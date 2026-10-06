@@ -54,6 +54,7 @@ async fn save_product_spec_tx(
          RETURNING item_code, item_name, item_group, qolip_code, size,
              COALESCE(payload_json->>'warehouse', '') AS warehouse,
              COALESCE(payload_json->>'color', '') AS color,
+             COALESCE(payload_json->>'qolip_set_id', '') AS qolip_set_id,
              created_by_role, created_by_ref, created_by_name",
     )
     .bind(spec.item_code.trim())
@@ -143,6 +144,14 @@ pub(super) async fn rename_product_spec(
         return Err(QolipError::MissingQolipCode);
     }
     let mut tx = pool.begin().await.map_err(|_| QolipError::StoreFailed)?;
+    let mut codes = vec![previous.clone(), next.clone()];
+    codes.sort();
+    codes.dedup();
+    for code in codes {
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(format!("qolip:{code}")).execute(&mut *tx).await
+            .map_err(|_| QolipError::StoreFailed)?;
+    }
     spec.color =
         allocate_panton_color(&mut tx, &spec.qolip_code, Some(&previous), &spec.color).await?;
     sqlx::query(
@@ -236,6 +245,7 @@ pub(super) async fn rename_product_spec(
          RETURNING item_code, item_name, item_group, qolip_code, size,
              COALESCE(payload_json->>'warehouse', '') AS warehouse,
              COALESCE(payload_json->>'color', '') AS color,
+             COALESCE(payload_json->>'qolip_set_id', '') AS qolip_set_id,
              created_by_role, created_by_ref, created_by_name",
     )
     .bind(&previous)
@@ -272,6 +282,11 @@ pub(super) async fn delete_product_specs(
     }
 
     let mut tx = pool.begin().await.map_err(|_| QolipError::StoreFailed)?;
+    for code in &normalized {
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(format!("qolip:{code}")).execute(&mut *tx).await
+            .map_err(|_| QolipError::StoreFailed)?;
+    }
     sqlx::query(
         "SELECT pg_advisory_xact_lock(hashtext(lock_key)::bigint)
          FROM (

@@ -744,6 +744,11 @@ pub(super) fn preserve_qolip_lineage(
     if !replacement.is_object() {
         replacement = serde_json::json!({});
     }
+    if replacement.get("qolip_lock_owner").is_none()
+        && let Some(owner) = current.payload_json.get("qolip_lock_owner")
+    {
+        replacement["qolip_lock_owner"] = owner.clone();
+    }
     for field in [
         START_RESOURCES_PAYLOAD_FIELD,
         INPUT_LINEAGE_PAYLOAD_FIELD,

@@ -1152,6 +1152,9 @@ impl PostgresProductionMapStore {
         }
         if let Some(session) = &write.session {
             reject_qolip_in_use_tx(&mut tx, session).await?;
+            if matches!(event.action, crate::core::production_map::queue_state::ApparatusQueueAction::Start) {
+                qolip_session_helpers::validate_qolip_set_tx(&mut tx, session).await?;
+            }
         }
         put_queue_action_state_tx(&mut tx, event).await?;
         let remove_order_from_sequence = matches!(
@@ -1423,6 +1426,10 @@ fn production_map_qolip_checkout_error(error: QolipError) -> ProductionMapError 
         _ => ProductionMapError::StoreFailed,
     }
 }
+
+#[cfg(test)]
+#[path = "postgres_production_map/qolip/alternative_sets_tests.rs"]
+mod qolip_alternative_sets_tests;
 
 #[cfg(test)]
 mod tests {

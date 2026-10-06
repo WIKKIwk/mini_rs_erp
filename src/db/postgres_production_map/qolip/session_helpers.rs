@@ -84,3 +84,57 @@ pub(super) async fn reject_qolip_in_use_tx(
     }
     Ok(())
 }
+
+pub(super) async fn validate_qolip_set_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    session: &OrderRunSession,
+) -> Result<(), ProductionMapError> {
+    let Some(set_id) = session.payload_json.get("qolip_set_id")
+        .and_then(serde_json::Value::as_str).filter(|id| !id.is_empty()) else {
+        return Ok(());
+    };
+    let item_code = sqlx::query_scalar::<_, String>(
+        "SELECT product_code FROM mini_production_maps WHERE id = $1",
+    ).bind(&session.order_id).fetch_one(&mut **tx).await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    let mut rows = sqlx::query_as::<_, (String, String, String)>(
+        "SELECT qolip_code, COALESCE(payload_json->>'qolip_set_id', ''),
+                COALESCE(payload_json->>'warehouse', '')
+         FROM mini_qolip_product_specs WHERE lower(item_code) = lower($1)
+           AND (payload_json->>'qolip_set_id' = $2 OR
+                (COALESCE(btrim(payload_json->>'qolip_set_id'), '') = '' AND
+                 'legacy:' || length(lower(btrim(item_code)))::text || ':' || lower(btrim(item_code))
+                   || ':' || lower(btrim(COALESCE(payload_json->>'warehouse', ''))) = $2))
+         ORDER BY lower(qolip_code) FOR SHARE",
+    ).bind(&item_code).bind(set_id).fetch_all(&mut **tx).await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    let legacy = sqlx::query_as::<_, (String, String, String)>(
+        "SELECT l.qolip_code, ''::text,
+                COALESCE(mini_qolip_assigned_warehouse(l.created_by_role, l.created_by_ref), '')
+         FROM mini_qolip_locations l WHERE lower(l.item_code) = lower($1)
+           AND NOT EXISTS (SELECT 1 FROM mini_qolip_product_specs s WHERE lower(s.qolip_code) = lower(l.qolip_code))
+         UNION ALL
+         SELECT c.qolip_code, ''::text,
+                COALESCE(mini_qolip_assigned_warehouse(c.issued_by_role, c.issued_by_ref), '')
+         FROM mini_qolip_checkouts c WHERE lower(c.item_code) = lower($1) AND c.status = 'open'
+           AND NOT EXISTS (SELECT 1 FROM mini_qolip_product_specs s WHERE lower(s.qolip_code) = lower(c.qolip_code))",
+    ).bind(&item_code).fetch_all(&mut **tx).await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    rows.extend(legacy);
+    let required = rows.into_iter().filter_map(|(code, id, warehouse)| {
+        let spec = crate::core::qolip::QolipProductSpec {
+            qolip_set_id: id, item_code: item_code.clone(), warehouse,
+            ..Default::default()
+        };
+        (spec.set_id() == set_id).then(|| code.trim().to_lowercase())
+    }).collect::<std::collections::BTreeSet<_>>();
+    let scanned = session.payload_json.get("qolip_codes")
+        .and_then(serde_json::Value::as_array).into_iter().flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(|code| code.trim().to_lowercase())
+        .collect::<std::collections::BTreeSet<_>>();
+    if required.is_empty() || required != scanned {
+        return Err(ProductionMapError::QolipCodeMismatch);
+    }
+    Ok(())
+}

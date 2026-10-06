@@ -32,6 +32,7 @@ impl MemoryQolipStore {
         let mut stored = self.product_specs.write().await;
         let mut locations = self.locations.write().await;
         let mut saved = Vec::new();
+        let mut transferred_sets = BTreeMap::new();
         for code in &input.qolip_codes {
             if checkouts
                 .iter()
@@ -63,6 +64,8 @@ impl MemoryQolipStore {
             if !spec.item_code.eq_ignore_ascii_case(&input.from_item_code) {
                 return Err(QolipError::ProductTransferConflict);
             }
+            spec.qolip_set_id = transferred_sets.entry(spec.set_id())
+                .or_insert_with(|| format!("qolip-set:{:032x}", rand::random::<u128>())).clone();
             spec.item_code = target.code.clone();
             spec.item_name = target.name.clone();
             spec.item_group = target.item_group.clone();

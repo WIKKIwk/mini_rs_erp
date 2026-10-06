@@ -135,7 +135,7 @@ async fn insert_movement_event_tx(
             $1, $2, $3, NULLIF($4, ''),
             $5, $6, $7, $8, $9, $10,
             ($11::bigint::numeric / 1000000)::numeric(18,6), $12,
-            $13, $14, $15, $16, '{}'::jsonb
+            $13, $14, $15, $16, $17
         )
         ON CONFLICT (idempotency_key) DO NOTHING
         "#,
@@ -156,6 +156,7 @@ async fn insert_movement_event_tx(
     .bind(draft.actor.principal.ref_.trim())
     .bind(draft.actor.principal.display_name.trim())
     .bind(draft.note)
+    .bind(draft.actor.delivery_receipt_payload())
     .execute(&mut **tx)
     .await
     .map_err(store_error)?;

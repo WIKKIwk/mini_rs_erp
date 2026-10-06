@@ -165,7 +165,7 @@ async fn movement_event_identity_tx(
 ) -> Result<Option<MovementIdentityRow>, InventoryMovementError> {
     sqlx::query_as::<_, MovementIdentityRow>(
         r#"
-        SELECT event_type, asset_kind, asset_ref, to_location_id
+        SELECT event_type, asset_kind, asset_ref, to_location_id, payload_json
         FROM mini_inventory_movement_events
         WHERE idempotency_key = $1
         "#,

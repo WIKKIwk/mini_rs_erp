@@ -67,6 +67,7 @@ pub(super) async fn transfer(
     }
 
     let mut previous = Vec::new();
+    let mut transferred_sets = std::collections::BTreeMap::new();
     let mut specs = Vec::new();
     for code in &input.qolip_codes {
         reject_in_use(&mut tx, code).await?;
@@ -80,6 +81,8 @@ pub(super) async fn transfer(
             return Err(QolipError::ProductTransferConflict);
         }
         let mut spec = old.clone();
+        spec.qolip_set_id = transferred_sets.entry(old.set_id())
+            .or_insert_with(|| format!("qolip-set:{:032x}", rand::random::<u128>())).clone();
         spec.item_code = target.0.clone();
         spec.item_name = target.1.clone();
         spec.item_group = target.2.clone();
@@ -168,6 +171,7 @@ async fn load_spec(
         "SELECT item_code, item_name, item_group, qolip_code, size,
             COALESCE(payload_json->>'warehouse', '') AS warehouse,
             COALESCE(payload_json->>'color', '') AS color,
+            COALESCE(payload_json->>'qolip_set_id', '') AS qolip_set_id,
             created_by_role, created_by_ref, created_by_name
          FROM mini_qolip_product_specs WHERE lower(qolip_code) = $1 FOR UPDATE",
     )

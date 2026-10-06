@@ -130,6 +130,7 @@ impl MemoryQolipStore {
                     .get(&item_key)
                     .map(|index| &products[*index]);
                 let item = QolipProduct {
+                    qolip_set_id: spec.set_id(),
                     warehouse: spec.warehouse.clone(),
                     code: spec.item_code.clone(),
                     name: base
@@ -175,6 +176,7 @@ impl MemoryQolipStore {
                     .get(&item_key)
                     .map(|index| &products[*index]);
                 let item = QolipProduct {
+                    qolip_set_id: String::new(),
                     warehouse: location.warehouse.clone(),
                     code: location.item_code.clone(),
                     name: base
@@ -222,6 +224,7 @@ impl MemoryQolipStore {
                     .get(&item_key)
                     .map(|index| &products[*index]);
                 let item = QolipProduct {
+                    qolip_set_id: String::new(),
                     warehouse: checkout.warehouse.clone(),
                     code: checkout.item_code.clone(),
                     name: base
@@ -258,6 +261,7 @@ impl MemoryQolipStore {
                 }
                 let mut item = product.clone();
                 // This branch is a shared product picker row, not a mold record.
+                item.qolip_set_id.clear();
                 item.qolip_code.clear();
                 item.first_qolip_code.clear();
                 item.warehouse.clear();

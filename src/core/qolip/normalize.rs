@@ -139,6 +139,7 @@ pub(super) fn normalize_product_spec(
         return Err(QolipError::InvalidSize);
     }
     Ok(QolipProductSpec {
+        qolip_set_id: format!("qolip-set:{:032x}", rand::random::<u128>()),
         warehouse: trim_owned(warehouse),
         item_code,
         item_name,

@@ -83,9 +83,14 @@ impl PreparedApparatusQueueAction {
     }
 
     pub fn attach_qolip_codes(&mut self, qolip_codes: &[String]) {
-        let Some(lineage) = QolipLineage::from_codes(qolip_codes) else {
+        self.attach_qolip_set(qolip_codes, "");
+    }
+
+    pub fn attach_qolip_set(&mut self, qolip_codes: &[String], set_id: &str) {
+        let Some(mut lineage) = QolipLineage::from_codes(qolip_codes) else {
             return;
         };
+        lineage.qolip_set_id = set_id.to_string();
         if let Some(session) = &mut self.session {
             lineage.write_to_payload(&mut session.payload_json);
             session.payload_json["qolip_lock_owner"] = serde_json::Value::Bool(true);

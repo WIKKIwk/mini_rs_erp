@@ -200,6 +200,7 @@ fn qolip_validation(order_id: &str) -> TrustedQolipStartValidation {
         order_id,
         &[QolipOrderStartPreparation {
             spec: QolipProductSpec {
+                qolip_set_id: String::new(),
                 qolip_code: "QOLIP-CAPACITY-TEST".to_string(),
                 ..QolipProductSpec::default()
             },

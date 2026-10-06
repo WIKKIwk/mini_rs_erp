@@ -48,6 +48,8 @@ pub use material_link_requests::material_link_requests;
 pub(crate) use raw_materials::validate_receipt_order_assignment;
 mod raw_material_reprint;
 mod raw_materials;
+mod raw_material_start_receipt;
+pub use raw_material_start_receipt::raw_material_start_receipt;
 mod wip;
 mod warehouse_qr;
 pub use warehouse_qr::{werka_qr_preview, werka_wip_receive};

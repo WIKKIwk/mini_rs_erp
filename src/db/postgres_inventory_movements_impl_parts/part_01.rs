@@ -173,6 +173,7 @@ impl PostgresInventoryMovementStore {
                 || existing.asset_kind != input.asset_kind.as_str()
                 || !existing.asset_ref.eq_ignore_ascii_case(&input.asset_ref)
                 || existing.to_location_id != input.physical_location_id
+                || (actor.delivery_receipt.is_some() && existing.payload_json != actor.delivery_receipt_payload())
             {
                 return Err(InventoryMovementError::IdempotencyConflict);
             }
@@ -182,6 +183,23 @@ impl PostgresInventoryMovementStore {
 
         let asset = lock_asset_tx(&mut tx, input.asset_kind, &input.asset_ref).await?;
         ensure_asset_available(&asset)?;
+        if let Some(receipt) = &actor.delivery_receipt {
+            if input.asset_kind != InventoryAssetKind::RawMaterial
+                || !receipt.asset_ref.eq_ignore_ascii_case(&asset.asset_ref)
+                || receipt.destination_location_id != input.physical_location_id
+                || (asset.physical_location_id != receipt.source_location_id
+                    && asset.physical_location_id != receipt.destination_location_id)
+            {
+                return Err(InventoryMovementError::AssetUnavailable);
+            }
+            let assigned: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM mini_raw_material_assignments
+                 WHERE lower(barcode) = lower($1) AND order_id = $2
+                   AND canonical_apparatus_id = $3)",
+            ).bind(&asset.identifier).bind(&receipt.order_id).bind(&receipt.apparatus_id)
+                .fetch_one(&mut *tx).await.map_err(store_error)?;
+            if !assigned { return Err(InventoryMovementError::AssetUnavailable); }
+        }
         if !actor.can_manage_warehouse(&asset.warehouse) {
             return Err(InventoryMovementError::WarehouseForbidden);
         }
@@ -241,6 +259,24 @@ impl PostgresInventoryMovementStore {
             },
         )
         .await?;
+        if let Some(receipt) = &actor.delivery_receipt {
+            use crate::db::postgres_raw_material_events::{RawMaterialEventDraft, insert_raw_material_event_tx};
+            insert_raw_material_event_tx(&mut tx, RawMaterialEventDraft {
+                idempotency_key: format!("delivery:{}", input.idempotency_key),
+                event_type: "delivery_received".into(),
+                warehouse: asset.warehouse.clone(), barcode: asset.identifier.clone(),
+                item_code: asset.item_code.clone(), item_name: asset.item_name.clone(),
+                qty_delta: 0.0, uom: asset.uom.clone(),
+                stock_status_before: Some(asset.status.clone()), stock_status_after: Some(asset.status.clone()),
+                order_id: Some(receipt.order_id.clone()), apparatus: Some(receipt.apparatus_id.clone()),
+                actor_role: inventory_role_code(&actor.principal.role).into(),
+                actor_ref: actor.principal.ref_.clone(), actor_display_name: actor.principal.display_name.clone(),
+                owner_role: String::new(), owner_ref: String::new(), owner_display_name: String::new(),
+                source_type: "material_delivery".into(), source_id: input.idempotency_key.clone(),
+                source_line_ref: None, correlation_id: Some(input.idempotency_key.clone()),
+                payload_json: actor.delivery_receipt_payload(),
+            }).await.map_err(store_error)?;
+        }
         tx.commit().await.map_err(store_error)?;
 
         let mut saved = fetch_asset(&self.pool, input.asset_kind, &input.asset_ref).await?;

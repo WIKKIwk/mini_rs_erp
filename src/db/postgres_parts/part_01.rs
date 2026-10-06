@@ -3,7 +3,7 @@ const DEFAULT_MAX_CONNECTIONS: u32 = 16;
 const DEFAULT_ACQUIRE_TIMEOUT_MS: u64 = 500;
 const MIGRATION_LOCK_KEY: i64 = 6_514_811_918_052_026_001;
 
-const POSTGRES_MIGRATIONS: [(&str, &str); 134] = [
+const POSTGRES_MIGRATIONS: [(&str, &str); 136] = [
     (
         "0001_mini_erp_foundation",
         include_str!("../../../migrations/postgres/0001_mini_erp_foundation.sql"),
@@ -545,6 +545,14 @@ const POSTGRES_MIGRATIONS: [(&str, &str); 134] = [
     (
         "0134_preserve_template_maps_on_order_reset",
         include_str!("../../../migrations/postgres/0134_preserve_template_maps_on_order_reset.sql"),
+    ),
+    (
+        "0135_material_delivery_receipts",
+        include_str!("../../../migrations/postgres/0135_material_delivery_receipts.sql"),
+    ),
+    (
+        "0136_qolip_alternative_sets",
+        include_str!("../../../migrations/postgres/0136_qolip_alternative_sets.sql"),
     ),
 ];
 

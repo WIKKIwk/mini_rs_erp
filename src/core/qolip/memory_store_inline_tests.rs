@@ -4,6 +4,7 @@ mod tests {
 
     fn product(code: &str, name: &str) -> QolipProduct {
         QolipProduct {
+            qolip_set_id: String::new(),
             warehouse: "Qolip ombor".to_string(),
             code: code.to_string(),
             name: name.to_string(),
@@ -20,6 +21,7 @@ mod tests {
 
     fn product_spec(item_code: &str, qolip_code: &str) -> QolipProductSpec {
         QolipProductSpec {
+            qolip_set_id: String::new(),
             warehouse: "Qolip ombor".to_string(),
             item_code: item_code.to_string(),
             item_name: "Kross qolip".to_string(),

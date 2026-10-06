@@ -52,6 +52,7 @@ pub(super) async fn load(pool: &PgPool, codes: &[String]) -> Result<Vec<QolipPro
     Ok(rows
         .into_iter()
         .map(|(code, name, item_group, has_qolip_spec)| QolipProduct {
+            qolip_set_id: String::new(),
             code,
             name,
             item_group,

@@ -4,6 +4,11 @@ use super::*;
 use crate::core::admin::service::helpers::dedupe_strings;
 
 impl AdminService {
+    pub async fn principal_is_active(&self, principal: &Principal) -> Result<bool, AdminPortError> {
+        let state = self.state_for(principal.ref_.trim()).await?;
+        Ok(!state.blocked && !state.removed)
+    }
+
     pub fn with_role_store(mut self, role_store: Arc<dyn RoleDefinitionStorePort>) -> Self {
         self.role_store = role_store;
         self

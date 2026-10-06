@@ -148,7 +148,10 @@ impl QolipService {
         if !previous_qolip_code.is_empty() {
             if let Some(existing) = self.store.product_spec_by_qolip_code(&previous_qolip_code).await? {
                 if !existing.warehouse.trim().is_empty() {
-                    normalized.warehouse = existing.warehouse;
+                    normalized.warehouse = existing.warehouse.clone();
+                }
+                if normalized.item_code.eq_ignore_ascii_case(&existing.item_code) {
+                    normalized.qolip_set_id = existing.set_id();
                 }
                 normalized.created_by_role = existing.created_by_role;
                 normalized.created_by_ref = existing.created_by_ref;
@@ -181,11 +184,19 @@ impl QolipService {
         }
         let mut seen_codes = std::collections::BTreeSet::new();
         let mut normalized = Vec::with_capacity(inputs.len());
+        let set_id = format!("qolip-set:{:032x}", rand::random::<u128>());
         for input in inputs {
             if !input.previous_qolip_code.trim().is_empty() {
                 return Err(QolipError::QolipCodeConflict);
             }
-            let spec = normalize_product_spec(input, principal)?;
+            let mut spec = normalize_product_spec(input, principal)?;
+            spec.qolip_set_id = set_id.clone();
+            if normalized.first().is_some_and(|first: &QolipProductSpec| {
+                !first.item_code.eq_ignore_ascii_case(&spec.item_code)
+                    || !first.warehouse.eq_ignore_ascii_case(&spec.warehouse)
+            }) {
+                return Err(QolipError::QolipCodeMismatch);
+            }
             if !seen_codes.insert(spec.qolip_code.trim().to_lowercase()) {
                 return Err(QolipError::QolipCodeConflict);
             }

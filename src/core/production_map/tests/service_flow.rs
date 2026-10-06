@@ -5657,6 +5657,7 @@ async fn pause_first_stage_batch(
                     order_id,
                     &[QolipOrderStartPreparation {
                         spec: QolipProductSpec {
+                            qolip_set_id: String::new(),
                             qolip_code: "QOLIP-FLOW-TEST".to_string(),
                             ..QolipProductSpec::default()
                         },
@@ -5699,6 +5700,7 @@ async fn start_first_stage(
         order_id,
         &[QolipOrderStartPreparation {
             spec: QolipProductSpec {
+                qolip_set_id: String::new(),
                 qolip_code: "QOLIP-FLOW-TEST".to_string(),
                 ..QolipProductSpec::default()
             },
