@@ -1,6 +1,8 @@
 use super::queue_actions::progress_print_failure_json;
 use super::*;
-use crate::core::production_map::{OrderControlState, ProgressBatchCorrectionInput};
+use crate::core::production_map::{
+    OrderControlState, OrderProgressBatch, ProgressBatchCorrectionInput,
+};
 
 #[derive(serde::Deserialize)]
 struct ProgressQrLookupRequest {
@@ -100,16 +102,26 @@ pub async fn production_map_progress_qr_lookup(
             .state
         {
             OrderControlState::Frozen => {
-                return Err(production_map_error(ProductionMapError::OrderFrozen));
+                return Err(progress_qr_order_control_error(
+                    &state,
+                    &batch,
+                    ProductionMapError::OrderFrozen,
+                )
+                .await);
             }
             OrderControlState::FreezeRequested => {
-                return Err(production_map_error(ProductionMapError::OrderFreezeRequested));
+                return Err(progress_qr_order_control_error(
+                    &state,
+                    &batch,
+                    ProductionMapError::OrderFreezeRequested,
+                )
+                .await);
             }
             OrderControlState::Active => {}
         }
     }
     if scoped {
-        batch = state
+        let result = state
             .production_maps
             .start_input_for_qr(
                 &input.apparatus,
@@ -117,8 +129,15 @@ pub async fn production_map_progress_qr_lookup(
                 &input.progress_batch_id,
                 qr_payload,
             )
-            .await
-            .map_err(production_map_error)?;
+            .await;
+        batch = match result {
+            Ok(batch) => batch,
+            Err(error @ (ProductionMapError::OrderFrozen |
+                ProductionMapError::OrderFreezeRequested)) => {
+                return Err(progress_qr_order_control_error(&state, &batch, error).await);
+            }
+            Err(error) => return Err(production_map_error(error)),
+        };
     }
     let (input_route, input_route_error) = if batch.wip_status == OrderProgressBatchWipStatus::Waiting {
         match state.production_maps.progress_batch_input_route(&batch).await {
@@ -137,6 +156,31 @@ pub async fn production_map_progress_qr_lookup(
         "input_route": input_route,
         "input_route_error": input_route_error,
     })))
+}
+
+async fn progress_qr_order_control_error(
+    state: &AppState,
+    batch: &OrderProgressBatch,
+    error: ProductionMapError,
+) -> AdminError {
+    let mut response = production_map_error(error);
+    // Keep the freeze rejection even if its presentation-only title read fails.
+    let title = state
+        .production_maps
+        .raw_map(&batch.order_id)
+        .await
+        .ok()
+        .flatten()
+        .map(|map| map.title.trim().to_string())
+        .filter(|title| !title.is_empty())
+        .unwrap_or_else(|| {
+            batch.label_item_name.split(", apparat:")
+                .next().unwrap_or_default().trim().to_string()
+        });
+    if !title.is_empty() {
+        response.1.0.order_title = Some(title);
+    }
+    response
 }
 
 pub async fn production_map_progress_qr_report(

@@ -121,7 +121,9 @@ async fn worker_progress_qr_checks_global_freeze_before_downstream_route() {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::CONFLICT);
-        assert_eq!(json_body(response).await["error"], "order_frozen");
+        let body = json_body(response).await;
+        assert_eq!(body["error"], "order_frozen");
+        assert_eq!(body["order_title"], "Frozen waiting roll");
     }
     assert_eq!(
         state
