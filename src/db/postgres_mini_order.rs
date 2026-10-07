@@ -29,8 +29,9 @@ impl MiniOrderSink for PostgresMiniOrderSink {
         order_ids: &[String],
         item_groups: &[String],
     ) -> Result<Vec<OrderMaterialTask>, MiniOrderError> {
-        // The apparatus selects the queue window in the client. Supply coverage
-        // belongs to the order: layers may be delivered to different stages.
+        // The apparatus selects the queue window in the client. This task list
+        // contains only orders with no material assignment at any stage.
+        // Linking a material is independent of reserving or consuming stock.
         let groups: Vec<_> = item_groups
             .iter()
             .map(|group| group.trim().to_lowercase())
@@ -49,14 +50,7 @@ impl MiniOrderSink for PostgresMiniOrderSink {
              SELECT DISTINCT layers.order_id, item.code, item.name, layers.micron,
                     EXISTS (
                         SELECT 1 FROM mini_raw_material_assignments assignment
-                        JOIN mini_raw_material_stock stock ON stock.barcode = assignment.barcode
                         WHERE assignment.order_id = layers.order_id
-                          AND assignment.item_code = item.code
-                          AND stock.item_code = item.code
-                          AND abs(stock.micron - layers.micron) < 0.000001
-                          AND stock.reserved_order_id = layers.order_id
-                          AND (stock.status = 'consumed'
-                               OR (stock.status IN ('reserved', 'in_use') AND stock.qty > 0))
                     ) AS assigned
              FROM layers JOIN mini_items item
                ON lower(btrim(item.code)) = lower(layers.material_name)

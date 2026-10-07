@@ -18,6 +18,7 @@ pub struct OrderMaterialTask {
     pub item_code: String,
     pub material: String,
     pub micron: f64,
+    /// Whether this order has any material linked, regardless of stock usage.
     pub assigned: bool,
 }
 

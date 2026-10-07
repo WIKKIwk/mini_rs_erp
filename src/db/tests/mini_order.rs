@@ -27,7 +27,8 @@ async fn postgres_order_materials_read_saved_layers_in_one_query() {
                             {\"material\":\"PET\",\"micron\":\"20\"},
                             {\"material\":\"PET\",\"micron\":\"12\"},
                             {\"material_id\":\"pe-id\",\"material\":\"PE oq\",\"micron\":\"30\"}]'),
-            ('zakaz-9002', '[{\"material\":\"OPP\",\"micron\":\"25\"}]');")
+            ('zakaz-9002', '[{\"material\":\"OPP\",\"micron\":\"25\"}]'),
+            ('zakaz-9003', '[{\"material\":\"OPP\",\"micron\":\"25\"}]');")
         .execute(&pool).await.unwrap();
     let sink = PostgresMiniOrderSink::new(pool.clone());
     let materials = sink.order_materials("zakaz-9001").await.unwrap();
@@ -47,25 +48,32 @@ async fn postgres_order_materials_read_saved_layers_in_one_query() {
             ('pet20-other', 'zakaz-9002', 'FILM-PET'),
             ('pe-wrong', 'zakaz-9001', 'OLD-PE');
         INSERT INTO mini_raw_material_stock VALUES
-            ('pet12', 'FILM-PET', 12, 'zakaz-9001', 'reserved', 15),
+            ('pet12', 'FILM-PET', 12, '', 'available', 0.001),
             ('pet20-other', 'FILM-PET', 20, 'zakaz-9002', 'reserved', 15),
             ('pe-wrong', 'OLD-PE', 50, 'zakaz-9001', 'reserved', 15);")
         .execute(&pool).await.unwrap();
-    let ids = vec!["zakaz-9001".into(), "zakaz-9002".into()];
+    let ids = vec!["zakaz-9001".into(), "zakaz-9002".into(), "zakaz-9003".into()];
     let groups = vec!["Rulon".into()];
     let tasks = sink.order_material_tasks(&ids, &groups).await.unwrap();
-    assert_eq!(tasks.len(), 4);
-    assert!(tasks[0].assigned); // PET 12, matching order and micron.
-    assert!(!tasks[1].assigned); // PET 20 belongs to another order.
-    assert!(!tasks[2].assigned); // PE 30 was not supplied (only PE 50).
-    assert!(!tasks[3].assigned); // OPP has no assignment.
+    assert_eq!(tasks.len(), 5);
+    assert!(tasks[..4].iter().all(|task| task.assigned));
+    // A tiny available roll already removes the whole order, even when other
+    // layers are missing or the linked material has a different type/micron.
+    assert!(!tasks[4].assigned); // Only the order with no assignment is a task.
     assert!(sink.order_material_tasks(&ids, &["Kraska".into()]).await.unwrap().is_empty());
-    for (status, qty, expected) in [("consumed", 0, true), ("available", 15, false),
-                                  ("reserved", 0, false), ("in_use", 5, true)] {
+    for (status, qty) in [("consumed", 0), ("available", 15),
+                          ("reserved", 0), ("in_use", 5)] {
         sqlx::query("UPDATE mini_raw_material_stock SET status=$1, qty=$2 WHERE barcode='pet12'")
             .bind(status).bind(qty).execute(&pool).await.unwrap();
-        assert_eq!(sink.order_material_tasks(&ids, &groups).await.unwrap()[0].assigned, expected);
+        assert!(sink.order_material_tasks(&ids, &groups).await.unwrap()[..3]
+            .iter().all(|task| task.assigned));
     }
+    sqlx::query("DELETE FROM mini_raw_material_assignments WHERE order_id='zakaz-9001'")
+        .execute(&pool).await.unwrap();
+    let tasks = sink.order_material_tasks(&ids, &groups).await.unwrap();
+    assert!(tasks[..3].iter().all(|task| !task.assigned));
+    assert!(tasks[3].assigned);
+    assert!(!tasks[4].assigned); // Another order's link does not hide this order.
     pool.close().await;
 }
 
