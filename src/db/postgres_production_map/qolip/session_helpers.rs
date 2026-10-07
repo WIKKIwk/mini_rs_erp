@@ -2,10 +2,23 @@ use sqlx::{Postgres, Transaction};
 
 use crate::core::production_map::{OrderRunSession, OrderRunStatus, ProductionMapError};
 
+// Downstream WIP sessions retain mold identity as production history. Only a
+// session that claims the physical tooling participates in resource validation.
+fn session_owns_qolip_lock(session: &OrderRunSession) -> bool {
+    session
+        .payload_json
+        .get("qolip_lock_owner")
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
+}
+
 pub(super) async fn reject_qolip_in_use_tx(
     tx: &mut Transaction<'_, Postgres>,
     session: &OrderRunSession,
 ) -> Result<(), ProductionMapError> {
+    if !session_owns_qolip_lock(session) {
+        return Ok(());
+    }
     if !matches!(
         session.status,
         OrderRunStatus::Active
@@ -89,6 +102,9 @@ pub(super) async fn validate_qolip_set_tx(
     tx: &mut Transaction<'_, Postgres>,
     session: &OrderRunSession,
 ) -> Result<(), ProductionMapError> {
+    if !session_owns_qolip_lock(session) {
+        return Ok(());
+    }
     let Some(set_id) = session.payload_json.get("qolip_set_id")
         .and_then(serde_json::Value::as_str).filter(|id| !id.is_empty()) else {
         return Ok(());
