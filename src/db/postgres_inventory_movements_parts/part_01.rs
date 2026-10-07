@@ -294,7 +294,6 @@ async fn fetch_asset(
         .bind(50_i64)
         .bind(0_i64)
         .bind(false)
-        .bind("")
         .fetch_all(pool)
         .await
         .map_err(store_error)?;
