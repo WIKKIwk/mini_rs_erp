@@ -150,18 +150,41 @@ pub async fn production_map_qolip_validate(
         })));
     }
     reject_qolip_in_use(&state, &apparatus, order_id, &qolip_code).await?;
-    let preparation = state
-        .qolip
-        .prepare_qolip_code_for_order_start(
-            &qolip_code,
-            &map.product_code,
-            &map.title,
-            &principal.ref_,
-            &principal.display_name,
-            &principal,
+    let reacquisition = state
+        .production_maps
+        .qolip_scan_required_for_action(
+            &apparatus_id,
+            order_id,
+            queue_state::ApparatusQueueAction::Resume,
         )
         .await
-        .map_err(qolip_queue_error)?;
+        .map_err(production_map_error)?;
+    let preparation = if reacquisition {
+        state
+            .qolip
+            .prepare_qolip_code_for_order_reacquisition(
+                &qolip_code,
+                &map.product_code,
+                &map.title,
+                &principal.ref_,
+                &principal.display_name,
+                &principal,
+            )
+            .await
+    } else {
+        state
+            .qolip
+            .prepare_qolip_code_for_order_start(
+                &qolip_code,
+                &map.product_code,
+                &map.title,
+                &principal.ref_,
+                &principal.display_name,
+                &principal,
+            )
+            .await
+    }
+    .map_err(qolip_queue_error)?;
     Ok(json_response(serde_json::json!({
         "ok": true,
         "qolip": {

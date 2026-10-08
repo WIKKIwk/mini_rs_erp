@@ -194,6 +194,8 @@ pub async fn production_map_queue_action(
                 .map_err(production_map_error)?;
             Ok(json_response(serde_json::json!({
                 "ok": true,
+                "rev": state.production_maps.snapshot_revision(),
+                "epoch": state.production_maps.snapshot_epoch(),
                 "states": result.states,
                 "session": null,
                 "progress_event": null,

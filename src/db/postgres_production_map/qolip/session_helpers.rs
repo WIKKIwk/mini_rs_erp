@@ -12,6 +12,35 @@ fn session_owns_qolip_lock(session: &OrderRunSession) -> bool {
         == Some(true)
 }
 
+pub(super) async fn validate_reacquired_qolip_checkouts_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    session: &OrderRunSession,
+) -> Result<(), ProductionMapError> {
+    let codes = session
+        .payload_json
+        .get("qolip_codes")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str);
+    for code in codes {
+        let issued_to_worker: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM mini_qolip_checkouts
+             WHERE lower(qolip_code) = lower($1) AND lower(status) = 'open'
+               AND lower(issued_to_ref) = lower($2))",
+        )
+        .bind(code.trim())
+        .bind(session.worker_ref.trim())
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+        if !issued_to_worker {
+            return Err(ProductionMapError::QolipCodeMismatch);
+        }
+    }
+    Ok(())
+}
+
 pub(super) async fn reject_qolip_in_use_tx(
     tx: &mut Transaction<'_, Postgres>,
     session: &OrderRunSession,

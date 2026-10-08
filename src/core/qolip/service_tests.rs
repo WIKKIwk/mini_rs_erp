@@ -139,6 +139,9 @@ async fn order_start_accepts_slash_code_without_inventing_checkout() {
 
     assert_eq!(preparation.spec.qolip_code, "Milano Premium 30/40");
     assert!(preparation.checkout.is_none());
+    assert_eq!(service.prepare_qolip_code_for_order_reacquisition(
+        "Milano Premium 30/40", "ITEM-ORDER", "Order product", "worker-1", "Worker", &principal(),
+    ).await, Err(QolipError::CheckoutRequired));
     assert_eq!(
         service.product_spec_by_qolip_code("40").await.unwrap(),
         None,
@@ -282,6 +285,9 @@ async fn order_start_accepts_existing_checkout_for_same_worker() {
 
     assert_eq!(preparation.spec.qolip_code, "QOLIP-CHECKED-OUT");
     assert!(preparation.checkout.is_none());
+    assert!(service.prepare_qolip_code_for_order_reacquisition(
+        "QOLIP-CHECKED-OUT", "ITEM-ORDER", "Order product", "worker-1", "Worker", &principal(),
+    ).await.is_ok());
 }
 
 #[tokio::test]

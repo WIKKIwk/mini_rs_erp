@@ -7,7 +7,9 @@ async fn execute_queue_action(
     state_material_barcodes: Vec<String>,
     returned_paint_report: Option<crate::core::returned_paint::ReturnedPaintRequest>,
 ) -> Result<Response, AdminError> {
-    let qolip_preparations = if matches!(input.action, queue_state::ApparatusQueueAction::Start) {
+    let qolip_preparations = if state.production_maps.qolip_scan_required_for_action(
+        &input.apparatus, &input.order_id, input.action,
+    ).await.map_err(production_map_error)? {
         prepare_qolips_for_bosma_start(state, principal, &input, apparatus).await?
     } else {
         Vec::new()
@@ -226,6 +228,8 @@ async fn execute_queue_action(
     });
     let mut response = serde_json::json!({
         "ok": true,
+        "rev": state.production_maps.snapshot_revision(),
+        "epoch": state.production_maps.snapshot_epoch(),
         "states": result.states,
         "order_status": result.order_status,
         "session": result.session,

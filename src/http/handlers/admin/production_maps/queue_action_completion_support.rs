@@ -135,18 +135,32 @@ async fn prepare_qolips_for_bosma_start(
     let mut preparations = Vec::with_capacity(input.materials.qolip_codes.len());
     for qolip_code in &input.materials.qolip_codes {
         reject_qolip_in_use(state, apparatus, &input.order_id, qolip_code).await?;
-        let preparation = state
-            .qolip
-            .prepare_qolip_code_for_order_start(
-                qolip_code,
-                &map.product_code,
-                &map.title,
-                &principal.ref_,
-                &principal.display_name,
-                principal,
-            )
-            .await
-            .map_err(qolip_queue_error)?;
+        let preparation = if input.action == queue_state::ApparatusQueueAction::Resume {
+            state
+                .qolip
+                .prepare_qolip_code_for_order_reacquisition(
+                    qolip_code,
+                    &map.product_code,
+                    &map.title,
+                    &principal.ref_,
+                    &principal.display_name,
+                    principal,
+                )
+                .await
+        } else {
+            state
+                .qolip
+                .prepare_qolip_code_for_order_start(
+                    qolip_code,
+                    &map.product_code,
+                    &map.title,
+                    &principal.ref_,
+                    &principal.display_name,
+                    principal,
+                )
+                .await
+        }
+        .map_err(qolip_queue_error)?;
         preparations.push(preparation);
     }
     let scanned = input
@@ -156,11 +170,15 @@ async fn prepare_qolips_for_bosma_start(
         .map(|code| code.trim().to_lowercase())
         .collect::<std::collections::BTreeSet<_>>();
     let selected_set = preparations.first().map(|p| p.spec.set_id());
-    let required = required_qolips.iter()
+    let required = required_qolips
+        .iter()
         .filter(|spec| Some(spec.set_id()) == selected_set)
         .map(|spec| spec.qolip_code.trim().to_lowercase())
         .collect::<std::collections::BTreeSet<_>>();
-    if preparations.iter().any(|p| Some(p.spec.set_id()) != selected_set) {
+    if preparations
+        .iter()
+        .any(|p| Some(p.spec.set_id()) != selected_set)
+    {
         return Err(bad_request("qolip_scan_mixed_sets"));
     }
     if scanned != required {

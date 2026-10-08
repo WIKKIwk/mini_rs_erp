@@ -922,7 +922,7 @@ async fn session_assignment_and_capability_revocation_during_reads_discard_the_b
 }
 
 #[tokio::test]
-async fn one_revision_change_retries_and_returns_current_authoritative_control() {
+async fn unrelated_revision_change_reuses_sections_with_current_control_cursor() {
     let f = Fixture::new(PRINT).await;
     f.warm().await;
     let revision = f.state.production_maps.snapshot_revision();
@@ -945,7 +945,7 @@ async fn one_revision_change_retries_and_returns_current_authoritative_control()
     let result = task.await.unwrap();
     assert_eq!(result.status, StatusCode::OK, "{}", result.body);
     assert_eq!(result.body["control_state"]["rev"], revision + 1);
-    assert_eq!(f.qolips.products_reads.load(Ordering::SeqCst), 2);
+    assert_eq!(f.qolips.products_reads.load(Ordering::SeqCst), 1);
     let snapshot = f
         .state
         .production_maps
@@ -976,8 +976,14 @@ async fn repeated_revision_churn_stops_after_two_attempts_with_conflict() {
         )
         .await
     });
-    for _ in 0..2 {
+    for index in 0..2 {
         f.qolips.products_gate.wait_entered().await;
+        let mut changed = serde_json::to_value(map(PRINT)).unwrap();
+        let next_node = format!("work-{index}");
+        changed["nodes"][1]["id"] = json!(next_node);
+        changed["edges"][0]["to"] = json!(next_node);
+        changed["edges"][1]["from"] = json!(next_node);
+        f.maps.inner.put_map(serde_json::from_value(changed).unwrap()).await.unwrap();
         f.state.production_maps.notify_live();
         f.qolips.products_gate.resume();
     }
@@ -1262,4 +1268,95 @@ async fn oversized_section_is_bounded_and_preserves_the_control_and_other_sectio
         "oversized section must not leak into the response"
     );
     f.assert_no_writes();
+}
+
+#[tokio::test]
+async fn control_only_read_skips_sections_and_preserves_authority() {
+    let f = Fixture::new(PRINT).await;
+    let full = f.bootstrap(&f.worker, PRINT).await;
+    let material_reads = f.maps.material_reads.load(Ordering::SeqCst);
+    let qolip_reads = f.qolips.products_reads.load(Ordering::SeqCst);
+    let thin = f.request("GET", &f.worker,
+        &(query(BOOTSTRAP, PRINT, ORDER, "") + "&include_sections=false"), Value::Null).await;
+    assert_eq!(thin.status, StatusCode::OK, "{}", thin.body);
+    assert_eq!(thin.body["control_state"], full.body["control_state"]);
+    assert_eq!(f.maps.material_reads.load(Ordering::SeqCst), material_reads);
+    assert_eq!(f.qolips.products_reads.load(Ordering::SeqCst), qolip_reads);
+    assert!(thin.bytes < full.bytes);
+    let denied = f.request("GET", &f.worker,
+        &(query(BOOTSTRAP, "apparatus:default:bosma_6", ORDER, "") + "&include_sections=false"),
+        Value::Null).await;
+    assert!(!denied.status.is_success());
+    f.assert_no_writes();
+}
+
+#[tokio::test]
+async fn gzip_negotiation_is_lossless_and_conditional_snapshot_stays_empty() {
+    use std::io::Read;
+    let f = Fixture::new(PRINT).await;
+    let uri = format!("{SEQUENCE}?worker_scope=true");
+    let plain = f.request("GET", &f.worker, &uri, Value::Null).await;
+    assert_eq!(plain.status, StatusCode::OK);
+    for encoding in ["gzip", "identity", "gzip;q=0", "br"] {
+        let response = f.router.clone().oneshot(Request::builder().uri(&uri)
+            .header(header::AUTHORIZATION, format!("Bearer {}", f.worker))
+            .header(header::ACCEPT_ENCODING, encoding).body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let compressed = response.headers().get(header::CONTENT_ENCODING)
+            .is_some_and(|value| value == "gzip");
+        assert_eq!(compressed, encoding == "gzip");
+        if compressed {
+            assert!(response.headers().get(header::VARY).unwrap().to_str().unwrap()
+                .to_lowercase().contains("accept-encoding"));
+        }
+        let bytes = to_bytes(response.into_body(), 8 * 1024 * 1024).await.unwrap();
+        let decoded = if compressed {
+            assert!(bytes.len() < plain.bytes);
+            let mut decoder = flate2::read::GzDecoder::new(&bytes[..]);
+            let mut decoded = Vec::new();
+            decoder.read_to_end(&mut decoded).unwrap();
+            decoded
+        } else { bytes.to_vec() };
+        assert_eq!(serde_json::from_slice::<Value>(&decoded).unwrap(), plain.body);
+    }
+    let conditional = format!("{uri}&if_rev={}&if_epoch={}&if_scope={}",
+        plain.body["rev"], urlencoding::encode(plain.body["epoch"].as_str().unwrap()),
+        urlencoding::encode(plain.body["scope"].as_str().unwrap()));
+    let response = f.router.clone().oneshot(Request::builder().uri(conditional)
+        .header(header::AUTHORIZATION, format!("Bearer {}", f.worker))
+        .header(header::ACCEPT_ENCODING, "gzip").body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+    assert!(response.headers().get(header::CONTENT_ENCODING).is_none());
+    assert!(to_bytes(response.into_body(), 1024).await.unwrap().is_empty());
+    f.assert_no_writes();
+}
+
+#[tokio::test]
+async fn queue_action_ack_cursor_covers_committed_state_and_rejected_replay_does_not_write() {
+    let f = Fixture::new(CUT).await;
+    let mut state = f.state.clone();
+    let store = Arc::new(MemoryProductionMapStore::default());
+    const ACK_ORDER: &str = "zakaz-queue-ack";
+    let mut seeded_map = map(CUT);
+    seeded_map.id = ACK_ORDER.into();
+    store.put_map(seeded_map).await.unwrap();
+    store.put_apparatus_sequence(CUT, vec![ACK_ORDER.into()]).await.unwrap();
+    state.production_maps = ProductionMapService::new(store.clone(),
+        Arc::new(CanonicalServiceApparatusResolver::new(state.apparatus.clone())));
+    let router = build_router(state.clone());
+    let body = json!({"apparatus":CUT,"order_id":ACK_ORDER,"action":"start"});
+    let result = request(&router, "POST", &f.worker,
+        "/v1/mobile/admin/production-maps/queue-action", body.clone()).await;
+    assert_eq!(result.status, StatusCode::OK, "{}", result.body);
+    assert_eq!(result.body["epoch"], state.production_maps.snapshot_epoch());
+    assert_eq!(result.body["rev"], state.production_maps.snapshot_revision());
+    assert_eq!(result.body["states"][ACK_ORDER], "in_progress");
+    let committed = store.apparatus_queue_states().await.unwrap();
+    assert_eq!(committed[CUT][ACK_ORDER], "in_progress");
+    let revision = state.production_maps.snapshot_revision();
+    let rejected = request(&router, "POST", &f.worker,
+        "/v1/mobile/admin/production-maps/queue-action", body).await;
+    assert!(!rejected.status.is_success());
+    assert_eq!(store.apparatus_queue_states().await.unwrap(), committed);
+    assert_eq!(state.production_maps.snapshot_revision(), revision);
 }

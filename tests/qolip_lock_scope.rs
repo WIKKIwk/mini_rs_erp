@@ -335,7 +335,6 @@ async fn postgres_physical_print_claims_still_enforce_mold_locks_and_set_members
     for status in [
         OrderRunStatus::Active,
         OrderRunStatus::Paused,
-        OrderRunStatus::Frozen,
         OrderRunStatus::RollDetached,
     ] {
         f.store
@@ -368,6 +367,31 @@ async fn postgres_physical_print_claims_still_enforce_mold_locks_and_set_members
             "print-session",
             PRINT,
             ORDER,
+            OrderRunStatus::Frozen,
+            "original-print-set",
+        ))
+        .await
+        .unwrap();
+    assert!(
+        f.store
+            .active_order_run_session_for_qolip("22091058-1")
+            .await
+            .unwrap()
+            .is_none(),
+        "fully Frozen releases physical claims"
+    );
+    assert_eq!(
+        f.store
+            .put_apparatus_queue_states_with_event_and_progress(&contender)
+            .await,
+        Err(ProductionMapError::QolipCodeMismatch),
+        "released molds still require a valid set"
+    );
+    f.store
+        .put_order_run_session(print_session(
+            "print-session",
+            PRINT,
+            ORDER,
             OrderRunStatus::Completed,
             "original-print-set",
         ))
@@ -387,5 +411,165 @@ async fn postgres_physical_print_claims_still_enforce_mold_locks_and_set_members
             .unwrap()
             .is_none()
     );
+    f.cleanup().await;
+}
+
+#[tokio::test]
+#[ignore = "requires MINI_ERP_TEST_ADMIN_DATABASE_URL; creates an isolated database"]
+async fn postgres_resume_after_freeze_reacquires_the_complete_physical_set_atomically() {
+    use mini_rs_erp::core::qolip::QolipCheckout;
+    let f = Fixture::new().await;
+    let set = "freeze-resume-set";
+    let active = print_session("print-session", PRINT, ORDER, OrderRunStatus::Active, set);
+    f.store.put_order_run_session(active.clone()).await.unwrap();
+    for (index, code) in codes().iter().enumerate() {
+        sqlx::query(
+            "INSERT INTO mini_qolip_product_specs (item_code, item_name, qolip_code, size, payload_json)
+             VALUES ('PRODUCT', 'Printed product', $1, 40, $2)",
+        ).bind(code).bind(json!({"qolip_set_id":set,"warehouse":"Qolip ombori"}))
+            .execute(&f.pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO mini_qolip_checkouts (id, location_id, block, warehouse, item_code, item_name,
+                qolip_code, size, quantity, row_letter, column_number, location_label,
+                issued_to_ref, issued_to_name, status, issued_by_role, issued_by_ref, issued_by_name)
+             VALUES ($1, $2, 'A', 'Qolip ombori', 'PRODUCT', 'Printed product', $3, 40, 1,
+                'A', 1, 'A1', 'print-worker', 'Printer', 'open', 'qolipchi', 'owner', 'Owner')",
+        ).bind(format!("old-{index}")).bind(format!("qolip:a:product:22091058_{}:40:a:1", index + 1)).bind(code)
+            .execute(&f.pool).await.unwrap();
+    }
+    let mut frozen = active.clone();
+    frozen.status = OrderRunStatus::Frozen;
+    f.store.put_order_run_session(frozen).await.unwrap();
+    let mut paused = f
+        .store
+        .order_run_session("print-session")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(paused.payload_json["qolip_returned_checkout_count"], 8);
+    paused.status = OrderRunStatus::Paused;
+    f.store.put_order_run_session(paused.clone()).await.unwrap();
+    f.store
+        .put_apparatus_queue_states(PRINT, BTreeMap::from([(ORDER.into(), "pending".into())]))
+        .await
+        .unwrap();
+    let mut resume = print_start_write(active);
+    resume.event.action = Action::Resume;
+    resume.event.event_id = "resume-after-freeze".into();
+    resume.event.actor = actor("print-worker");
+    resume.event.payload_json = json!({"qolip_reacquired_after_freeze":true});
+    assert_eq!(
+        f.store
+            .put_apparatus_queue_states_with_event_and_progress(&resume)
+            .await,
+        Err(ProductionMapError::QolipCodeMismatch),
+        "codes alone cannot reacquire released stock"
+    );
+    assert_eq!(
+        f.store
+            .order_run_session("print-session")
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        OrderRunStatus::Paused
+    );
+    assert_eq!(
+        f.store.apparatus_queue_states().await.unwrap()[PRINT][ORDER],
+        "pending"
+    );
+    let quantity: i64 =
+        sqlx::query_scalar("SELECT sum(quantity)::bigint FROM mini_qolip_locations")
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+    assert_eq!(quantity, 8);
+
+    resume.qolip_checkouts = codes()
+        .iter()
+        .enumerate()
+        .map(|(index, code)| QolipCheckout {
+            id: format!("new-{index}"),
+            location_id: format!("qolip:a:product:22091058_{}:40:a:1", index + 1),
+            block: "A".into(),
+            warehouse: "Qolip ombori".into(),
+            item_code: "PRODUCT".into(),
+            item_name: "Printed product".into(),
+            qolip_code: code.clone(),
+            size: 40,
+            quantity: 1,
+            row_letter: "A".into(),
+            column_number: Some(1),
+            location_label: "A1".into(),
+            issued_to_ref: "print-worker".into(),
+            issued_to_name: "Printer".into(),
+            status: "open".into(),
+            issued_by_role: "aparatchi".into(),
+            issued_by_ref: "print-worker".into(),
+            issued_by_name: "Printer".into(),
+            issued_at: "2026-10-07T00:00:00Z".into(),
+            ..Default::default()
+        })
+        .collect();
+    f.store
+        .put_map(map("other-order", OTHER_PRINT))
+        .await
+        .unwrap();
+    let mut competitor = print_session(
+        "other-session",
+        OTHER_PRINT,
+        "other-order",
+        OrderRunStatus::Active,
+        set,
+    );
+    competitor.worker_ref = "other-worker".into();
+    f.store
+        .put_order_run_session(competitor.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        f.store
+            .put_apparatus_queue_states_with_event_and_progress(&resume)
+            .await,
+        Err(ProductionMapError::QolipAlreadyInUse),
+        "another order owns the released molds"
+    );
+    competitor.status = OrderRunStatus::Completed;
+    f.store.put_order_run_session(competitor).await.unwrap();
+    f.store
+        .put_apparatus_queue_states_with_event_and_progress(&resume)
+        .await
+        .expect("reacquire all molds");
+    let resumed = f
+        .store
+        .order_run_session("print-session")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(resumed.status, OrderRunStatus::Active);
+    assert_eq!(resumed.payload_json["qolip_lock_owner"], true);
+    assert!(!resumed.qolip_reacquisition_required());
+    let open: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM mini_qolip_checkouts WHERE status = 'open'")
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+    assert_eq!(open, 8);
+    let stock: i64 =
+        sqlx::query_scalar("SELECT COALESCE(sum(quantity),0)::bigint FROM mini_qolip_locations")
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+    assert_eq!(stock, 0);
+    f.store
+        .put_apparatus_queue_states_with_event_and_progress(&resume)
+        .await
+        .expect("replay resume");
+    let open: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM mini_qolip_checkouts WHERE status = 'open'")
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+    assert_eq!(open, 8, "resume replay cannot issue duplicate checkouts");
     f.cleanup().await;
 }

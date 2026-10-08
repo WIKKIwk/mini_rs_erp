@@ -52,6 +52,13 @@ async fn main() -> Result<(), error::AppError> {
     if reconciled > 0 {
         tracing::info!(reconciled, "reconciled active alternative order lifecycle projections");
     }
+    let released = mini_rs_erp::db::postgres_production_map::PostgresProductionMapStore::new(
+        postgres_pool.clone(),
+    ).reconcile_frozen_qolip_returns().await
+        .map_err(|error| error::AppError::Storage(error.to_string()))?;
+    if released > 0 {
+        tracing::info!(released, "returned molds held by frozen production sessions");
+    }
     let state = AppState::from_postgres(config, postgres_pool.clone());
     PostgresQolipItemCodeDoctor::from_env(postgres_pool).start_scheduler();
     let bootstrapped_apparatus = state

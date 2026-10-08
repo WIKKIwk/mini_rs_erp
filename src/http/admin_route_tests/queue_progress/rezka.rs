@@ -1180,6 +1180,14 @@ async fn rezka_consumes_laminatsiya_wip_and_creates_distinct_frame_wips() {
     let merged_snapshot_body = json_body(merged_snapshot).await;
     let merged_control = &merged_snapshot_body["queue_action_controls"]["apparatus:default:asset-010"]
         ["zakaz-rezka-wip-fanout"];
+    assert!(
+        !merged_control["allowed_actions"]
+            .as_array()
+            .expect("allowed Rezka actions after the last input is mounted")
+            .iter()
+            .any(|action| action == "merge"),
+        "Merge must disappear after the last waiting input WIP is mounted"
+    );
     assert_eq!(
         merged_control["rezka_input_lineage"],
         merged_body["session"]["payload_json"]["input_lineage"]

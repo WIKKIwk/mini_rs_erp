@@ -1988,3 +1988,247 @@ async fn delete_blocks_opening_wip_without_work_or_material() {
     // Another order's Opening WIP must not block this otherwise removable peer.
     assert!(service.delete_order("zakaz-ahead-4").await.unwrap().deleted);
 }
+
+#[tokio::test]
+async fn fully_frozen_molds_release_on_every_stop_path_and_resume_requires_reacquisition() {
+    use queue_state::ApparatusQueueAction as Action;
+    for stop_path in ["safe_stop", "paused_admin", "worker_issue"] {
+        let store = std::sync::Arc::new(MemoryProductionMapStore::new());
+        let service = service_with_default_apparatus(store.clone()).await;
+        let id = "zakaz-frozen-mold-release";
+        service
+            .upsert_map(canonical_apparatus_stage_map(
+                id,
+                PECHAT_ID,
+                "7 ta rangli pechat",
+            ))
+            .await
+            .unwrap();
+        let assigned = [PECHAT_ID.to_string()];
+        let codes = ["FROZEN-MOLD-1".to_string(), "FROZEN-MOLD-2".to_string()];
+        let mut start = service
+            .prepare_apparatus_queue_action_with_progress(
+                PECHAT_ID,
+                id,
+                Action::Start,
+                &assigned,
+                actor("aparatchi"),
+                QueueProgressInput::default(),
+            )
+            .await
+            .unwrap();
+        start.attach_qolip_set(&codes, "frozen-mold-set");
+        service.commit_prepared_queue_action(start).await.unwrap();
+        let output = || QueueProgressInput {
+            produced_qty: Some(10.0),
+            gross_qty: Some(2.0),
+            bobina_kg: Some(0.5),
+            uom: "m".into(),
+            ..Default::default()
+        };
+        match stop_path {
+            "safe_stop" => {
+                let requested = service
+                    .request_order_freeze(id, actor("admin"))
+                    .await
+                    .unwrap();
+                assert_eq!(requested.state, OrderControlState::FreezeRequested);
+                assert!(
+                    store
+                        .active_order_run_session_for_qolip(&codes[0])
+                        .await
+                        .unwrap()
+                        .is_some(),
+                    "request alone keeps molds reserved"
+                );
+                service
+                    .cancel_order_freeze_request(id, actor("admin"))
+                    .await
+                    .unwrap();
+                assert!(
+                    store
+                        .active_order_run_session_for_qolip(&codes[0])
+                        .await
+                        .unwrap()
+                        .is_some()
+                );
+                let request = service
+                    .request_order_freeze(id, actor("admin"))
+                    .await
+                    .unwrap();
+                let result = service
+                    .apply_apparatus_queue_action_with_progress(
+                        PECHAT_ID,
+                        id,
+                        Action::DetachRoll,
+                        &assigned,
+                        actor("aparatchi"),
+                        QueueProgressInput {
+                            freeze_request_id: request.freeze_request.unwrap().request_id,
+                            ..output()
+                        },
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    result.session.unwrap().payload_json["qolip_lock_owner"],
+                    false
+                );
+            }
+            "paused_admin" => {
+                service
+                    .apply_apparatus_queue_action_with_progress(
+                        PECHAT_ID,
+                        id,
+                        Action::DetachRoll,
+                        &assigned,
+                        actor("aparatchi"),
+                        output(),
+                    )
+                    .await
+                    .unwrap();
+                assert!(
+                    store
+                        .active_order_run_session_for_qolip(&codes[0])
+                        .await
+                        .unwrap()
+                        .is_some(),
+                    "ordinary detach keeps physical molds reserved"
+                );
+                assert_eq!(
+                    service
+                        .request_order_freeze(id, actor("admin"))
+                        .await
+                        .unwrap()
+                        .state,
+                    OrderControlState::Frozen
+                );
+            }
+            _ => {
+                let result = service
+                    .apply_apparatus_queue_action_with_progress(
+                        PECHAT_ID,
+                        id,
+                        Action::Freeze,
+                        &assigned,
+                        actor("aparatchi"),
+                        QueueProgressInput {
+                            freeze_with_issue: true,
+                            description: "Mold problem".into(),
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    result.session.unwrap().payload_json["qolip_lock_owner"],
+                    false
+                );
+            }
+        }
+        assert_eq!(
+            service.order_control_state(id).await.unwrap().state,
+            OrderControlState::Frozen
+        );
+        assert!(
+            store
+                .active_order_run_session_for_qolip(&codes[0])
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let frozen = store
+            .order_run_sessions_for_order(id)
+            .await
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert_eq!(frozen.status, OrderRunStatus::Frozen);
+        assert_eq!(frozen.payload_json["qolip_codes"], serde_json::json!(codes));
+        assert!(frozen.qolip_reacquisition_required());
+        let resources = ProductionQrSessionResources::for_session(&frozen);
+        assert!(resources.qolip_codes.is_empty());
+        assert!(!resources.qolip_available);
+        service.unfreeze_order(id, actor("admin")).await.unwrap();
+        let snapshot = service.live_snapshot().await.unwrap();
+        let control = &snapshot.queue_action_controls[PECHAT_ID][id];
+        assert_eq!(
+            control.interaction.qolip_mode,
+            ApparatusQueueQolipMode::ScanRequired
+        );
+        assert!(control.allowed_actions.contains(&Action::Resume));
+        assert_eq!(
+            service
+                .apply_apparatus_queue_action_with_progress(
+                    PECHAT_ID,
+                    id,
+                    Action::Resume,
+                    &assigned,
+                    actor("aparatchi"),
+                    Default::default(),
+                )
+                .await,
+            Err(ProductionMapError::QolipCodeMismatch)
+        );
+
+        let apparatus_id = crate::core::apparatus_standard::ApparatusId::new(PECHAT_ID).unwrap();
+        let preparations = codes
+            .iter()
+            .map(|code| QolipOrderStartPreparation {
+                spec: QolipProductSpec {
+                    qolip_set_id: "frozen-mold-set".into(),
+                    qolip_code: code.clone(),
+                    ..Default::default()
+                },
+                checkout: None,
+            })
+            .collect::<Vec<_>>();
+        let mut resume = service
+            .prepare_apparatus_queue_action_with_material_scan_and_progress(
+                MaterialScanProgressAction {
+                    apparatus: PECHAT_ID,
+                    order_id: id,
+                    action: Action::Resume,
+                    assigned_apparatus: &assigned,
+                    actor: actor("aparatchi"),
+                    material_barcodes: &[],
+                    state_material_barcodes: &[],
+                    progress: Default::default(),
+                    qolip_validation: TrustedQolipStartValidation::from_preparations(
+                        &apparatus_id,
+                        id,
+                        &preparations,
+                    ),
+                },
+            )
+            .await
+            .unwrap();
+        resume.attach_qolip_set(&codes, "frozen-mold-set");
+        assert_eq!(
+            resume.event.payload_json["qolip_reacquired_after_freeze"],
+            true
+        );
+        let resumed = service
+            .commit_prepared_queue_action(resume)
+            .await
+            .unwrap()
+            .session
+            .unwrap();
+        assert_eq!(resumed.status, OrderRunStatus::Active);
+        assert_eq!(resumed.payload_json["qolip_lock_owner"], true);
+        assert!(!resumed.qolip_reacquisition_required());
+        assert!(
+            store
+                .active_order_run_session_for_qolip(&codes[0])
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            !service
+                .qolip_scan_required_for_action(PECHAT_ID, id, Action::Resume)
+                .await
+                .unwrap()
+        );
+    }
+}

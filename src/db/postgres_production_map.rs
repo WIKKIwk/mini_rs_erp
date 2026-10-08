@@ -209,6 +209,10 @@ impl PostgresProductionMapStore {
         lifecycle::reconcile_alternative_order_lifecycles(&self.pool).await
     }
 
+    pub async fn reconcile_frozen_qolip_returns(&self) -> Result<usize, ProductionMapError> {
+        progress_helpers::reconcile_frozen_qolip_returns(&self.pool).await
+    }
+
     #[cfg(test)]
     pub(crate) fn with_legacy_queue_reads(mut self) -> Self {
         self.legacy_queue_reads = true;
@@ -1152,7 +1156,9 @@ impl PostgresProductionMapStore {
         }
         if let Some(session) = &write.session {
             reject_qolip_in_use_tx(&mut tx, session).await?;
-            if matches!(event.action, crate::core::production_map::queue_state::ApparatusQueueAction::Start) {
+            if matches!(event.action, crate::core::production_map::queue_state::ApparatusQueueAction::Start)
+                || event.payload_json.get("qolip_reacquired_after_freeze")
+                    .and_then(serde_json::Value::as_bool) == Some(true) {
                 qolip_session_helpers::validate_qolip_set_tx(&mut tx, session).await?;
             }
         }
@@ -1216,9 +1222,6 @@ impl PostgresProductionMapStore {
                 stage_execution::stamp_report_tx(&mut tx, &mut stored_session, &event.event_id, &event.actor).await?;
             }
             put_order_run_session_tx(&mut tx, &stored_session).await?;
-            super::postgres_qolip::return_completed_session_checkouts_tx(&mut tx, session)
-                .await
-                .map_err(production_map_qolip_checkout_error)?;
         }
         if let Some(progress_event) = &write.progress_event {
             put_order_progress_event_tx(&mut tx, progress_event).await?;
@@ -1252,6 +1255,11 @@ impl PostgresProductionMapStore {
             )
             .await
             .map_err(production_map_qolip_checkout_error)?;
+        }
+        if event.payload_json.get("qolip_reacquired_after_freeze")
+            .and_then(serde_json::Value::as_bool) == Some(true)
+            && let Some(session) = &write.session {
+            qolip_session_helpers::validate_reacquired_qolip_checkouts_tx(&mut tx, session).await?;
         }
         if let Some(report) = &write.returned_paint_report {
             super::postgres_returned_paint::insert_returned_paint_request_tx(&mut tx, report)

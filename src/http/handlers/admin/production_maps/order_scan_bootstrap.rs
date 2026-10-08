@@ -27,6 +27,12 @@ pub struct OrderScanBootstrapQuery {
     order_id: String,
     #[serde(default)]
     material_barcodes: String,
+    #[serde(default = "include_sections_default")]
+    include_sections: bool,
+}
+
+fn include_sections_default() -> bool {
+    true
 }
 
 pub async fn production_map_order_scan_bootstrap(
@@ -83,7 +89,7 @@ async fn bootstrap(
     }
     let scope = authorization_scope(state, &principal, apparatus).await?;
     for _ in 0..SNAPSHOT_ATTEMPTS {
-        let (snapshot, revision) = state
+        let (snapshot, mut revision) = state
             .production_maps
             .worker_snapshot_shared_with_revision(
                 &[apparatus.to_string()], &[order_id.to_string()],
@@ -107,7 +113,7 @@ async fn bootstrap(
         // resource guards. No child request can contain a scanned Qolip code.
         let (materials, qolips) = tokio::join!(
             async {
-                if !needs_materials {
+                if !query.include_sections || !needs_materials {
                     return not_required();
                 }
                 section(
@@ -128,7 +134,7 @@ async fn bootstrap(
                 .await
             },
             async {
-                if !needs_qolips {
+                if !query.include_sections || !needs_qolips {
                     return not_required();
                 }
                 let body = serde_json::json!({
@@ -146,6 +152,32 @@ async fn bootstrap(
                 .await
             }
         );
+        if state.production_maps.snapshot_revision() != revision {
+            let (latest, latest_revision) = state
+                .production_maps
+                .worker_snapshot_shared_with_revision(
+                    &[apparatus.to_string()],
+                    &[order_id.to_string()],
+                )
+                .await
+                .map_err(production_map_error)?;
+            // A global revision can change for another apparatus/order. Only
+            // reuse the sections when every target control field is unchanged.
+            let latest_control = latest
+                .queue_action_controls
+                .get(apparatus)
+                .and_then(|orders| orders.get(order_id));
+            let previous = serde_json::to_value((Some(control),
+                snapshot.stage_states.get(order_id), snapshot.order_controls.get(order_id)))
+                .map_err(|_| conflict("order_scan_bootstrap_changed"))?;
+            let current = serde_json::to_value((latest_control,
+                latest.stage_states.get(order_id), latest.order_controls.get(order_id)))
+                .map_err(|_| conflict("order_scan_bootstrap_changed"))?;
+            if previous != current {
+                continue;
+            }
+            revision = latest_revision;
+        }
         // Reauthenticate, rather than trusting the captured principal after
         // awaited readers. Never silently re-scope an in-flight request.
         let current = authorize_any_capability(state, headers, BOOTSTRAP_CAPABILITIES).await?;

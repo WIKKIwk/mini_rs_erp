@@ -279,6 +279,34 @@ pub struct OrderRunSession {
     pub payload_json: serde_json::Value,
 }
 
+impl OrderRunSession {
+    pub fn qolip_reacquisition_required(&self) -> bool {
+        self.payload_json
+            .get("qolip_released_on_freeze")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+    }
+
+    pub(crate) fn release_frozen_qolips(&mut self) {
+        if self.status != OrderRunStatus::Frozen
+            || self
+                .payload_json
+                .get("qolip_lock_owner")
+                .and_then(serde_json::Value::as_bool)
+                != Some(true)
+        {
+            return;
+        }
+        let mut resources = ProductionQrSessionResources::for_session(self);
+        resources.qolip_codes.clear();
+        resources.qolip_available = false;
+        resources.write_to_session(self);
+        self.payload_json["qolip_lock_owner"] = serde_json::json!(false);
+        self.payload_json["qolip_released_on_freeze"] = serde_json::json!(true);
+        self.payload_json["qolip_released_at_unix"] = serde_json::json!(self.updated_at_unix);
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OrderProgressEvent {
     pub event_id: String,

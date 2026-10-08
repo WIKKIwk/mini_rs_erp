@@ -285,12 +285,6 @@ pub(super) async fn resolve_completion_request_decision(
         .await?;
         if let Some(session) = resolution.session {
             put_order_run_session_tx(&mut tx, &session).await?;
-            crate::db::postgres_qolip::return_completed_session_checkouts_tx(
-                &mut tx,
-                &session,
-            )
-            .await
-            .map_err(super::production_map_qolip_checkout_error)?;
         }
         if let Some(report) = resolution.returned_paint_report {
             insert_returned_paint_request_tx(&mut tx, &report)

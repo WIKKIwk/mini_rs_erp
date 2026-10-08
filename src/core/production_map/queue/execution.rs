@@ -789,11 +789,14 @@ impl ProductionMapService {
 
     pub(crate) async fn commit_prepared_queue_action_with_raw_material_stock(
         &self,
-        prepared: PreparedApparatusQueueAction,
+        mut prepared: PreparedApparatusQueueAction,
         raw_material_stock_transitions: Vec<RawMaterialStockTransition>,
         qolip_checkouts: Vec<crate::core::qolip::QolipCheckout>,
         returned_paint_report: Option<crate::core::returned_paint::ReturnedPaintRequest>,
     ) -> Result<ApparatusQueueActionResult, ProductionMapError> {
+        if let Some(session) = prepared.session.as_mut() {
+            session.release_frozen_qolips();
+        }
         let write = QueueActionProgressWrite {
             apparatus: prepared.apparatus,
             map_update: prepared.claimed_alternative_map,

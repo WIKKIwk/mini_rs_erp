@@ -1046,3 +1046,55 @@ async fn mixed_opening_and_production_wip_accept_either_without_consuming_the_ot
         }
     }
 }
+
+#[tokio::test]
+async fn opening_wip_merge_control_requires_another_waiting_roll() {
+    let service = ProductionMapService::new_for_test(Arc::new(MemoryProductionMapStore::new()));
+    let order = "zakaz-opening-merge-control";
+    service
+        .upsert_map(print_lamination_rezka_map(order))
+        .await
+        .unwrap();
+    let opening = service
+        .create_opening_wip(
+            source_opening_input(
+                order,
+                "opening-merge-control",
+                LAMINATION_ID,
+                "second",
+            ),
+            admin_actor(),
+        )
+        .await
+        .unwrap();
+    for (index, action) in [
+        queue_state::ApparatusQueueAction::Start,
+        queue_state::ApparatusQueueAction::Merge,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        service
+            .apply_apparatus_queue_action_with_progress(
+                REZKA_ID,
+                order,
+                action,
+                &[REZKA_ID.into()],
+                worker_actor(),
+                QueueProgressInput {
+                    qr_payload: opening.batches[index].qr_payload.clone(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let controls = service.queue_action_controls().await.unwrap();
+        assert_eq!(
+            controls[REZKA_ID][order]
+                .allowed_actions
+                .contains(&queue_state::ApparatusQueueAction::Merge),
+            index == 0,
+            "Only a remaining waiting opening WIP roll may enable Merge"
+        );
+    }
+}

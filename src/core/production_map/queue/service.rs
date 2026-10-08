@@ -970,6 +970,10 @@ impl ProductionMapService {
 
                 match state {
                     queue_state::ApparatusQueueOrderState::Pending if requeued_session => {
+                        if active_session.is_some_and(OrderRunSession::qolip_reacquisition_required)
+                            && apparatus::requires_qolip_scan(canonical) {
+                            interaction.qolip_mode = ApparatusQueueQolipMode::ScanRequired;
+                        }
                         if pending_actionable {
                             interaction.mode = ApparatusQueueInteractionMode::RequeuedReady;
                         } else {
@@ -1101,9 +1105,12 @@ impl ProductionMapService {
                                     stage_work.as_ref().map(|s| s.upstream_closed),
                                 );
                             if is_rezka || is_laminatsiya {
-                                merge_ready = active_session.is_some_and(|session| {
-                                    !session_progress_links(session).batch_id.trim().is_empty()
-                                });
+                                // A mounted roll alone does not provide another input to splice.
+                                merge_ready = (stage_projection.has_waiting_previous_stage_wip
+                                    || input.has_waiting_opening_wip_for_stage(&stage_node_id))
+                                    && active_session.is_some_and(|session| {
+                                        !session_progress_links(session).batch_id.trim().is_empty()
+                                    });
                             }
                             if is_rezka {
                                 let is_final_stage = if stage_node_id.trim().is_empty() {
@@ -1121,6 +1128,10 @@ impl ProductionMapService {
                         }
                     }
                     queue_state::ApparatusQueueOrderState::Paused => {
+                        if active_session.is_some_and(OrderRunSession::qolip_reacquisition_required)
+                            && apparatus::requires_qolip_scan(canonical) {
+                            interaction.qolip_mode = ApparatusQueueQolipMode::ScanRequired;
+                        }
                         interaction.mode = if control == OrderControlState::FreezeRequested {
                             ApparatusQueueInteractionMode::FreezeRequested
                         } else {
@@ -1313,7 +1324,33 @@ impl ProductionMapService {
         self.commit_prepared_queue_action(prepared).await
     }
 
-    /// Core queue callers must not be able to enter a Qolip-protected start
+    pub async fn qolip_scan_required_for_action(
+        &self,
+        apparatus: &str,
+        order_id: &str,
+        action: queue_state::ApparatusQueueAction,
+    ) -> Result<bool, ProductionMapError> {
+        if !matches!(
+            action,
+            queue_state::ApparatusQueueAction::Start | queue_state::ApparatusQueueAction::Resume
+        ) {
+            return Ok(false);
+        }
+        let canonical = self.resolve_canonical_apparatus_text(apparatus).await?;
+        if !apparatus::requires_qolip_scan(&canonical) {
+            return Ok(false);
+        }
+        if action == queue_state::ApparatusQueueAction::Start {
+            return Ok(true);
+        }
+        Ok(self
+            .store
+            .active_order_run_session(canonical.runtime.apparatus_id.as_str(), order_id)
+            .await?
+            .is_some_and(|session| session.qolip_reacquisition_required()))
+    }
+
+    /// Core queue callers must not enter a Qolip-protected start or reacquisition
     /// without the trusted handler validation bound to the same canonical
     /// apparatus and order. Untrusted core callers therefore remain
     /// fail-closed.
@@ -1324,7 +1361,7 @@ impl ProductionMapService {
         action: queue_state::ApparatusQueueAction,
         qolip_validation: Option<&TrustedQolipStartValidation>,
     ) -> Result<(), ProductionMapError> {
-        if action != queue_state::ApparatusQueueAction::Start {
+        if !self.qolip_scan_required_for_action(apparatus, order_id, action).await? {
             return Ok(());
         }
         let canonical = self.resolve_canonical_apparatus_text(apparatus).await?;

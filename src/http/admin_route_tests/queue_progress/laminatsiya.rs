@@ -1717,6 +1717,25 @@ async fn assert_lamination_workflow_merge(apparatus: &str) {
     );
     assert!(merged_body["session"]["payload_json"]["rezka_active_partial_rolls"].is_null());
 
+    let snapshot = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/sequence",
+            &worker_token,
+        ))
+        .await
+        .expect("lamination control after the last input is mounted");
+    let snapshot_body = json_body(snapshot).await;
+    assert!(
+        !snapshot_body["queue_action_controls"][apparatus][order_id]["allowed_actions"]
+            .as_array()
+            .expect("allowed lamination actions")
+            .iter()
+            .any(|action| action == "merge"),
+        "Merge must disappear when no waiting input WIP remains"
+    );
+
     let completed = router
         .clone()
         .oneshot(request_with_body(

@@ -2,8 +2,9 @@ use super::*;
 
 pub(in super::super) async fn put_order_run_session(
     store: &MemoryProductionMapStore,
-    session: OrderRunSession,
+    mut session: OrderRunSession,
 ) -> Result<(), ProductionMapError> {
+    session.release_frozen_qolips();
     validate_session_apparatus(&session)?;
     let input_links = order_run_input_links_from_payload(&session.payload_json)
         .map_err(|_| ProductionMapError::StoreFailed)?;

@@ -375,6 +375,25 @@ impl QolipService {
         Ok(QolipOrderStartPreparation { spec, checkout })
     }
 
+    pub async fn prepare_qolip_code_for_order_reacquisition(
+        &self,
+        qolip_code: &str,
+        expected_item_code: &str,
+        expected_item_name: &str,
+        worker_id: &str,
+        worker_name: &str,
+        principal: &Principal,
+    ) -> Result<QolipOrderStartPreparation, QolipError> {
+        let preparation = self.prepare_qolip_code_for_order_start(
+            qolip_code, expected_item_code, expected_item_name, worker_id, worker_name, principal,
+        ).await?;
+        if preparation.checkout.is_none()
+            && self.store.open_checkout_by_qolip_code(qolip_code).await?.is_none() {
+            return Err(QolipError::CheckoutRequired);
+        }
+        Ok(preparation)
+    }
+
     pub async fn issue_prepared_checkout(
         &self,
         checkout: QolipCheckout,

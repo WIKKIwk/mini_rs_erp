@@ -92,8 +92,12 @@ impl PreparedApparatusQueueAction {
         };
         lineage.qolip_set_id = set_id.to_string();
         if let Some(session) = &mut self.session {
+            if session.qolip_reacquisition_required() {
+                self.event.payload_json["qolip_reacquired_after_freeze"] = serde_json::json!(true);
+            }
             lineage.write_to_payload(&mut session.payload_json);
             session.payload_json["qolip_lock_owner"] = serde_json::Value::Bool(true);
+            session.payload_json["qolip_released_on_freeze"] = serde_json::json!(false);
             let mut resources = ProductionQrSessionResources::for_session(session);
             resources.qolip_codes = lineage.qolip_codes.clone();
             resources.qolip_available = true;

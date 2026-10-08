@@ -726,12 +726,14 @@ async fn prepare_direct_freeze_queue_write(
         }
         payload_json["frozen_order"] = serde_json::json!(true);
         payload_json["admin_freeze"] = serde_json::json!(true);
-        OrderRunSession {
+        let mut frozen = OrderRunSession {
             status: OrderRunStatus::Frozen,
             updated_at_unix: unix_seconds(),
             payload_json,
             ..session.clone()
-        }
+        };
+        frozen.release_frozen_qolips();
+        frozen
     });
     Ok(Some(QueueActionProgressWrite {
         apparatus: storage_key,

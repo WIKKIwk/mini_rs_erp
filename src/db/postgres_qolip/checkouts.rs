@@ -25,8 +25,8 @@ pub(crate) async fn save_checkout_tx(
     checkout: &QolipCheckout,
     excluded_session_id: Option<&str>,
 ) -> Result<QolipCheckout, QolipError> {
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtext(lower($1))::bigint)")
-        .bind(checkout.qolip_code.trim())
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("qolip:{}", checkout.qolip_code.trim().to_ascii_lowercase()))
         .execute(&mut **tx)
         .await
         .map_err(|_| QolipError::StoreFailed)?;
@@ -370,16 +370,18 @@ pub(super) async fn load_checkout_by_id(
     Ok(row.map(row_to_checkout))
 }
 
-pub(crate) async fn return_completed_session_checkouts_tx(
+pub(crate) async fn return_stopped_session_checkouts_tx(
     tx: &mut Transaction<'_, Postgres>,
     session: &OrderRunSession,
 ) -> Result<u64, QolipError> {
-    if session.status != OrderRunStatus::Completed
-        || session
-            .payload_json
-            .get("qolip_lock_owner")
-            .and_then(serde_json::Value::as_bool)
-            != Some(true)
+    let owns_qolips = session
+        .payload_json
+        .get("qolip_lock_owner")
+        .and_then(serde_json::Value::as_bool)
+        == Some(true);
+    let released_on_freeze = session.qolip_reacquisition_required();
+    if !((session.status == OrderRunStatus::Completed && owns_qolips)
+        || (session.status == OrderRunStatus::Frozen && (owns_qolips || released_on_freeze)))
     {
         return Ok(0);
     }
@@ -395,6 +397,16 @@ pub(crate) async fn return_completed_session_checkouts_tx(
         .collect::<Vec<_>>();
     if worker_ref.is_empty() || code_keys.is_empty() {
         return Ok(0);
+    }
+
+    // Use the same locks as production starts, in a stable order. Restoring a
+    // checkout and another order claiming that mold cannot interleave.
+    for code in &code_keys {
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(format!("qolip:{code}"))
+            .execute(&mut **tx)
+            .await
+            .map_err(|_| QolipError::StoreFailed)?;
     }
 
     let rows = sqlx::query_as::<_, QolipCheckoutRow>(
@@ -506,6 +518,14 @@ pub(super) async fn return_checkout_to_location(
 ) -> Result<QolipCheckout, QolipError> {
     let checkout_id = checkout_id.trim();
     let mut tx = pool.begin().await.map_err(|_| QolipError::StoreFailed)?;
+
+    let code = sqlx::query_scalar::<_, String>(
+        "SELECT qolip_code FROM mini_qolip_checkouts WHERE id = $1",
+    ).bind(checkout_id).fetch_optional(&mut *tx).await
+        .map_err(|_| QolipError::StoreFailed)?.ok_or(QolipError::CheckoutNotFound)?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("qolip:{}", code.trim().to_ascii_lowercase()))
+        .execute(&mut *tx).await.map_err(|_| QolipError::StoreFailed)?;
 
     let row = sqlx::query_as::<_, QolipCheckoutRow>(
         "UPDATE mini_qolip_checkouts

@@ -12,6 +12,52 @@ use crate::core::production_map::{
 
 use super::transaction_locks::lock_order_and_apparatuses_tx;
 
+pub(super) async fn reconcile_frozen_qolip_returns(
+    pool: &PgPool,
+) -> Result<usize, ProductionMapError> {
+    let candidates = sqlx::query_as::<_, (String, String, String)>(
+        "SELECT session_id, order_id, canonical_apparatus_id FROM mini_order_run_sessions
+         WHERE status = 'frozen' AND payload_json->>'qolip_lock_owner' = 'true'
+         ORDER BY session_id",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    let mut released = 0;
+    for (session_id, order_id, apparatus) in candidates {
+        let mut tx = pool
+            .begin()
+            .await
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        lock_order_and_apparatuses_tx(&mut tx, &order_id, &[&apparatus]).await?;
+        let payload = sqlx::query_scalar::<_, serde_json::Value>(
+            "SELECT jsonb_build_object(
+                'session_id', session_id, 'apparatus', canonical_apparatus_id,
+                'order_id', order_id, 'stage_node_id', stage_node_id, 'status', status,
+                'worker_role', worker_role, 'worker_ref', worker_ref,
+                'worker_display_name', worker_display_name,
+                'started_at_unix', EXTRACT(EPOCH FROM started_at)::bigint,
+                'updated_at_unix', EXTRACT(EPOCH FROM updated_at)::bigint,
+                'payload_json', payload_json)
+             FROM mini_order_run_sessions WHERE session_id = $1 AND status = 'frozen'
+                AND payload_json->>'qolip_lock_owner' = 'true' FOR UPDATE",
+        )
+        .bind(&session_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+        if let Some(payload) = payload {
+            let session: OrderRunSession =
+                serde_json::from_value(payload).map_err(|_| ProductionMapError::StoreFailed)?;
+            put_order_run_session_tx(&mut tx, &session).await?;
+            released += 1;
+        }
+        tx.commit()
+            .await
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+    }
+    Ok(released)
+}
 
 pub(super) async fn put_order_run_session(
     pool: &PgPool,
@@ -33,6 +79,41 @@ pub(super) async fn put_order_run_session_tx(
 ) -> Result<(), ProductionMapError> {
     validate_rezka_merge_payload(session)?;
     lock_order_and_apparatuses_tx(tx, &session.order_id, &[&session.apparatus]).await?;
+    let mut session = session.clone();
+    if session.status == OrderRunStatus::Frozen {
+        let previous = sqlx::query_scalar::<_, serde_json::Value>(
+            "SELECT payload_json FROM mini_order_run_sessions WHERE session_id = $1 FOR UPDATE",
+        )
+        .bind(&session.session_id)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+        // A repeated freeze must not return a later checkout of the same molds.
+        let already_released = previous.as_ref().is_some_and(|payload| {
+            payload
+                .get("qolip_released_on_freeze")
+                .and_then(serde_json::Value::as_bool)
+                == Some(true)
+        });
+        if !already_released {
+            let returned =
+                crate::db::postgres_qolip::return_stopped_session_checkouts_tx(tx, &session)
+                    .await
+                    .map_err(super::production_map_qolip_checkout_error)?;
+            session.payload_json["qolip_returned_checkout_count"] = serde_json::json!(returned);
+        } else if let Some(previous) = previous {
+            for key in ["qolip_returned_checkout_count", "qolip_released_at_unix"] {
+                if let Some(value) = previous.get(key) {
+                    session.payload_json[key] = value.clone();
+                }
+            }
+        }
+        session.release_frozen_qolips();
+    } else if session.status == OrderRunStatus::Completed {
+        crate::db::postgres_qolip::return_stopped_session_checkouts_tx(tx, &session)
+            .await
+            .map_err(super::production_map_qolip_checkout_error)?;
+    }
     let apparatus_id = ApparatusId::new(session.apparatus.trim().to_string())
         .map_err(|_| ProductionMapError::StoreFailed)?;
     sqlx::query(
@@ -416,7 +497,6 @@ fn validate_rezka_merge_payload(session: &OrderRunSession) -> Result<(), Product
     }
     Ok(())
 }
-
 
 pub(super) async fn correct_progress_batch(
     pool: &PgPool,
