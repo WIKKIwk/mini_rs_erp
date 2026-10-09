@@ -73,3 +73,14 @@ pub struct PaddonCreateInput {
     pub actor_ref: String,
     pub actor_display_name: String,
 }
+
+pub(crate) fn paddon_unlock_actor_allowed(
+    locked_by_ref: &str,
+    free_movement_enabled: bool,
+    actor: &crate::core::production_map::QueueActionActor,
+) -> bool {
+    !actor.ref_.trim().is_empty()
+        && (actor.role == "admin"
+            || free_movement_enabled
+            || (actor.role == "aparatchi" && locked_by_ref.trim() == actor.ref_.trim()))
+}

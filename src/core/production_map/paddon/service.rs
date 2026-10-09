@@ -113,6 +113,24 @@ impl ProductionMapService {
         Ok(result)
     }
 
+    pub async fn can_unlock_paddon(&self, code: &str, actor: &QueueActionActor) -> Result<bool, ProductionMapError> {
+        let code = code.trim();
+        if code.is_empty() || code.len() > 128 || actor.ref_.trim().is_empty() {
+            return Err(ProductionMapError::PaddonInvalidInput);
+        }
+        self.store.can_unlock_paddon(code, actor).await
+    }
+
+    pub async fn unlock_paddon(&self, code: &str, actor: &QueueActionActor) -> Result<PaddonSummary, ProductionMapError> {
+        let code = code.trim();
+        if code.is_empty() || code.len() > 128 || actor.ref_.trim().is_empty() {
+            return Err(ProductionMapError::PaddonInvalidInput);
+        }
+        let paddon = self.store.unlock_paddon(code, actor).await?;
+        self.notify_live();
+        Ok(paddon)
+    }
+
     pub async fn create_active_paddon_successor(&self, code: &str, apparatus: &str, actor: &QueueActionActor) -> Result<PaddonSummary, ProductionMapError> {
         self.validate_active_paddon_scope(apparatus, actor).await?;
         let code = code.trim();

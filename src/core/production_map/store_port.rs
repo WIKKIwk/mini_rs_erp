@@ -716,6 +716,12 @@ pub trait ProductionMapStorePort: Send + Sync {
     async fn confirm_paddon_print(&self, _code: &str, _actor: &QueueActionActor) -> StoreResult<PaddonPrintConfirmation> {
         Err(ProductionMapError::StoreFailed)
     }
+    async fn can_unlock_paddon(&self, _code: &str, _actor: &QueueActionActor) -> StoreResult<bool> {
+        Ok(false)
+    }
+    async fn unlock_paddon(&self, _code: &str, _actor: &QueueActionActor) -> StoreResult<PaddonSummary> {
+        Err(ProductionMapError::StoreFailed)
+    }
     async fn create_active_paddon_successor(&self, _code: &str, _apparatus: &str, _actor: &QueueActionActor) -> StoreResult<PaddonSummary> {
         Err(ProductionMapError::StoreFailed)
     }

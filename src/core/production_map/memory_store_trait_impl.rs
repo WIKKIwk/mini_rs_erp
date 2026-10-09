@@ -70,6 +70,9 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         let mut paddons = self.paddons.write().await;
         let paddon = paddons.get_mut(code).ok_or(ProductionMapError::PaddonNotFound)?;
         let newly_locked = paddon.locked_at_unix.is_none();
+        if newly_locked {
+            self.paddon_lock_owners.write().await.insert(code.to_string(), actor.ref_.trim().to_string());
+        }
         paddon.locked_at_unix.get_or_insert(super::progress::unix_seconds());
         let mut active = self.active_paddons.write().await;
         let apparatuses = active.iter().filter(|((role, ref_, _), selected)|
@@ -77,6 +80,42 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
             .map(|((_, _, apparatus), _)| apparatus.clone()).collect();
         active.retain(|_, selected| selected != code);
         Ok(PaddonPrintConfirmation { paddon: paddon.clone(), newly_locked, apparatuses })
+    }
+    async fn can_unlock_paddon(&self, code: &str, actor: &QueueActionActor) -> Result<bool, ProductionMapError> {
+        let paddons = self.paddons.read().await;
+        let paddon = paddons.get(code).ok_or(ProductionMapError::PaddonNotFound)?;
+        if paddon.locked_at_unix.is_none() { return Ok(false); }
+        let owners = self.paddon_lock_owners.read().await;
+        let enabled = self.paddon_management_settings.read().await.free_movement_enabled;
+        Ok(paddon_unlock_actor_allowed(owners.get(code).map(String::as_str).unwrap_or_default(), enabled, actor))
+    }
+    async fn unlock_paddon(&self, code: &str, actor: &QueueActionActor) -> Result<PaddonSummary, ProductionMapError> {
+        let mut successors = self.paddon_successors.lock().await;
+        let mut paddons = self.paddons.write().await;
+        let paddon = paddons.get_mut(code).ok_or(ProductionMapError::PaddonNotFound)?;
+        if paddon.locked_at_unix.is_some() {
+            let mut owners = self.paddon_lock_owners.write().await;
+            let enabled = self.paddon_management_settings.read().await.free_movement_enabled;
+            if !paddon_unlock_actor_allowed(owners.get(code).map(String::as_str).unwrap_or_default(), enabled, actor) {
+                return Err(ProductionMapError::PaddonUnlockForbidden);
+            }
+            paddon.locked_at_unix = None;
+            paddon.updated_at_unix = super::progress::unix_seconds();
+            owners.remove(code);
+            successors.retain(|(source, _, _, _), _| source != code);
+        }
+        Ok(paddon.clone())
+    }
+    async fn paddon_snapshot(&self, code: &str) -> Result<Option<PaddonSnapshot>, ProductionMapError> {
+        let Some(paddon) = self.paddons.read().await.get(code).cloned() else { return Ok(None); };
+        let enabled = self.paddon_management_settings.read().await.free_movement_enabled;
+        Ok(Some(PaddonSnapshot {
+            can_manage_items: paddon.locked_at_unix.is_none() || enabled,
+            paddon, items: Vec::new(), available_items: Vec::new(), free_movement_enabled: enabled,
+        }))
+    }
+    async fn paddon_scan_snapshot(&self, code: &str) -> Result<Option<PaddonSnapshot>, ProductionMapError> {
+        self.paddon_snapshot(code).await
     }
     async fn create_active_paddon_successor(&self, code: &str, apparatus: &str, actor: &QueueActionActor) -> Result<PaddonSummary, ProductionMapError> {
         let mut successors = self.paddon_successors.lock().await;

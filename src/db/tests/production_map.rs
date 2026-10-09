@@ -22,6 +22,8 @@ mod paddon_receipt;
 mod paddon_delete;
 #[path = "paddon_movement.rs"]
 mod paddon_movement;
+#[path = "paddon_unlock.rs"]
+mod paddon_unlock;
 
 #[tokio::test]
 async fn postgres_production_map_store_persists_maps_sequences_and_queue_states() {

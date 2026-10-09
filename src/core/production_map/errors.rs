@@ -269,6 +269,8 @@ pub enum ProductionMapError {
     PaddonInvalidInput,
     #[error("paddon is locked after QR printing")]
     PaddonLocked,
+    #[error("another worker's paddon cannot be unlocked without free movement permission")]
+    PaddonUnlockForbidden,
     #[error("select an active paddon before recording a cutting output")]
     ActivePaddonRequired,
     #[error("paddon changed; scan again")]

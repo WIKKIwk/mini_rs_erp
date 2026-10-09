@@ -78,7 +78,7 @@ pub use self::order_control::production_map_order_control;
 pub use self::order_image::production_map_order_image_view;
 pub use self::order_scan_bootstrap::production_map_order_scan_bootstrap;
 pub use self::rezka_output_report::production_map_rezka_output_report;
-pub use self::paddon_print_lock::{production_map_paddon_print_confirm, production_map_paddon_next};
+pub use self::paddon_print_lock::{production_map_paddon_print_confirm, production_map_paddon_next, production_map_paddon_unlock};
 pub use self::paddon_management::production_map_paddon_management_settings;
 pub use self::paddons::{
     production_map_paddon_delete,

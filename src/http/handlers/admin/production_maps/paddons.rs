@@ -131,7 +131,7 @@ pub async fn production_map_paddon_detail(
     method: Method,
     headers: HeaderMap,
 ) -> Result<Response, AdminError> {
-    authorize_any_capability(
+    let principal = authorize_any_capability(
         &state,
         &headers,
         &[
@@ -150,6 +150,7 @@ pub async fn production_map_paddon_detail(
         .paddon_snapshot(&query.code)
         .await
         .map_err(production_map_error)?;
+    let can_unlock = super::paddon_print_lock::can_unlock_snapshot(&state, &principal, &snapshot).await?;
     Ok(json_response(serde_json::json!({
         "ok": true,
         "paddon": snapshot.paddon,
@@ -157,6 +158,7 @@ pub async fn production_map_paddon_detail(
         "available_items": snapshot.available_items,
         "free_movement_enabled": snapshot.free_movement_enabled,
         "can_manage_items": snapshot.can_manage_items,
+        "can_unlock": can_unlock,
     })))
 }
 
@@ -166,7 +168,7 @@ pub async fn production_map_paddon_qr_report(
     method: Method,
     headers: HeaderMap,
 ) -> Result<Response, AdminError> {
-    authorize_any_capability(
+    let principal = authorize_any_capability(
         &state,
         &headers,
         &[
@@ -185,6 +187,7 @@ pub async fn production_map_paddon_qr_report(
         .paddon_scan_snapshot(&query.code)
         .await
         .map_err(production_map_error)?;
+    let can_unlock = super::paddon_print_lock::can_unlock_snapshot(&state, &principal, &snapshot).await?;
     Ok(json_response(serde_json::json!({
         "ok": true,
         "paddon": snapshot.paddon,
@@ -192,6 +195,7 @@ pub async fn production_map_paddon_qr_report(
         "qr_payload": query.code.trim(),
         "free_movement_enabled": snapshot.free_movement_enabled,
         "can_manage_items": snapshot.can_manage_items,
+        "can_unlock": can_unlock,
     })))
 }
 
@@ -380,6 +384,7 @@ pub async fn production_map_paddon_item_add(
         )
         .await
         .map_err(production_map_error)?;
+    let can_unlock = super::paddon_print_lock::can_unlock_snapshot(&state, &principal, &snapshot).await?;
     Ok(json_response(serde_json::json!({
         "ok": true,
         "paddon": snapshot.paddon,
@@ -387,6 +392,7 @@ pub async fn production_map_paddon_item_add(
         "available_items": snapshot.available_items,
         "free_movement_enabled": snapshot.free_movement_enabled,
         "can_manage_items": snapshot.can_manage_items,
+        "can_unlock": can_unlock,
     })))
 }
 
@@ -419,6 +425,7 @@ pub async fn production_map_paddon_items_add(
         )
         .await
         .map_err(production_map_error)?;
+    let can_unlock = super::paddon_print_lock::can_unlock_snapshot(&state, &principal, &snapshot).await?;
     Ok(json_response(serde_json::json!({
         "ok": true,
         "paddon": snapshot.paddon,
@@ -426,6 +433,7 @@ pub async fn production_map_paddon_items_add(
         "available_items": snapshot.available_items,
         "free_movement_enabled": snapshot.free_movement_enabled,
         "can_manage_items": snapshot.can_manage_items,
+        "can_unlock": can_unlock,
     })))
 }
 
@@ -462,6 +470,7 @@ pub async fn production_map_paddon_item_remove(
         )
         .await
         .map_err(production_map_error)?;
+    let can_unlock = super::paddon_print_lock::can_unlock_snapshot(&state, &principal, &snapshot).await?;
     Ok(json_response(serde_json::json!({
         "ok": true,
         "paddon": snapshot.paddon,
@@ -469,6 +478,7 @@ pub async fn production_map_paddon_item_remove(
         "available_items": snapshot.available_items,
         "free_movement_enabled": snapshot.free_movement_enabled,
         "can_manage_items": snapshot.can_manage_items,
+        "can_unlock": can_unlock,
     })))
 }
 
@@ -501,6 +511,7 @@ pub async fn production_map_paddon_items_remove(
         )
         .await
         .map_err(production_map_error)?;
+    let can_unlock = super::paddon_print_lock::can_unlock_snapshot(&state, &principal, &snapshot).await?;
     Ok(json_response(serde_json::json!({
         "ok": true,
         "paddon": snapshot.paddon,
@@ -508,6 +519,7 @@ pub async fn production_map_paddon_items_remove(
         "available_items": snapshot.available_items,
         "free_movement_enabled": snapshot.free_movement_enabled,
         "can_manage_items": snapshot.can_manage_items,
+        "can_unlock": can_unlock,
     })))
 }
 

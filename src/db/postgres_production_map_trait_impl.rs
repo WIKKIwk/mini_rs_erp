@@ -616,6 +616,12 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
     async fn confirm_paddon_print(&self, code: &str, actor: &QueueActionActor) -> Result<crate::core::production_map::PaddonPrintConfirmation, ProductionMapError> {
         paddon_print_lock::confirm(&self.pool, code, actor).await
     }
+    async fn can_unlock_paddon(&self, code: &str, actor: &QueueActionActor) -> Result<bool, ProductionMapError> {
+        paddon_print_lock::can_unlock(&self.pool, code, actor).await
+    }
+    async fn unlock_paddon(&self, code: &str, actor: &QueueActionActor) -> Result<PaddonSummary, ProductionMapError> {
+        paddon_print_lock::unlock(&self.pool, code, actor).await
+    }
     async fn create_active_paddon_successor(&self, code: &str, apparatus: &str, actor: &QueueActionActor) -> Result<PaddonSummary, ProductionMapError> {
         paddon_print_lock::successor(&self.pool, code, apparatus, actor).await
     }

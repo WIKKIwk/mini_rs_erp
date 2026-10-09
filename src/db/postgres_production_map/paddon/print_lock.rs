@@ -1,8 +1,78 @@
 use sqlx::PgPool;
 
 use crate::core::production_map::{
-    PaddonCreateInput, PaddonPrintConfirmation, PaddonSummary, ProductionMapError, QueueActionActor,
+    PaddonCreateInput, PaddonPrintConfirmation, PaddonSummary, ProductionMapError,
+    QueueActionActor, paddon_unlock_actor_allowed,
 };
+
+#[derive(sqlx::FromRow)]
+struct UnlockAccess {
+    locked: bool,
+    locked_by_ref: String,
+    received: bool,
+}
+
+pub(super) async fn can_unlock(
+    pool: &PgPool,
+    code: &str,
+    actor: &QueueActionActor,
+) -> Result<bool, ProductionMapError> {
+    let access = sqlx::query_as::<_, UnlockAccess>(
+        "SELECT locked_at IS NOT NULL AS locked, locked_by_ref, receipt_json IS NOT NULL AS received FROM mini_paddons WHERE code=$1",
+    ).bind(code).fetch_optional(pool).await.map_err(|_| ProductionMapError::StoreFailed)?
+        .ok_or(ProductionMapError::PaddonNotFound)?;
+    if !access.locked || access.received {
+        return Ok(false);
+    }
+    let enabled = super::paddon_management::load(pool)
+        .await?
+        .free_movement_enabled;
+    Ok(paddon_unlock_actor_allowed(
+        &access.locked_by_ref,
+        enabled,
+        actor,
+    ))
+}
+
+pub(super) async fn unlock(
+    pool: &PgPool,
+    code: &str,
+    actor: &QueueActionActor,
+) -> Result<PaddonSummary, ProductionMapError> {
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    // Use the membership-edit lock order; disabling the mode waits for this unlock.
+    let enabled = super::paddon_management::lock_enabled(&mut tx).await?;
+    let access = sqlx::query_as::<_, UnlockAccess>(
+        "SELECT locked_at IS NOT NULL AS locked, locked_by_ref, receipt_json IS NOT NULL AS received FROM mini_paddons WHERE code=$1 FOR UPDATE",
+    ).bind(code).fetch_optional(&mut *tx).await.map_err(|_| ProductionMapError::StoreFailed)?
+        .ok_or(ProductionMapError::PaddonNotFound)?;
+    if access.received {
+        return Err(ProductionMapError::PaddonAlreadyReceived);
+    }
+    if access.locked {
+        if !paddon_unlock_actor_allowed(&access.locked_by_ref, enabled, actor) {
+            return Err(ProductionMapError::PaddonUnlockForbidden);
+        }
+        sqlx::query("UPDATE mini_paddons SET locked_at=NULL, locked_by_ref='', locked_by_display_name='', updated_at=now() WHERE code=$1")
+            .bind(code).execute(&mut *tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
+        // The next successful print starts a new successor-confirmation cycle.
+        // Existing successor paddons and active selections are preserved.
+        sqlx::query("DELETE FROM mini_paddon_print_successors WHERE source_code=$1")
+            .bind(code)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+    }
+    tx.commit()
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    super::paddon_helpers::load_paddon_summary(pool, code)
+        .await?
+        .ok_or(ProductionMapError::PaddonNotFound)
+}
 
 pub(super) async fn confirm(
     pool: &PgPool,

@@ -13,6 +13,73 @@ struct NextPaddonRequest {
     apparatus: String,
 }
 
+pub(super) async fn can_unlock_snapshot(
+    state: &AppState,
+    principal: &Principal,
+    snapshot: &crate::core::production_map::PaddonSnapshot,
+) -> Result<bool, AdminError> {
+    if snapshot.paddon.locked_at_unix.is_none() {
+        return Ok(false);
+    }
+    for capability in [
+        Capability::AdminAccess,
+        Capability::ProductionMapManage,
+        Capability::ApparatusQueueManage,
+    ] {
+        if state
+            .admin
+            .principal_has_capability(principal, capability)
+            .await
+        {
+            return state
+                .production_maps
+                .can_unlock_paddon(&snapshot.paddon.code, &queue_action_actor(principal))
+                .await
+                .map_err(production_map_error);
+        }
+    }
+    Ok(false)
+}
+
+pub async fn production_map_paddon_unlock(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AdminError> {
+    if method != Method::POST {
+        return Err(method_not_allowed());
+    }
+    let principal = authorize_any_capability(
+        &state,
+        &headers,
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::ApparatusQueueManage,
+        ],
+    )
+    .await?;
+    let input: PrintConfirmationRequest = parse_json(&body)?;
+    state
+        .production_maps
+        .unlock_paddon(&input.code, &queue_action_actor(&principal))
+        .await
+        .map_err(production_map_error)?;
+    let snapshot = state
+        .production_maps
+        .paddon_snapshot(&input.code)
+        .await
+        .map_err(production_map_error)?;
+    let can_unlock = can_unlock_snapshot(&state, &principal, &snapshot).await?;
+    Ok(json_response(serde_json::json!({
+        "ok": true, "paddon": snapshot.paddon, "items": snapshot.items,
+        "available_items": snapshot.available_items,
+        "free_movement_enabled": snapshot.free_movement_enabled,
+        "can_manage_items": snapshot.can_manage_items, "can_unlock": can_unlock,
+    })))
+}
+
 pub(super) async fn assigned_cut_apparatuses(
     state: &AppState,
     principal: &Principal,

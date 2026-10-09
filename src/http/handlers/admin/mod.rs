@@ -42,6 +42,7 @@ pub use production_maps::{
     production_map_paddon_qr_report, production_map_paddons, production_map_print_preflight,
     production_map_paddon_print_confirm, production_map_paddon_next,
     production_map_paddon_management_settings,
+    production_map_paddon_unlock,
     production_map_progress_batch_correct, production_map_progress_qr_history,
     production_map_progress_qr_lookup, production_map_progress_qr_report,
     production_map_progress_qr_reprint, production_map_qolip_validate, production_map_queue_action,
