@@ -182,6 +182,52 @@ pub(crate) async fn load_production_order_lifecycles(
         .collect())
 }
 
+/// Recording a card leaves its active execution and queue state unchanged.
+/// Its new outstanding output cannot close an operation. Refresh only stock
+/// projection in this case, so printing does not read historical sessions or
+/// events. All closure/freeze/recovery paths still use the full derivation.
+pub(super) async fn refresh_recorded_rezka_output_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    write: &crate::core::production_map::QueueActionProgressWrite,
+) -> Result<bool, ProductionMapError> {
+    use crate::core::production_map::OrderRunStatus;
+    let event = &write.event;
+    let is_card = write.progress_event.as_ref().is_some_and(|progress| {
+        progress.payload_json.get("rezka_record_frame_index")
+            .and_then(serde_json::Value::as_u64).is_some_and(|index| index > 0)
+    });
+    if !is_card || event.action != ApparatusQueueAction::RollComplete
+        || event.from_state != ApparatusQueueOrderState::InProgress
+        || event.to_state != ApparatusQueueOrderState::InProgress
+        || write.session.as_ref().is_none_or(|s| s.status != OrderRunStatus::Active)
+        || event.payload_json.get("rezka_expected_output_revision").is_none()
+        || write.map_update.is_some() || write.order_control_update.is_some()
+        || !write.sequence_updates.is_empty() || !write.progress_batch_updates.is_empty()
+        || !write.opening_wip_batch_updates.is_empty() || !write.raw_material_stock_transitions.is_empty()
+        || !write.qolip_checkouts.is_empty() || write.returned_paint_report.is_some()
+        || event.payload_json.get("completed_with_issue").and_then(serde_json::Value::as_bool) == Some(true)
+    { return Ok(false); }
+    let row = sqlx::query_as::<_, (String, String, String, String)>(
+        "SELECT lifecycle_status, operational_status, flow_status, stock_status
+         FROM mini_production_maps WHERE id = $1 FOR UPDATE",
+    ).bind(&event.order_id).fetch_optional(&mut **tx).await
+        .map_err(|_| ProductionMapError::StoreFailed)?.ok_or(ProductionMapError::MapNotFound)?;
+    if row.0 != "in_progress" || row.1 != "in_progress" { return Ok(false); }
+    let counts = sqlx::query_as::<_, (i64, i64, i64, i64)>(
+        "SELECT free_wip_count, waiting_next_stage_count, in_use_wip_count, accepted_wip_count
+         FROM mini_progress_batch_lifecycle_totals WHERE order_id = $1",
+    ).bind(&event.order_id).fetch_optional(&mut **tx).await
+        .map_err(|_| ProductionMapError::StoreFailed)?.unwrap_or((0, 0, 0, 0));
+    let (flow, stock) = crate::core::production_map::derive_order_flow_and_stock_status(
+        "in_progress", counts.0 as usize, counts.1 as usize, counts.2 as usize, counts.3 as usize);
+    if row.2 != flow || row.3 != stock {
+        sqlx::query("UPDATE mini_production_maps SET flow_status = $2, stock_status = $3 WHERE id = $1")
+            .bind(&event.order_id).bind(flow).bind(stock).execute(&mut **tx).await
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+    }
+    Ok(true)
+}
+
 pub(crate) async fn refresh_production_order_lifecycle_tx(
     tx: &mut Transaction<'_, Postgres>,
     order_id: &str,
@@ -298,28 +344,14 @@ pub(crate) async fn refresh_production_order_lifecycle_tx(
 
     let (free_wip_count, waiting_next_stage_count, in_use_wip_count, accepted_wip_count) =
         sqlx::query_as::<_, (i64, i64, i64, i64)>(
-            "SELECT count(*) FILTER (
-                        WHERE wip_status = 'waiting'
-                          AND (COALESCE(canonical_next_apparatus_id, '') = '' OR canonical_next_apparatus_id IS NULL)
-                    )::BIGINT,
-                    count(*) FILTER (
-                        WHERE wip_status = 'waiting'
-                          AND COALESCE(canonical_next_apparatus_id, '') <> ''
-                    )::BIGINT,
-                    count(*) FILTER (
-                        WHERE wip_status = 'in_use'
-                    )::BIGINT,
-                    count(*) FILTER (
-                        WHERE wip_status = 'processed'
-                          AND lower(COALESCE(processed_by_apparatus, '')) LIKE 'warehouse:%'
-                    )::BIGINT
-             FROM mini_progress_batches
-             WHERE order_id = $1",
+            "SELECT free_wip_count, waiting_next_stage_count, in_use_wip_count, accepted_wip_count
+             FROM mini_progress_batch_lifecycle_totals WHERE order_id = $1",
         )
         .bind(order_id)
-        .fetch_one(&mut **tx)
+        .fetch_optional(&mut **tx)
         .await
-        .map_err(|_| ProductionMapError::StoreFailed)?;
+        .map_err(|_| ProductionMapError::StoreFailed)?
+        .unwrap_or((0, 0, 0, 0));
 
     let free_wip_usize = usize::try_from(free_wip_count).unwrap_or(0);
     let waiting_next_stage_usize = usize::try_from(waiting_next_stage_count).unwrap_or(0);

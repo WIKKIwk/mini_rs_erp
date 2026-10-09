@@ -21,7 +21,7 @@ impl QueueApparatusMetadata {
         self.operation == ExecutionOperation::Print
     }
 
-    fn is_rezka(&self) -> bool {
+    pub(super) fn is_rezka(&self) -> bool {
         self.operation == ExecutionOperation::Cut
     }
 
@@ -134,7 +134,10 @@ pub async fn production_map_queue_action(
             .map_err(production_map_error)?;
     }
     let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
-    let _queue_action_guard = state.production_maps.queue_action_guard().await;
+    let _queue_action_guard = state.production_maps.queue_progress_action_guard(
+        &input.apparatus, input.action, &input.progress,
+        &input.materials.scan_barcodes, &input.materials.qolip_codes,
+    ).await.map_err(production_map_error)?;
     let mut usable_material_barcodes = Vec::new();
     if matches!(input.action, queue_state::ApparatusQueueAction::Start) {
         let usable = super::raw_materials::raw_material_usable_barcodes(&state, &input.order_id, &input.apparatus).await?;

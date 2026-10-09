@@ -509,7 +509,7 @@ async fn progress_qr_history_lists_own_batches_and_reprints_existing_qr() {
         .expect("forbidden reprint missing");
     assert_eq!(forbidden.status(), StatusCode::NOT_FOUND);
 
-    let forbidden_other = router
+    let other_reprint = router
         .clone()
         .oneshot(request_with_body(
             "POST",
@@ -518,8 +518,12 @@ async fn progress_qr_history_lists_own_batches_and_reprints_existing_qr() {
             &format!(r#"{{"qr_payload":"{other_qr}"}}"#),
         ))
         .await
-        .expect("forbidden reprint other worker");
-    assert_eq!(forbidden_other.status(), StatusCode::FORBIDDEN);
+        .expect("reprint another worker's QR");
+    assert_eq!(other_reprint.status(), StatusCode::OK);
+    let other_reprint = json_body(other_reprint).await;
+    assert_eq!(other_reprint["ok"], true);
+    assert_eq!(other_reprint["batch"]["batch_id"], other_batch_id);
+    assert_eq!(other_reprint["batch"]["qr_payload"], other_qr);
 
     let reprinted = router
         .clone()
@@ -566,9 +570,9 @@ async fn progress_qr_history_lists_own_batches_and_reprints_existing_qr() {
     assert_eq!(warehouse_reprinted_body["batch"]["qr_payload"], other_qr);
     assert_eq!(warehouse_reprinted_body["print"]["status"], "printed");
 
-    wait_for_progress_print_request_count(&print_requests, 4).await;
+    wait_for_progress_print_request_count(&print_requests, 5).await;
     let printed = print_requests.lock().await;
-    assert_eq!(printed.len(), 4);
+    assert_eq!(printed.len(), 5);
     assert!(printed.iter().any(|request| request.epc == own_qr));
     assert!(printed.iter().any(|request| request.epc == other_qr));
     let reprint_request = printed

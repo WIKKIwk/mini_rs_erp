@@ -26,6 +26,19 @@ fn normalize_paddon_batch_ids(
 }
 
 impl ProductionMapService {
+    pub async fn paddon_management_settings(&self) -> Result<PaddonManagementSettings, ProductionMapError> {
+        self.store.paddon_management_settings().await
+    }
+
+    pub async fn update_paddon_management_settings(&self, enabled: bool, actor: &QueueActionActor) -> Result<PaddonManagementSettings, ProductionMapError> {
+        if actor.role != "admin" || actor.ref_.trim().is_empty() {
+            return Err(ProductionMapError::PaddonInvalidInput);
+        }
+        let settings = self.store.update_paddon_management_settings(enabled, actor).await?;
+        self.notify_live();
+        Ok(settings)
+    }
+
     async fn validate_active_paddon_scope(&self, apparatus: &str, actor: &QueueActionActor) -> Result<(), ProductionMapError> {
         if actor.ref_.trim().is_empty() || actor.role.trim().is_empty() {
             return Err(ProductionMapError::PaddonInvalidInput);
@@ -57,6 +70,10 @@ impl ProductionMapService {
         self.store.paddons(limit.clamp(1, 200)).await
     }
 
+    pub async fn selectable_rezka_paddons(&self, limit: usize) -> Result<Vec<PaddonSummary>, ProductionMapError> {
+        self.store.selectable_rezka_paddons(limit.clamp(1, 200)).await
+    }
+
     pub async fn paddon_summary(&self, code: &str) -> Result<PaddonSummary, ProductionMapError> {
         let code = code.trim();
         if code.is_empty() {
@@ -86,6 +103,21 @@ impl ProductionMapService {
             actor_display_name: actor.display_name.trim().to_string(),
         };
         self.store.create_paddon(input).await
+    }
+
+    pub async fn confirm_paddon_print(&self, code: &str, actor: &QueueActionActor) -> Result<PaddonPrintConfirmation, ProductionMapError> {
+        let code = code.trim();
+        if code.is_empty() || code.len() > 128 { return Err(ProductionMapError::PaddonInvalidInput); }
+        let result = self.store.confirm_paddon_print(code, actor).await?;
+        self.notify_live();
+        Ok(result)
+    }
+
+    pub async fn create_active_paddon_successor(&self, code: &str, apparatus: &str, actor: &QueueActionActor) -> Result<PaddonSummary, ProductionMapError> {
+        self.validate_active_paddon_scope(apparatus, actor).await?;
+        let code = code.trim();
+        if code.is_empty() || code.len() > 128 { return Err(ProductionMapError::PaddonInvalidInput); }
+        self.store.create_active_paddon_successor(code, apparatus.trim(), actor).await
     }
 
     pub async fn delete_paddon(&self, code: &str) -> Result<(), ProductionMapError> {

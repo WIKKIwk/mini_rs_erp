@@ -316,18 +316,9 @@ pub(super) async fn put_order_progress_batch_tx(
 ) -> Result<(), ProductionMapError> {
     progress_batch_input_links_from_payload(&batch.payload_json)
         .map_err(|_| ProductionMapError::StoreFailed)?;
-    let mut locked_apparatuses = vec![batch.apparatus.as_str()];
-    for apparatus in [
-        batch.current_apparatus.as_str(),
-        batch.next_apparatus.as_str(),
-        batch.used_by_apparatus.as_str(),
-        batch.processed_by_apparatus.as_str(),
-    ] {
-        if !apparatus.trim().is_empty() && !is_warehouse_processing_marker(apparatus) {
-            locked_apparatuses.push(apparatus);
-        }
-    }
-    lock_order_and_apparatuses_tx(tx, &batch.order_id, &locked_apparatuses).await?;
+    // This write changes a roll, not its producer/next machine's queue.
+    // The order lock and revision CAS protect standalone writes too.
+    lock_order_and_apparatuses_tx(tx, &batch.order_id, &[]).await?;
     let apparatus_id = ApparatusId::new(batch.apparatus.trim().to_string())
         .map_err(|_| ProductionMapError::StoreFailed)?;
     for apparatus in [

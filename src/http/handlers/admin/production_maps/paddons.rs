@@ -48,6 +48,8 @@ pub async fn production_map_active_paddon(
 pub struct PaddonsQuery {
     #[serde(default)]
     limit: Option<usize>,
+    #[serde(default)]
+    selectable_only: bool,
 }
 
 #[derive(Default, serde::Deserialize)]
@@ -112,11 +114,11 @@ pub async fn production_map_paddons(
     if method != Method::GET {
         return Err(method_not_allowed());
     }
-    let paddons = state
-        .production_maps
-        .paddons(query.limit.unwrap_or(50))
-        .await
-        .map_err(production_map_error)?;
+    let paddons = if query.selectable_only {
+        state.production_maps.selectable_rezka_paddons(query.limit.unwrap_or(50)).await
+    } else {
+        state.production_maps.paddons(query.limit.unwrap_or(50)).await
+    }.map_err(production_map_error)?;
     Ok(json_response(serde_json::json!({
         "ok": true,
         "paddons": paddons,
@@ -153,6 +155,8 @@ pub async fn production_map_paddon_detail(
         "paddon": snapshot.paddon,
         "items": snapshot.items,
         "available_items": snapshot.available_items,
+        "free_movement_enabled": snapshot.free_movement_enabled,
+        "can_manage_items": snapshot.can_manage_items,
     })))
 }
 
@@ -186,6 +190,8 @@ pub async fn production_map_paddon_qr_report(
         "paddon": snapshot.paddon,
         "items": snapshot.items,
         "qr_payload": query.code.trim(),
+        "free_movement_enabled": snapshot.free_movement_enabled,
+        "can_manage_items": snapshot.can_manage_items,
     })))
 }
 
@@ -195,48 +201,26 @@ pub async fn production_map_paddon_qr_print(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, AdminError> {
-    let principal = authorize_any_capability(
-        &state,
-        &headers,
-        &[
-            Capability::AdminAccess,
-            Capability::ProductionMapManage,
-            Capability::ApparatusQueueRead,
-            Capability::ApparatusQueueManage,
-            Capability::WerkaAccess,
-        ],
-    )
-    .await?;
+    let token = bearer_token(&headers).ok_or_else(unauthorized)?;
+    let principal = state.sessions.get(&token).await.map_err(|_| unauthorized())?;
     if method != Method::POST {
         return Err(method_not_allowed());
     }
     let input: PaddonQrPrintRequest = parse_json(&body)?;
-    if principal.role == PrincipalRole::Werka {
-        let warehouses = state
-            .warehouses
-            .assigned_warehouse_names(&principal)
-            .await
-            .map_err(warehouse_error)?;
-        if warehouses.is_empty() {
-            return Err(forbidden());
-        }
-        if let Some(receipt) = state
-            .production_maps
-            .paddon_receipt(&input.code)
-            .await
-            .map_err(production_map_error)?
-        {
-            if !warehouses.iter().any(|name| name == &receipt.warehouse) {
-                return Err(forbidden());
-            }
-        }
-    }
     let snapshot = state
         .production_maps
         .paddon_scan_snapshot(&input.code)
         .await
         .map_err(production_map_error)?;
     let paddon = snapshot.paddon;
+    let can_close_after_print = paddon.locked_at_unix.is_none()
+        && state
+            .admin
+            .principal_has_capability(&principal, Capability::ApparatusQueueManage)
+            .await
+        && !super::paddon_print_lock::assigned_cut_apparatuses(&state, &principal)
+            .await?
+            .is_empty();
     let code = paddon.code.clone();
     let print_request = ProgressLabelPrintRequest {
         driver_url: input.driver_url,
@@ -276,6 +260,7 @@ pub async fn production_map_paddon_qr_print(
         "items": snapshot.items,
         "qr_payload": code,
         "print": print,
+        "can_close_after_print": can_close_after_print,
     })))
 }
 
@@ -400,6 +385,8 @@ pub async fn production_map_paddon_item_add(
         "paddon": snapshot.paddon,
         "items": snapshot.items,
         "available_items": snapshot.available_items,
+        "free_movement_enabled": snapshot.free_movement_enabled,
+        "can_manage_items": snapshot.can_manage_items,
     })))
 }
 
@@ -437,6 +424,8 @@ pub async fn production_map_paddon_items_add(
         "paddon": snapshot.paddon,
         "items": snapshot.items,
         "available_items": snapshot.available_items,
+        "free_movement_enabled": snapshot.free_movement_enabled,
+        "can_manage_items": snapshot.can_manage_items,
     })))
 }
 
@@ -478,6 +467,8 @@ pub async fn production_map_paddon_item_remove(
         "paddon": snapshot.paddon,
         "items": snapshot.items,
         "available_items": snapshot.available_items,
+        "free_movement_enabled": snapshot.free_movement_enabled,
+        "can_manage_items": snapshot.can_manage_items,
     })))
 }
 
@@ -515,6 +506,8 @@ pub async fn production_map_paddon_items_remove(
         "paddon": snapshot.paddon,
         "items": snapshot.items,
         "available_items": snapshot.available_items,
+        "free_movement_enabled": snapshot.free_movement_enabled,
+        "can_manage_items": snapshot.can_manage_items,
     })))
 }
 

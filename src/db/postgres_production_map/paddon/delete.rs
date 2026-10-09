@@ -10,7 +10,7 @@ pub(super) async fn delete_paddon(pool: &PgPool, code: &str) -> Result<(), Produ
     // Item assignment/removal, output recording and receiving take this same
     // lock. Check history after acquiring it so a concurrent write cannot be lost.
     let (id, used) = sqlx::query_as::<_, (String, bool)>(
-        "SELECT id, receipt_json IS NOT NULL OR updated_at <> created_at
+        "SELECT id, locked_at IS NOT NULL OR receipt_json IS NOT NULL OR updated_at <> created_at
          FROM mini_paddons WHERE code = $1 FOR UPDATE",
     )
     .bind(code)

@@ -755,6 +755,48 @@ async fn old_destination_two_alternative_workers_cannot_claim_the_same_roll() {
 }
 
 #[tokio::test]
+async fn alternative_apparatus_on_same_order_starts_without_waiting_for_peer_roll() {
+    let (service, store, original) = setup(QueueDiscipline::FreePick).await;
+    service.upsert_map(route_map(true)).await.unwrap();
+    let mut other = original.clone();
+    other.batch_id = "physical-independent-lam1-roll".into();
+    other.qr_payload = "400118DA2F17C3617F59DDC7".into();
+    store.put_order_progress_batch(other.clone()).await.unwrap();
+    let peer_guard = service.queue_progress_action_guard(
+        REZKA_ID, queue_state::ApparatusQueueAction::Start, &scan(&original), &[], &[],
+    ).await.unwrap();
+    let result = tokio::time::timeout(std::time::Duration::from_millis(500),
+        service.apply_apparatus_queue_action_with_progress(
+            CUT2, ORDER, queue_state::ApparatusQueueAction::Start,
+            &[CUT2.into()], worker("independent-cut-worker"), scan(&other),
+        ),
+    ).await.expect("same group/order with a different apparatus and roll must proceed")
+        .expect("independent cut start");
+    assert_eq!(result.session.unwrap().apparatus, CUT2);
+    assert_eq!(store.progress_batch(&original.batch_id).await.unwrap().unwrap().wip_status,
+        OrderProgressBatchWipStatus::Waiting);
+    assert_eq!(store.progress_batch(&other.batch_id).await.unwrap().unwrap().used_by_apparatus, CUT2);
+    drop(peer_guard);
+}
+
+#[tokio::test]
+async fn qr_only_and_explicit_batch_claims_share_the_same_roll_guard() {
+    let (service, _, original) = setup(QueueDiscipline::FreePick).await;
+    service.upsert_map(route_map(true)).await.unwrap();
+    let explicit = service.queue_progress_action_guard(
+        REZKA_ID, queue_state::ApparatusQueueAction::Start, &scan(&original), &[], &[],
+    ).await.unwrap();
+    let qr_only = QueueProgressInput { qr_payload: original.qr_payload.clone(), ..Default::default() };
+    assert!(tokio::time::timeout(std::time::Duration::from_millis(30),
+        service.queue_progress_action_guard(CUT2, queue_state::ApparatusQueueAction::Start,
+            &qr_only, &[], &[]),
+    ).await.is_err(), "the QR alias must resolve to the exclusive physical roll lock");
+    drop(explicit);
+    service.queue_progress_action_guard(CUT2, queue_state::ApparatusQueueAction::Start,
+        &qr_only, &[], &[]).await.unwrap();
+}
+
+#[tokio::test]
 async fn map_save_protects_waiting_route_from_ambiguous_or_deleted_producer_edit() {
     let (service, store, original) = setup(QueueDiscipline::FreePick).await;
     let before = service.raw_map(ORDER).await.unwrap().unwrap();

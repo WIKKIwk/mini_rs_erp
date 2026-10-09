@@ -1,6 +1,14 @@
 #[async_trait]
 #[cfg(any(test, feature = "verification"))]
 impl ProductionMapStorePort for MemoryProductionMapStore {
+    async fn paddon_management_settings(&self) -> Result<PaddonManagementSettings, ProductionMapError> {
+        Ok(self.paddon_management_settings.read().await.clone())
+    }
+    async fn update_paddon_management_settings(&self, enabled: bool, _actor: &QueueActionActor) -> Result<PaddonManagementSettings, ProductionMapError> {
+        let settings = PaddonManagementSettings { free_movement_enabled: enabled };
+        *self.paddon_management_settings.write().await = settings.clone();
+        Ok(settings)
+    }
     async fn move_apparatus_sequence(
         &self,
         canonical: &crate::core::apparatus_standard::RuntimeApparatusConfiguration,
@@ -37,7 +45,9 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
     }
     async fn set_active_rezka_paddon(&self, apparatus: &str, actor: &QueueActionActor, code: Option<&str>) -> Result<(), ProductionMapError> {
         if let Some(code) = code {
-            if !self.paddons.read().await.contains_key(code) { return Err(ProductionMapError::PaddonNotFound); }
+            let paddons = self.paddons.read().await;
+            let paddon = paddons.get(code).ok_or(ProductionMapError::PaddonNotFound)?;
+            if paddon.locked_at_unix.is_some() { return Err(ProductionMapError::PaddonLocked); }
         }
         let key = (actor.role.clone(), actor.ref_.clone(), apparatus.to_string());
         let mut selections = self.active_paddons.write().await;
@@ -51,9 +61,37 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
             id: code.clone(), code: code.clone(), location: input.location, note: input.note,
             created_by_ref: input.actor_ref, created_by_display_name: input.actor_display_name,
             created_at_unix: 0, updated_at_unix: 0, item_count: 0,
-            total_gross_kg: Some(0.0), total_net_kg: Some(0.0),
+            total_gross_kg: Some(0.0), total_net_kg: Some(0.0), locked_at_unix: None,
         };
         paddons.insert(code, paddon.clone());
+        Ok(paddon)
+    }
+    async fn confirm_paddon_print(&self, code: &str, actor: &QueueActionActor) -> Result<PaddonPrintConfirmation, ProductionMapError> {
+        let mut paddons = self.paddons.write().await;
+        let paddon = paddons.get_mut(code).ok_or(ProductionMapError::PaddonNotFound)?;
+        let newly_locked = paddon.locked_at_unix.is_none();
+        paddon.locked_at_unix.get_or_insert(super::progress::unix_seconds());
+        let mut active = self.active_paddons.write().await;
+        let apparatuses = active.iter().filter(|((role, ref_, _), selected)|
+            role == &actor.role && ref_ == &actor.ref_ && selected.as_str() == code)
+            .map(|((_, _, apparatus), _)| apparatus.clone()).collect();
+        active.retain(|_, selected| selected != code);
+        Ok(PaddonPrintConfirmation { paddon: paddon.clone(), newly_locked, apparatuses })
+    }
+    async fn create_active_paddon_successor(&self, code: &str, apparatus: &str, actor: &QueueActionActor) -> Result<PaddonSummary, ProductionMapError> {
+        let mut successors = self.paddon_successors.lock().await;
+        let key = (code.to_string(), actor.role.clone(), actor.ref_.clone(), apparatus.to_string());
+        if let Some(next) = successors.get(&key) {
+            self.set_active_rezka_paddon(apparatus, actor, Some(next)).await?;
+            return self.paddons.read().await.get(next).cloned().ok_or(ProductionMapError::PaddonNotFound);
+        }
+        if self.paddons.read().await.get(code).ok_or(ProductionMapError::PaddonNotFound)?.locked_at_unix.is_none() {
+            return Err(ProductionMapError::PaddonInvalidInput);
+        }
+        let paddon = self.create_paddon(PaddonCreateInput { location: apparatus.to_string(), note: String::new(),
+            actor_ref: actor.ref_.clone(), actor_display_name: actor.display_name.clone() }).await?;
+        self.set_active_rezka_paddon(apparatus, actor, Some(&paddon.code)).await?;
+        successors.insert(key, paddon.code.clone());
         Ok(paddon)
     }
     async fn commit_stage_astatka_report(&self, report: StageAstatkaReport,

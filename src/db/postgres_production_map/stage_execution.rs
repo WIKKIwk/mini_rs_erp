@@ -41,29 +41,25 @@ pub(super) async fn inputs_tx(
     .ok_or(ProductionMapError::StoreFailed)?;
     let map: ProductionMapDefinition =
         serde_json::from_value(map).map_err(|_| ProductionMapError::StoreFailed)?;
-    let ids = sqlx::query_scalar::<_, String>(
-        "SELECT batch_id FROM mini_progress_batches
-         WHERE order_id = $1 AND wip_status IN ('waiting', 'in_use')
-         ORDER BY batch_id",
+    let routes = sqlx::query_scalar::<_, serde_json::Value>(
+        "SELECT route_json FROM mini_progress_batch_work_inputs
+         WHERE order_id = $1 AND batch_count > 0 ORDER BY route_key",
     )
     .bind(order_id)
     .fetch_all(&mut **tx)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
-    let mut batches = Vec::with_capacity(ids.len());
-    for id in ids {
-        batches.push(
-            super::order_query_helpers::load_progress_batch(&mut **tx, &id)
-                .await?
-                .ok_or(ProductionMapError::StoreFailed)?,
-        );
-    }
+    // One representative per exact routing class is enough: stage closure
+    // depends on existence/availability, never the number or weight of rolls.
+    // Keep the same effective-route resolver, including edited maps and pins.
+    let batches = routes.into_iter().map(|route| route_projection_batch(order_id, route))
+        .collect::<Result<Vec<_>, _>>()?;
     let mut inputs = work_inputs(&map, &batches, &[]);
     // Opening WIP has its own authoritative intake route. Preserve its existing
     // projection while standard produced inputs share the effective-route
     // resolver with scan, preview, Start and the in-memory lifecycle.
     let rows = sqlx::query_as::<_, (String, String, String, String, bool)>(
-        "SELECT CASE WHEN i.source_apparatus <> '' THEN i.resume_stage_node_id ELSE '' END,
+        "SELECT DISTINCT CASE WHEN i.source_apparatus <> '' THEN i.resume_stage_node_id ELSE '' END,
                 CASE WHEN i.source_apparatus = '' THEN i.resume_stage_node_id ELSE '' END,
                 i.source_apparatus, COALESCE(i.resume_apparatus, ''), b.wip_status = 'waiting'
          FROM mini_opening_wip_intakes i JOIN mini_opening_wip_batches b ON b.intake_id = i.intake_id
@@ -82,6 +78,26 @@ pub(super) async fn inputs_tx(
         },
     ));
     Ok(inputs)
+}
+
+fn route_projection_batch(
+    order_id: &str,
+    route: serde_json::Value,
+) -> Result<OrderProgressBatch, ProductionMapError> {
+    let mut batch = serde_json::json!({
+        "batch_id": "", "session_id": "", "order_id": order_id,
+        "started_at_unix": 0, "completed_at_unix": 0,
+        "status": "completed", "produced_qty": 0.0, "uom": "",
+        "qr_payload": "", "label_item_code": "", "label_item_name": "",
+        "executor_name": "", "worker_role": "", "worker_ref": "", "worker_display_name": ""
+    });
+    let fields = route.as_object().ok_or(ProductionMapError::StoreFailed)?;
+    batch.as_object_mut().expect("object").extend(fields.clone());
+    // Match the existing SQL row parser's legacy case/whitespace tolerance.
+    let action = batch.get("action").and_then(serde_json::Value::as_str)
+        .and_then(queue_state::ApparatusQueueAction::parse).ok_or(ProductionMapError::StoreFailed)?;
+    batch["action"] = serde_json::json!(action.as_str());
+    serde_json::from_value(batch).map_err(|_| ProductionMapError::StoreFailed)
 }
 
 pub(super) async fn stamp_report_tx(

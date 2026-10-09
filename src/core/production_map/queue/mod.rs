@@ -2,6 +2,7 @@ mod actions;
 mod policy;
 mod sequence;
 mod service;
+mod rezka_output_report;
 mod snapshot_tolerance;
 mod state;
 

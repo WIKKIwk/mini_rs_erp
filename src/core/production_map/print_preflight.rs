@@ -79,7 +79,7 @@ impl ProductionMapService {
         idempotency_key: &str,
         actor: QueueActionActor,
     ) -> Result<PrintPreflightHold, ProductionMapError> {
-        let _guard = self.queue_action_guard().await;
+        let _guard = self.apparatus_preflight_guard(apparatus, idempotency_key).await;
         let apparatus = apparatus.trim();
         let order_id = order_id.trim();
         let hold_id = hold_id.trim();
@@ -191,7 +191,7 @@ impl ProductionMapService {
         action: &str,
         actor: QueueActionActor,
     ) -> Result<PrintPreflightHold, ProductionMapError> {
-        let _guard = self.queue_action_guard().await;
+        let _guard = self.apparatus_action_guard(apparatus).await;
         let hold_id = hold_id.trim();
         let order_id = order_id.trim();
         let apparatus = apparatus.trim();

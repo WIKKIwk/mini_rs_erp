@@ -34,6 +34,8 @@ pub struct PaddonSummary {
     pub created_at_unix: i64,
     pub updated_at_unix: i64,
     pub item_count: i64,
+    #[serde(default)]
+    pub locked_at_unix: Option<i64>,
     /// Product weights only; pallet tare is excluded. None means incomplete knowledge.
     #[serde(default)]
     pub total_gross_kg: Option<f64>,
@@ -46,6 +48,22 @@ pub struct PaddonSnapshot {
     pub paddon: PaddonSummary,
     pub items: Vec<OrderProgressBatch>,
     pub available_items: Vec<OrderProgressBatch>,
+    #[serde(default)]
+    pub free_movement_enabled: bool,
+    #[serde(default)]
+    pub can_manage_items: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaddonManagementSettings {
+    pub free_movement_enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PaddonPrintConfirmation {
+    pub paddon: PaddonSummary,
+    pub newly_locked: bool,
+    pub apparatuses: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

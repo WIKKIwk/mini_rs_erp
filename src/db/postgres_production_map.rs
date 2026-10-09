@@ -11,7 +11,7 @@ use crate::core::production_map::{
     CompletionRequestStateResolution, FinishedGoodsStockEntry, LaminatsiyaAstatkaReport,
     OpeningWipBatchRecord, OpeningWipCreateWrite, OpeningWipDeleteWrite, OpeningWipQuery,
     OpeningWipRecord, OrderControlRecord, OrderProgressBatch, OrderProgressEvent, OrderRunSession,
-    PaddonCreateInput, PaddonSnapshot, PaddonSummary, ProductionMapApparatusTransferRecord,
+    PaddonCreateInput, PaddonManagementSettings, PaddonSnapshot, PaddonSummary, ProductionMapApparatusTransferRecord,
     ProductionMapApparatusTransferWrite, ProductionMapDefinition, ProductionMapError,
     ProductionMapStorePort, ProductionOrderLifecycleRecord, ProductionOrderLifecycleStatus,
     ProductionOrderLogEntry, ProductionQrSessionResources, ProgressBatchCorrectionInput, ProgressBatchCorrectionRecord,
@@ -53,6 +53,12 @@ mod paddon_weights;
 mod paddon_delete;
 #[path = "postgres_production_map/paddon/active.rs"]
 mod active_paddon;
+#[path = "postgres_production_map/paddon/print_lock.rs"]
+mod paddon_print_lock;
+#[path = "postgres_production_map/paddon/management.rs"]
+mod paddon_management;
+#[path = "postgres_production_map/paddon/movement.rs"]
+mod paddon_movement;
 #[path = "postgres_production_map/paddon/receipts.rs"]
 mod paddon_receipts;
 #[path = "postgres_production_map/print_preflight.rs"]
@@ -848,7 +854,7 @@ impl PostgresProductionMapStore {
     }
 
     async fn paddons(&self, limit: usize) -> Result<Vec<PaddonSummary>, ProductionMapError> {
-        load_paddons(&self.pool, limit).await
+        load_paddons(&self.pool, limit, false).await
     }
 
     async fn paddon_summary(
@@ -1004,7 +1010,11 @@ impl PostgresProductionMapStore {
             }
             let mut locked_apparatuses =
                 vec![write.apparatus.as_str(), write.event.apparatus.as_str()];
-            locked_apparatuses.extend(write.event.assigned_apparatus.iter().map(String::as_str));
+            // Assigned peers are map metadata, not resources mutated by a normal card.
+            if write.event.action == crate::core::production_map::queue_state::ApparatusQueueAction::Freeze
+                || write.map_update.is_some() {
+                locked_apparatuses.extend(write.event.assigned_apparatus.iter().map(String::as_str));
+            }
             locked_apparatuses.extend(write.sequence_updates.keys().map(String::as_str));
             if let Some(session) = &write.session {
                 locked_apparatuses.push(session.apparatus.as_str());
@@ -1012,26 +1022,9 @@ impl PostgresProductionMapStore {
             if let Some(event) = &write.progress_event {
                 locked_apparatuses.push(event.apparatus.as_str());
             }
-            for batch in write
-                .progress_batch
-                .iter()
-                .chain(write.progress_batches.iter())
-                .chain(write.progress_batch_updates.iter())
-            {
-                locked_apparatuses.push(batch.apparatus.as_str());
-                for value in [
-                    batch.current_apparatus.as_str(),
-                    batch.next_apparatus.as_str(),
-                    batch.used_by_apparatus.as_str(),
-                    batch.processed_by_apparatus.as_str(),
-                ] {
-                    if !value.trim().is_empty()
-                        && !value.trim().to_ascii_lowercase().starts_with("warehouse:")
-                    {
-                        locked_apparatuses.push(value);
-                    }
-                }
-            }
+            // WIP producer/nominal next IDs describe route history, not queues
+            // being changed. The order lock, batch row ownership lock and CAS
+            // protect those rolls without blocking unrelated peer machines.
             for batch in &write.opening_wip_batch_updates {
                 for value in [
                     batch.used_by_apparatus.as_str(),
@@ -1266,14 +1259,16 @@ impl PostgresProductionMapStore {
                 .await
                 .map_err(|_| ProductionMapError::StoreFailed)?;
         }
-        refresh_production_order_lifecycle_tx(
-            &mut tx,
-            &event.order_id,
-            &event.actor,
-            &event.event_id,
-            "queue_action_progress",
-        )
-        .await?;
+        if !lifecycle::refresh_recorded_rezka_output_tx(&mut tx, write).await? {
+            refresh_production_order_lifecycle_tx(
+                &mut tx,
+                &event.order_id,
+                &event.actor,
+                &event.event_id,
+                "queue_action_progress",
+            )
+            .await?;
+        }
         tx.commit()
             .await
             .map_err(|_| ProductionMapError::StoreFailed)?;

@@ -22,12 +22,14 @@ struct PaddonRow {
     created_at_unix: i64,
     updated_at_unix: i64,
     item_count: i64,
+    locked_at_unix: Option<i64>,
 }
 
 #[derive(FromRow)]
 struct PaddonLockRow {
     id: String,
     receipt_json: Option<serde_json::Value>,
+    locked: bool,
 }
 
 #[derive(FromRow)]
@@ -46,6 +48,7 @@ fn summary_from_row(row: PaddonRow) -> PaddonSummary {
         created_at_unix: row.created_at_unix,
         updated_at_unix: row.updated_at_unix,
         item_count: row.item_count,
+        locked_at_unix: row.locked_at_unix,
         total_gross_kg: None, total_net_kg: None,
     }
 }
@@ -59,7 +62,8 @@ async fn load_raw_summary_by_code(
                 p.created_by_ref, p.created_by_display_name,
                 EXTRACT(EPOCH FROM p.created_at)::bigint AS created_at_unix,
                 EXTRACT(EPOCH FROM p.updated_at)::bigint AS updated_at_unix,
-                COUNT(i.id) FILTER (WHERE i.removed_at IS NULL)::bigint AS item_count
+                COUNT(i.id) FILTER (WHERE i.removed_at IS NULL)::bigint AS item_count,
+                EXTRACT(EPOCH FROM p.locked_at)::bigint AS locked_at_unix
          FROM mini_paddons AS p
          LEFT JOIN mini_paddon_items AS i ON i.paddon_id = p.id
          WHERE p.code = $1
@@ -108,11 +112,16 @@ async fn load_snapshot_by_code(
             .filter(|b| b.wip_status == OrderProgressBatchWipStatus::Waiting)
             .map(|b| (b, corrections.get(&b.batch_id).copied())),
     );
-    if let Some(receipt) = super::paddon_receipts::load(pool, code).await? {
+    let receipt = super::paddon_receipts::load(pool, code).await?;
+    let free_movement_enabled = super::paddon_management::load(pool).await?.free_movement_enabled;
+    let can_manage_items = receipt.is_none() && (paddon.locked_at_unix.is_none() || free_movement_enabled);
+    if let Some(receipt) = receipt {
         paddon.total_gross_kg = receipt.paddon.total_gross_kg;
         paddon.total_net_kg = receipt.paddon.total_net_kg;
     }
-    let available_items = if include_available_items {
+    let available_items = if include_available_items && can_manage_items && free_movement_enabled {
+        super::paddon_movement::load_available(pool, &paddon.id).await?
+    } else if include_available_items && can_manage_items {
         load_unassigned_wip_progress_batches(
             pool,
             WipProgressBatchQuery::new("", "", "", None, false, "", 500),
@@ -125,12 +134,15 @@ async fn load_snapshot_by_code(
         paddon,
         items,
         available_items,
+        free_movement_enabled,
+        can_manage_items,
     }))
 }
 
 pub(super) async fn load_paddons(
     pool: &PgPool,
     limit: usize,
+    selectable_only: bool,
 ) -> Result<Vec<PaddonSummary>, ProductionMapError> {
     let limit = i64::try_from(limit.clamp(1, 200)).unwrap_or(200);
     let rows = sqlx::query_as::<_, PaddonRow>(
@@ -138,15 +150,17 @@ pub(super) async fn load_paddons(
                 p.created_by_ref, p.created_by_display_name,
                 EXTRACT(EPOCH FROM p.created_at)::bigint AS created_at_unix,
                 EXTRACT(EPOCH FROM p.updated_at)::bigint AS updated_at_unix,
-                COUNT(i.id) FILTER (WHERE i.removed_at IS NULL)::bigint AS item_count
+                COUNT(i.id) FILTER (WHERE i.removed_at IS NULL)::bigint AS item_count,
+                EXTRACT(EPOCH FROM p.locked_at)::bigint AS locked_at_unix
          FROM mini_paddons AS p
          LEFT JOIN mini_paddon_items AS i ON i.paddon_id = p.id
-         WHERE p.id IN (SELECT id FROM mini_paddons ORDER BY updated_at DESC, code ASC LIMIT $1)
+         WHERE p.id IN (SELECT id FROM mini_paddons WHERE NOT $2 OR (locked_at IS NULL AND receipt_json IS NULL) ORDER BY updated_at DESC, code ASC LIMIT $1)
          GROUP BY p.id
          ORDER BY p.updated_at DESC, p.code ASC
          LIMIT $1",
     )
     .bind(limit)
+    .bind(selectable_only)
     .fetch_all(pool)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
@@ -199,10 +213,16 @@ pub(super) async fn create_paddon(
     pool: &PgPool,
     input: PaddonCreateInput,
 ) -> Result<PaddonSummary, ProductionMapError> {
-    let mut tx = pool
-        .begin()
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)?;
+    let mut tx = pool.begin().await.map_err(|_| ProductionMapError::StoreFailed)?;
+    let code = create_paddon_tx(&mut tx, input).await?;
+    tx.commit().await.map_err(|_| ProductionMapError::StoreFailed)?;
+    load_paddon_summary(pool, &code).await?.ok_or(ProductionMapError::StoreFailed)
+}
+
+pub(super) async fn create_paddon_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    input: PaddonCreateInput,
+) -> Result<String, ProductionMapError> {
     let created = sqlx::query_as::<_, CreatedPaddonRow>(
         "WITH allocated AS (
              UPDATE mini_paddon_sequence
@@ -224,18 +244,13 @@ pub(super) async fn create_paddon(
     .bind(input.note)
     .bind(input.actor_ref)
     .bind(input.actor_display_name)
-    .fetch_optional(&mut *tx)
+    .fetch_optional(&mut **tx)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
     let Some(created) = created else {
         return Err(ProductionMapError::PaddonCodeExhausted);
     };
-    tx.commit()
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-    load_paddon_summary(pool, &created.code)
-        .await?
-        .ok_or(ProductionMapError::StoreFailed)
+    Ok(created.code)
 }
 
 pub(super) async fn load_paddon_snapshot(
@@ -255,9 +270,10 @@ pub(super) async fn load_paddon_scan_snapshot(
 async fn lock_paddon(
     tx: &mut Transaction<'_, Postgres>,
     code: &str,
+    allow_printed: bool,
 ) -> Result<PaddonLockRow, ProductionMapError> {
     let row = sqlx::query_as::<_, PaddonLockRow>(
-        "SELECT id, receipt_json
+        "SELECT id, receipt_json, locked_at IS NOT NULL AS locked
          FROM mini_paddons
          WHERE code = $1
          FOR UPDATE",
@@ -268,10 +284,11 @@ async fn lock_paddon(
     .map_err(|_| ProductionMapError::StoreFailed)?
     .ok_or(ProductionMapError::PaddonNotFound)?;
     if row.receipt_json.is_some() { return Err(ProductionMapError::PaddonAlreadyReceived); }
+    if row.locked && !allow_printed { return Err(ProductionMapError::PaddonLocked); }
     Ok(row)
 }
 
-fn new_item_id() -> String {
+pub(super) fn new_item_id() -> String {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|value| value.as_millis())
@@ -299,7 +316,12 @@ pub(super) async fn add_paddon_items(
         .begin()
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
-    let paddon = lock_paddon(&mut tx, code).await?;
+    if super::paddon_management::lock_enabled(&mut tx).await? {
+        super::paddon_movement::move_items(&mut tx, code, progress_batch_ids, actor).await?;
+        tx.commit().await.map_err(|_| ProductionMapError::StoreFailed)?;
+        return load_snapshot_by_code(pool, code, true).await?.ok_or(ProductionMapError::PaddonNotFound);
+    }
+    let paddon = lock_paddon(&mut tx, code, false).await?;
     let mut changed = false;
     let mut batch_ids: Vec<_> = progress_batch_ids.iter().map(|id| id.trim()).collect();
     batch_ids.sort_unstable();
@@ -395,9 +417,15 @@ pub(super) async fn remove_paddon_items(
         .begin()
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
-    let paddon = lock_paddon(&mut tx, code).await?;
+    let allow_printed = super::paddon_management::lock_enabled(&mut tx).await?;
+    let paddon = lock_paddon(&mut tx, code, allow_printed).await?;
     let mut item_ids = Vec::with_capacity(progress_batch_ids.len());
-    for progress_batch_id in progress_batch_ids {
+    let mut batch_ids = progress_batch_ids.to_vec();
+    batch_ids.sort();
+    for progress_batch_id in &batch_ids {
+        if allow_printed {
+            super::paddon_movement::lock_movable_roll(&mut tx, progress_batch_id).await?;
+        }
         let item_id = sqlx::query_scalar::<_, String>(
             "SELECT id
              FROM mini_paddon_items

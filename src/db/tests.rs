@@ -9,6 +9,7 @@ mod mini_order;
 mod opening_wip;
 mod production_map;
 mod rezka_output_paddon;
+mod paddon_print_lock;
 mod bosma_astatka;
 mod cooperative_stages;
 mod qolip_checkout;

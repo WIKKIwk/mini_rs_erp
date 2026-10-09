@@ -94,9 +94,11 @@ async fn execute_queue_action(
             &order_id,
         ));
     }
-    // A card first commits its record, then prints that exact QR through the
-    // reprint endpoint. A printer failure must never repeat the business write.
-    let print_requests = if action.records_progress_output() && !recording_rezka_frame {
+    // Local cards receive a prepared label only after the business commit.
+    // Printer failures retry the saved QR through reprint, never the write.
+    let print_requests = if action.records_progress_output()
+        && (!recording_rezka_frame || print.print_transport.trim().eq_ignore_ascii_case("offline"))
+    {
         prepared
             .progress_output_batches()
             .iter()

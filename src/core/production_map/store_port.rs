@@ -692,6 +692,15 @@ pub trait ProductionMapStorePort: Send + Sync {
     async fn paddons(&self, _limit: usize) -> StoreResult<Vec<PaddonSummary>> {
         Ok(Vec::new())
     }
+    async fn paddon_management_settings(&self) -> StoreResult<PaddonManagementSettings> {
+        Ok(PaddonManagementSettings::default())
+    }
+    async fn update_paddon_management_settings(&self, _enabled: bool, _actor: &QueueActionActor) -> StoreResult<PaddonManagementSettings> {
+        Err(ProductionMapError::StoreFailed)
+    }
+    async fn selectable_rezka_paddons(&self, limit: usize) -> StoreResult<Vec<PaddonSummary>> {
+        Ok(self.paddons(200).await?.into_iter().filter(|p| p.locked_at_unix.is_none()).take(limit).collect())
+    }
     async fn active_rezka_paddon(&self, _apparatus: &str, _actor: &QueueActionActor) -> StoreResult<Option<String>> {
         Err(ProductionMapError::StoreFailed)
     }
@@ -702,6 +711,12 @@ pub trait ProductionMapStorePort: Send + Sync {
         Ok(None)
     }
     async fn create_paddon(&self, _input: PaddonCreateInput) -> StoreResult<PaddonSummary> {
+        Err(ProductionMapError::StoreFailed)
+    }
+    async fn confirm_paddon_print(&self, _code: &str, _actor: &QueueActionActor) -> StoreResult<PaddonPrintConfirmation> {
+        Err(ProductionMapError::StoreFailed)
+    }
+    async fn create_active_paddon_successor(&self, _code: &str, _apparatus: &str, _actor: &QueueActionActor) -> StoreResult<PaddonSummary> {
         Err(ProductionMapError::StoreFailed)
     }
     async fn delete_paddon(&self, _code: &str) -> StoreResult<()> {

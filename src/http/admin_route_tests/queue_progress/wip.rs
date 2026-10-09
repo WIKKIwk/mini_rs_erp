@@ -571,7 +571,7 @@ async fn complete_after_wip_start_does_not_reuse_input_qr_as_output_qr() {
     assert_ne!(completed_body["progress_batch"]["qr_payload"], input_qr);
 
     // The print-only viewer may read every stage of this order, including
-    // processed print output, but cannot operate/reprint the other stage.
+    // processed print output, and reprint its QR without operating the other stage.
     for _ in 0..2 {
         let history = router.clone().oneshot(request(
             "GET",
@@ -604,7 +604,8 @@ async fn complete_after_wip_start_does_not_reuse_input_qr_as_output_qr() {
         ))
         .await
         .unwrap();
-    assert_eq!(reprint.status(), StatusCode::FORBIDDEN);
+    assert_eq!(reprint.status(), StatusCode::OK);
+    assert_eq!(json_body(reprint).await["batch"]["qr_payload"], completed_body["progress_batch"]["qr_payload"]);
     let action = router.oneshot(request_with_body(
         "POST", "/v1/mobile/admin/production-maps/queue-action", &viewer,
         r#"{"apparatus":"apparatus:default:asset-007","order_id":"zakaz-wip-complete-qr","action":"start"}"#,

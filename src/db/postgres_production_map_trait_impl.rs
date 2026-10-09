@@ -1,5 +1,11 @@
 #[async_trait]
 impl ProductionMapStorePort for PostgresProductionMapStore {
+    async fn paddon_management_settings(&self) -> Result<PaddonManagementSettings, ProductionMapError> {
+        paddon_management::load(&self.pool).await
+    }
+    async fn update_paddon_management_settings(&self, enabled: bool, actor: &QueueActionActor) -> Result<PaddonManagementSettings, ProductionMapError> {
+        paddon_management::update(&self.pool, enabled, actor).await
+    }
     async fn move_apparatus_sequence(
         &self,
         canonical: &crate::core::apparatus_standard::RuntimeApparatusConfiguration,
@@ -597,11 +603,21 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
     async fn paddons(&self, limit: usize) -> Result<Vec<PaddonSummary>, ProductionMapError> {
         PostgresProductionMapStore::paddons(self, limit).await
     }
+    async fn selectable_rezka_paddons(&self, limit: usize) -> Result<Vec<PaddonSummary>, ProductionMapError> {
+        load_paddons(&self.pool, limit, true).await
+    }
     async fn active_rezka_paddon(&self, apparatus: &str, actor: &QueueActionActor) -> Result<Option<String>, ProductionMapError> {
         active_paddon::load(&self.pool, apparatus, actor).await
     }
     async fn set_active_rezka_paddon(&self, apparatus: &str, actor: &QueueActionActor, code: Option<&str>) -> Result<(), ProductionMapError> {
         active_paddon::save(&self.pool, apparatus, actor, code).await
+    }
+
+    async fn confirm_paddon_print(&self, code: &str, actor: &QueueActionActor) -> Result<crate::core::production_map::PaddonPrintConfirmation, ProductionMapError> {
+        paddon_print_lock::confirm(&self.pool, code, actor).await
+    }
+    async fn create_active_paddon_successor(&self, code: &str, apparatus: &str, actor: &QueueActionActor) -> Result<PaddonSummary, ProductionMapError> {
+        paddon_print_lock::successor(&self.pool, code, apparatus, actor).await
     }
 
     async fn paddon_summary(

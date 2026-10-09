@@ -21,6 +21,9 @@ const CUT: &str = "apparatus:default:asset-010";
 const CUT2: &str = "apparatus:test:route-cut2";
 const QR: &str = "400118DA2F17C3617F59DDC6";
 
+#[path = "wip_service_stress_tests.rs"]
+mod service_stress;
+
 async fn fixture() -> (PgPool, Arc<PostgresProductionMapStore>, PgPool, String) {
     let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
         .expect("an explicitly isolated PostgreSQL test URL is required");
@@ -30,7 +33,10 @@ async fn fixture() -> (PgPool, Arc<PostgresProductionMapStore>, PgPool, String) 
         .execute(&admin)
         .await
         .unwrap();
-    let pool = PgPool::connect_with(postgres_test_database_options(&admin_url, &db_name))
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(16)
+        .acquire_timeout(Duration::from_millis(500))
+        .connect_with(postgres_test_database_options(&admin_url, &db_name))
         .await
         .unwrap();
     apply_postgres_migrations_through_version(&pool, "0121")
@@ -190,6 +196,107 @@ fn claim_write(
         print_preflight_hold_id: None,
         print_preflight_cancel_hold_id: None,
     }
+}
+
+fn claim_for_apparatus(
+    map: &ProductionMapDefinition,
+    source: &OrderProgressBatch,
+    apparatus: &str,
+    stage_node: &str,
+    session_id: &str,
+    event_id: &str,
+) -> QueueActionProgressWrite {
+    let mut write = claim_write(map, source);
+    write.apparatus = apparatus.into();
+    write.states = BTreeMap::from([(map.id.clone(), "in_progress".into())]);
+    write.event.event_id = event_id.into();
+    write.event.apparatus = apparatus.into();
+    write.event.order_id = map.id.clone();
+    write.event.stage_node_id = stage_node.into();
+    write.event.assigned_apparatus = vec![apparatus.into()];
+    let session = write.session.as_mut().unwrap();
+    session.session_id = session_id.into();
+    session.apparatus = apparatus.into();
+    session.order_id = map.id.clone();
+    session.stage_node_id = stage_node.into();
+    session.payload_json["input_progress_qr_payload"] = serde_json::json!(source.qr_payload);
+    let update = &mut write.progress_batch_updates[0];
+    update.current_apparatus = apparatus.into();
+    update.current_location = apparatus.into();
+    update.used_by_apparatus = apparatus.into();
+    update.used_by_session_id = session_id.into();
+    update.payload_json["wip_route_binding"]["stage_node_id"] = serde_json::json!(stage_node);
+    update.refresh_status_detail();
+    write
+}
+
+#[tokio::test]
+async fn postgres_parallel_alternative_claims_have_one_owner_and_replay_is_safe() {
+    let (pool, store, admin, name) = fixture().await;
+    let map = alternative_map();
+    store.put_map(map.clone()).await.unwrap();
+    store.put_order_progress_batch(original_batch()).await.unwrap();
+    let original = store.progress_batch("reported-route-roll").await.unwrap().unwrap();
+    let first = claim_for_apparatus(&map, &original, CUT, "apparatus_6", "cut1-race-session", "cut1-race-event");
+    let second = claim_for_apparatus(&map, &original, CUT2, "apparatus_7", "cut2-race-session", "cut2-race-event");
+    let (first_result, second_result) = tokio::join!(
+        store.put_apparatus_queue_states_with_event_and_progress(&first),
+        store.put_apparatus_queue_states_with_event_and_progress(&second),
+    );
+    assert_eq!(usize::from(first_result.is_ok()) + usize::from(second_result.is_ok()), 1,
+        "exactly one transactional physical roll owner: {first_result:?}, {second_result:?}");
+    let winner = if first_result.is_ok() { &first } else { &second };
+    let loser = if first_result.is_ok() { &second } else { &first };
+    let claimed = store.progress_batch(&original.batch_id).await.unwrap().unwrap();
+    assert_eq!(claimed.used_by_apparatus, winner.apparatus);
+    assert_eq!(claimed.used_by_session_id, winner.session.as_ref().unwrap().session_id);
+    assert_eq!(claimed.wip_status, OrderProgressBatchWipStatus::InUse);
+    store.put_apparatus_queue_states_with_event_and_progress(winner).await.unwrap();
+    assert!(store.put_apparatus_queue_states_with_event_and_progress(loser).await.is_err(),
+        "stale competing action must not steal or duplicate a claimed roll");
+    assert_eq!(store.progress_batch(&original.batch_id).await.unwrap().unwrap(), claimed);
+    assert_eq!(store.order_run_sessions_for_order(ORDER).await.unwrap().len(), 1);
+    let event_count: i64 = sqlx::query_scalar("SELECT count(*) FROM mini_queue_action_events WHERE order_id=$1")
+        .bind(ORDER).fetch_one(&pool).await.unwrap();
+    assert_eq!(event_count, 1, "winner replay and loser must create no extra queue event");
+    cleanup(pool, store, admin, name).await;
+}
+
+#[tokio::test]
+async fn postgres_independent_apparatus_commit_does_not_wait_for_peer_order_lock() {
+    let (pool, store, admin, name) = fixture().await;
+    let first_map = alternative_map();
+    let mut second_map = first_map.clone();
+    second_map.id = "zakaz-independent-route-0005".into();
+    store.put_map(first_map.clone()).await.unwrap();
+    store.put_map(second_map.clone()).await.unwrap();
+    let first_batch = original_batch();
+    let mut second_batch = first_batch.clone();
+    second_batch.batch_id = "independent-route-roll".into();
+    second_batch.order_id = second_map.id.clone();
+    second_batch.qr_payload = "400118DA2F17C3617F59DDC7".into();
+    store.put_order_progress_batch(first_batch.clone()).await.unwrap();
+    store.put_order_progress_batch(second_batch.clone()).await.unwrap();
+    let first_batch = store.progress_batch(&first_batch.batch_id).await.unwrap().unwrap();
+    let second_batch = store.progress_batch(&second_batch.batch_id).await.unwrap().unwrap();
+    let first = claim_for_apparatus(&first_map, &first_batch, CUT, "apparatus_6", "independent-cut1-session", "independent-cut1-event");
+    let second = claim_for_apparatus(&second_map, &second_batch, CUT2, "apparatus_7", "independent-cut2-session", "independent-cut2-event");
+    let mut blocker = pool.begin().await.unwrap();
+    super::super::transaction_locks::lock_order_and_apparatuses_tx(&mut blocker, ORDER, &[CUT]).await.unwrap();
+    let waiting_store = store.clone();
+    let mut waiting = tokio::spawn(async move {
+        waiting_store.put_apparatus_queue_states_with_event_and_progress(&first).await
+    });
+    assert!(tokio::time::timeout(Duration::from_millis(50), &mut waiting).await.is_err(),
+        "the same physical apparatus/order must wait for its mutation lock");
+    tokio::time::timeout(Duration::from_secs(2),
+        store.put_apparatus_queue_states_with_event_and_progress(&second)).await
+        .expect("another apparatus/order must commit while the first is blocked").unwrap();
+    blocker.commit().await.unwrap();
+    waiting.await.unwrap().unwrap();
+    assert_eq!(store.progress_batch(&first_batch.batch_id).await.unwrap().unwrap().used_by_apparatus, CUT);
+    assert_eq!(store.progress_batch(&second_batch.batch_id).await.unwrap().unwrap().used_by_apparatus, CUT2);
+    cleanup(pool, store, admin, name).await;
 }
 
 #[tokio::test]

@@ -4,7 +4,10 @@ use crate::core::production_map::{
     ProductionMapError, ProductionMapService, ProductionMapStorePort, QueueActionActor,
     QueueProgressInput, queue_state::ApparatusQueueAction as Action,
 };
-use crate::db::postgres::{apply_foundation_migration, postgres_test_database_options};
+use crate::db::postgres::{
+    apply_foundation_migration, apply_postgres_migrations_through_version,
+    postgres_test_database_options,
+};
 use crate::db::postgres_production_map::PostgresProductionMapStore;
 
 #[tokio::test]
@@ -25,6 +28,8 @@ async fn rezka_outputs_and_paddon_membership_commit_atomically() {
     let pool = sqlx::PgPool::connect_with(postgres_test_database_options(&admin_url, &db_name))
         .await
         .unwrap();
+    apply_postgres_migrations_through_version(&pool, "0121").await.unwrap();
+    super::seed_standard_canonical_apparatus(&pool).await;
     apply_foundation_migration(&pool).await.unwrap();
     // Exercise the receipt guard without requiring the separate receipt
     // feature's migration to be part of this change.
@@ -32,7 +37,6 @@ async fn rezka_outputs_and_paddon_membership_commit_atomically() {
         .execute(&pool)
         .await
         .unwrap();
-    super::seed_standard_canonical_apparatus(&pool).await;
     let store = Arc::new(PostgresProductionMapStore::new(pool.clone()));
     let service = ProductionMapService::new_for_test(store.clone());
     let apparatus = "apparatus:default:asset-010";

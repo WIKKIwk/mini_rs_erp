@@ -18,18 +18,20 @@ pub(super) async fn lock_for_output(
 ) -> Result<Option<String>, ProductionMapError> {
     if outputs(write).is_empty() { return Ok(None); }
     let code = selection_for_output(tx, &write.apparatus, &write.event.actor, &write.event.payload_json).await?;
-    let Some(code) = code else { return Ok(None); };
-    // Pallets have no lifecycle column. A warehouse receipt, when supported
-    // by this database, seals the package. Row JSON also supports databases
-    // that have not introduced receipt metadata yet.
-    let (id, receipt) = sqlx::query_as::<_, (String, Option<serde_json::Value>)>(
-        "SELECT p.id, to_jsonb(p)->'receipt_json' FROM mini_paddons p WHERE p.code = $1 FOR UPDATE",
+    let Some(code) = code else {
+        // A WIP label may be printed before the roll is assigned to a pallet.
+        return Ok(None);
+    };
+    // Printing seals membership before the independent warehouse receipt.
+    let (id, receipt, locked) = sqlx::query_as::<_, (String, Option<serde_json::Value>, bool)>(
+        "SELECT p.id, to_jsonb(p)->'receipt_json', p.locked_at IS NOT NULL FROM mini_paddons p WHERE p.code = $1 FOR UPDATE",
     )
     .bind(code.trim())
     .fetch_optional(&mut **tx)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?
     .ok_or(ProductionMapError::PaddonNotFound)?;
+    if locked { return Err(ProductionMapError::PaddonLocked); }
     if receipt.is_some_and(|value| !value.is_null()) {
         return Err(ProductionMapError::PaddonInvalidInput);
     }

@@ -267,6 +267,10 @@ pub enum ProductionMapError {
     OpeningWipDeleteForbidden,
     #[error("paddon input is invalid")]
     PaddonInvalidInput,
+    #[error("paddon is locked after QR printing")]
+    PaddonLocked,
+    #[error("select an active paddon before recording a cutting output")]
+    ActivePaddonRequired,
     #[error("paddon changed; scan again")]
     PaddonReceiptConflict,
     #[error("paddon already received")]

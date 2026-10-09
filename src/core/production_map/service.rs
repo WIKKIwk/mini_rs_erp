@@ -11,9 +11,18 @@ use super::progress::effective_apparatus_queue_policy_record;
 use super::service_maps::compile_saved_maps_reusing_programs;
 use super::store_port::ApparatusQueueStateMap;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{Mutex, OwnedMutexGuard, RwLock, broadcast};
+use tokio::sync::{Mutex, OwnedRwLockWriteGuard, RwLock, broadcast};
+
+#[path = "service_mutation_guard.rs"]
+mod mutation_guard;
+use mutation_guard::{ProductionMutationLocks, ScopedProductionMutationGuard};
 
 const LIVE_NOTIFY_CAPACITY: usize = 256;
+
+pub(crate) enum QueueProgressMutationGuard {
+    Exclusive { _guard: OwnedRwLockWriteGuard<()> },
+    Scoped { _guard: ScopedProductionMutationGuard },
+}
 
 #[path = "service_worker_snapshot.rs"]
 mod worker_snapshot;
@@ -193,7 +202,7 @@ pub struct ProductionMapService {
     pub(super) store: std::sync::Arc<dyn ProductionMapStorePort>,
     pub(super) apparatus_resolver: std::sync::Arc<dyn CanonicalApparatusResolver>,
     live_notify: broadcast::Sender<ProductionMapLiveEvent>,
-    queue_action_lock: std::sync::Arc<Mutex<()>>,
+    queue_action_locks: std::sync::Arc<ProductionMutationLocks>,
     snapshot_cache: std::sync::Arc<ProductionSnapshotCache>,
 }
 
@@ -207,7 +216,7 @@ impl ProductionMapService {
             store,
             apparatus_resolver,
             live_notify,
-            queue_action_lock: std::sync::Arc::new(Mutex::new(())),
+            queue_action_locks: std::sync::Arc::new(ProductionMutationLocks::default()),
             snapshot_cache: std::sync::Arc::new(ProductionSnapshotCache::default()),
         }
     }
@@ -308,8 +317,74 @@ impl ProductionMapService {
             .collect()
     }
 
-    pub(crate) async fn queue_action_guard(&self) -> OwnedMutexGuard<()> {
-        self.queue_action_lock.clone().lock_owned().await
+    pub(crate) async fn queue_action_guard(&self) -> OwnedRwLockWriteGuard<()> {
+        self.queue_action_locks.barrier.clone().write_owned().await
+    }
+
+    pub(crate) async fn apparatus_action_guard(
+        &self,
+        apparatus: &str,
+    ) -> ScopedProductionMutationGuard {
+        self.queue_action_locks.scoped(vec![("apparatus", apparatus.trim().to_string())]).await
+    }
+
+    pub(crate) async fn apparatus_preflight_guard(
+        &self,
+        apparatus: &str,
+        idempotency_key: &str,
+    ) -> ScopedProductionMutationGuard {
+        self.queue_action_locks.scoped(vec![
+            ("apparatus", apparatus.trim().to_string()),
+            ("print-preflight-idempotency", idempotency_key.trim().to_string()),
+        ]).await
+    }
+
+    pub(crate) async fn wip_action_guard(
+        &self,
+        batch_id: &str,
+    ) -> ScopedProductionMutationGuard {
+        self.queue_action_locks.scoped(vec![("wip", batch_id.trim().to_string())]).await
+    }
+
+    pub(crate) async fn queue_progress_action_guard(
+        &self,
+        apparatus: &str,
+        action: queue_state::ApparatusQueueAction,
+        progress: &QueueProgressInput,
+        material_barcodes: &[String],
+        qolip_codes: &[String],
+    ) -> Result<QueueProgressMutationGuard, ProductionMapError> {
+        if action == queue_state::ApparatusQueueAction::Freeze
+            || progress.freeze_with_issue || !progress.freeze_request_id.trim().is_empty()
+        {
+            return Ok(QueueProgressMutationGuard::Exclusive {
+                _guard: self.queue_action_guard().await,
+            });
+        }
+        let mut keys = vec![("apparatus", apparatus.trim().to_string())];
+        let batch_id = progress.progress_batch_id.trim();
+        let qr_payload = progress.qr_payload.trim();
+        if !batch_id.is_empty() {
+            keys.push(("wip", batch_id.to_string()));
+        } else if !qr_payload.is_empty() {
+            // Resolve QR-only clients to the same identity as clients supplying
+            // batch_id. This read never grants ownership: prepare and commit
+            // still revalidate the input after acquiring the guard.
+            if let Some(batch) = self.store.progress_batch_by_qr(qr_payload).await? {
+                keys.push(("wip", batch.batch_id));
+            } else if let Some(batch) = self.store.opening_wip_batch("", qr_payload).await? {
+                keys.push(("wip", batch.batch.batch_id));
+            } else {
+                keys.push(("wip-qr", qr_payload.to_ascii_lowercase()));
+            }
+        }
+        keys.extend(material_barcodes.iter().filter(|code| !code.trim().is_empty())
+            .map(|code| ("material", code.trim().to_ascii_lowercase())));
+        keys.extend(qolip_codes.iter().filter(|code| !code.trim().is_empty())
+            .map(|code| ("qolip", code.trim().to_ascii_lowercase())));
+        Ok(QueueProgressMutationGuard::Scoped {
+            _guard: self.queue_action_locks.scoped(keys).await,
+        })
     }
 
     pub fn subscribe_live(&self) -> broadcast::Receiver<ProductionMapLiveEvent> {

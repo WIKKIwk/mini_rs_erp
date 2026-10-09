@@ -138,7 +138,7 @@ impl ProductionMapService {
         order_ids: Vec<String>,
         moved_order_id: Option<&str>,
     ) -> Result<Vec<String>, ProductionMapError> {
-        let _guard = self.queue_action_guard().await;
+        let _guard = self.apparatus_action_guard(apparatus).await;
         let apparatus = apparatus.trim();
         if !queue_state::is_canonical_apparatus_id(apparatus) {
             return Err(ProductionMapError::MissingId);
@@ -1308,7 +1308,7 @@ impl ProductionMapService {
         actor: QueueActionActor,
         progress: QueueProgressInput,
     ) -> Result<ApparatusQueueActionResult, ProductionMapError> {
-        let _guard = self.queue_action_guard().await;
+        let _guard = self.queue_progress_action_guard(apparatus, action, &progress, &[], &[]).await?;
         self.enforce_qolip_start_boundary(apparatus, order_id, action, None)
             .await?;
         let prepared = self

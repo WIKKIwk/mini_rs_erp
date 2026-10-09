@@ -201,7 +201,8 @@ impl ProductionMapService {
         ) {
             return Err(ProductionMapError::QueueActionNotAllowed);
         }
-        let _guard = self.queue_action_guard().await;
+        let identity = self.progress_batch_for_qr(progress_batch_id, qr_payload).await?;
+        let _guard = self.wip_action_guard(&identity.batch_id).await;
         let mut batch = self
             .progress_batch_for_qr(progress_batch_id, qr_payload)
             .await?;

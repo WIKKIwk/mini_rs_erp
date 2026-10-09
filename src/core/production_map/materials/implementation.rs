@@ -557,7 +557,11 @@ impl ProductionMapService {
         &self,
         request: MaterialScanProgressAction<'_>,
     ) -> Result<ApparatusQueueActionResult, ProductionMapError> {
-        let _guard = self.queue_action_guard().await;
+        let _guard = self.queue_progress_action_guard(
+            request.apparatus, request.action, &request.progress,
+            request.material_barcodes,
+            request.qolip_validation.as_ref().map(|validation| validation.qolip_codes.as_slice()).unwrap_or_default(),
+        ).await?;
         let material_barcodes = parse_material_barcodes(
             request.material_barcodes.iter().map(String::as_str),
         );

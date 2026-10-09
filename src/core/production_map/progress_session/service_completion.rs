@@ -150,12 +150,12 @@ impl ProductionMapService {
         if request_event_id.is_empty() {
             return Err(ProductionMapError::MissingId);
         }
-        let _guard = self.queue_action_guard().await;
         let request = self
             .store
             .completion_request_by_event_id(request_event_id)
             .await?
             .ok_or(ProductionMapError::QueueActionNotAllowed)?;
+        let _guard = self.apparatus_action_guard(&request.apparatus).await;
         if decision == CompletionRequestDecision::Approved {
             match self.order_control_state(&request.order_id).await?.state {
                 OrderControlState::Active => {}

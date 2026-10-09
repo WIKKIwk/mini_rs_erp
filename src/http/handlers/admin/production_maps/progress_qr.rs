@@ -474,6 +474,7 @@ fn principal_can_reprint_progress_batch(
     let principal_ref = principal.ref_.trim();
     principal.role == PrincipalRole::Admin
         || principal.role == PrincipalRole::Werka
+        || principal.role == PrincipalRole::Aparatchi
         || (!principal_ref.is_empty() && batch.worker_ref.trim() == principal_ref)
         || (batch.order_id.trim().starts_with("training-")
             && batch

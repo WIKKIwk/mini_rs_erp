@@ -102,7 +102,10 @@ async fn isolated_pool() -> PgPool {
             started_at TIMESTAMPTZ, updated_at TIMESTAMPTZ, payload_json JSONB);
         CREATE TEMP TABLE mini_progress_batches (
             order_id TEXT, wip_status TEXT, canonical_next_apparatus_id TEXT, processed_by_apparatus TEXT,
-            canonical_apparatus_id TEXT, payload_json JSONB
+            canonical_apparatus_id TEXT, payload_json JSONB,
+            action TEXT DEFAULT 'complete', canonical_current_apparatus_id TEXT,
+            canonical_used_by_apparatus_id TEXT, used_by_session_id TEXT,
+            canonical_processed_by_apparatus_id TEXT, processed_by_session_id TEXT
         );
         CREATE TEMP TABLE mini_opening_wip_intakes (intake_id TEXT, order_id TEXT, status TEXT,
             source_apparatus TEXT, resume_apparatus TEXT, resume_stage_node_id TEXT);
@@ -113,6 +116,12 @@ async fn isolated_pool() -> PgPool {
             source_event_id TEXT, reason TEXT, lifecycle_version BIGINT, created_at TIMESTAMPTZ
         );
     ").execute(&pool).await.unwrap();
+    let projection = include_str!("../../../migrations/postgres/0138_incremental_wip_lifecycle.sql")
+        .replace("CREATE TABLE", "CREATE TEMP TABLE");
+    let names = ["mini_progress_batch_work_route", "mini_progress_batch_adjust_work_input",
+        "mini_progress_batch_adjust_lifecycle_totals", "mini_progress_batch_refresh_lifecycle_projection"];
+    let projection = names.into_iter().fold(projection, |sql, name| sql.replace(name, &format!("pg_temp.{name}")));
+    sqlx::raw_sql(&projection).execute(&pool).await.unwrap();
     pool
 }
 
@@ -231,5 +240,103 @@ async fn postgres_stage_lifecycle_latest_partial_event_blocks_old_completion() {
             .await
             .unwrap();
     assert_eq!(status, "in_progress");
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn incremental_wip_projection_preserves_routes_counts_and_rollback() {
+    let pool = isolated_pool().await;
+    seed(&pool).await;
+    sqlx::raw_sql("ALTER TABLE mini_progress_batches ADD COLUMN batch_id TEXT;
+        INSERT INTO mini_progress_batches (batch_id, order_id, action, wip_status,
+            canonical_apparatus_id, canonical_next_apparatus_id, payload_json)
+        SELECT n::text, 'split', 'roll_complete', 'waiting', 'apparatus:test:rezka',
+            'apparatus:test:lam1', '{\"stage_node_id\":\"before\",\"next_stage_node_id\":\"lam1\"}'::jsonb
+        FROM generate_series(1, 2500) n;").execute(&pool).await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    let inputs = super::super::stage_execution::inputs_tx(&mut tx, "split").await.unwrap();
+    assert_eq!(inputs.len(), 1, "roll count does not expand lifecycle inputs");
+    assert_eq!(inputs[0].target_node, "lam1");
+    assert!(inputs[0].available);
+    let count: (i64, i64) = sqlx::query_as("SELECT waiting_next_stage_count,
+        (SELECT sum(batch_count)::bigint FROM mini_progress_batch_work_inputs WHERE order_id='split')
+        FROM mini_progress_batch_lifecycle_totals WHERE order_id='split'")
+        .fetch_one(&mut *tx).await.unwrap();
+    assert_eq!(count, (2500, 2500));
+    sqlx::raw_sql("UPDATE mini_progress_batches SET wip_status='in_use',
+        canonical_current_apparatus_id='apparatus:test:lam2', canonical_used_by_apparatus_id='apparatus:test:lam2',
+        used_by_session_id='session-distinct-for-each-roll',
+        payload_json=payload_json || '{\"wip_route_binding\":{\"source_stage_node_id\":\"before\",\"stage_node_id\":\"lam2\",\"consumer_apparatus_ids\":[\"apparatus:test:lam1\",\"apparatus:test:lam2\"],\"map_fingerprint\":\"test\",\"remapped\":false}}'::jsonb
+        WHERE batch_id IN ('1','2');
+        UPDATE mini_progress_batches SET wip_status='processed', processed_by_apparatus='warehouse:fg'
+        WHERE batch_id='3';
+        DELETE FROM mini_progress_batches WHERE batch_id='4';")
+        .execute(&mut *tx).await.unwrap();
+    let inputs = super::super::stage_execution::inputs_tx(&mut tx, "split").await.unwrap();
+    assert_eq!(inputs.len(), 2);
+    assert!(inputs.iter().any(|i| i.target_node == "lam2" && !i.available));
+    let counts: (i64, i64, i64, i64) = sqlx::query_as("SELECT free_wip_count,
+        waiting_next_stage_count, in_use_wip_count, accepted_wip_count
+        FROM mini_progress_batch_lifecycle_totals WHERE order_id='split'")
+        .fetch_one(&mut *tx).await.unwrap();
+    assert_eq!(counts, (0, 2496, 2, 1));
+    tx.rollback().await.unwrap();
+    let restored: i64 = sqlx::query_scalar("SELECT waiting_next_stage_count
+        FROM mini_progress_batch_lifecycle_totals WHERE order_id='split'").fetch_one(&pool).await.unwrap();
+    assert_eq!(restored, 2500);
+    sqlx::query("DELETE FROM mini_progress_batches WHERE order_id='split'").execute(&pool).await.unwrap();
+    let empty: i64 = sqlx::query_scalar("SELECT count(*) FROM mini_progress_batch_work_inputs WHERE order_id='split'")
+        .fetch_one(&pool).await.unwrap();
+    assert_eq!(empty, 0, "reset removes obsolete route classes");
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn recorded_card_refresh_uses_counts_without_reading_roll_history() {
+    use crate::core::production_map::{QueueActionProgressWrite, OrderRunSession, OrderProgressEvent};
+    let pool = isolated_pool().await;
+    seed(&pool).await;
+    sqlx::query("UPDATE mini_production_maps SET operational_status='in_progress', flow_status='in_progress'
+        WHERE id='split'").execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO mini_progress_batches (order_id, action, wip_status, canonical_apparatus_id, payload_json)
+        VALUES ('split','roll_complete','waiting','apparatus:test:rezka','{\"stage_node_id\":\"after\"}')")
+        .execute(&pool).await.unwrap();
+    let actor = QueueActionActor {role:"aparatchi".into(),ref_:"worker".into(),display_name:"Worker".into()};
+    let session: OrderRunSession = serde_json::from_value(serde_json::json!({
+        "session_id":"active", "apparatus":"apparatus:test:rezka", "order_id":"split", "stage_node_id":"after",
+        "status":"active", "worker_role":"aparatchi", "worker_ref":"worker", "worker_display_name":"Worker",
+        "started_at_unix":1, "updated_at_unix":2, "payload_json":{}
+    })).unwrap();
+    let progress: OrderProgressEvent = serde_json::from_value(serde_json::json!({
+        "event_id":"card", "session_id":"active", "apparatus":"apparatus:test:rezka", "order_id":"split",
+        "action":"roll_complete", "produced_qty":1.0, "uom":"m", "worker_role":"aparatchi",
+        "worker_ref":"worker", "worker_display_name":"Worker", "payload_json":{"rezka_record_frame_index":1}
+    })).unwrap();
+    let mut write = QueueActionProgressWrite {
+        apparatus:"apparatus:test:rezka".into(), map_update:None, states:BTreeMap::new(), sequence_updates:BTreeMap::new(),
+        event: serde_json::from_value(serde_json::json!({"event_id":"card", "apparatus":"apparatus:test:rezka",
+            "order_id":"split", "action":"roll_complete", "from_state":"in_progress", "to_state":"in_progress",
+            "policy":"free_pick", "actor":actor, "payload_json":{"rezka_expected_output_revision":1}})).unwrap(),
+        session:Some(session), progress_event:Some(progress), progress_batch:None, progress_batches:vec![],
+        progress_batch_updates:vec![], opening_wip_batch_updates:vec![], raw_material_stock_transitions:vec![],
+        qolip_checkouts:vec![], returned_paint_report:None, order_control_update:None, schedule_reservation_status:None,
+        print_preflight_hold_id:None, print_preflight_cancel_hold_id:None,
+    };
+    // The hot path must remain independent of unbounded event/session history.
+    sqlx::raw_sql("DROP TABLE mini_order_run_sessions; DROP TABLE mini_queue_action_events")
+        .execute(&pool).await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    assert!(refresh_recorded_rezka_output_tx(&mut tx, &write).await.unwrap());
+    let projection: (String, String, String, i64) = sqlx::query_as("SELECT lifecycle_status,
+        operational_status, flow_status, lifecycle_version FROM mini_production_maps WHERE id='split'")
+        .fetch_one(&mut *tx).await.unwrap();
+    assert_eq!(projection, ("in_progress".into(), "in_progress".into(), "free_wip".into(), 1));
+    write.event.action = ApparatusQueueAction::Complete;
+    assert!(!refresh_recorded_rezka_output_tx(&mut tx, &write).await.unwrap(), "closure needs full lifecycle validation");
+    write.event.action = ApparatusQueueAction::RollComplete;
+    sqlx::query("UPDATE mini_production_maps SET operational_status='frozen' WHERE id='split'")
+        .execute(&mut *tx).await.unwrap();
+    assert!(!refresh_recorded_rezka_output_tx(&mut tx, &write).await.unwrap(), "non-running projections use normal derivation");
+    tx.rollback().await.unwrap();
     pool.close().await;
 }

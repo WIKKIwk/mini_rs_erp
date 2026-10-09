@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 const SECTION_BODY_LIMIT: usize = 4 * 1024 * 1024;
 const SNAPSHOT_ATTEMPTS: usize = 2;
 const BOOTSTRAP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-const BOOTSTRAP_CAPABILITIES: &[Capability] = &[
+pub(super) const BOOTSTRAP_CAPABILITIES: &[Capability] = &[
     Capability::AdminAccess,
     Capability::ProductionMapManage,
     Capability::ApparatusQueueRead,
@@ -210,7 +210,7 @@ async fn bootstrap(
     Err(conflict("order_scan_bootstrap_changed"))
 }
 
-async fn authorization_scope(
+pub(super) async fn authorization_scope(
     state: &AppState,
     principal: &Principal,
     apparatus: &str,

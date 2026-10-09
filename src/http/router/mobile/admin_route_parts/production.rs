@@ -116,6 +116,10 @@ fn production_routes() -> Router<AppState> {
             any(admin::production_map_order_scan_bootstrap),
         )
         .route(
+            "/v1/mobile/admin/production-maps/rezka-output-report",
+            any(admin::production_map_rezka_output_report),
+        )
+        .route(
             "/v1/mobile/admin/production-maps/sequence",
             any(admin::production_map_sequence),
         )
@@ -219,6 +223,9 @@ fn production_routes() -> Router<AppState> {
             "/v1/mobile/admin/production-maps/paddons/qr/report",
             any(admin::production_map_paddon_qr_report),
         )
+        .route("/v1/mobile/admin/production-maps/paddons/qr/confirm", post(admin::production_map_paddon_print_confirm))
+        .route("/v1/mobile/admin/production-maps/paddons/active/next", post(admin::production_map_paddon_next))
+        .route("/v1/mobile/admin/production-maps/paddons/management-settings", any(admin::production_map_paddon_management_settings))
         .route(
             "/v1/mobile/admin/production-maps/paddons/qr/print",
             any(admin::production_map_paddon_qr_print),
