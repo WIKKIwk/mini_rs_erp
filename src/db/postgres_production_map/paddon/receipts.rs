@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use super::{
-    order_query_helpers::load_progress_batch, progress_helpers::receive_finished_goods_batch_tx,
+    order_query_helpers::load_progress_batch, progress_helpers::receive_finished_goods_batches_tx,
     transaction_locks::lock_orders_and_apparatuses_tx,
 };
 use crate::core::production_map::{
@@ -114,9 +114,11 @@ pub(super) async fn commit(
             return Err(ProductionMapError::PaddonReceiptConflict);
         }
     }
-    for (batch, stock) in write.receipt.items.iter().zip(&write.receipt.stocks) {
-        receive_finished_goods_batch_tx(&mut tx, batch, stock).await?;
-    }
+    receive_finished_goods_batches_tx(
+        &mut tx,
+        write.receipt.items.iter().zip(&write.receipt.stocks),
+    )
+    .await?;
     insert_paddon_inventory_events(&mut tx, &write.receipt).await?;
     insert_paddon_receipt_lines(&mut tx, &write.receipt).await?;
     sqlx::query("UPDATE mini_paddons SET location = $2, updated_at = now(), receipt_json = $3 WHERE id = $1")

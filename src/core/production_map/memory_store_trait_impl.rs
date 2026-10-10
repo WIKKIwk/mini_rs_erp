@@ -4,10 +4,19 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
     async fn paddon_management_settings(&self) -> Result<PaddonManagementSettings, ProductionMapError> {
         Ok(self.paddon_management_settings.read().await.clone())
     }
-    async fn update_paddon_management_settings(&self, enabled: bool, _actor: &QueueActionActor) -> Result<PaddonManagementSettings, ProductionMapError> {
-        let settings = PaddonManagementSettings { free_movement_enabled: enabled };
-        *self.paddon_management_settings.write().await = settings.clone();
-        Ok(settings)
+    async fn update_paddon_management_settings(&self, free_movement_enabled: Option<bool>, worker_visibility_enabled: Option<bool>, _actor: &QueueActionActor) -> Result<PaddonManagementSettings, ProductionMapError> {
+        let mut settings = self.paddon_management_settings.write().await;
+        if let Some(enabled) = free_movement_enabled { settings.free_movement_enabled = enabled; }
+        if let Some(enabled) = worker_visibility_enabled { settings.worker_visibility_enabled = enabled; }
+        Ok(settings.clone())
+    }
+    async fn paddons_for_creator(&self, limit: usize, selectable_only: bool, creator_ref: Option<&str>) -> Result<Vec<PaddonSummary>, ProductionMapError> {
+        let mut paddons: Vec<_> = self.paddons.read().await.values()
+            .filter(|p| creator_ref.is_none_or(|creator| p.created_by_ref.trim() == creator)
+                && (!selectable_only || p.locked_at_unix.is_none())).cloned().collect();
+        paddons.sort_by(|a, b| b.updated_at_unix.cmp(&a.updated_at_unix).then_with(|| a.code.cmp(&b.code)));
+        paddons.truncate(limit);
+        Ok(paddons)
     }
     async fn move_apparatus_sequence(
         &self,
@@ -41,7 +50,12 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         Ok(result)
     }
     async fn active_rezka_paddon(&self, apparatus: &str, actor: &QueueActionActor) -> Result<Option<String>, ProductionMapError> {
-        Ok(self.active_paddons.read().await.get(&(actor.role.clone(), actor.ref_.clone(), apparatus.to_string())).cloned())
+        let code = self.active_paddons.read().await.get(&(actor.role.clone(), actor.ref_.clone(), apparatus.to_string())).cloned();
+        if let Some(code) = code.as_deref().filter(|_| actor.role == "aparatchi") {
+            let owned = self.paddons.read().await.get(code).is_some_and(|p| p.created_by_ref.trim() == actor.ref_.trim());
+            if !owned && !self.paddon_management_settings.read().await.worker_visibility_enabled { return Ok(None); }
+        }
+        Ok(code)
     }
     async fn set_active_rezka_paddon(&self, apparatus: &str, actor: &QueueActionActor, code: Option<&str>) -> Result<(), ProductionMapError> {
         if let Some(code) = code {
@@ -116,6 +130,9 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
     }
     async fn paddon_scan_snapshot(&self, code: &str) -> Result<Option<PaddonSnapshot>, ProductionMapError> {
         self.paddon_snapshot(code).await
+    }
+    async fn paddon_summary(&self, code: &str) -> Result<Option<PaddonSummary>, ProductionMapError> {
+        Ok(self.paddons.read().await.get(code).cloned())
     }
     async fn create_active_paddon_successor(&self, code: &str, apparatus: &str, actor: &QueueActionActor) -> Result<PaddonSummary, ProductionMapError> {
         let mut successors = self.paddon_successors.lock().await;

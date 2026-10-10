@@ -124,48 +124,48 @@ async fn prepare_qolips_for_bosma_start(
     else {
         return Err(production_map_error(ProductionMapError::MapNotFound));
     };
-    if input.materials.qolip_codes.is_empty() {
-        return Err(bad_request("qolip_scan_required"));
+    // Resume reuses the set validated at Start. It must not make the operator
+    // scan again or let a client silently replace the session's tooling.
+    let qolip_codes = if input.action == queue_state::ApparatusQueueAction::Resume {
+        state.production_maps
+            .qolip_codes_for_resume(&input.apparatus, &input.order_id)
+            .await
+            .map_err(production_map_error)?
+    } else {
+        input.materials.qolip_codes.clone()
+    };
+    if qolip_codes.is_empty() {
+        return Err(if input.action == queue_state::ApparatusQueueAction::Resume {
+            production_map_error(ProductionMapError::QolipCodeMismatch)
+        } else {
+            bad_request("qolip_scan_required")
+        });
     }
     let required_qolips = state
         .qolip
         .required_qolips_for_order(&map.product_code, &map.title)
         .await
         .map_err(qolip_queue_error)?;
-    let mut preparations = Vec::with_capacity(input.materials.qolip_codes.len());
-    for qolip_code in &input.materials.qolip_codes {
+    let mut preparations = Vec::with_capacity(qolip_codes.len());
+    for qolip_code in &qolip_codes {
         reject_qolip_in_use(state, apparatus, &input.order_id, qolip_code).await?;
-        let preparation = if input.action == queue_state::ApparatusQueueAction::Resume {
-            state
-                .qolip
-                .prepare_qolip_code_for_order_reacquisition(
-                    qolip_code,
-                    &map.product_code,
-                    &map.title,
-                    &principal.ref_,
-                    &principal.display_name,
-                    principal,
-                )
-                .await
-        } else {
-            state
-                .qolip
-                .prepare_qolip_code_for_order_start(
-                    qolip_code,
-                    &map.product_code,
-                    &map.title,
-                    &principal.ref_,
-                    &principal.display_name,
-                    principal,
-                )
-                .await
-        }
-        .map_err(qolip_queue_error)?;
+        // Keep the original Start policy, including catalog-only molds that
+        // never required a physical warehouse checkout.
+        let preparation = state
+            .qolip
+            .prepare_qolip_code_for_order_start(
+                qolip_code,
+                &map.product_code,
+                &map.title,
+                &principal.ref_,
+                &principal.display_name,
+                principal,
+            )
+            .await
+            .map_err(qolip_queue_error)?;
         preparations.push(preparation);
     }
-    let scanned = input
-        .materials
-        .qolip_codes
+    let scanned = qolip_codes
         .iter()
         .map(|code| code.trim().to_lowercase())
         .collect::<std::collections::BTreeSet<_>>();

@@ -50,6 +50,7 @@ async fn paddon_free_movement_is_off_by_default_and_only_admin_can_toggle_it() {
     for body in [
         r#"{}"#,
         r#"{"free_movement_enabled":"true"}"#,
+        r#"{"worker_visibility_enabled":"true"}"#,
         r#"{"free_movement_enabled":true,"actor_ref":"admin"}"#,
     ] {
         let response = router

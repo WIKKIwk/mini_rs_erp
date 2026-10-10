@@ -57,6 +57,7 @@ async fn paddon_unlock_checks_owner_setting_receipt_and_resets_print_successors(
         role: "boyoqchi".into(),
         ..owner.clone()
     };
+    service.update_paddon_settings(None, Some(true), &manager).await.unwrap();
     let paddon = service.create_paddon("", "", &creator).await.unwrap();
     let apparatus = "apparatus:default:asset-010";
     let mut map = test_map("paddon-unlock-order", "9583", "PRODUCT-1");

@@ -100,7 +100,7 @@ pub async fn production_map_paddons(
     method: Method,
     headers: HeaderMap,
 ) -> Result<Response, AdminError> {
-    authorize_any_capability(
+    let principal = authorize_any_capability(
         &state,
         &headers,
         &[
@@ -114,11 +114,9 @@ pub async fn production_map_paddons(
     if method != Method::GET {
         return Err(method_not_allowed());
     }
-    let paddons = if query.selectable_only {
-        state.production_maps.selectable_rezka_paddons(query.limit.unwrap_or(50)).await
-    } else {
-        state.production_maps.paddons(query.limit.unwrap_or(50)).await
-    }.map_err(production_map_error)?;
+    let paddons = state.production_maps.visible_paddons(
+        query.limit.unwrap_or(50), query.selectable_only, &queue_action_actor(&principal),
+    ).await.map_err(production_map_error)?;
     Ok(json_response(serde_json::json!({
         "ok": true,
         "paddons": paddons,
@@ -150,6 +148,7 @@ pub async fn production_map_paddon_detail(
         .paddon_snapshot(&query.code)
         .await
         .map_err(production_map_error)?;
+    state.production_maps.ensure_paddon_visible(&snapshot.paddon, &queue_action_actor(&principal)).await.map_err(production_map_error)?;
     let can_unlock = super::paddon_print_lock::can_unlock_snapshot(&state, &principal, &snapshot).await?;
     Ok(json_response(serde_json::json!({
         "ok": true,
@@ -187,6 +186,7 @@ pub async fn production_map_paddon_qr_report(
         .paddon_scan_snapshot(&query.code)
         .await
         .map_err(production_map_error)?;
+    state.production_maps.ensure_paddon_visible(&snapshot.paddon, &queue_action_actor(&principal)).await.map_err(production_map_error)?;
     let can_unlock = super::paddon_print_lock::can_unlock_snapshot(&state, &principal, &snapshot).await?;
     Ok(json_response(serde_json::json!({
         "ok": true,
@@ -216,6 +216,7 @@ pub async fn production_map_paddon_qr_print(
         .paddon_scan_snapshot(&input.code)
         .await
         .map_err(production_map_error)?;
+    state.production_maps.ensure_paddon_visible(&snapshot.paddon, &queue_action_actor(&principal)).await.map_err(production_map_error)?;
     let paddon = snapshot.paddon;
     let can_close_after_print = paddon.locked_at_unix.is_none()
         && state
@@ -279,6 +280,14 @@ fn paddon_print_error(error: GscaleServiceError) -> AdminError {
     }
 }
 
+pub(super) async fn require_paddon_visible(state: &AppState, principal: &Principal, code: &str) -> Result<(), AdminError> {
+    if principal.role == PrincipalRole::Aparatchi {
+        let snapshot = state.production_maps.paddon_scan_snapshot(code).await.map_err(production_map_error)?;
+        state.production_maps.ensure_paddon_visible(&snapshot.paddon, &queue_action_actor(principal)).await.map_err(production_map_error)?;
+    }
+    Ok(())
+}
+
 #[derive(Default, serde::Deserialize)]
 pub struct PaddonCodeQuery {
     #[serde(default)]
@@ -332,7 +341,7 @@ pub async fn production_map_paddon_delete(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, AdminError> {
-    authorize_any_capability(
+    let principal = authorize_any_capability(
         &state,
         &headers,
         &[
@@ -346,6 +355,7 @@ pub async fn production_map_paddon_delete(
         return Err(method_not_allowed());
     }
     let input: PaddonDeleteRequest = parse_json(&body)?;
+    require_paddon_visible(&state, &principal, &input.code).await?;
     state
         .production_maps
         .delete_paddon(&input.code)
@@ -374,6 +384,7 @@ pub async fn production_map_paddon_item_add(
         return Err(method_not_allowed());
     }
     let input: PaddonItemRequest = parse_json(&body)?;
+    require_paddon_visible(&state, &principal, &input.code).await?;
     let progress_batch_id = resolve_progress_batch_id(&state, &input).await?;
     let snapshot = state
         .production_maps
@@ -416,6 +427,7 @@ pub async fn production_map_paddon_items_add(
         return Err(method_not_allowed());
     }
     let input: PaddonItemsRequest = parse_json(&body)?;
+    require_paddon_visible(&state, &principal, &input.code).await?;
     let snapshot = state
         .production_maps
         .add_paddon_items(
@@ -457,6 +469,7 @@ pub async fn production_map_paddon_item_remove(
         return Err(method_not_allowed());
     }
     let input: PaddonItemRequest = parse_json(&body)?;
+    require_paddon_visible(&state, &principal, &input.code).await?;
     let progress_batch_id = input.progress_batch_id.trim();
     if progress_batch_id.is_empty() {
         return Err(bad_request("progress_batch_id_required"));
@@ -502,6 +515,7 @@ pub async fn production_map_paddon_items_remove(
         return Err(method_not_allowed());
     }
     let input: PaddonItemsRequest = parse_json(&body)?;
+    require_paddon_visible(&state, &principal, &input.code).await?;
     let snapshot = state
         .production_maps
         .remove_paddon_items(

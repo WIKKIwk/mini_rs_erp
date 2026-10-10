@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::core::apparatus_standard::ApparatusId;
@@ -699,6 +701,47 @@ pub(super) async fn receive_finished_goods_batch_tx(
     batch: &OrderProgressBatch,
     stock: &FinishedGoodsStockEntry,
 ) -> Result<(), ProductionMapError> {
+    receive_finished_goods_batches_tx(tx, std::iter::once((batch, stock))).await
+}
+
+/// Persist every roll with the existing checks, then refresh each affected
+/// order once in the same transaction. A failed refresh rolls back the receipt.
+pub(super) async fn receive_finished_goods_batches_tx<'a>(
+    tx: &mut Transaction<'_, Postgres>,
+    receipts: impl IntoIterator<Item = (&'a OrderProgressBatch, &'a FinishedGoodsStockEntry)>,
+) -> Result<(), ProductionMapError> {
+    let mut received_orders = BTreeMap::new();
+    for (batch, stock) in receipts {
+        store_finished_goods_batch_tx(tx, batch, stock).await?;
+        let order_id = stock.order_id.trim();
+        if !order_id.is_empty() {
+            // Keep the first receipt's stock as the lifecycle audit source.
+            received_orders.entry(order_id).or_insert(stock);
+        }
+    }
+    for (order_id, stock) in received_orders {
+        let actor = QueueActionActor {
+            role: "werka".to_string(),
+            ref_: "warehouse-worker".to_string(),
+            display_name: "Warehouse Worker".to_string(),
+        };
+        crate::db::postgres_production_map::lifecycle::refresh_production_order_lifecycle_tx(
+            tx,
+            order_id,
+            &actor,
+            stock.id.trim(),
+            "finished_goods_receipt",
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+async fn store_finished_goods_batch_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    batch: &OrderProgressBatch,
+    stock: &FinishedGoodsStockEntry,
+) -> Result<(), ProductionMapError> {
     // Individual-roll receiving must not overwrite a concurrent pallet receipt.
     // Acquire the same advisory locks before row locks as all progress writes.
     let apparatuses: Vec<_> = [&batch.apparatus, &batch.current_apparatus, &batch.next_apparatus,
@@ -753,22 +796,6 @@ pub(super) async fn receive_finished_goods_batch_tx(
         );
         ProductionMapError::StoreFailed
     })?;
-    let order_id = stock.order_id.trim();
-    if !order_id.is_empty() {
-        let actor = QueueActionActor {
-            role: "werka".to_string(),
-            ref_: "warehouse-worker".to_string(),
-            display_name: "Warehouse Worker".to_string(),
-        };
-        crate::db::postgres_production_map::lifecycle::refresh_production_order_lifecycle_tx(
-            tx,
-            order_id,
-            &actor,
-            stock.id.trim(),
-            "finished_goods_receipt",
-        )
-        .await?;
-    }
     Ok(())
 }
 

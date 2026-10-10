@@ -2018,6 +2018,15 @@ async fn fully_frozen_molds_release_on_every_stop_path_and_resume_requires_reacq
             .await
             .unwrap();
         start.attach_qolip_set(&codes, "frozen-mold-set");
+        let mounted_materials = vec![ProductionQrRawMaterial {
+            barcode: "MOUNTED-ROLL".into(),
+            item_code: "FILM".into(),
+            item_name: "Mounted film".into(),
+            stock_id: Some("stock-mounted-roll".into()),
+            source_qty: Some(100.0),
+            uom: Some("kg".into()),
+        }];
+        start.attach_start_materials(mounted_materials.clone());
         service.commit_prepared_queue_action(start).await.unwrap();
         let output = || QueueProgressInput {
             produced_qty: Some(10.0),
@@ -2147,6 +2156,7 @@ async fn fully_frozen_molds_release_on_every_stop_path_and_resume_requires_reacq
         assert_eq!(frozen.payload_json["qolip_codes"], serde_json::json!(codes));
         assert!(frozen.qolip_reacquisition_required());
         let resources = ProductionQrSessionResources::for_session(&frozen);
+        assert_eq!(resources.raw_materials, mounted_materials);
         assert!(resources.qolip_codes.is_empty());
         assert!(!resources.qolip_available);
         service.unfreeze_order(id, actor("admin")).await.unwrap();
@@ -2154,8 +2164,9 @@ async fn fully_frozen_molds_release_on_every_stop_path_and_resume_requires_reacq
         let control = &snapshot.queue_action_controls[PECHAT_ID][id];
         assert_eq!(
             control.interaction.qolip_mode,
-            ApparatusQueueQolipMode::ScanRequired
+            ApparatusQueueQolipMode::NotRequired
         );
+        assert!(!control.interaction.material_scan_required);
         assert!(control.allowed_actions.contains(&Action::Resume));
         assert_eq!(
             service
@@ -2217,6 +2228,9 @@ async fn fully_frozen_molds_release_on_every_stop_path_and_resume_requires_reacq
         assert_eq!(resumed.status, OrderRunStatus::Active);
         assert_eq!(resumed.payload_json["qolip_lock_owner"], true);
         assert!(!resumed.qolip_reacquisition_required());
+        let resumed_resources = ProductionQrSessionResources::for_session(&resumed);
+        assert_eq!(resumed_resources.raw_materials, mounted_materials);
+        assert_eq!(resumed_resources.qolip_codes, codes);
         assert!(
             store
                 .active_order_run_session_for_qolip(&codes[0])
@@ -2226,7 +2240,7 @@ async fn fully_frozen_molds_release_on_every_stop_path_and_resume_requires_reacq
         );
         assert!(
             !service
-                .qolip_scan_required_for_action(PECHAT_ID, id, Action::Resume)
+                .qolip_validation_required_for_action(PECHAT_ID, id, Action::Resume)
                 .await
                 .unwrap()
         );

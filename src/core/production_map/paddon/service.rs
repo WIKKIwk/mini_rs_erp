@@ -31,12 +31,42 @@ impl ProductionMapService {
     }
 
     pub async fn update_paddon_management_settings(&self, enabled: bool, actor: &QueueActionActor) -> Result<PaddonManagementSettings, ProductionMapError> {
-        if actor.role != "admin" || actor.ref_.trim().is_empty() {
+        self.update_paddon_settings(Some(enabled), None, actor).await
+    }
+
+    pub async fn update_paddon_settings(&self, free_movement_enabled: Option<bool>, worker_visibility_enabled: Option<bool>, actor: &QueueActionActor) -> Result<PaddonManagementSettings, ProductionMapError> {
+        if actor.role != "admin" || actor.ref_.trim().is_empty()
+            || (free_movement_enabled.is_none() && worker_visibility_enabled.is_none()) {
             return Err(ProductionMapError::PaddonInvalidInput);
         }
-        let settings = self.store.update_paddon_management_settings(enabled, actor).await?;
+        let settings = self.store.update_paddon_management_settings(free_movement_enabled, worker_visibility_enabled, actor).await?;
         self.notify_live();
         Ok(settings)
+    }
+
+    pub async fn visible_paddons(&self, limit: usize, selectable_only: bool, actor: &QueueActionActor) -> Result<Vec<PaddonSummary>, ProductionMapError> {
+        let creator_ref = if actor.role == "aparatchi" && !self.store.paddon_management_settings().await?.worker_visibility_enabled {
+            if actor.ref_.trim().is_empty() { return Err(ProductionMapError::PaddonInvalidInput); }
+            Some(actor.ref_.trim())
+        } else { None };
+        self.store.paddons_for_creator(limit.clamp(1, 200), selectable_only, creator_ref).await
+    }
+
+    pub(crate) async fn ensure_paddon_visible(&self, paddon: &PaddonSummary, actor: &QueueActionActor) -> Result<(), ProductionMapError> {
+        if actor.role == "aparatchi"
+            && (actor.ref_.trim().is_empty() || paddon.created_by_ref.trim() != actor.ref_.trim())
+            && !self.store.paddon_management_settings().await?.worker_visibility_enabled {
+            return Err(ProductionMapError::PaddonNotFound);
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn require_paddon_visible(&self, code: &str, actor: &QueueActionActor) -> Result<(), ProductionMapError> {
+        if actor.role == "aparatchi" {
+            let paddon = self.paddon_summary(code).await?;
+            self.ensure_paddon_visible(&paddon, actor).await?;
+        }
+        Ok(())
     }
 
     async fn validate_active_paddon_scope(&self, apparatus: &str, actor: &QueueActionActor) -> Result<(), ProductionMapError> {
@@ -60,6 +90,7 @@ impl ProductionMapService {
         let code = code.trim();
         if code.len() > 128 { return Err(ProductionMapError::PaddonInvalidInput); }
         let code = (!code.is_empty()).then_some(code);
+        if let Some(code) = code { self.require_paddon_visible(code, actor).await?; }
         self.store.set_active_rezka_paddon(apparatus.trim(), actor, code).await?;
         // Actor-scoped selection is absent from production snapshots/controls.
         // Its GET reads the store; output assignment re-reads it in its transaction.

@@ -257,7 +257,8 @@ impl ProductionMapService {
             && queue_action == queue_state::ApparatusQueueAction::Resume
             && from_state == queue_state::ApparatusQueueOrderState::Pending;
         let bosma_sequence_start = pechat::is_pechat_apparatus(&canonical)
-            && (queue_action == queue_state::ApparatusQueueAction::Start || requeued_resume);
+            && (queue_action == queue_state::ApparatusQueueAction::Start
+                || (requeued_resume && policy == ApparatusQueuePolicy::StrictSequence));
         if bosma_sequence_start {
             let sessions = self.store.active_order_run_sessions_for_orders(&sequence).await?;
             let detached_order_ids = sessions.values().flatten().filter(|session| {

@@ -930,7 +930,8 @@ impl ProductionMapService {
                 let queue_actionable = active_order_is_this
                     && (state.is_active()
                         || state == queue_state::ApparatusQueueOrderState::Paused
-                        || (!is_bosma && policy == ApparatusQueuePolicy::FreePick)
+                        || (policy == ApparatusQueuePolicy::FreePick
+                            && (!is_bosma || requeued_session))
                         || actionable_order_id == Some(order_id.trim()));
                 let mut complete_requires_full_report = false;
                 let mut complete_requires_rezka_total_waste_only = false;
@@ -970,10 +971,6 @@ impl ProductionMapService {
 
                 match state {
                     queue_state::ApparatusQueueOrderState::Pending if requeued_session => {
-                        if active_session.is_some_and(OrderRunSession::qolip_reacquisition_required)
-                            && apparatus::requires_qolip_scan(canonical) {
-                            interaction.qolip_mode = ApparatusQueueQolipMode::ScanRequired;
-                        }
                         if pending_actionable {
                             interaction.mode = ApparatusQueueInteractionMode::RequeuedReady;
                         } else {
@@ -1128,10 +1125,6 @@ impl ProductionMapService {
                         }
                     }
                     queue_state::ApparatusQueueOrderState::Paused => {
-                        if active_session.is_some_and(OrderRunSession::qolip_reacquisition_required)
-                            && apparatus::requires_qolip_scan(canonical) {
-                            interaction.qolip_mode = ApparatusQueueQolipMode::ScanRequired;
-                        }
                         interaction.mode = if control == OrderControlState::FreezeRequested {
                             ApparatusQueueInteractionMode::FreezeRequested
                         } else {
@@ -1324,7 +1317,7 @@ impl ProductionMapService {
         self.commit_prepared_queue_action(prepared).await
     }
 
-    pub async fn qolip_scan_required_for_action(
+    pub async fn qolip_validation_required_for_action(
         &self,
         apparatus: &str,
         order_id: &str,
@@ -1361,7 +1354,7 @@ impl ProductionMapService {
         action: queue_state::ApparatusQueueAction,
         qolip_validation: Option<&TrustedQolipStartValidation>,
     ) -> Result<(), ProductionMapError> {
-        if !self.qolip_scan_required_for_action(apparatus, order_id, action).await? {
+        if !self.qolip_validation_required_for_action(apparatus, order_id, action).await? {
             return Ok(());
         }
         let canonical = self.resolve_canonical_apparatus_text(apparatus).await?;

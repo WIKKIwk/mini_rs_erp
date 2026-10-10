@@ -24,6 +24,8 @@ mod paddon_delete;
 mod paddon_movement;
 #[path = "paddon_unlock.rs"]
 mod paddon_unlock;
+#[path = "paddon_visibility.rs"]
+mod paddon_visibility;
 
 #[tokio::test]
 async fn postgres_production_map_store_persists_maps_sequences_and_queue_states() {

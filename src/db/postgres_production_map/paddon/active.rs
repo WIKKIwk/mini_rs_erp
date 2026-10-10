@@ -29,7 +29,7 @@ pub(super) async fn load(
     actor: &QueueActionActor,
 ) -> Result<Option<String>, ProductionMapError> {
     sqlx::query_scalar::<_, Option<String>>(
-        "SELECT a.paddon_code FROM mini_active_rezka_paddons a JOIN mini_paddons p ON p.code=a.paddon_code WHERE a.actor_role=$1 AND a.actor_ref=$2 AND a.apparatus_id=$3 AND p.locked_at IS NULL AND p.receipt_json IS NULL"
+        "SELECT a.paddon_code FROM mini_active_rezka_paddons a JOIN mini_paddons p ON p.code=a.paddon_code WHERE a.actor_role=$1 AND a.actor_ref=$2 AND a.apparatus_id=$3 AND p.locked_at IS NULL AND p.receipt_json IS NULL AND ($1 <> 'aparatchi' OR p.created_by_ref=$2 OR (SELECT worker_visibility_enabled FROM mini_paddon_management_settings WHERE singleton))"
     ).bind(actor.role.trim()).bind(actor.ref_.trim()).bind(apparatus.trim())
         .fetch_optional(pool).await.map(Option::flatten).map_err(|_| ProductionMapError::StoreFailed)
 }
@@ -41,7 +41,7 @@ pub(super) async fn load_for_output(
 ) -> Result<Option<String>, ProductionMapError> {
     lock_scope(tx, apparatus, actor).await?;
     sqlx::query_scalar::<_, Option<String>>(
-        "SELECT a.paddon_code FROM mini_active_rezka_paddons a JOIN mini_paddons p ON p.code=a.paddon_code WHERE a.actor_role=$1 AND a.actor_ref=$2 AND a.apparatus_id=$3 AND p.locked_at IS NULL AND p.receipt_json IS NULL"
+        "SELECT a.paddon_code FROM mini_active_rezka_paddons a JOIN mini_paddons p ON p.code=a.paddon_code WHERE a.actor_role=$1 AND a.actor_ref=$2 AND a.apparatus_id=$3 AND p.locked_at IS NULL AND p.receipt_json IS NULL AND ($1 <> 'aparatchi' OR p.created_by_ref=$2 OR (SELECT worker_visibility_enabled FROM mini_paddon_management_settings WHERE singleton))"
     ).bind(actor.role.trim()).bind(actor.ref_.trim()).bind(apparatus.trim())
         .fetch_optional(&mut **tx).await.map(Option::flatten).map_err(|_| ProductionMapError::StoreFailed)
 }
@@ -117,8 +117,10 @@ mod tests {
             .connect(&url)
             .await
             .unwrap();
-        sqlx::raw_sql("CREATE TABLE mini_paddons(id TEXT PRIMARY KEY, code TEXT UNIQUE, receipt_json JSONB, locked_at TIMESTAMPTZ);
-            INSERT INTO mini_paddons(id,code,receipt_json) VALUES ('a','00001',NULL),('b','00002',NULL),('c','00003','{}');")
+        sqlx::raw_sql("CREATE TABLE mini_paddons(id TEXT PRIMARY KEY, code TEXT UNIQUE, receipt_json JSONB, locked_at TIMESTAMPTZ, created_by_ref TEXT);
+            CREATE TABLE mini_paddon_management_settings(singleton BOOLEAN, worker_visibility_enabled BOOLEAN);
+            INSERT INTO mini_paddon_management_settings VALUES (TRUE,FALSE);
+            INSERT INTO mini_paddons(id,code,receipt_json,created_by_ref) VALUES ('a','00001',NULL,'worker-a'),('b','00002',NULL,'worker-a'),('c','00003','{}','worker-a');")
             .execute(&pool).await.unwrap();
         sqlx::raw_sql(include_str!(
             "../../../../migrations/postgres/0125_active_rezka_paddon.sql"
@@ -201,6 +203,15 @@ mod tests {
         .unwrap();
         assert_eq!(selected.as_deref(), Some("00002"));
         tx.commit().await.unwrap();
+        sqlx::query("UPDATE mini_paddons SET created_by_ref='worker-b' WHERE code='00002'")
+            .execute(&pool).await.unwrap();
+        for enabled in [false, true, false] {
+            sqlx::query("UPDATE mini_paddon_management_settings SET worker_visibility_enabled=$1")
+                .bind(enabled).execute(&pool).await.unwrap();
+            let mut tx = pool.begin().await.unwrap();
+            assert_eq!(load_for_output(&mut tx, apparatus, &actor).await.unwrap().as_deref(), enabled.then_some("00002"));
+            tx.commit().await.unwrap();
+        }
         second_device
             .set_active_rezka_paddon(apparatus, &actor, None)
             .await

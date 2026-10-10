@@ -61,6 +61,7 @@ pub async fn production_map_paddon_unlock(
     )
     .await?;
     let input: PrintConfirmationRequest = parse_json(&body)?;
+    super::paddons::require_paddon_visible(&state, &principal, &input.code).await?;
     state
         .production_maps
         .unlock_paddon(&input.code, &queue_action_actor(&principal))
@@ -116,6 +117,7 @@ pub async fn production_map_paddon_print_confirm(
         return Err(forbidden());
     }
     let input: PrintConfirmationRequest = parse_json(&body)?;
+    super::paddons::require_paddon_visible(&state, &principal, &input.code).await?;
     let result = state
         .production_maps
         .confirm_paddon_print(&input.code, &queue_action_actor(&principal))
@@ -151,6 +153,7 @@ pub async fn production_map_paddon_next(
     let principal =
         authorize_any_capability(&state, &headers, &[Capability::ApparatusQueueManage]).await?;
     let input: NextPaddonRequest = parse_json(&body)?;
+    super::paddons::require_paddon_visible(&state, &principal, &input.code).await?;
     let options = assigned_cut_apparatuses(&state, &principal).await?;
     if !options.iter().any(|(id, _)| id == input.apparatus.trim()) {
         return Err(forbidden());

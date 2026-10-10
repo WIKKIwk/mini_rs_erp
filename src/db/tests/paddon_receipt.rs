@@ -16,8 +16,10 @@ async fn postgres_werka_paddon_receipt_atomic_retry_and_locks() {
     let pool = sqlx::PgPool::connect_with(postgres_test_database_options(&admin_url, &db_name))
         .await
         .unwrap();
-    apply_foundation_migration(&pool).await.unwrap();
+    crate::db::postgres::apply_postgres_migrations_through_version(&pool, "0121")
+        .await.unwrap();
     seed_standard_canonical_apparatus(&pool).await;
+    apply_foundation_migration(&pool).await.unwrap();
     let store = Arc::new(PostgresProductionMapStore::new(pool.clone()));
     let service = ProductionMapService::new_for_test(store.clone());
     let mut map = test_map("receipt-order", "89001", "PRODUCT-1");

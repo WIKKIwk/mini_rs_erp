@@ -6,6 +6,9 @@ const UNLOCK: &str = "/v1/mobile/admin/production-maps/paddons/unlock";
 #[tokio::test]
 async fn paddon_unlock_permissions_follow_lock_owner_and_the_admin_setting() {
     let state = test_state();
+    state.production_maps.update_paddon_settings(None, Some(true), &QueueActionActor {
+        role: "admin".into(), ref_: "admin".into(), display_name: "Admin".into(),
+    }).await.unwrap();
     for worker in ["lock-owner", "other-worker"] {
         state
             .admin

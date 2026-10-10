@@ -80,6 +80,7 @@ pub async fn production_map_queue_action(
         return Err(bad_request("apparatus and order_id are required"));
     }
     let apparatus = resolve_queue_apparatus(&state, &request.apparatus).await?;
+    let include_control = request.include_control;
     let mut input = QueueActionCommand::from_request(request, &apparatus, &principal)?;
     if let Some(training_result) = super::super::training::training_queue_action(
         &state,
@@ -195,7 +196,7 @@ pub async fn production_map_queue_action(
                 )
                 .await
                 .map_err(production_map_error)?;
-            Ok(json_response(serde_json::json!({
+            let mut response = serde_json::json!({
                 "ok": true,
                 "rev": state.production_maps.snapshot_revision(),
                 "epoch": state.production_maps.snapshot_epoch(),
@@ -205,12 +206,20 @@ pub async fn production_map_queue_action(
                 "progress_batch": null,
                 "print": null,
                 "completion_request": result.completion_request,
-            })))
+            });
+            if include_control {
+                response["control_state"] = serde_json::json!(queue_action_response_control(
+                    &state, &principal, &headers, &input.apparatus, &input.order_id,
+                ).await);
+            }
+            Ok(json_response(response))
         }
         QueueActionDecision::Execute => {
             execute_queue_action(
                 &state,
                 &principal,
+                &headers,
+                include_control,
                 input,
                 &apparatus,
                 assigned_apparatus,
@@ -223,6 +232,7 @@ pub async fn production_map_queue_action(
 }
 
 include!("queue_action_execution.rs");
+include!("queue_action_response_control.rs");
 include!("queue_action_rules.rs");
 include!("queue_action_completion_support.rs");
 include!("queue_action_tests.rs");

@@ -143,6 +143,7 @@ pub(super) async fn load_paddons(
     pool: &PgPool,
     limit: usize,
     selectable_only: bool,
+    creator_ref: Option<&str>,
 ) -> Result<Vec<PaddonSummary>, ProductionMapError> {
     let limit = i64::try_from(limit.clamp(1, 200)).unwrap_or(200);
     let rows = sqlx::query_as::<_, PaddonRow>(
@@ -154,13 +155,14 @@ pub(super) async fn load_paddons(
                 EXTRACT(EPOCH FROM p.locked_at)::bigint AS locked_at_unix
          FROM mini_paddons AS p
          LEFT JOIN mini_paddon_items AS i ON i.paddon_id = p.id
-         WHERE p.id IN (SELECT id FROM mini_paddons WHERE NOT $2 OR (locked_at IS NULL AND receipt_json IS NULL) ORDER BY updated_at DESC, code ASC LIMIT $1)
+         WHERE p.id IN (SELECT id FROM mini_paddons WHERE ($3::text IS NULL OR created_by_ref=$3) AND (NOT $2 OR (locked_at IS NULL AND receipt_json IS NULL)) ORDER BY updated_at DESC, code ASC LIMIT $1)
          GROUP BY p.id
          ORDER BY p.updated_at DESC, p.code ASC
          LIMIT $1",
     )
     .bind(limit)
     .bind(selectable_only)
+    .bind(creator_ref)
     .fetch_all(pool)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;

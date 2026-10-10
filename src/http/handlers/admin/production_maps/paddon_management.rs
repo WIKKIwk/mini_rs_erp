@@ -3,7 +3,8 @@ use super::*;
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ManagementSettingsRequest {
-    free_movement_enabled: bool,
+    free_movement_enabled: Option<bool>,
+    worker_visibility_enabled: Option<bool>,
 }
 
 pub async fn production_map_paddon_management_settings(
@@ -36,8 +37,9 @@ pub async fn production_map_paddon_management_settings(
             let input: ManagementSettingsRequest = parse_json(&body)?;
             state
                 .production_maps
-                .update_paddon_management_settings(
+                .update_paddon_settings(
                     input.free_movement_enabled,
+                    input.worker_visibility_enabled,
                     &queue_action_actor(&principal),
                 )
                 .await

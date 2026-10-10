@@ -23,14 +23,19 @@ pub(super) async fn lock_for_output(
         return Ok(None);
     };
     // Printing seals membership before the independent warehouse receipt.
-    let (id, receipt, locked) = sqlx::query_as::<_, (String, Option<serde_json::Value>, bool)>(
-        "SELECT p.id, to_jsonb(p)->'receipt_json', p.locked_at IS NOT NULL FROM mini_paddons p WHERE p.code = $1 FOR UPDATE",
+    let (id, receipt, locked, creator_ref) = sqlx::query_as::<_, (String, Option<serde_json::Value>, bool, String)>(
+        "SELECT p.id, to_jsonb(p)->'receipt_json', p.locked_at IS NOT NULL, p.created_by_ref FROM mini_paddons p WHERE p.code = $1 FOR UPDATE",
     )
     .bind(code.trim())
     .fetch_optional(&mut **tx)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?
     .ok_or(ProductionMapError::PaddonNotFound)?;
+    if write.event.actor.role == "aparatchi" && creator_ref.trim() != write.event.actor.ref_.trim() {
+        let visible: bool = sqlx::query_scalar("SELECT worker_visibility_enabled FROM mini_paddon_management_settings WHERE singleton FOR SHARE")
+            .fetch_one(&mut **tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
+        if !visible { return Err(ProductionMapError::PaddonNotFound); }
+    }
     if locked { return Err(ProductionMapError::PaddonLocked); }
     if receipt.is_some_and(|value| !value.is_null()) {
         return Err(ProductionMapError::PaddonInvalidInput);

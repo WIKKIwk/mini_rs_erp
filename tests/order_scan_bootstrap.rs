@@ -103,10 +103,17 @@ struct CountedMapStore {
     material_reads: AtomicUsize,
     fail_materials: AtomicBool,
     materials_gate: ReadGate,
+    snapshot_gate: ReadGate,
 }
 #[async_trait::async_trait]
 impl ProductionMapStorePort for CountedMapStore {
     async fn maps(&self) -> MapResult<Vec<ProductionMapDefinition>> {
+        self.inner.maps().await
+    }
+    async fn maps_for_snapshot_scope(
+        &self, _apparatus: &[String], _extra_order_ids: &[String],
+    ) -> MapResult<Vec<ProductionMapDefinition>> {
+        self.snapshot_gate.read().await;
         self.inner.maps().await
     }
     async fn map_by_id(&self, id: &str) -> MapResult<Option<ProductionMapDefinition>> {
@@ -1344,13 +1351,25 @@ async fn queue_action_ack_cursor_covers_committed_state_and_rejected_replay_does
     state.production_maps = ProductionMapService::new(store.clone(),
         Arc::new(CanonicalServiceApparatusResolver::new(state.apparatus.clone())));
     let router = build_router(state.clone());
-    let body = json!({"apparatus":CUT,"order_id":ACK_ORDER,"action":"start"});
+    let body = json!({"apparatus":CUT,"order_id":ACK_ORDER,"action":"start",
+        "include_control":true});
     let result = request(&router, "POST", &f.worker,
         "/v1/mobile/admin/production-maps/queue-action", body.clone()).await;
     assert_eq!(result.status, StatusCode::OK, "{}", result.body);
     assert_eq!(result.body["epoch"], state.production_maps.snapshot_epoch());
     assert_eq!(result.body["rev"], state.production_maps.snapshot_revision());
     assert_eq!(result.body["states"][ACK_ORDER], "in_progress");
+    let snapshot = state.production_maps.worker_snapshot_shared_with_revision(
+        &[CUT.into()], &[ACK_ORDER.into()],
+    ).await.unwrap();
+    let control = &result.body["control_state"];
+    assert_eq!(control["control"], json!(snapshot.0.queue_action_controls[CUT][ACK_ORDER]));
+    assert_eq!(control["apparatus"], CUT);
+    assert_eq!(control["order_id"], ACK_ORDER);
+    assert_eq!(control["queue_state"], "in_progress");
+    assert_eq!(control["rev"], result.body["rev"]);
+    assert_eq!(control["epoch"], result.body["epoch"]);
+    assert!(control["stage_states"].is_object());
     let committed = store.apparatus_queue_states().await.unwrap();
     assert_eq!(committed[CUT][ACK_ORDER], "in_progress");
     let revision = state.production_maps.snapshot_revision();
@@ -1359,4 +1378,75 @@ async fn queue_action_ack_cursor_covers_committed_state_and_rejected_replay_does
     assert!(!rejected.status.is_success());
     assert_eq!(store.apparatus_queue_states().await.unwrap(), committed);
     assert_eq!(state.production_maps.snapshot_revision(), revision);
+}
+
+#[tokio::test]
+async fn queue_action_optional_control_timeout_preserves_the_committed_ack() {
+    let f = queue_action_control_fixture().await;
+    f.maps.snapshot_gate.arm(1);
+    let router = f.router.clone();
+    let token = f.worker.clone();
+    let pending = tokio::spawn(async move {
+        request(&router, "POST", &token,
+            "/v1/mobile/admin/production-maps/queue-action",
+            json!({"apparatus":CUT,"order_id":CONTROL_ACK_ORDER,"action":"start",
+                "include_control":true})).await
+    });
+    f.maps.snapshot_gate.wait_entered().await;
+    assert_eq!(f.maps.inner.apparatus_queue_states().await.unwrap()[CUT][CONTROL_ACK_ORDER],
+        "in_progress", "the blocked reader must follow the business commit");
+    let result = tokio::time::timeout(Duration::from_secs(1), pending).await
+        .expect("optional presentation must not hold the committed ACK open")
+        .unwrap();
+    assert_eq!(result.status, StatusCode::OK, "{}", result.body);
+    assert_eq!(result.body["states"][CONTROL_ACK_ORDER], "in_progress");
+    assert!(result.body["control_state"].is_null());
+    assert_eq!(result.body["rev"], f.state.production_maps.snapshot_revision());
+}
+
+#[tokio::test]
+async fn queue_action_legacy_ack_skips_optional_control_reads() {
+    let f = queue_action_control_fixture().await;
+    f.maps.snapshot_gate.arm(1);
+    let result = tokio::time::timeout(Duration::from_secs(1),
+        f.request("POST", &f.worker,
+            "/v1/mobile/admin/production-maps/queue-action",
+            json!({"apparatus":CUT,"order_id":CONTROL_ACK_ORDER,"action":"start"}))).await
+        .expect("legacy clients must not pay for an optional control read");
+    assert_eq!(result.status, StatusCode::OK, "{}", result.body);
+    assert!(result.body.get("control_state").is_none());
+    assert_eq!(f.maps.snapshot_gate.remaining.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn queue_action_control_reauth_drops_presentation_after_assignment_change() {
+    let f = queue_action_control_fixture().await;
+    f.maps.snapshot_gate.arm(1);
+    let router = f.router.clone();
+    let token = f.worker.clone();
+    let pending = tokio::spawn(async move {
+        request(&router, "POST", &token,
+            "/v1/mobile/admin/production-maps/queue-action",
+            json!({"apparatus":CUT,"order_id":CONTROL_ACK_ORDER,"action":"start",
+                "include_control":true})).await
+    });
+    f.maps.snapshot_gate.wait_entered().await;
+    assign(&f.state, "worker", "aparatchi", &[PRINT]).await;
+    f.maps.snapshot_gate.resume();
+    let result = pending.await.unwrap();
+    assert_eq!(result.status, StatusCode::OK, "{}", result.body);
+    assert_eq!(result.body["states"][CONTROL_ACK_ORDER], "in_progress");
+    assert!(result.body["control_state"].is_null());
+}
+
+const CONTROL_ACK_ORDER: &str = "zakaz-control-ack";
+
+async fn queue_action_control_fixture() -> Fixture {
+    let f = Fixture::new(CUT).await;
+    let mut seeded_map = map(CUT);
+    seeded_map.id = CONTROL_ACK_ORDER.into();
+    f.maps.inner.put_map(seeded_map).await.unwrap();
+    f.maps.inner.put_apparatus_sequence(CUT, vec![CONTROL_ACK_ORDER.into()])
+        .await.unwrap();
+    f
 }

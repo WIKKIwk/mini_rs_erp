@@ -1,13 +1,15 @@
 async fn execute_queue_action(
     state: &AppState,
     principal: &Principal,
+    headers: &HeaderMap,
+    include_control: bool,
     input: QueueActionCommand,
     apparatus: &QueueApparatusMetadata,
     assigned_apparatus: Vec<String>,
     state_material_barcodes: Vec<String>,
     returned_paint_report: Option<crate::core::returned_paint::ReturnedPaintRequest>,
 ) -> Result<Response, AdminError> {
-    let qolip_preparations = if state.production_maps.qolip_scan_required_for_action(
+    let qolip_preparations = if state.production_maps.qolip_validation_required_for_action(
         &input.apparatus, &input.order_id, input.action,
     ).await.map_err(production_map_error)? {
         prepare_qolips_for_bosma_start(state, principal, &input, apparatus).await?
@@ -244,6 +246,11 @@ async fn execute_queue_action(
     });
     if let Some(order_control) = order_control {
         response["order_control"] = serde_json::json!(order_control);
+    }
+    if include_control {
+        response["control_state"] = serde_json::json!(queue_action_response_control(
+            state, principal, headers, &input_apparatus, &order_id,
+        ).await);
     }
     Ok(json_response(response))
 }

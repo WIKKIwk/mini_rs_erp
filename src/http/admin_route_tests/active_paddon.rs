@@ -65,9 +65,9 @@ async fn active_paddon_is_shared_by_sessions_but_isolated_by_authenticated_user(
             "",
             "",
             &crate::core::production_map::QueueActionActor {
-                role: "admin".into(),
-                ref_: "admin".into(),
-                display_name: "Admin".into(),
+                role: "aparatchi".into(),
+                ref_: "worker-a".into(),
+                display_name: "Worker A".into(),
             },
         )
         .await

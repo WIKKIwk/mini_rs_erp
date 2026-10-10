@@ -67,6 +67,7 @@ mod preparation;
 mod apparatus_aasx;
 mod active_paddon;
 mod paddon_management;
+mod paddon_visibility;
 mod paddon_qr_print;
 mod paddon_unlock;
 mod apparatus_collections;

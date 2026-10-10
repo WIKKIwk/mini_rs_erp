@@ -57,6 +57,8 @@ pub struct PaddonSnapshot {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaddonManagementSettings {
     pub free_movement_enabled: bool,
+    #[serde(default)]
+    pub worker_visibility_enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

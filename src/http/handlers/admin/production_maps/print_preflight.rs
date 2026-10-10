@@ -1,4 +1,4 @@
-use super::queue_actions::resolve_queue_apparatus;
+use super::queue_actions::{queue_action_response_control, resolve_queue_apparatus};
 use super::*;
 
 #[derive(serde::Deserialize)]
@@ -94,38 +94,9 @@ pub async fn production_map_print_preflight(
     // The mutation has committed. A failed presentation read must not turn a
     // successful write into an apparent failure (and invite a second write).
     let control_state = if input.include_control {
-        match state
-            .production_maps
-            .worker_snapshot_shared_with_revision(
-                &[apparatus.id.to_string()], &[order_id.to_string()],
-            )
-            .await
-        {
-            Ok((snapshot, revision)) => snapshot
-                .queue_action_controls
-                .get(apparatus.id.as_str())
-                .and_then(|controls| controls.get(order_id))
-                .map(|control| {
-                    serde_json::json!({
-                        "apparatus": apparatus.id.as_str(),
-                        "order_id": order_id,
-                        "rev": revision,
-                        "epoch": state.production_maps.snapshot_epoch(),
-                        "control": control,
-                        "queue_state": control.state.as_str(),
-                        "stage_states": snapshot.stage_states.get(order_id),
-                        "order_control": snapshot.order_controls.get(order_id)
-                            .map(|record| record.state.as_str()).unwrap_or("active"),
-                    })
-                }),
-            Err(error) => {
-                tracing::warn!(
-                    ?error,
-                    "print preflight committed; control refresh deferred"
-                );
-                None
-            }
-        }
+        queue_action_response_control(
+            &state, &principal, &headers, apparatus.id.as_str(), order_id,
+        ).await
     } else {
         None
     };

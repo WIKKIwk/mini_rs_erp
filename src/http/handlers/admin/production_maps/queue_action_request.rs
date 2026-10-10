@@ -5,6 +5,8 @@ struct ApparatusQueueActionRequest {
     #[serde(default)]
     order_id: String,
     #[serde(default)]
+    include_control: bool,
+    #[serde(default)]
     material_barcode: String,
     #[serde(default)]
     material_barcodes: Vec<String>,

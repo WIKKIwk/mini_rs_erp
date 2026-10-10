@@ -152,7 +152,7 @@ pub async fn production_map_qolip_validate(
     reject_qolip_in_use(&state, &apparatus, order_id, &qolip_code).await?;
     let reacquisition = state
         .production_maps
-        .qolip_scan_required_for_action(
+        .qolip_validation_required_for_action(
             &apparatus_id,
             order_id,
             queue_state::ApparatusQueueAction::Resume,

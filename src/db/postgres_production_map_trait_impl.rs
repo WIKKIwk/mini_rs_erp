@@ -3,8 +3,8 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
     async fn paddon_management_settings(&self) -> Result<PaddonManagementSettings, ProductionMapError> {
         paddon_management::load(&self.pool).await
     }
-    async fn update_paddon_management_settings(&self, enabled: bool, actor: &QueueActionActor) -> Result<PaddonManagementSettings, ProductionMapError> {
-        paddon_management::update(&self.pool, enabled, actor).await
+    async fn update_paddon_management_settings(&self, free_movement_enabled: Option<bool>, worker_visibility_enabled: Option<bool>, actor: &QueueActionActor) -> Result<PaddonManagementSettings, ProductionMapError> {
+        paddon_management::update(&self.pool, free_movement_enabled, worker_visibility_enabled, actor).await
     }
     async fn move_apparatus_sequence(
         &self,
@@ -604,7 +604,10 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         PostgresProductionMapStore::paddons(self, limit).await
     }
     async fn selectable_rezka_paddons(&self, limit: usize) -> Result<Vec<PaddonSummary>, ProductionMapError> {
-        load_paddons(&self.pool, limit, true).await
+        load_paddons(&self.pool, limit, true, None).await
+    }
+    async fn paddons_for_creator(&self, limit: usize, selectable_only: bool, creator_ref: Option<&str>) -> Result<Vec<PaddonSummary>, ProductionMapError> {
+        load_paddons(&self.pool, limit, selectable_only, creator_ref).await
     }
     async fn active_rezka_paddon(&self, apparatus: &str, actor: &QueueActionActor) -> Result<Option<String>, ProductionMapError> {
         active_paddon::load(&self.pool, apparatus, actor).await

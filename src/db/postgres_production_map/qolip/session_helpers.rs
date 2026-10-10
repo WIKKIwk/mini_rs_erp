@@ -12,6 +12,85 @@ fn session_owns_qolip_lock(session: &OrderRunSession) -> bool {
         == Some(true)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn automatic_resume_accepts_catalog_molds_and_requires_owned_physical_checkouts() {
+        let url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://wikki@127.0.0.1:5432/postgres".into());
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&url)
+            .await
+            .expect("test PostgreSQL");
+        let mut tx = pool.begin().await.unwrap();
+        // Temporary tables shadow production names on this connection only.
+        sqlx::query(
+            "CREATE TEMP TABLE mini_qolip_checkouts (
+            qolip_code text, status text, issued_to_ref text) ON COMMIT DROP",
+        )
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TEMP TABLE mini_qolip_locations (
+            qolip_code text, quantity integer) ON COMMIT DROP",
+        )
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+        let mut session = OrderRunSession {
+            session_id: "resume-validation".into(),
+            apparatus: "apparatus:default:bosma_7".into(),
+            order_id: "order-resume-validation".into(),
+            stage_node_id: "print".into(),
+            status: OrderRunStatus::Active,
+            worker_role: "aparatchi".into(),
+            worker_ref: "worker-1".into(),
+            worker_display_name: "Worker".into(),
+            started_at_unix: 1,
+            updated_at_unix: 2,
+            payload_json: serde_json::json!({"qolip_codes": ["CATALOG"]}),
+        };
+        validate_reacquired_qolip_checkouts_tx(&mut tx, &session)
+            .await
+            .unwrap();
+        session.payload_json["qolip_codes"] = serde_json::json!(["PHYSICAL"]);
+        sqlx::query("INSERT INTO mini_qolip_locations VALUES ('PHYSICAL', 1)")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        assert_eq!(
+            validate_reacquired_qolip_checkouts_tx(&mut tx, &session).await,
+            Err(ProductionMapError::QolipCodeMismatch)
+        );
+        sqlx::query("DELETE FROM mini_qolip_locations")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO mini_qolip_checkouts VALUES ('PHYSICAL', 'open', 'worker-2')")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        assert_eq!(
+            validate_reacquired_qolip_checkouts_tx(&mut tx, &session).await,
+            Err(ProductionMapError::QolipCodeMismatch)
+        );
+        sqlx::query("UPDATE mini_qolip_checkouts SET issued_to_ref = 'worker-1'")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        session.payload_json["qolip_codes"] = serde_json::json!(["PHYSICAL", "CATALOG"]);
+        validate_reacquired_qolip_checkouts_tx(&mut tx, &session)
+            .await
+            .unwrap();
+        tx.rollback().await.unwrap();
+        pool.close().await;
+    }
+}
+
 pub(super) async fn validate_reacquired_qolip_checkouts_tx(
     tx: &mut Transaction<'_, Postgres>,
     session: &OrderRunSession,
@@ -24,17 +103,23 @@ pub(super) async fn validate_reacquired_qolip_checkouts_tx(
         .flatten()
         .filter_map(serde_json::Value::as_str);
     for code in codes {
-        let issued_to_worker: bool = sqlx::query_scalar(
+        // Start also accepts catalog-only molds. Resume must keep that policy
+        // while rejecting physical stock or checkouts held by another worker.
+        let issued_or_catalog_only: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM mini_qolip_checkouts
              WHERE lower(qolip_code) = lower($1) AND lower(status) = 'open'
-               AND lower(issued_to_ref) = lower($2))",
+               AND lower(issued_to_ref) = lower($2))
+             OR (NOT EXISTS(SELECT 1 FROM mini_qolip_checkouts
+                 WHERE lower(qolip_code) = lower($1) AND lower(status) = 'open')
+                 AND NOT EXISTS(SELECT 1 FROM mini_qolip_locations
+                 WHERE lower(qolip_code) = lower($1) AND quantity > 0))",
         )
         .bind(code.trim())
         .bind(session.worker_ref.trim())
         .fetch_one(&mut **tx)
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
-        if !issued_to_worker {
+        if !issued_or_catalog_only {
             return Err(ProductionMapError::QolipCodeMismatch);
         }
     }

@@ -692,10 +692,14 @@ pub trait ProductionMapStorePort: Send + Sync {
     async fn paddons(&self, _limit: usize) -> StoreResult<Vec<PaddonSummary>> {
         Ok(Vec::new())
     }
+    async fn paddons_for_creator(&self, limit: usize, selectable_only: bool, creator_ref: Option<&str>) -> StoreResult<Vec<PaddonSummary>> {
+        let paddons = if selectable_only { self.selectable_rezka_paddons(200).await? } else { self.paddons(200).await? };
+        Ok(paddons.into_iter().filter(|p| creator_ref.is_none_or(|creator| p.created_by_ref.trim() == creator)).take(limit).collect())
+    }
     async fn paddon_management_settings(&self) -> StoreResult<PaddonManagementSettings> {
         Ok(PaddonManagementSettings::default())
     }
-    async fn update_paddon_management_settings(&self, _enabled: bool, _actor: &QueueActionActor) -> StoreResult<PaddonManagementSettings> {
+    async fn update_paddon_management_settings(&self, _free_movement_enabled: Option<bool>, _worker_visibility_enabled: Option<bool>, _actor: &QueueActionActor) -> StoreResult<PaddonManagementSettings> {
         Err(ProductionMapError::StoreFailed)
     }
     async fn selectable_rezka_paddons(&self, limit: usize) -> StoreResult<Vec<PaddonSummary>> {

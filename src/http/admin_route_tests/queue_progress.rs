@@ -7,6 +7,7 @@ mod laminatsiya;
 mod laminatsiya_notices;
 mod qolip_chain;
 mod report;
+mod resume_after_freeze;
 mod rezka;
 mod rezka_prepared_label;
 mod rezka_recorded_outputs;

@@ -71,6 +71,12 @@ impl ProductionMapStorePort for PaddonQrStore {
         self.reads.fetch_add(1, Ordering::Relaxed);
         Ok((code == CODE).then(|| self.snapshot.clone()))
     }
+    async fn paddon_management_settings(&self) -> StoreResult<crate::core::production_map::PaddonManagementSettings> {
+        Ok(crate::core::production_map::PaddonManagementSettings {
+            worker_visibility_enabled: true,
+            ..Default::default()
+        })
+    }
     async fn paddon_receipt(&self, code: &str) -> StoreResult<Option<PaddonReceipt>> {
         Ok(
             (code == CODE && self.snapshot.paddon.locked_at_unix.is_some()).then(|| {
