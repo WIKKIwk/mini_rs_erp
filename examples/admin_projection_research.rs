@@ -5,19 +5,18 @@
 //! Set MINI_ERP_DATABASE_URL or ERP_RESEARCH_ENV_FILE to an isolated clone at
 //! 127.0.0.1:5433/mini_rs_erp_new. Each connection enforces read-only statements.
 //! ERP_RESEARCH_THREADS selects runtime threads (default 4), and
-//! ERP_RESEARCH_MODES can select 0,6,7; mode 0 is required as the baseline.
+//! ERP_RESEARCH_MODES selects 0 (reference) and 1 (production), with 0 required.
 //! ERP_RESEARCH_APPARATUS selects one canonical apparatus or a unique suffix
 //! (default bosma_7). Full snapshots are written only when
 //! ERP_RESEARCH_WRITE_SNAPSHOTS=1, under ERP_RESEARCH_OUTPUT_DIR (default data/).
 //! Those snapshots contain business data and must stay out of source control.
 //! ERP_RESEARCH_HEAP is a build-time switch for allocation instrumentation;
 //! rebuild without it for latency measurements. CPU times are Windows-only.
-//! This prototype does not implement bounded publication or admin delivery fixes.
+//! Production projection caches are enabled by default; this feature only enables the benchmark.
 use async_trait::async_trait;
 use mini_rs_erp::core::apparatus_standard::{ApparatusId, RuntimeApparatusConfiguration};
 use mini_rs_erp::core::production_map::{
     CanonicalApparatusResolver, ProductionMapError, ProductionMapService, ProductionMapStorePort,
-    optimization_research as memo,
 };
 use mini_rs_erp::db::postgres_production_map::PostgresProductionMapStore;
 use sha2::{Digest, Sha256};
@@ -277,23 +276,21 @@ async fn run(threads: usize) -> Result<(), Box<dyn std::error::Error>> {
                 .collect::<Result<Vec<_>, _>>()
         })
         .transpose()?
-        .unwrap_or_else(|| (0..=7).collect());
-    if !selected_modes.contains(&0) || selected_modes.iter().any(|mode| *mode > 7) {
-        return Err("research modes must include original mode 0 and stay in 0..=7".into());
+        .unwrap_or_else(|| vec![0, 1]);
+    if !selected_modes.contains(&0) || selected_modes.iter().any(|mode| *mode > 1) {
+        return Err("research modes must include original mode 0 and stay in 0..=1".into());
     }
     for pass in 0..3 {
         let order = match pass {
-            0 => [0, 1, 2, 3, 4, 5, 6, 7],
-            1 => [7, 6, 5, 4, 3, 2, 0, 1],
-            _ => [1, 6, 7, 5, 4, 3, 2, 0],
+            0 => [0, 1],
+            _ => [1, 0],
         };
         for mode in order {
             if !selected_modes.contains(&mode) {
                 continue;
             }
-            memo::set_mode(mode);
             for view in ["admin", "worker"] {
-                let service = ProductionMapService::new(store.clone(), resolver.clone());
+                let service = research_service(mode, store.clone(), resolver.clone());
                 let meter = Meter::start();
                 let (snapshot, revision) = if view == "admin" {
                     service.live_snapshot_shared_with_revision().await?
@@ -303,7 +300,6 @@ async fn run(threads: usize) -> Result<(), Box<dyn std::error::Error>> {
                         .await?
                 };
                 let metrics = meter.finish();
-                let summaries = memo::take_summaries();
                 let encode = Instant::now();
                 let value = serde_json::to_value(snapshot.as_ref())?;
                 let serialization_ms = encode.elapsed().as_secs_f64() * 1000.;
@@ -316,7 +312,7 @@ async fn run(threads: usize) -> Result<(), Box<dyn std::error::Error>> {
                 println!(
                     "{}",
                     serde_json::json!({"phase":"cold_snapshot","runtime_threads":threads,"pass":pass,
-                    "mode":mode,"view":view,"metrics":metrics,"memo":summaries,"exact_json_equal":same,
+                    "mode":mode,"view":view,"metrics":metrics,"exact_json_equal":same,
                     "json_sha256":sha,"serialization_ms":serialization_ms,"json_bytes":bytes.len(),"revision":revision,
                     "maps":snapshot.maps.len(),"controls":snapshot.queue_action_controls.values().map(|v|v.len()).sum::<usize>()})
                 );
@@ -341,12 +337,11 @@ async fn run(threads: usize) -> Result<(), Box<dyn std::error::Error>> {
                     let invalidate = Meter::start();
                     let (fresh, fresh_rev) = service.live_snapshot_shared_with_revision().await?;
                     let fresh_metrics = invalidate.finish();
-                    let summaries = memo::take_summaries();
                     let same = serde_json::to_value(fresh.as_ref())? == value;
                     println!(
                         "{}",
                         serde_json::json!({"phase":"after_invalidation","mode":mode,"runtime_threads":threads,
-                        "metrics":fresh_metrics,"memo":summaries,"revision":fresh_rev,"exact_json_equal":same})
+                        "metrics":fresh_metrics,"revision":fresh_rev,"exact_json_equal":same})
                     );
                     if !same {
                         return Err("invalidation output changed".into());
@@ -355,12 +350,11 @@ async fn run(threads: usize) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
-    for mode in [0, 6, 7] {
+    for mode in [0, 1] {
         if !selected_modes.contains(&mode) {
             continue;
         }
-        memo::set_mode(mode);
-        let service = Arc::new(ProductionMapService::new(store.clone(), resolver.clone()));
+        let service = Arc::new(research_service(mode, store.clone(), resolver.clone()));
         let meter = Meter::start();
         let mut tasks = tokio::task::JoinSet::new();
         for _ in 0..8 {
@@ -372,19 +366,18 @@ async fn run(threads: usize) -> Result<(), Box<dyn std::error::Error>> {
             results.push(result??);
         }
         let metrics = meter.finish();
-        let summaries = memo::take_summaries();
         let same_arc = results
             .iter()
             .all(|(s, r)| *r == results[0].1 && Arc::ptr_eq(s, &results[0].0));
         println!(
             "{}",
             serde_json::json!({"phase":"eight_concurrent_readers","mode":mode,"runtime_threads":threads,
-            "metrics":metrics,"memo":summaries,"same_arc":same_arc,"readers":results.len()})
+            "metrics":metrics,"same_arc":same_arc,"readers":results.len()})
         );
         if !same_arc {
             return Err("concurrent reads disagree".into());
         }
-        let burst = Arc::new(ProductionMapService::new(store.clone(), resolver.clone()));
+        let burst = Arc::new(research_service(mode, store.clone(), resolver.clone()));
         let notifier = burst.clone();
         let notifications = std::thread::spawn(move || {
             for _ in 0..30 {
@@ -395,13 +388,12 @@ async fn run(threads: usize) -> Result<(), Box<dyn std::error::Error>> {
         let meter = Meter::start();
         let (snapshot, revision) = burst.live_snapshot_shared_with_revision().await?;
         let metrics = meter.finish();
-        let summaries = memo::take_summaries();
         notifications.join().unwrap();
         let same = serde_json::to_value(snapshot.as_ref())? == baseline["admin"];
         println!(
             "{}",
             serde_json::json!({"phase":"revision_burst","mode":mode,"runtime_threads":threads,
-            "metrics":metrics,"memo":summaries,"revision":revision,"notifications":30,
+            "metrics":metrics,"revision":revision,"notifications":30,
             "notification_interval_ms":30,"exact_json_equal":same})
         );
         if !same {
@@ -409,4 +401,17 @@ async fn run(threads: usize) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     Ok(())
+}
+
+fn research_service(
+    mode: usize,
+    store: Arc<dyn ProductionMapStorePort>,
+    resolver: Arc<dyn CanonicalApparatusResolver>,
+) -> ProductionMapService {
+    let service = ProductionMapService::new(store, resolver);
+    if mode == 0 {
+        service.with_reference_projection()
+    } else {
+        service
+    }
 }

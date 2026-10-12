@@ -1,5 +1,3 @@
-#[cfg(feature = "projection-research")]
-pub mod optimization_research;
 #[path = "queue/apparatus.rs"]
 mod apparatus;
 mod apparatus_resolver;

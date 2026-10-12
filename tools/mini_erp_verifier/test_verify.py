@@ -10,6 +10,18 @@ import verify
 
 
 class HarnessFreshnessTests(unittest.TestCase):
+    def test_current_contract_updates_preserve_request_fields_and_require_a_reason(self) -> None:
+        cases = [{"name": "create", "request": {"body": {"code": "original"}}, "expect": {"status": 200}}]
+        verify.apply_contract_updates(cases, {"create": {
+            "reason": "Warehouse ownership is now explicit.",
+            "request_body_fields": {"warehouse": "Stores"},
+        }})
+        self.assertEqual(cases[0]["request"]["body"], {"code": "original", "warehouse": "Stores"})
+        self.assertEqual(cases[0]["expect"], {"status": 200})
+        for updates in [{"missing": {"reason": "required"}}, {"create": {"expect": {"status": 400}}}]:
+            with self.assertRaises(verify.VerificationFailure):
+                verify.apply_contract_updates(cases, updates)
+
     def test_raw_material_split_role_participates_in_access_matrices(self) -> None:
         cases = verify.expanded_cases({"cases": [], "access_matrices": [{
             "name": "split", "uri": "/split", "methods": ["GET"],

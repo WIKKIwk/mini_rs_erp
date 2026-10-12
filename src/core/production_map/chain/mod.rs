@@ -1,10 +1,14 @@
+mod adjacent;
+use adjacent::adjacent_physical_stages_for_node_with_stages;
+mod projection;
+pub(crate) use projection::ProjectionMap;
+
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use super::compiler::normalize_branch;
 use super::queue_state::ApparatusQueueOrderState;
 use super::{ProductionMapDefinition, ProductionMapEdge, ProductionMapNode, ProductionMapNodeKind};
 use crate::core::apparatus_standard::ApparatusId;
-
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChainStage {
@@ -19,14 +23,6 @@ pub struct ChainStage {
 }
 
 pub fn linear_work_stages(map: &ProductionMapDefinition) -> Vec<ChainStage> {
-    #[cfg(feature = "projection-research")]
-    if let Some(value) = super::optimization_research::get_stages(map) { return value; }
-    let value = linear_work_stages_uncached(map);
-    #[cfg(feature = "projection-research")]
-    super::optimization_research::put_stages(map, &value);
-    value
-}
-pub fn linear_work_stages_uncached(map: &ProductionMapDefinition) -> Vec<ChainStage> {
     let mut stages = Vec::new();
     let mut seen_stage_ids = BTreeSet::<String>::new();
     let mut seen_apparatus = false;
@@ -66,19 +62,19 @@ pub fn previous_work_stage_station(
 
 /// Return all physical predecessors reached through the same branch-aware
 /// topology used by [`linear_work_stages`].
-pub fn previous_work_stage_stations(map:&ProductionMapDefinition,station_id:&str)->Vec<String> {
-    #[cfg(feature = "projection-research")]
-    if let Some(value)=super::optimization_research::get_station_neighbors(map,station_id,true) {return value;}
-    let value=previous_work_stage_stations_uncached(map,station_id);
-    #[cfg(feature = "projection-research")]
-    super::optimization_research::put_station_neighbors(map,station_id,true,&value);
-    value
-}
-pub fn previous_work_stage_stations_uncached(
+pub fn previous_work_stage_stations(
     map: &ProductionMapDefinition,
     station_id: &str,
 ) -> Vec<String> {
-    let physical_stage_node_ids = linear_work_stages(map)
+    previous_work_stage_stations_with_stages(map, station_id, linear_work_stages(map))
+}
+
+fn previous_work_stage_stations_with_stages(
+    map: &ProductionMapDefinition,
+    station_id: &str,
+    stages: Vec<ChainStage>,
+) -> Vec<String> {
+    let physical_stage_node_ids = stages
         .into_iter()
         .filter_map(|stage| stage.apparatus_id.map(|_| stage.node_id))
         .collect::<BTreeSet<_>>();
@@ -105,19 +101,19 @@ pub fn previous_work_stage_stations_uncached(
 /// A standalone first-stage apparatus remains valid for legacy/direct flows;
 /// an unresolvable station in a map that has physical stages is not treated as
 /// proof that no predecessor exists.
-pub fn previous_stage_resolution_is_unavailable(map:&ProductionMapDefinition,station_id:&str)->bool {
-    #[cfg(feature = "projection-research")]
-    if let Some(value)=super::optimization_research::get_unavailable(map,station_id) {return value;}
-    let value=previous_stage_resolution_is_unavailable_uncached(map,station_id);
-    #[cfg(feature = "projection-research")]
-    super::optimization_research::put_unavailable(map,station_id,value);
-    value
-}
-pub fn previous_stage_resolution_is_unavailable_uncached(
+pub fn previous_stage_resolution_is_unavailable(
     map: &ProductionMapDefinition,
     station_id: &str,
 ) -> bool {
-    let physical_stages = linear_work_stages(map)
+    previous_stage_resolution_is_unavailable_with_stages(map, station_id, linear_work_stages(map))
+}
+
+fn previous_stage_resolution_is_unavailable_with_stages(
+    map: &ProductionMapDefinition,
+    station_id: &str,
+    stages: Vec<ChainStage>,
+) -> bool {
+    let physical_stages = stages
         .into_iter()
         .filter(|stage| stage.apparatus_id.is_some())
         .collect::<Vec<_>>();
@@ -152,16 +148,16 @@ pub fn next_work_stage_station(map: &ProductionMapDefinition, station_id: &str) 
 
 /// Return all physical successors reached through the same branch-aware
 /// topology used by [`linear_work_stages`].
-pub fn next_work_stage_stations(map:&ProductionMapDefinition,station_id:&str)->Vec<String> {
-    #[cfg(feature = "projection-research")]
-    if let Some(value)=super::optimization_research::get_station_neighbors(map,station_id,false) {return value;}
-    let value=next_work_stage_stations_uncached(map,station_id);
-    #[cfg(feature = "projection-research")]
-    super::optimization_research::put_station_neighbors(map,station_id,false,&value);
-    value
+pub fn next_work_stage_stations(map: &ProductionMapDefinition, station_id: &str) -> Vec<String> {
+    next_work_stage_stations_with_stages(map, station_id, linear_work_stages(map))
 }
-pub fn next_work_stage_stations_uncached(map: &ProductionMapDefinition, station_id: &str) -> Vec<String> {
-    let physical_stage_node_ids = linear_work_stages(map)
+
+fn next_work_stage_stations_with_stages(
+    map: &ProductionMapDefinition,
+    station_id: &str,
+    stages: Vec<ChainStage>,
+) -> Vec<String> {
+    let physical_stage_node_ids = stages
         .into_iter()
         .filter_map(|stage| stage.apparatus_id.map(|_| stage.node_id))
         .collect::<BTreeSet<_>>();
@@ -185,22 +181,22 @@ pub fn next_work_stage_stations_uncached(map: &ProductionMapDefinition, station_
 /// Resolve one physical stage occurrence. `preferred_node_id` is authoritative
 /// when supplied by WIP/session metadata; the canonical station fallback keeps
 /// legacy maps working when an apparatus occurs only once.
-pub fn work_stage_for_station(map:&ProductionMapDefinition,station_id:&str,preferred_node_id:&str)->Option<ChainStage> {
-    #[cfg(feature = "projection-research")]
-    if let Some(value)=super::optimization_research::get_stage_lookup(map,station_id,preferred_node_id) {return value;}
-    let value=work_stage_for_station_uncached(map,station_id,preferred_node_id);
-    #[cfg(feature = "projection-research")]
-    super::optimization_research::put_stage_lookup(map,station_id,preferred_node_id,&value);
-    value
-}
-pub fn work_stage_for_station_uncached(
+pub fn work_stage_for_station(
     map: &ProductionMapDefinition,
     station_id: &str,
     preferred_node_id: &str,
 ) -> Option<ChainStage> {
+    work_stage_for_station_with_stages(map, station_id, preferred_node_id, linear_work_stages(map))
+}
+
+fn work_stage_for_station_with_stages(
+    map: &ProductionMapDefinition,
+    station_id: &str,
+    preferred_node_id: &str,
+    stages: Vec<ChainStage>,
+) -> Option<ChainStage> {
     #[cfg(feature = "verification")]
     super::verification_stage_work::count_resolution();
-    let stages = linear_work_stages(map);
     let preferred_node_id = preferred_node_id.trim();
     if !preferred_node_id.is_empty() {
         return stages.into_iter().find(|stage| {
@@ -223,7 +219,10 @@ pub fn previous_work_stage_for_node(
         .next()
 }
 
-pub fn previous_work_stages_for_node(map: &ProductionMapDefinition, stage_node_id: &str) -> Vec<ChainStage> {
+pub fn previous_work_stages_for_node(
+    map: &ProductionMapDefinition,
+    stage_node_id: &str,
+) -> Vec<ChainStage> {
     adjacent_physical_stages_for_node(map, stage_node_id, true)
 }
 
@@ -245,9 +244,10 @@ pub fn next_work_stages_for_node(
 }
 
 pub fn is_final_work_stage_node(map: &ProductionMapDefinition, stage_node_id: &str) -> bool {
-    linear_work_stages(map).iter().any(|stage| {
-        stage.node_id.trim() == stage_node_id.trim() && stage.apparatus_id.is_some()
-    }) && next_work_stage_for_node(map, stage_node_id).is_none()
+    linear_work_stages(map)
+        .iter()
+        .any(|stage| stage.node_id.trim() == stage_node_id.trim() && stage.apparatus_id.is_some())
+        && next_work_stage_for_node(map, stage_node_id).is_none()
 }
 
 /// Physical stages reachable from Start. Virtual Task nodes are intentionally
@@ -473,8 +473,7 @@ fn canonical_apparatus_identity(node: &ProductionMapNode) -> Option<String> {
 }
 
 fn is_unassigned_alternative_apparatus(node: &ProductionMapNode) -> bool {
-    node.kind == ProductionMapNodeKind::Apparatus
-        && !node.alternative_group_id.trim().is_empty()
+    node.kind == ProductionMapNodeKind::Apparatus && !node.alternative_group_id.trim().is_empty()
 }
 
 fn stages_for_node(map: &ProductionMapDefinition, node: &ProductionMapNode) -> Vec<ChainStage> {
@@ -512,7 +511,9 @@ fn stages_for_node(map: &ProductionMapDefinition, node: &ProductionMapNode) -> V
 fn display_title(node: &ProductionMapNode) -> String {
     let assigned = node.alternative_assigned_title.trim();
     if node.kind == ProductionMapNodeKind::Apparatus
-        && node.alternative_group_id.trim().is_empty() && !assigned.is_empty() {
+        && node.alternative_group_id.trim().is_empty()
+        && !assigned.is_empty()
+    {
         assigned.to_string()
     } else {
         node.title.trim().to_string()
@@ -540,64 +541,16 @@ fn chain_stage_matches_station(stage: &ChainStage, station_id: &str) -> bool {
 }
 
 fn adjacent_physical_stages_for_node(
-    map: &ProductionMapDefinition, stage_node_id: &str, previous: bool,
-) -> Vec<ChainStage> {
-    #[cfg(feature = "projection-research")]
-    if let Some(value) = super::optimization_research::get_adjacent(map, stage_node_id, previous) { return value; }
-    let value = adjacent_physical_stages_for_node_uncached(map, stage_node_id, previous);
-    #[cfg(feature = "projection-research")]
-    super::optimization_research::put_adjacent(map, stage_node_id, previous, &value);
-    value
-}
-fn adjacent_physical_stages_for_node_uncached(
     map: &ProductionMapDefinition,
     stage_node_id: &str,
     previous: bool,
 ) -> Vec<ChainStage> {
-    let stages = linear_work_stages(map);
-    if !stages
-        .iter()
-        .any(|stage| stage.node_id.trim() == stage_node_id.trim())
-    {
-        return Vec::new();
-    }
-    let physical_by_node = stages
-        .iter()
-        .filter(|stage| stage.apparatus_id.is_some())
-        .map(|stage| (stage.node_id.as_str(), stage))
-        .collect::<BTreeMap<_, _>>();
-    let mut queue = VecDeque::<&str>::new();
-    let mut visited = BTreeSet::<String>::new();
-    let mut found = Vec::<ChainStage>::new();
-    let mut found_nodes = BTreeSet::<String>::new();
-    if previous {
-        queue.extend(route_predecessors(map, stage_node_id.trim()));
-    } else {
-        queue.extend(route_successors(map, stage_node_id.trim()));
-    }
-    while let Some(node_id) = queue.pop_front() {
-        if !visited.insert(node_id.to_string()) {
-            continue;
-        }
-        let Some(node) = map.nodes.iter().find(|node| node.id == node_id) else {
-            continue;
-        };
-        if matches!(node.kind, ProductionMapNodeKind::Start | ProductionMapNodeKind::End) {
-            continue;
-        }
-        if let Some(stage) = physical_by_node.get(node_id) {
-            if found_nodes.insert(node_id.to_string()) {
-                found.push((*stage).clone());
-            }
-            continue;
-        }
-        if previous {
-            queue.extend(route_predecessors(map, node_id));
-        } else {
-            queue.extend(route_successors(map, node_id));
-        }
-    }
-    found
+    adjacent_physical_stages_for_node_with_stages(
+        map,
+        stage_node_id,
+        previous,
+        linear_work_stages(map),
+    )
 }
 
 fn collect_previous_stage_ids(
@@ -670,7 +623,6 @@ fn collect_next_stage_ids(
     }
 }
 
-
 fn reachable_node_ids(map: &ProductionMapDefinition) -> Vec<String> {
     let Some(start_id) = map
         .nodes
@@ -737,7 +689,6 @@ fn node_by_id(map: &ProductionMapDefinition) -> BTreeMap<&str, &ProductionMapNod
         .map(|node| (node.id.as_str(), node))
         .collect()
 }
-
 
 #[cfg(test)]
 #[path = "tests.rs"]

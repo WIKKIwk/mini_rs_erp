@@ -1,5 +1,9 @@
 //! Operation closure is distinct from a machine finishing its own roll.
 //! Candidates share an operation; only actual executions participate in closure.
+#[path = "stage_execution/inputs.rs"]
+mod inputs;
+pub(crate) use inputs::{StageWorkInput, work_inputs, work_inputs_projected};
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
@@ -101,6 +105,23 @@ pub(crate) fn work_control(
     statuses: &[StageWorkStatus],
     sessions: &[OrderRunSession],
 ) -> Option<StageWorkControl> {
+    work_control_projected(
+        &chain::ProjectionMap::reference(map),
+        apparatus,
+        node,
+        statuses,
+        sessions,
+    )
+}
+
+pub(crate) fn work_control_projected(
+    projection: &chain::ProjectionMap<'_>,
+    apparatus: &str,
+    node: &str,
+    statuses: &[StageWorkStatus],
+    sessions: &[OrderRunSession],
+) -> Option<StageWorkControl> {
+    let map = projection.map();
     let status = statuses
         .iter()
         .find(|s| chain::stage_node_ids_match_for_map(map, &s.stage_node_id, node))?;
@@ -116,15 +137,16 @@ pub(crate) fn work_control(
     let latest = sessions
         .iter()
         .filter(|s| {
-            s.order_id == map.id && s.apparatus == apparatus
+            s.order_id == map.id
+                && s.apparatus == apparatus
                 && chain::stage_node_ids_match_for_map(map, &s.stage_node_id, node)
         })
         .max_by(|a, b| (a.started_at_unix, &a.session_id).cmp(&(b.started_at_unix, &b.session_id)));
     Some(StageWorkControl {
         completed: status.completed,
-        local_completed: !status.has_available_input && latest.is_some_and(|s| {
-            s.status == OrderRunStatus::Completed && work_report(s).is_some()
-        }),
+        local_completed: !status.has_available_input
+            && latest
+                .is_some_and(|s| s.status == OrderRunStatus::Completed && work_report(s).is_some()),
         upstream_closed: status.upstream_closed,
         astatka_available: latest.is_some_and(|s| s.status == OrderRunStatus::Completed),
         astatka_required: status
@@ -132,7 +154,8 @@ pub(crate) fn work_control(
             .iter()
             .any(|a| a == apparatus),
         report_session_id: latest.map(|s| s.session_id.clone()).unwrap_or_default(),
-        upstream_title: chain::previous_work_stages_for_node(map, node)
+        upstream_title: projection
+            .previous_stages(node)
             .iter()
             .map(|s| s.station_title.clone())
             .collect::<Vec<_>>()
@@ -142,87 +165,6 @@ pub(crate) fn work_control(
     })
 }
 
-/// Compact input location used by both PostgreSQL and in-memory projection.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct StageWorkInput {
-    pub source_node: String,
-    pub target_node: String,
-    pub source_apparatus: String,
-    pub target_apparatus: String,
-    pub outstanding: bool,
-    pub available: bool,
-}
-
-pub(crate) fn work_inputs(
-    map: &ProductionMapDefinition,
-    batches: &[OrderProgressBatch],
-    opening: &[OpeningWipRecord],
-) -> Vec<StageWorkInput> {
-    #[cfg(feature = "projection-research")]
-    let skip_terminal_input_route = super::optimization_research::skip_terminal_input_route();
-    #[cfg(not(feature = "projection-research"))]
-    let skip_terminal_input_route = false;
-    let mut inputs = batches
-        .iter()
-        .map(|b| StageWorkInput {
-            source_node: b
-                .payload_json
-                .get("stage_node_id")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default()
-                .into(),
-            target_node: if skip_terminal_input_route
-                && !matches!(b.wip_status, OrderProgressBatchWipStatus::Waiting | OrderProgressBatchWipStatus::InUse) {
-                super::service_queue_support::progress_batch_next_stage_node_id(b).to_string()
-            } else {
-                super::wip_route::resolve_wip_input_route(map, b)
-                    .map(|route| route.stage_node_id)
-                    .unwrap_or_else(|_| super::service_queue_support::progress_batch_next_stage_node_id(b).to_string())
-            },
-            source_apparatus: b.apparatus.clone(),
-            target_apparatus: b.next_apparatus.clone(),
-            available: b.wip_status == OrderProgressBatchWipStatus::Waiting,
-            outstanding: matches!(
-                b.wip_status,
-                OrderProgressBatchWipStatus::Waiting | OrderProgressBatchWipStatus::InUse
-            ),
-        })
-        .collect::<Vec<_>>();
-    inputs.extend(
-        opening
-            .iter()
-            .filter(|r| r.intake.status == OpeningWipIntakeStatus::Confirmed)
-            .filter(|r| {
-                r.batches.iter().any(|b| {
-                    matches!(
-                        b.wip_status,
-                        OpeningWipBatchStatus::Waiting | OpeningWipBatchStatus::InUse
-                    )
-                })
-            })
-            .map(|r| StageWorkInput {
-                source_node: if r.intake.source_apparatus.is_empty() {
-                    String::new()
-                } else {
-                    r.intake.resume_stage_node_id.clone()
-                },
-                target_node: if r.intake.source_apparatus.is_empty() {
-                    r.intake.resume_stage_node_id.clone()
-                } else {
-                    String::new()
-                },
-                source_apparatus: r.intake.source_apparatus.clone(),
-                target_apparatus: r.intake.resume_apparatus.clone(),
-                outstanding: true,
-                available: r
-                    .batches
-                    .iter()
-                    .any(|b| b.wip_status == OpeningWipBatchStatus::Waiting),
-            }),
-    );
-    inputs
-}
-
 pub(crate) fn stage_work_statuses(
     map: &ProductionMapDefinition,
     sessions: &[OrderRunSession],
@@ -230,7 +172,25 @@ pub(crate) fn stage_work_statuses(
     states: &BTreeMap<String, BTreeMap<String, String>>,
     events: &[ProductionStageLifecycleEvent],
 ) -> Vec<StageWorkStatus> {
-    let stages = chain::linear_work_stages(map)
+    stage_work_statuses_projected(
+        &chain::ProjectionMap::reference(map),
+        sessions,
+        inputs,
+        states,
+        events,
+    )
+}
+
+pub(crate) fn stage_work_statuses_projected(
+    projection: &chain::ProjectionMap<'_>,
+    sessions: &[OrderRunSession],
+    inputs: &[StageWorkInput],
+    states: &BTreeMap<String, BTreeMap<String, String>>,
+    events: &[ProductionStageLifecycleEvent],
+) -> Vec<StageWorkStatus> {
+    let map = projection.map();
+    let stages = projection
+        .stages()
         .into_iter()
         .filter(|s| s.apparatus_id.is_some())
         .collect::<Vec<_>>();
@@ -264,8 +224,7 @@ pub(crate) fn stage_work_statuses(
             {
                 continue;
             }
-            let node =
-                chain::work_stage_for_station(map, &session.apparatus, &session.stage_node_id);
+            let node = projection.work_stage(&session.apparatus, &session.stage_node_id);
             if let Some(node) = node {
                 resolved_sessions.push((session, node.node_id));
             }
@@ -335,7 +294,7 @@ pub(crate) fn stage_work_statuses(
         }
         let mut prev = BTreeSet::new();
         for candidate in candidates {
-            for p in chain::previous_work_stages_for_node(map, &candidate.node_id) {
+            for p in projection.previous_stages(&candidate.node_id) {
                 if let Some(k) = key_by_node.get(p.node_id.as_str()).filter(|k| *k != key) {
                     prev.insert(k.clone());
                 }
@@ -349,7 +308,8 @@ pub(crate) fn stage_work_statuses(
                     return matches(&input.target_node);
                 }
                 if !input.source_node.is_empty() {
-                    return chain::next_work_stages_for_node(map, &input.source_node)
+                    return projection
+                        .next_stages(&input.source_node)
                         .iter()
                         .any(|s| matches(&s.node_id));
                 }
@@ -359,11 +319,9 @@ pub(crate) fn stage_work_statuses(
                         .any(|s| s.apparatus_id.as_deref() == Some(input.target_apparatus.as_str()))
                     || (!input.source_apparatus.is_empty()
                         && candidates.iter().any(|s| {
-                            chain::previous_work_stage_stations(
-                                map,
-                                s.apparatus_id.as_deref().unwrap_or_default(),
-                            )
-                            .contains(&input.source_apparatus)
+                            projection
+                                .previous_stations(s.apparatus_id.as_deref().unwrap_or_default())
+                                .contains(&input.source_apparatus)
                         }))
             })
             .collect::<Vec<_>>();
