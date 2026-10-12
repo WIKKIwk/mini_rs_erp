@@ -6,7 +6,6 @@ use super::apparatus::visible_order_ids_by_apparatus;
 use super::progress::queue_action_event_id;
 use super::store_port::ApparatusQueueStateMap;
 
-
 pub(super) fn validate_queue_action_request(
     apparatus: &str,
     order_id: &str,
@@ -47,7 +46,9 @@ pub(super) fn order_run_session_was_requeued(session: &OrderRunSession) -> bool 
 }
 
 pub(super) fn progress_batch_next_stage_node_id(batch: &OrderProgressBatch) -> &str {
-    if let Some(stage) = batch.payload_json.get("wip_route_binding")
+    if let Some(stage) = batch
+        .payload_json
+        .get("wip_route_binding")
         .and_then(|value| value.get("stage_node_id"))
         .and_then(serde_json::Value::as_str)
     {
@@ -62,7 +63,7 @@ pub(super) fn progress_batch_next_stage_node_id(batch: &OrderProgressBatch) -> &
 }
 
 pub(super) fn waiting_reentry_stage_node_id(
-    map: &ProductionMapDefinition,
+    projection: &chain::ProjectionMap<'_>,
     batches: &[OrderProgressBatch],
     order_id: &str,
     apparatus: &str,
@@ -73,8 +74,11 @@ pub(super) fn waiting_reentry_stage_node_id(
         {
             return None;
         }
-        let route = super::wip_route::resolve_wip_input_route(map, batch).ok()?;
-        route.consumer_apparatus_ids.iter().any(|id| id == apparatus)
+        let route = projection.route(batch).ok()?;
+        route
+            .consumer_apparatus_ids
+            .iter()
+            .any(|id| id == apparatus)
             .then_some(route.stage_node_id)
     })
 }
@@ -189,8 +193,11 @@ pub(super) fn bosma_startable_order_id<'a>(
                         !id.is_empty()
                             && states.get(*id).copied().unwrap_or(S::Pending) != S::Completed
                     })?;
-                return matches!(states.get(next).copied().unwrap_or(S::Pending), S::Pending | S::PrintPreflight)
-                    .then_some(next);
+                return matches!(
+                    states.get(next).copied().unwrap_or(S::Pending),
+                    S::Pending | S::PrintPreflight
+                )
+                .then_some(next);
             }
             _ => return None,
         }
@@ -381,8 +388,8 @@ fn repair_next_apparatus_field(
     else {
         return;
     };
-    if let Some(next) = chain::next_work_stage_for_node(map, &source.node_id)
-        .and_then(|stage| stage.apparatus_id)
+    if let Some(next) =
+        chain::next_work_stage_for_node(map, &source.node_id).and_then(|stage| stage.apparatus_id)
     {
         batch.next_apparatus = next;
     }
@@ -490,16 +497,19 @@ pub(super) fn nearest_allowed_sequence(
     states: &BTreeMap<String, String>,
     frozen_order_ids: &BTreeSet<String>,
 ) -> Result<Vec<String>, ProductionMapError> {
-    let Some(requested_index) = requested_sequence.iter().position(|id| id == moved_order_id)
+    let Some(requested_index) = requested_sequence
+        .iter()
+        .position(|id| id == moved_order_id)
     else {
         return Err(ProductionMapError::QueueActionNotAllowed);
     };
-    let Some(original_index) = current_sequence.iter().position(|id| id == moved_order_id)
-    else {
+    let Some(original_index) = current_sequence.iter().position(|id| id == moved_order_id) else {
         return Err(ProductionMapError::QueueActionNotAllowed);
     };
     if requested_sequence.iter().collect::<BTreeSet<_>>().len() != requested_sequence.len()
-        || requested_sequence.iter().any(|id| !current_sequence.contains(id))
+        || requested_sequence
+            .iter()
+            .any(|id| !current_sequence.contains(id))
     {
         return Err(ProductionMapError::QueueActionNotAllowed);
     }
@@ -510,9 +520,11 @@ pub(super) fn nearest_allowed_sequence(
     let target_index = if let Some(next_id) = requested_sequence.get(requested_index + 1) {
         remaining.iter().position(|id| id == next_id).unwrap()
     } else if requested_index > 0 {
-        remaining.iter()
+        remaining
+            .iter()
             .position(|id| id == &requested_sequence[requested_index - 1])
-            .unwrap() + 1
+            .unwrap()
+            + 1
     } else {
         original_index
     };
@@ -521,9 +533,9 @@ pub(super) fn nearest_allowed_sequence(
     for index in slots {
         let mut candidate = remaining.clone();
         candidate.insert(index, moved_order_id.to_string());
-        if validate_active_sequence_barrier(
-            current_sequence, &candidate, states, frozen_order_ids,
-        ).is_ok() {
+        if validate_active_sequence_barrier(current_sequence, &candidate, states, frozen_order_ids)
+            .is_ok()
+        {
             return Ok(candidate);
         }
     }
@@ -550,8 +562,7 @@ pub(super) fn validate_active_sequence_barrier(
     for id in next_sequence {
         if let Some(&current_position) = current_positions.get(id.trim()) {
             max_current_position = Some(
-                max_current_position
-                    .map_or(current_position, |max| max.max(current_position)),
+                max_current_position.map_or(current_position, |max| max.max(current_position)),
             );
         } else {
             prefix_is_known = false;
@@ -612,7 +623,9 @@ mod active_sequence_barrier_tests {
     fn nearest_slot_is_legal_and_minimal_for_every_drag_and_active_barrier_combination() {
         let current = ids(&["a", "b", "c", "d", "e"]);
         for mask in 0..32 {
-            let states = current.iter().enumerate()
+            let states = current
+                .iter()
+                .enumerate()
                 .filter(|(index, _)| mask & (1 << index) != 0)
                 .map(|(_, id)| (id.clone(), "in_progress".to_string()))
                 .collect::<BTreeMap<_, _>>();
@@ -621,16 +634,45 @@ mod active_sequence_barrier_tests {
                     let mut requested = current.clone();
                     let moved = requested.remove(old_index);
                     requested.insert(requested_index, moved.clone());
-                    let saved = nearest_allowed_sequence(&current, &requested, &moved, &states, &BTreeSet::new()).unwrap();
-                    validate_active_sequence_barrier(&current, &saved, &states, &BTreeSet::new()).unwrap();
+                    let saved = nearest_allowed_sequence(
+                        &current,
+                        &requested,
+                        &moved,
+                        &states,
+                        &BTreeSet::new(),
+                    )
+                    .unwrap();
+                    validate_active_sequence_barrier(&current, &saved, &states, &BTreeSet::new())
+                        .unwrap();
                     let saved_index = saved.iter().position(|id| id == &moved).unwrap();
-                    let remaining = current.iter().filter(|id| *id != &moved).cloned().collect::<Vec<_>>();
-                    assert_eq!(saved.iter().filter(|id| *id != &moved).cloned().collect::<Vec<_>>(), remaining);
+                    let remaining = current
+                        .iter()
+                        .filter(|id| *id != &moved)
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    assert_eq!(
+                        saved
+                            .iter()
+                            .filter(|id| *id != &moved)
+                            .cloned()
+                            .collect::<Vec<_>>(),
+                        remaining
+                    );
                     for index in 0..current.len() {
                         let mut candidate = remaining.clone();
                         candidate.insert(index, moved.clone());
-                        if validate_active_sequence_barrier(&current, &candidate, &states, &BTreeSet::new()).is_ok() {
-                            assert!(saved_index.abs_diff(requested_index) <= index.abs_diff(requested_index));
+                        if validate_active_sequence_barrier(
+                            &current,
+                            &candidate,
+                            &states,
+                            &BTreeSet::new(),
+                        )
+                        .is_ok()
+                        {
+                            assert!(
+                                saved_index.abs_diff(requested_index)
+                                    <= index.abs_diff(requested_index)
+                            );
                         }
                     }
                 }

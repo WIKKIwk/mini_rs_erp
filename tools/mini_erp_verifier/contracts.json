@@ -1,8 +1,8 @@
 {
   "protocol": 1,
   "route_snapshot": {
-    "count": 299,
-    "sha256": "1164b739c8c2f91c28134e7ea3cc8c101053f37e17f4fe69201d641af7ce202c"
+    "count": 305,
+    "sha256": "e498d0295622c67ac9c8cc1cb63bad2f22503a0b3c852a7fe964c30659815b9c"
   },
   "access_matrices": [
     {
@@ -511,5 +511,50 @@
         "body_ends_with": "%%EOF\n"
       }
     }
-  ]
+  ],
+  "current_contract_updates": {
+    "qolip_locations_without_assignment_are_forbidden": {
+      "reason": "Current location reads filter each location by warehouse ownership. An unassigned user with no locations receives an empty list; the contract must still forbid any leaked location.",
+      "expect": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "locations": []
+        }
+      }
+    },
+    "product_spec_create_rejects_duplicate_qolip_code_without_overwriting__01_first": {
+      "reason": "Current product specs require explicit warehouse ownership. Keep the creation/duplicate/original-preservation assertions intact.",
+      "request_body_fields": {
+        "warehouse": "Stores - CH"
+      }
+    },
+    "product_spec_create_rejects_duplicate_qolip_code_without_overwriting__02_duplicate": {
+      "reason": "The duplicate must use the same explicit warehouse as the original product spec.",
+      "request_body_fields": {
+        "warehouse": "Stores - CH"
+      }
+    },
+    "admin_settings_put_updates_auth_runtime_like_go__02_old": {
+      "reason": "Settings update phone and display name but cannot inject a caller-chosen access code; rotation belongs to the dedicated regeneration endpoint. Assert that the original code remains valid.",
+      "expect": {
+        "status": 200,
+        "body": {
+          "profile": {
+            "role": "werka",
+            "display_name": "Updated Werka"
+          }
+        }
+      }
+    },
+    "admin_settings_put_updates_auth_runtime_like_go__03_new": {
+      "reason": "The caller-chosen settings code must be rejected rather than becoming a login credential.",
+      "expect": {
+        "status": 401,
+        "body": {
+          "error": "invalid credentials"
+        }
+      }
+    }
+  }
 }

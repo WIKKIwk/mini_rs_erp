@@ -103,6 +103,43 @@ impl SequenceMoveState {
         preflight_orders: &BTreeSet<String>,
     ) -> Self {
         let visible = apparatus::selected_order_ids_for_apparatus(maps, canonical);
+        Self::from_visible(
+            canonical,
+            visible,
+            stored,
+            raw_states,
+            frozen,
+            preflight_orders,
+        )
+    }
+
+    pub(crate) fn from_projection(
+        canonical: &RuntimeApparatusConfiguration,
+        projections: &[chain::ProjectionMap<'_>],
+        stored: &[String],
+        raw_states: &BTreeMap<String, String>,
+        frozen: &BTreeSet<String>,
+        preflight_orders: &BTreeSet<String>,
+    ) -> Self {
+        let visible = apparatus::selected_order_ids_for_projection(projections, canonical);
+        Self::from_visible(
+            canonical,
+            visible,
+            stored,
+            raw_states,
+            frozen,
+            preflight_orders,
+        )
+    }
+
+    fn from_visible(
+        canonical: &RuntimeApparatusConfiguration,
+        visible: Vec<String>,
+        stored: &[String],
+        raw_states: &BTreeMap<String, String>,
+        frozen: &BTreeSet<String>,
+        preflight_orders: &BTreeSet<String>,
+    ) -> Self {
         let frozen = visible
             .iter()
             .filter(|id| {
@@ -184,7 +221,8 @@ impl SequenceMoveState {
         )
         .map_err(|_| ProductionMapError::QueueReorderBlocked)?;
         let adjusted = order_ids != requested;
-        let mut event = compute_canonical_sequence_delta(&self.order_ids, &order_ids, &command.order_id);
+        let mut event =
+            compute_canonical_sequence_delta(&self.order_ids, &order_ids, &command.order_id);
         let mut next = self.clone();
         next.order_ids = order_ids.clone();
         // Persist the fingerprint chain with the operation, so replay cannot
@@ -261,20 +299,40 @@ mod canonical_delta_tests {
 
     #[test]
     fn canonical_delta_invariant_apply_matches_new_sequence() {
-        let old_seq = vec!["A".to_string(), "B".to_string(), "C".to_string(), "D".to_string()];
+        let old_seq = vec![
+            "A".to_string(),
+            "B".to_string(),
+            "C".to_string(),
+            "D".to_string(),
+        ];
 
         // Move D to head
-        let new_seq = vec!["D".to_string(), "A".to_string(), "B".to_string(), "C".to_string()];
+        let new_seq = vec![
+            "D".to_string(),
+            "A".to_string(),
+            "B".to_string(),
+            "C".to_string(),
+        ];
         let delta = compute_canonical_sequence_delta(&old_seq, &new_seq, "D").unwrap();
         assert_eq!(apply_client_delta(&old_seq, &delta), new_seq);
 
         // Move A to tail
-        let new_seq = vec!["B".to_string(), "C".to_string(), "D".to_string(), "A".to_string()];
+        let new_seq = vec![
+            "B".to_string(),
+            "C".to_string(),
+            "D".to_string(),
+            "A".to_string(),
+        ];
         let delta = compute_canonical_sequence_delta(&old_seq, &new_seq, "A").unwrap();
         assert_eq!(apply_client_delta(&old_seq, &delta), new_seq);
 
         // Move D between A and B
-        let new_seq = vec!["A".to_string(), "D".to_string(), "B".to_string(), "C".to_string()];
+        let new_seq = vec![
+            "A".to_string(),
+            "D".to_string(),
+            "B".to_string(),
+            "C".to_string(),
+        ];
         let delta = compute_canonical_sequence_delta(&old_seq, &new_seq, "D").unwrap();
         assert_eq!(apply_client_delta(&old_seq, &delta), new_seq);
 

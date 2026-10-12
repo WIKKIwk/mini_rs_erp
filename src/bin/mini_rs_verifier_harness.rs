@@ -72,6 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::env::set_current_dir(&workspace)?;
 
     let mut isolated_state = AppState::verification(verifier_config(&workspace));
+    isolated_state.werka = WerkaService::new();
     isolated_state.sessions = SessionManager::memory(Some(60 * 60));
     let tokens = role_tokens(&isolated_state).await?;
 

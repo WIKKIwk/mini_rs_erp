@@ -74,6 +74,14 @@ pub(crate) fn resolve_wip_input_route(
     map: &ProductionMapDefinition,
     batch: &OrderProgressBatch,
 ) -> Result<WipInputRoute, ProductionMapError> {
+    resolve_wip_input_route_projected(&chain::ProjectionMap::reference(map), batch)
+}
+
+pub(super) fn resolve_wip_input_route_projected(
+    projection: &chain::ProjectionMap<'_>,
+    batch: &OrderProgressBatch,
+) -> Result<WipInputRoute, ProductionMapError> {
+    let map = projection.map();
     use ProductionMapError::*;
     if batch.order_id.trim() != map.id.trim() || !batch.action.records_progress_output() {
         return Err(ProgressBatchNotAccepted);
@@ -91,7 +99,7 @@ pub(crate) fn resolve_wip_input_route(
         .map(|r| r.stage_node_id.as_str())
         .unwrap_or_else(|| field(batch, "next_stage_node_id"));
     let source_id = field(batch, "stage_node_id");
-    let stages = chain::linear_work_stages(map);
+    let stages = projection.stages();
     // Older records may have only canonical producer/consumer IDs. A unique
     // existing pair identifies their route even after consumption; it never
     // licenses recovery of a supplied but deleted concrete destination.
@@ -134,7 +142,7 @@ pub(crate) fn resolve_wip_input_route(
         let possible_sources = if target_id.is_empty() {
             stages.clone()
         } else {
-            chain::previous_work_stages_for_node(map, target_id)
+            projection.previous_stages(target_id)
         };
         let sources: BTreeSet<_> = possible_sources
             .into_iter()
@@ -156,7 +164,7 @@ pub(crate) fn resolve_wip_input_route(
     {
         return Err(WipRouteSourceUnresolved);
     }
-    let successors = chain::next_work_stages_for_node(map, &source.id);
+    let successors = projection.next_stages(&source.id);
     let mut groups: BTreeMap<String, Vec<&ProductionMapNode>> = BTreeMap::new();
     for stage in &successors {
         if let Some(next) = node(map, &stage.node_id) {
@@ -278,7 +286,7 @@ pub(crate) fn resolve_wip_input_route(
         source_stage_node_id: source.id.clone(),
         stage_node_id: target.id.clone(),
         consumer_apparatus_ids,
-        map_fingerprint: production_map_fingerprint(map),
+        map_fingerprint: projection.fingerprint(),
         remapped,
     })
 }

@@ -124,6 +124,37 @@ pub(super) fn selected_order_ids_for_apparatus(
     orders
 }
 
+pub(super) fn selected_order_ids_for_projection(
+    projections: &[chain::ProjectionMap<'_>],
+    apparatus: &RuntimeApparatusConfiguration,
+) -> Vec<String> {
+    let id = apparatus.runtime.apparatus_id.as_str();
+    let mut orders = projections
+        .iter()
+        .filter(|view| {
+            !is_template_map(view.map())
+                && view
+                    .stages()
+                    .iter()
+                    .any(|stage| stage.apparatus_id.as_deref() == Some(id))
+        })
+        .map(|view| view.map().id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .collect::<Vec<_>>();
+    if apparatus.runtime.execution_profile.operation == ExecutionOperation::Print {
+        let by_id = projections
+            .iter()
+            .map(|view| (view.map().id.trim(), view.map()))
+            .collect::<BTreeMap<_, _>>();
+        orders.retain(|id| {
+            by_id
+                .get(id.trim())
+                .is_some_and(|map| print_assignment_allows_order(map, apparatus))
+        });
+    }
+    orders
+}
+
 fn retain_selected_print_orders(
     maps: &[ProductionMapDefinition],
     apparatus: &RuntimeApparatusConfiguration,

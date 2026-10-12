@@ -163,11 +163,30 @@ def load_contract() -> tuple[dict[str, Any], list[dict[str, Any]]]:
         raise VerificationFailure(
             "duplicate verifier contract names: " + ", ".join(duplicates)
         )
+    apply_contract_updates(contract["cases"], contract.get("current_contract_updates", {}))
     contract["generated_summary"] = {
         "generated_cases": len(generated_cases),
         "source_tests": generated_source_tests,
     }
     return contract, manifests
+
+
+def apply_contract_updates(cases: list[dict[str, Any]], updates: dict[str, Any]) -> None:
+    """Keep archived extraction intact while explicitly checking current APIs."""
+    by_name = {case["name"]: case for case in cases}
+    for name, update in updates.items():
+        if name not in by_name or not update.get("reason", "").strip():
+            raise VerificationFailure(f"invalid current contract update: {name}")
+        if set(update) - {"reason", "request_body_fields", "expect"}:
+            raise VerificationFailure(f"unknown current contract update field: {name}")
+        case = by_name[name]
+        if "request_body_fields" in update:
+            body = case["request"].get("body")
+            if not isinstance(body, dict):
+                raise VerificationFailure(f"contract body is not an object: {name}")
+            body.update(update["request_body_fields"])
+        if "expect" in update:
+            case["expect"] = update["expect"]
 
 
 def expanded_cases(contract: dict[str, Any]) -> list[dict[str, Any]]:

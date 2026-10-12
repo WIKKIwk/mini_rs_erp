@@ -1,0 +1,349 @@
+{
+  "status": "Historical research measurements retained. Typed immutable projection caches are now enabled in production builds; the latency and memory figures below describe the earlier Windows prototype, not the final merged implementation.",
+  "research_selection": {
+    "selected_research_mode": 7,
+    "reason": "Sequence-version and queue topology/route reuse preserves full output. Extra station-helper caches show no meaningful admin speed benefit on this clone and retain more memory.",
+    "queue_context_estimate_bytes": 1805562,
+    "extra_helper_context_estimate_bytes": 2638583,
+    "queue_context_estimate_decrease_percent": 31.570771129807174,
+    "sequence_context_estimate_bytes": 201995,
+    "scopes_do_not_overlap": true
+  },
+  "latency": [
+    {
+      "view": "admin",
+      "runtime_threads": 4,
+      "samples_each": 3,
+      "original_wall_ms": 4236.1834,
+      "optimized_wall_ms": 315.233,
+      "wall_speedup": 13.438261222651182,
+      "original_process_cpu_ms": 4218.75,
+      "optimized_process_cpu_ms": 281.25,
+      "process_cpu_decrease_percent": 93.33333333333333
+    },
+    {
+      "view": "worker",
+      "runtime_threads": 4,
+      "samples_each": 3,
+      "original_wall_ms": 2192.6038000000003,
+      "optimized_wall_ms": 233.76569999999998,
+      "wall_speedup": 9.37949322762065,
+      "original_process_cpu_ms": 2156.25,
+      "optimized_process_cpu_ms": 218.75,
+      "process_cpu_decrease_percent": 89.85507246376811
+    },
+    {
+      "view": "admin",
+      "runtime_threads": 1,
+      "samples_each": 3,
+      "original_wall_ms": 4317.621800000001,
+      "optimized_wall_ms": 306.8595,
+      "wall_speedup": 14.070354021954675,
+      "original_process_cpu_ms": 4265.625,
+      "optimized_process_cpu_ms": 296.875,
+      "process_cpu_decrease_percent": 93.04029304029304
+    },
+    {
+      "view": "worker",
+      "runtime_threads": 1,
+      "samples_each": 3,
+      "original_wall_ms": 2156.6125,
+      "optimized_wall_ms": 240.15359999999998,
+      "wall_speedup": 8.98013812826458,
+      "original_process_cpu_ms": 2109.375,
+      "optimized_process_cpu_ms": 203.125,
+      "process_cpu_decrease_percent": 90.37037037037037
+    }
+  ],
+  "rust_allocations": [
+    {
+      "view": "admin",
+      "samples_each": 3,
+      "original_allocation_calls": 36327911,
+      "optimized_allocation_calls": 2589931,
+      "allocation_call_decrease_percent": 92.87068557286435,
+      "original_allocation_traffic_bytes": 1882346940,
+      "optimized_allocation_traffic_bytes": 177231654,
+      "allocation_traffic_decrease_percent": 90.58453836358137,
+      "original_rust_peak_growth_bytes": 36800079,
+      "optimized_rust_peak_growth_bytes": 38670977,
+      "rust_peak_growth_change_bytes": 1870898
+    },
+    {
+      "view": "worker",
+      "samples_each": 3,
+      "original_allocation_calls": 18045452,
+      "optimized_allocation_calls": 1787538,
+      "allocation_call_decrease_percent": 90.09424646165694,
+      "original_allocation_traffic_bytes": 956277583,
+      "optimized_allocation_traffic_bytes": 126066692,
+      "allocation_traffic_decrease_percent": 86.81693535003633,
+      "original_rust_peak_growth_bytes": 31628468,
+      "optimized_rust_peak_growth_bytes": 31637975,
+      "rust_peak_growth_change_bytes": 9507
+    }
+  ],
+  "queue_counter_scope": {
+    "original_linear_computations": 79693,
+    "optimized_linear_computations": 391,
+    "original_wip_route_computations": 30611,
+    "optimized_wip_route_computations": 273
+  },
+  "output_integrity": {
+    "admin_maps": 391,
+    "admin_controls": 1564,
+    "all_reported_equality_checks": {
+      "reported": 285,
+      "failures": 0
+    },
+    "admin_json_sha256": "0f89911400b8ea39a1ae917683ad7fa763d42d64c69e035e0379109dac02ba55",
+    "worker_json_sha256": "d5e1d1d24e27ce7aa71fbfa400022d3be599da24a95eee819a7bd2eda38cc8d1"
+  },
+  "shared_readers_and_burst": [
+    {
+      "phase": "eight_concurrent_readers",
+      "mode": 0,
+      "runtime_threads": 4,
+      "completed_queue_evaluations": 1,
+      "wall_ms": 4309.4444,
+      "process_cpu_ms": 4265.625,
+      "same_arc": true,
+      "exact_json_equal": null
+    },
+    {
+      "phase": "revision_burst",
+      "mode": 0,
+      "runtime_threads": 4,
+      "completed_queue_evaluations": 2,
+      "wall_ms": 8586.0018,
+      "process_cpu_ms": 8468.75,
+      "same_arc": null,
+      "exact_json_equal": true
+    },
+    {
+      "phase": "eight_concurrent_readers",
+      "mode": 6,
+      "runtime_threads": 4,
+      "completed_queue_evaluations": 1,
+      "wall_ms": 298.79499999999996,
+      "process_cpu_ms": 265.625,
+      "same_arc": true,
+      "exact_json_equal": null
+    },
+    {
+      "phase": "revision_burst",
+      "mode": 6,
+      "runtime_threads": 4,
+      "completed_queue_evaluations": 5,
+      "wall_ms": 1487.7958,
+      "process_cpu_ms": 1406.25,
+      "same_arc": null,
+      "exact_json_equal": true
+    },
+    {
+      "phase": "eight_concurrent_readers",
+      "mode": 7,
+      "runtime_threads": 4,
+      "completed_queue_evaluations": 1,
+      "wall_ms": 294.2615,
+      "process_cpu_ms": 296.875,
+      "same_arc": true,
+      "exact_json_equal": null
+    },
+    {
+      "phase": "revision_burst",
+      "mode": 7,
+      "runtime_threads": 4,
+      "completed_queue_evaluations": 5,
+      "wall_ms": 1508.7861,
+      "process_cpu_ms": 1406.25,
+      "same_arc": null,
+      "exact_json_equal": true
+    },
+    {
+      "phase": "eight_concurrent_readers",
+      "mode": 0,
+      "runtime_threads": 1,
+      "completed_queue_evaluations": 1,
+      "wall_ms": 4259.9164,
+      "process_cpu_ms": 4203.125,
+      "same_arc": true,
+      "exact_json_equal": null
+    },
+    {
+      "phase": "revision_burst",
+      "mode": 0,
+      "runtime_threads": 1,
+      "completed_queue_evaluations": 2,
+      "wall_ms": 8695.5743,
+      "process_cpu_ms": 8640.625,
+      "same_arc": null,
+      "exact_json_equal": true
+    },
+    {
+      "phase": "eight_concurrent_readers",
+      "mode": 6,
+      "runtime_threads": 1,
+      "completed_queue_evaluations": 1,
+      "wall_ms": 304.2702,
+      "process_cpu_ms": 296.875,
+      "same_arc": true,
+      "exact_json_equal": null
+    },
+    {
+      "phase": "revision_burst",
+      "mode": 6,
+      "runtime_threads": 1,
+      "completed_queue_evaluations": 4,
+      "wall_ms": 1217.3795,
+      "process_cpu_ms": 1125.0,
+      "same_arc": null,
+      "exact_json_equal": true
+    },
+    {
+      "phase": "eight_concurrent_readers",
+      "mode": 7,
+      "runtime_threads": 1,
+      "completed_queue_evaluations": 1,
+      "wall_ms": 290.4854,
+      "process_cpu_ms": 281.25,
+      "same_arc": true,
+      "exact_json_equal": null
+    },
+    {
+      "phase": "revision_burst",
+      "mode": 7,
+      "runtime_threads": 1,
+      "completed_queue_evaluations": 5,
+      "wall_ms": 1491.0804,
+      "process_cpu_ms": 1406.25,
+      "same_arc": null,
+      "exact_json_equal": true
+    }
+  ],
+  "memory_caveat": "Allocation traffic is cumulative requested bytes, not RAM. Rust peak growth excludes existing live allocations, native allocations and OS RSS. Context estimates exclude allocator overhead. Heap-instrumented wall times are never used for speed claims.",
+  "stability_caveat": "The measured prototype retains both core and handler revision-chasing loops. Finite RAM-notification bursts complete, but continuous mutation delivery is not guaranteed until coherent bounded publication and handler cursors are implemented.",
+  "implementation_order": [
+    "Typed immutable ProjectionContext and borrowed/indexed topology/WIP views",
+    "One bounded CPU projector with commit-coherent input capture and truthful completed-version publication",
+    "Dependency-scoped invalidation with safe unknown-event fallback",
+    "Admin active-apparatus bootstrap, independent admin delta scope, conditional HTTP fallback and initial recovery"
+  ],
+  "base_backend_commit": "d52d332c4292bd84b25721af38bae9ebbdbedf03",
+  "publication": {
+    "kind": "Production projection optimization with an optional isolated reference benchmark",
+    "cargo_feature": "projection-research enables only the benchmark and per-service reference selector",
+    "enabled_in_default_build": true,
+    "measurement_scope": "Pre-publication local Windows clone investigation. Feature isolation and portable harness configuration were added afterward; these benchmarks were not rerun for the publication package.",
+    "dataset": "391 maps, 1564 admin controls, 3190 progress batches loaded for those maps; one immutable local business-data clone.",
+    "compilation_checks": "cargo check --locked --lib; cargo check --locked --features projection-research --example admin_projection_research",
+    "benchmark_command": "cargo run --locked --release --features projection-research --example admin_projection_research",
+    "environment": {
+      "MINI_ERP_DATABASE_URL": "Must point to the isolated clone at 127.0.0.1:5433/mini_rs_erp_new; never printed.",
+      "ERP_RESEARCH_ENV_FILE": "Optional local .env file; use it when running from a separate checkout.",
+      "ERP_RESEARCH_THREADS": "1 or 4 in the measured experiments; default 4.",
+      "ERP_RESEARCH_MODES": "Optional modes 0 (pure reference) and 1 (production cache); baseline 0 is required. Default 0,1.",
+      "ERP_RESEARCH_APPARATUS": "One canonical apparatus ID or unique suffix; default bosma_7.",
+      "ERP_RESEARCH_HEAP": "Build-time allocation instrumentation; rebuild with this variable absent for latency measurements.",
+      "ERP_RESEARCH_WRITE_SNAPSHOTS": "Default disabled; 1 enables private full snapshot output.",
+      "ERP_RESEARCH_OUTPUT_DIR": "Optional snapshot directory; default data/diagnostics/admin-projection-research, ignored by Git."
+    },
+    "safety": "Read-only PostgreSQL connections; no HTTP business mutations, deployments or database migrations. Existing revision retry loops are deliberately retained.",
+    "future_shipping_work": "Coherent bounded publication, handler cursors and admin delivery are separate changes; existing revision retry semantics are retained."
+  },
+  "production_safety": {
+    "context": "Explicit ProjectionMap borrows one immutable map; no pointer identities, thread-local state or global collected summaries.",
+    "retention": "Each context is dropped after one read projection. At most 256 route classes with keys capped at 4096 bytes, and two adjacency entries per map node; excess, oversized and stale identities compute normally without being retained.",
+    "identity": "Route classes include every field read by input routing and actionability, including complete bindings and session ownership witnesses.",
+    "write_paths": "Write validation uses the pure reference implementation. Database/schema, HTTP contracts and mutation locks are unchanged.",
+    "differential_validation": "6 graph variants and 1728 WIP variants compare cached/reference routes, topology and stage status. Admin/worker JSON, parallel readers, map edit invalidation and thread handoff/capacity are tested.",
+    "ci_hygiene": "Unchanged formatting debt is pinned by exact file SHA256 from main d52d332. Changed/new Rust must format; new production files have a 500-line cap and legacy files cannot exceed their pre-change formatted size."
+  },
+  "production_validation": {
+    "rust_domain_tests": {
+      "passed": 385,
+      "failed": 0,
+      "ignored": 2
+    },
+    "http_contracts": {
+      "cases": 689,
+      "failures": 0,
+      "routes": 305,
+      "generated_contracts": 109
+    },
+    "synthetic_latency": {
+      "build": "Rust debug build on local macOS; memory stores, not a production/PostgreSQL latency claim",
+      "maps": 64,
+      "batches": 2048,
+      "controls": 128,
+      "samples_each": 3,
+      "reference_mean_ms": 662.6324303333333,
+      "optimized_mean_ms": 67.89197200000001,
+      "speedup": 9.760099917753651,
+      "exact_snapshot_json_equal": true,
+      "samples": [
+        {
+          "batches": 2048,
+          "controls": 128,
+          "elapsed_ms": 658.921291,
+          "exact_json_equal": true,
+          "maps": 64,
+          "optimized": false,
+          "pass": 0,
+          "phase": "synthetic_admin_snapshot"
+        },
+        {
+          "batches": 2048,
+          "controls": 128,
+          "elapsed_ms": 66.3615,
+          "exact_json_equal": true,
+          "maps": 64,
+          "optimized": true,
+          "pass": 0,
+          "phase": "synthetic_admin_snapshot"
+        },
+        {
+          "batches": 2048,
+          "controls": 128,
+          "elapsed_ms": 65.701875,
+          "exact_json_equal": true,
+          "maps": 64,
+          "optimized": true,
+          "pass": 1,
+          "phase": "synthetic_admin_snapshot"
+        },
+        {
+          "batches": 2048,
+          "controls": 128,
+          "elapsed_ms": 667.278,
+          "exact_json_equal": true,
+          "maps": 64,
+          "optimized": false,
+          "pass": 1,
+          "phase": "synthetic_admin_snapshot"
+        },
+        {
+          "batches": 2048,
+          "controls": 128,
+          "elapsed_ms": 661.698,
+          "exact_json_equal": true,
+          "maps": 64,
+          "optimized": false,
+          "pass": 2,
+          "phase": "synthetic_admin_snapshot"
+        },
+        {
+          "batches": 2048,
+          "controls": 128,
+          "elapsed_ms": 71.61254100000001,
+          "exact_json_equal": true,
+          "maps": 64,
+          "optimized": true,
+          "pass": 2,
+          "phase": "synthetic_admin_snapshot"
+        }
+      ]
+    },
+    "database_integration": "No isolated live PostgreSQL instance was available. Database integration is not certified by these results; no schema or SQL changes are included."
+  }
+}

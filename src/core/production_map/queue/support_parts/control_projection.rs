@@ -1,6 +1,7 @@
 pub(super) struct QueueControlOrderInput<'a> {
     pub(super) order_id: &'a str,
     pub(super) order_map: &'a ProductionMapDefinition,
+    pub(super) projection: &'a chain::ProjectionMap<'a>,
     pub(super) batches: &'a [OrderProgressBatch],
     pub(super) opening_wip_records: &'a [OpeningWipRecord],
     pub(super) active_session: Option<&'a OrderRunSession>,
@@ -18,12 +19,13 @@ impl QueueControlOrderInput<'_> {
 
 pub(super) fn queue_control_order_input<'a>(
     order_id: &'a str,
-    order_map: &'a ProductionMapDefinition,
+    projection: &'a chain::ProjectionMap<'a>,
     apparatus: &str,
     batches: &'a [OrderProgressBatch],
     opening_wip_records: &'a [OpeningWipRecord],
     active_session: Option<&'a OrderRunSession>,
 ) -> QueueControlOrderInput<'a> {
+    let order_map = projection.map();
     let mut opening_wip_stage_node_id = None;
     let mut waiting_opening_wip_stage_node_ids = BTreeSet::new();
     for record in opening_wip_records {
@@ -36,7 +38,7 @@ pub(super) fn queue_control_order_input<'a>(
             continue;
         }
         let target_stage_node_ids =
-            opening_wip_target_stage_node_ids(order_map, &record.intake, apparatus);
+            opening_wip_target_stage_node_ids(projection, &record.intake, apparatus);
         if opening_wip_stage_node_id.is_none() {
             opening_wip_stage_node_id = target_stage_node_ids.first().cloned();
         }
@@ -46,11 +48,12 @@ pub(super) fn queue_control_order_input<'a>(
     QueueControlOrderInput {
         order_id,
         order_map,
+        projection,
         batches,
         opening_wip_records,
         active_session,
         waiting_reentry_stage_node_id: waiting_reentry_stage_node_id(
-            order_map, batches, order_id, apparatus,
+            projection, batches, order_id, apparatus,
         ),
         opening_wip_stage_node_id,
         waiting_opening_wip_stage_node_ids,
@@ -58,19 +61,18 @@ pub(super) fn queue_control_order_input<'a>(
 }
 
 fn opening_wip_target_stage_node_ids(
-    map: &ProductionMapDefinition,
+    projection: &chain::ProjectionMap<'_>,
     intake: &OpeningWipIntake,
     target_apparatus: &str,
 ) -> Vec<String> {
     if !intake.source_apparatus.trim().is_empty() {
-        let Some(source_stage) = chain::work_stage_for_station(
-            map,
-            &intake.source_apparatus,
-            &intake.resume_stage_node_id,
-        ) else {
+        let Some(source_stage) =
+            projection.work_stage(&intake.source_apparatus, &intake.resume_stage_node_id)
+        else {
             return Vec::new();
         };
-        return chain::next_work_stages_for_node(map, &source_stage.node_id)
+        return projection
+            .next_stages(&source_stage.node_id)
             .into_iter()
             .filter(|stage| {
                 stage.apparatus_id.as_deref().is_some_and(|apparatus_id| {
@@ -83,7 +85,8 @@ fn opening_wip_target_stage_node_ids(
     if !super::types::apparatus_ids_match(&intake.resume_apparatus, target_apparatus) {
         return Vec::new();
     }
-    chain::work_stage_for_station(map, target_apparatus, &intake.resume_stage_node_id)
+    projection
+        .work_stage(target_apparatus, &intake.resume_stage_node_id)
         .map(|stage| vec![stage.node_id.trim().to_string()])
         .unwrap_or_default()
 }
@@ -94,14 +97,17 @@ pub(super) struct QueueControlStageProjection {
 }
 
 pub(super) fn queue_control_stage_projection(
-    map: &ProductionMapDefinition,
+    projection: &chain::ProjectionMap<'_>,
     batches: &[OrderProgressBatch],
     order_id: &str,
     previous_stage: Option<&str>,
     apparatus: &str,
     stage_node_id: &str,
 ) -> QueueControlStageProjection {
-    let previous_stage = previous_stage.map(str::trim).filter(|value| !value.is_empty());
+    let map = projection.map();
+    let previous_stage = previous_stage
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     let mut has_waiting_previous_stage_wip = false;
     let mut input_contained_kadr_count = None;
     for batch in batches {
@@ -122,9 +128,13 @@ pub(super) fn queue_control_stage_projection(
         };
         if batch.order_id.trim() == order_id.trim()
             && super::wip_route::actionable_wip(batch)
-            && super::wip_route::resolve_wip_input_route(map, batch).is_ok_and(|route|
-                route.consumer_apparatus_ids.iter().any(|id| id == apparatus)
-                    && chain::stage_node_ids_match_for_map(map, &route.stage_node_id, stage_node_id))
+            && projection.route(batch).is_ok_and(|route| {
+                route
+                    .consumer_apparatus_ids
+                    .iter()
+                    .any(|id| id == apparatus)
+                    && chain::stage_node_ids_match_for_map(map, &route.stage_node_id, stage_node_id)
+            })
         {
             has_waiting_previous_stage_wip = true;
         }
@@ -133,4 +143,18 @@ pub(super) fn queue_control_stage_projection(
         has_waiting_previous_stage_wip,
         input_contained_kadr_count,
     }
+}
+
+// Preserve the first-map lookup semantics even for malformed duplicate IDs.
+pub(super) fn projections_by_order_id<'a>(
+    projections: &'a [chain::ProjectionMap<'a>],
+) -> std::collections::HashMap<&'a str, &'a chain::ProjectionMap<'a>> {
+    let mut result = std::collections::HashMap::new();
+    for projection in projections {
+        let id = projection.map().id.trim();
+        if !id.is_empty() {
+            result.entry(id).or_insert(projection);
+        }
+    }
+    result
 }
