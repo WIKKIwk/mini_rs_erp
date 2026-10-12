@@ -119,3 +119,93 @@ fn removed_target_with_one_canonical_successor_is_still_outstanding_input() {
     let remapped = batch(PRESS, "press", LAM2, "removed-lamination");
     assert!(unfinished(&map, LAM2, "lam2", &[remapped]));
 }
+
+fn local_report_has_input(
+    map: &ProductionMapDefinition,
+    batches: &[OrderProgressBatch],
+    updates: &[OrderProgressBatch],
+    ignored_batch_id: &str,
+) -> bool {
+    let canonical =
+        crate::core::apparatus_standard::test_support::standard_runtime_configurations()
+            .into_iter()
+            .find(|config| config.runtime.apparatus_id.as_str() == LAM2)
+            .unwrap();
+    let states = BTreeMap::from([(
+        PRESS.into(),
+        BTreeMap::from([(map.id.clone(), "completed".into())]),
+    )]);
+    has_available_previous_wips_for_local_report(
+        &map.id,
+        map,
+        LAM2,
+        &canonical,
+        &states,
+        batches,
+        updates,
+        &[],
+        &[],
+        ignored_batch_id,
+        "lam2",
+        Some(true),
+    )
+}
+
+#[test]
+fn waiting_layer_remainder_defers_local_final_report_without_reopening_production() {
+    let map = map();
+    let mut remainder = batch(PRESS, "press", LAM2, "lam2");
+    remainder.payload_json["origin"] = serde_json::json!("layer_remainder");
+    assert!(local_report_has_input(&map, &[remainder.clone()], &[], ""));
+    assert!(!unfinished(&map, LAM2, "lam2", &[remainder.clone()]));
+    assert!(!local_report_has_input(
+        &map,
+        &[remainder.clone()],
+        &[],
+        &remainder.batch_id,
+    ));
+}
+
+#[test]
+fn local_final_report_only_counts_actionable_layer_remainders_for_this_stage() {
+    let map = map();
+    let mut remainder = batch(PRESS, "press", LAM2, "lam2");
+    remainder.payload_json["origin"] = serde_json::json!("layer_remainder");
+    for status in [
+        OrderProgressBatchWipStatus::InUse,
+        OrderProgressBatchWipStatus::Processed,
+    ] {
+        let mut unavailable = remainder.clone();
+        unavailable.wip_status = status;
+        assert!(!local_report_has_input(&map, &[unavailable], &[], ""));
+    }
+    let mut other_order = remainder.clone();
+    other_order.order_id = "other-order".into();
+    assert!(!local_report_has_input(&map, &[other_order], &[], ""));
+    let mut other_stage = remainder.clone();
+    other_stage.payload_json["stage_node_id"] = serde_json::json!("lam1");
+    other_stage.payload_json["next_stage_node_id"] = serde_json::json!("rezka");
+    other_stage.apparatus = LAM1.into();
+    other_stage.next_apparatus = REZKA.into();
+    assert!(!local_report_has_input(&map, &[other_stage], &[], ""));
+    let mut claimed = remainder;
+    claimed.used_by_session_id = "peer-session".into();
+    claimed.used_by_apparatus = LAM1.into();
+    assert!(!local_report_has_input(&map, &[claimed], &[], ""));
+}
+
+#[test]
+fn local_final_report_uses_latest_layer_remainder_status() {
+    let map = map();
+    let mut remainder = batch(PRESS, "press", LAM2, "lam2");
+    remainder.payload_json["origin"] = serde_json::json!("layer_remainder");
+    let mut processed = remainder.clone();
+    processed.wip_status = OrderProgressBatchWipStatus::Processed;
+    assert!(!local_report_has_input(
+        &map,
+        &[remainder.clone()],
+        &[processed.clone()],
+        "",
+    ));
+    assert!(local_report_has_input(&map, &[processed], &[remainder], ""));
+}

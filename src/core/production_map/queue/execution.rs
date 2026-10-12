@@ -922,6 +922,30 @@ fn has_available_previous_wips_for_local_report(
     opening_wip_batch_updates: &[OpeningWipBatch], ignored_batch_id: &str, stage_node_id: &str,
     upstream_closed: Option<bool>,
 ) -> bool {
+    // Returned layers remain reusable physical input even though they are
+    // excluded from production totals and operation completion projections.
+    let latest_batches = progress_batches
+        .iter()
+        .chain(progress_batch_updates)
+        .map(|batch| (batch.batch_id.trim(), batch))
+        .collect::<BTreeMap<_, _>>();
+    if latest_batches.values().any(|batch| {
+        batch.is_layer_remainder()
+            && batch.order_id.trim() == order_id.trim()
+            && batch.batch_id.trim() != ignored_batch_id.trim()
+            && super::super::wip_route::actionable_wip(batch)
+            && super::super::wip_route::resolve_wip_input_route(order_map, batch)
+                .is_ok_and(|route| {
+                    route.consumer_apparatus_ids.iter().any(|id| id == apparatus)
+                        && chain::stage_node_ids_match_for_map(
+                            order_map,
+                            &route.stage_node_id,
+                            stage_node_id,
+                        )
+                })
+    }) {
+        return true;
+    }
     // A peer's claimed roll keeps the operation open, but is not work this
     // machine can scan next and must not suppress its own final accounting.
     let batches = progress_batches.iter().filter(|b| b.wip_status != OrderProgressBatchWipStatus::InUse

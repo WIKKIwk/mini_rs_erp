@@ -207,6 +207,115 @@ async fn remainder_is_inventory_without_duplicate_production_or_reopened_stage()
 }
 
 #[tokio::test]
+async fn waiting_remainder_keeps_roll_completion_partial_until_last_input() {
+    let (service, store) = fixture().await;
+    let mut current = roll("current", "");
+    current.wip_status = OrderProgressBatchWipStatus::Waiting;
+    current.processed_by_apparatus.clear();
+    current.processed_by_session_id.clear();
+    store.put_order_progress_batch(current).await.unwrap();
+    service
+        .apply_apparatus_queue_action_with_progress(
+            LAM,
+            ORDER,
+            queue_state::ApparatusQueueAction::Start,
+            &[LAM.into()],
+            actor(),
+            QueueProgressInput {
+                progress_batch_id: "current".into(),
+                qr_payload: "qr-current".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let controls = service.queue_action_controls().await.unwrap();
+    assert!(!controls[LAM][ORDER].complete_requires_full_report);
+    assert!(controls[LAM][ORDER]
+        .allowed_actions
+        .contains(&queue_state::ApparatusQueueAction::Merge));
+
+    let roll_report = QueueProgressInput {
+        produced_qty: Some(100.0),
+        uom: "m".into(),
+        finished_goods_kg: Some(10.0),
+        finished_goods_meter: Some(100.0),
+        bobina_kg: Some(1.0),
+        ..Default::default()
+    };
+    let completed = service
+        .apply_apparatus_queue_action_with_progress(
+            LAM,
+            ORDER,
+            queue_state::ApparatusQueueAction::Complete,
+            &[LAM.into()],
+            actor(),
+            roll_report.clone(),
+        )
+        .await
+        .expect("another reusable layer allows roll completion without a full report");
+    assert!(
+        completed
+            .session
+            .unwrap()
+            .payload_json
+            .get("stage_work_report")
+            .is_none()
+    );
+    assert_eq!(
+        store
+            .progress_batch("remainder")
+            .await
+            .unwrap()
+            .unwrap()
+            .wip_status,
+        OrderProgressBatchWipStatus::Waiting,
+    );
+
+    service
+        .apply_apparatus_queue_action_with_progress(
+            LAM,
+            ORDER,
+            queue_state::ApparatusQueueAction::Start,
+            &[LAM.into()],
+            actor(),
+            QueueProgressInput {
+                progress_batch_id: "remainder".into(),
+                qr_payload: "qr-remainder".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("the remaining layer can be scanned for the next roll");
+    let controls = service.queue_action_controls().await.unwrap();
+    assert!(controls[LAM][ORDER].complete_requires_full_report);
+    let error = service
+        .apply_apparatus_queue_action_with_progress(
+            LAM,
+            ORDER,
+            queue_state::ApparatusQueueAction::Complete,
+            &[LAM.into()],
+            actor(),
+            roll_report,
+        )
+        .await
+        .expect_err("the final roll still requires the general completion report");
+    assert!(matches!(
+        error,
+        ProductionMapError::LaminatsiyaCompletionMetricsRequired
+    ));
+    assert_eq!(
+        store
+            .progress_batch("original")
+            .await
+            .unwrap()
+            .unwrap()
+            .finished_goods_kg,
+        Some(50.0),
+    );
+}
+
+#[tokio::test]
 async fn remainder_correction_is_locked_and_qr_lineage_points_to_physical_source() {
     let (service, store) = fixture().await;
     let error = service.correct_progress_batch(serde_json::from_value(json!({
