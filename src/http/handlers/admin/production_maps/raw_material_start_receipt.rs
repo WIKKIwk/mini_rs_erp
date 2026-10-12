@@ -180,12 +180,18 @@ async fn receipt_context(
         .get(apparatus)
         .and_then(|orders| orders.get(order_id))
         .ok_or_else(|| conflict("queue_action_not_allowed"))?;
-    if !control
+    let start_receipt_allowed = control
         .allowed_actions
         .contains(&queue_state::ApparatusQueueAction::Start)
-        || control.interaction.start_materials_mode
-            != crate::core::production_map::ApparatusQueueStartMaterialsMode::ScanRequired
-    {
+        && control.interaction.start_materials_mode
+            == crate::core::production_map::ApparatusQueueStartMaterialsMode::ScanRequired;
+    let intake_receipt_allowed = control.interaction.material_intake_allowed
+        && state
+            .production_maps
+            .raw_material_intake_is_available(order_id, apparatus)
+            .await
+            .map_err(production_map_error)?;
+    if !start_receipt_allowed && !intake_receipt_allowed {
         return Err(conflict("queue_action_not_allowed"));
     }
     let assignments = state
@@ -200,6 +206,25 @@ async fn receipt_context(
                 && assignment.barcode.eq_ignore_ascii_case(barcode)
         })
         .ok_or_else(|| conflict("raw_material_mismatch"))?;
+    if intake_receipt_allowed {
+        let groups = state
+            .admin
+            .item_group_tree()
+            .await
+            .map_err(|_| server_error("item group tree fetch failed"))?;
+        if !state
+            .production_maps
+            .raw_material_matches_apparatus_rule(
+                apparatus,
+                &assignment.item_group,
+                super::raw_material_details::item_group_path(&groups, &assignment.item_group),
+            )
+            .await
+            .map_err(production_map_error)?
+        {
+            return Err(conflict("raw_material_group_not_allowed"));
+        }
+    }
     let stock = state
         .gscale
         .raw_material_stock_by_barcode(barcode)

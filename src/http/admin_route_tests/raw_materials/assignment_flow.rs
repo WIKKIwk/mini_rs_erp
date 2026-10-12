@@ -1118,9 +1118,13 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
         .expect("additional material intake candidates");
     assert_eq!(intake_candidates.status(), StatusCode::OK);
     let intake_candidates_body = json_body(intake_candidates).await;
-    assert_eq!(intake_candidates_body.as_array().map(Vec::len), Some(1));
-    assert_eq!(intake_candidates_body[0]["barcode"], "30CC");
-    assert_eq!(intake_candidates_body[0]["stock_status"], "available");
+    let pending = intake_candidates_body.as_array().unwrap();
+    assert_eq!(pending.len(), 2);
+    let ready = pending.iter().find(|item| item["barcode"] == "30CC").unwrap();
+    assert_eq!(ready["stock_status"], "available");
+    assert_eq!(ready["execution_status"], "ready");
+    let awaiting = pending.iter().find(|item| item["barcode"] == "30EE").unwrap();
+    assert_eq!(awaiting["execution_status"], "awaiting_delivery");
 
     let not_staged_intake = router
         .clone()
@@ -1197,13 +1201,10 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
         .await
         .expect("candidates after additional material intake");
     assert_eq!(candidates_after_intake.status(), StatusCode::OK);
-    assert_eq!(
-        json_body(candidates_after_intake)
-            .await
-            .as_array()
-            .map(Vec::len),
-        Some(0)
-    );
+    let remaining_candidates = json_body(candidates_after_intake).await;
+    assert_eq!(remaining_candidates.as_array().map(Vec::len), Some(1));
+    assert_eq!(remaining_candidates[0]["barcode"], "30EE");
+    assert_eq!(remaining_candidates[0]["execution_status"], "awaiting_delivery");
 
     let repeated_intake = router
         .clone()

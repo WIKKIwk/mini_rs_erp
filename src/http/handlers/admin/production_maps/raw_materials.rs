@@ -1334,12 +1334,6 @@ pub async fn raw_material_intake_candidates(
         return Ok(json_response(Vec::<serde_json::Value>::new()));
     }
 
-    let staged_barcodes =
-        raw_material_state_barcodes_for_order_apparatus(&state, order_id, apparatus)
-            .await?
-            .into_iter()
-            .map(|barcode| barcode.trim().to_ascii_uppercase())
-            .collect::<BTreeSet<_>>();
     let groups = state
         .admin
         .item_group_tree()
@@ -1353,7 +1347,6 @@ pub async fn raw_material_intake_candidates(
     assignments.retain(|assignment| {
         assignment.order_id.trim() == order_id
             && apparatus_id_matches_text(&assignment.apparatus_id, apparatus)
-            && staged_barcodes.contains(&assignment.barcode.trim().to_ascii_uppercase())
     });
 
     let mut candidates = Vec::new();

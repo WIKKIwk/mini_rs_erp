@@ -143,6 +143,182 @@ fn receipt_body(deliverer: &str) -> String {
 }
 
 #[tokio::test]
+async fn active_material_receipt_lists_unstaged_roll_and_records_delivery_before_intake() {
+    let (state, worker, store) = fixture().await;
+    let router = build_router(state.clone());
+    let initial_receipt = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            ENDPOINT,
+            &worker,
+            &receipt_body("allowed-mover"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(initial_receipt.status(), StatusCode::OK);
+    let started = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker,
+            &serde_json::json!({"order_id":ORDER,"apparatus":APPARATUS,"action":"start",
+            "material_barcodes":["30AA"]})
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        started.status(),
+        StatusCode::OK,
+        "{:?}",
+        json_body(started).await
+    );
+    store
+        .seed_assets(vec![InventoryAsset {
+            kind: InventoryAssetKind::RawMaterial,
+            asset_ref: "raw:30CC".into(),
+            custody_warehouse_id: "warehouse:kalidor".into(),
+            custody_warehouse: "Kalidor".into(),
+            item_code: "INK-WHITE".into(),
+            item_name: "White ink".into(),
+            identifier: "30CC".into(),
+            qty: 8.0,
+            uom: "Kg".into(),
+            status: "available".into(),
+            physical_location: InventoryLocationRef {
+                id: "location:warehouse".into(),
+                kind: InventoryLocationKind::Warehouse,
+                name: "Kalidor".into(),
+            },
+            transfer_id: String::new(),
+            placement_version: 0,
+        }])
+        .await;
+    let admin = session(&state, PrincipalRole::Admin).await;
+    let intake_body =
+        serde_json::json!({"order_id":ORDER,"apparatus":APPARATUS,"barcode":"30CC"}).to_string();
+    let assigned = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/raw-material-assignments",
+            &admin,
+            &intake_body,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        assigned.status(),
+        StatusCode::OK,
+        "{:?}",
+        json_body(assigned).await
+    );
+    let candidates_url = format!(
+        "/v1/mobile/admin/raw-material-intake-candidates?order_id={ORDER}&apparatus={APPARATUS}"
+    );
+    let candidates = router
+        .clone()
+        .oneshot(request_with_body("GET", &candidates_url, &worker, ""))
+        .await
+        .unwrap();
+    assert_eq!(candidates.status(), StatusCode::OK);
+    let pending = json_body(candidates).await;
+    assert_eq!(pending.as_array().unwrap().len(), 1);
+    assert_eq!(pending[0]["barcode"], "30CC");
+    assert_eq!(pending[0]["execution_status"], "awaiting_delivery");
+    let premature = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/raw-material-intake",
+            &worker,
+            &intake_body,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(premature.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(premature).await["error"],
+        "raw_material_state_not_ready"
+    );
+    let preview = router
+        .clone()
+        .oneshot(request_with_body(
+            "GET",
+            &format!("{ENDPOINT}?order_id={ORDER}&apparatus={APPARATUS}&barcode=30CC"),
+            &worker,
+            "",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        preview.status(),
+        StatusCode::OK,
+        "{:?}",
+        json_body(preview).await
+    );
+    let receipt = serde_json::json!({"order_id":ORDER,"apparatus":APPARATUS,"barcode":"30CC",
+        "delivered_by_role":"qolipchi","delivered_by_ref":"allowed-mover",
+        "idempotency_key":"active-delivery-receipt"})
+    .to_string();
+    for _ in 0..2 {
+        let response = router
+            .clone()
+            .oneshot(request_with_body("POST", ENDPOINT, &worker, &receipt))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "{:?}",
+            json_body(response).await
+        );
+    }
+    let audit = store
+        .delivery_receipt_audit("active-delivery-receipt")
+        .await
+        .unwrap();
+    assert_eq!(audit["received_by"]["ref"], "delivery-worker");
+    assert_eq!(audit["delivered_by"]["ref"], "allowed-mover");
+    let received = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/raw-material-intake",
+            &worker,
+            &intake_body,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(received.status(), StatusCode::OK);
+    let received = json_body(received).await;
+    assert_eq!(received["stock_status"], "in_use");
+    assert_eq!(received["received_qty"], 8.0);
+    let duplicate = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/raw-material-intake",
+            &worker,
+            &intake_body,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(duplicate.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(duplicate).await["error"],
+        "raw_material_stock_unavailable"
+    );
+    let pending = router
+        .oneshot(request_with_body("GET", &candidates_url, &worker, ""))
+        .await
+        .unwrap();
+    assert_eq!(json_body(pending).await.as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
 async fn material_start_receipt_filters_deliverers_receives_once_and_enables_start_scan() {
     let (state, worker, store) = fixture().await;
     let router = build_router(state.clone());
