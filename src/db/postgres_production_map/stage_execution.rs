@@ -191,6 +191,28 @@ pub(super) async fn validate_input_claims_tx(
     tx: &mut Transaction<'_, Postgres>,
     write: &QueueActionProgressWrite,
 ) -> Result<(), ProductionMapError> {
+    if write.event.action == queue_state::ApparatusQueueAction::Resume
+        && let Some(session) = &write.session
+    {
+        let raw_released = sqlx::query_scalar::<_, bool>(
+            "SELECT COALESCE(payload_json->>'lamination_astatka_raw_released', '') = 'true'
+             FROM mini_order_run_sessions
+             WHERE session_id = $1 AND order_id = $2 AND canonical_apparatus_id = $3
+             FOR UPDATE",
+        ).bind(&session.session_id).bind(&write.event.order_id).bind(&write.apparatus)
+            .fetch_optional(&mut **tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
+        if raw_released == Some(true)
+            && (write.event.payload_json.get("lamination_raw_reacquisition")
+                .and_then(serde_json::Value::as_bool) != Some(true)
+                || !write.raw_material_stock_transitions.iter().any(|transition| {
+                    transition.kind == RawMaterialStockTransitionKind::InUse
+                        && transition.order_id == write.event.order_id
+                        && !transition.barcodes.is_empty()
+                }))
+        {
+            return Err(ProductionMapError::RawMaterialScanRequired);
+        }
+    }
     for batch in &write.progress_batch_updates {
         if batch.wip_status != OrderProgressBatchWipStatus::InUse {
             continue;
@@ -232,20 +254,24 @@ async fn validate_wip_route_claim_tx(
     current: &OrderProgressBatch,
     proposed: &OrderProgressBatch,
 ) -> Result<(), ProductionMapError> {
-    let resumed_layer = current.is_layer_remainder()
-        && write.event.action == queue_state::ApparatusQueueAction::Resume
-        && current.wip_status == OrderProgressBatchWipStatus::Waiting;
-    if resumed_layer {
+    let resumed_input = write.event.action == queue_state::ApparatusQueueAction::Resume
+        && current.wip_status == OrderProgressBatchWipStatus::Waiting
+        && (current.is_layer_remainder()
+            || write.event.payload_json.get("wip_input_expected_batch").is_some());
+    if resumed_input {
         let session = write.session.as_ref().ok_or(ProductionMapError::WipRouteChanged)?;
         let detached = sqlx::query_scalar::<_, bool>(
             "SELECT status IN ('paused', 'roll_detached')
                 AND COALESCE(payload_json->>'input_progress_batch_id', '') = ''
-                AND payload_json->>'layer_remainder_detached_input_batch_id' = $4
+                AND (COALESCE(payload_json->>'lamination_astatka_shift_closed', '') = 'true'
+                  OR ($5 AND COALESCE(payload_json->>'layer_remainder_detached_input_batch_id', '') = $4))
              FROM mini_order_run_sessions
              WHERE session_id = $1 AND order_id = $2 AND canonical_apparatus_id = $3
+               AND stage_node_id = $6
              FOR UPDATE",
         ).bind(&session.session_id).bind(&write.event.order_id).bind(&write.apparatus)
-            .bind(&current.parent_batch_id).fetch_optional(&mut **tx).await
+            .bind(&current.parent_batch_id).bind(current.is_layer_remainder())
+            .bind(&session.stage_node_id).fetch_optional(&mut **tx).await
             .map_err(|_| ProductionMapError::StoreFailed)?;
         if detached != Some(true) {
             return Err(ProductionMapError::ProgressBatchNotResumable);
@@ -268,7 +294,7 @@ async fn validate_wip_route_claim_tx(
     // next-stage route. Start/Merge may revisit the same physical apparatus
     // at a different graph occurrence, so canonical apparatus equality alone
     // must never bypass their map and source witness checks.
-    if !resumed_layer && current.apparatus == write.apparatus
+    if !resumed_input && current.apparatus == write.apparatus
         && !matches!(
             write.event.action,
             queue_state::ApparatusQueueAction::Start | queue_state::ApparatusQueueAction::Merge
@@ -276,7 +302,7 @@ async fn validate_wip_route_claim_tx(
     {
         return Ok(());
     }
-    if !resumed_layer && !matches!(
+    if !resumed_input && !matches!(
         write.event.action,
         queue_state::ApparatusQueueAction::Start | queue_state::ApparatusQueueAction::Merge
     ) {

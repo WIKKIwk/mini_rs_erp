@@ -179,6 +179,7 @@ impl QueueActionCommand {
                 qolip_codes,
             },
             progress: QueueProgressInput {
+                lamination_layer_dispositions_attached: false,
                 complete_without_output: request.complete_without_output,
                 freeze_request_id: request.freeze_request_id,
                 freeze_with_issue: request.freeze_with_issue,

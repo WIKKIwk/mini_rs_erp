@@ -168,6 +168,15 @@ pub(super) fn session_progress_links(session: &OrderRunSession) -> SessionProgre
     }
 }
 
+pub(crate) fn lamination_input_was_released(session: &OrderRunSession) -> bool {
+    matches!(session.status, OrderRunStatus::Paused | OrderRunStatus::RollDetached)
+        && session_progress_links(session).batch_id.trim().is_empty()
+        && (session.payload_json.get("lamination_astatka_shift_closed")
+            .and_then(serde_json::Value::as_bool) == Some(true)
+            || session.payload_json.get("layer_remainder_detached_input_batch_id")
+                .and_then(serde_json::Value::as_str).is_some_and(|id| !id.trim().is_empty()))
+}
+
 pub(super) fn progress_links_from_batch(batch: &OrderProgressBatch) -> SessionProgressLinks {
     SessionProgressLinks {
         batch_id: batch.batch_id.clone(),

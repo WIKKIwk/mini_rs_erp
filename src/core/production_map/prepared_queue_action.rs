@@ -35,6 +35,58 @@ pub struct PreparedApparatusQueueAction {
 }
 
 impl PreparedApparatusQueueAction {
+    /// Build the ordinary Pause/Complete write for an atomic layer return.
+    pub(crate) fn into_lamination_report_queue_write(mut self) -> super::QueueActionProgressWrite {
+        let completing = self.event.action == super::queue_state::ApparatusQueueAction::Complete;
+        // The existing Astatka report owns these counters. In the zero-output
+        // handoff they validated Pause, but must not become a second report in
+        // the ordinary progress event.
+        if !completing && let Some(event) = &mut self.progress_event {
+            event.lamination_print_leftover_rolls = None;
+            event.lamination_film_leftover_rolls = None;
+            event.total_waste = None;
+            for field in [
+                "lamination_print_leftover_rolls",
+                "lamination_film_leftover_rolls",
+                "total_waste",
+            ] {
+                event.payload_json[field] = serde_json::Value::Null;
+            }
+        }
+        if !completing && let Some(session) = &mut self.session {
+            for field in [
+                "lamination_print_leftover_rolls",
+                "lamination_film_leftover_rolls",
+                "total_waste",
+            ] {
+                session.payload_json[field] = serde_json::Value::Null;
+            }
+        }
+        super::QueueActionProgressWrite {
+            apparatus: self.apparatus,
+            map_update: self.claimed_alternative_map,
+            states: self.states,
+            sequence_updates: self.sequence_updates,
+            event: self.event,
+            session: self.session,
+            progress_event: self.progress_event,
+            progress_batch: self.progress_batch,
+            progress_batches: self.progress_batches,
+            progress_batch_updates: self.progress_batch_updates,
+            opening_wip_batch_updates: self.opening_wip_batch_updates,
+            raw_material_stock_transitions: Vec::new(),
+            qolip_checkouts: Vec::new(),
+            returned_paint_report: None,
+            order_control_update: self.order_control_update,
+            schedule_reservation_status: Some(if completing {
+                super::ApparatusScheduleStatus::Completed
+            } else {
+                super::ApparatusScheduleStatus::Paused
+            }),
+            print_preflight_hold_id: self.print_preflight_hold_id,
+            print_preflight_cancel_hold_id: self.print_preflight_cancel_hold_id,
+        }
+    }
     pub(crate) fn attach_active_paddon(&mut self) {
         if !self.progress_output_batches().is_empty() {
             self.event.payload_json["use_active_paddon"] = serde_json::json!(true);

@@ -80,12 +80,20 @@ pub(super) fn validated_progress_metrics(
             None
         },
         lamination_print_leftover_rolls: if is_complete && !allow_partial_station_completion {
-            valid_optional_progress_qty(progress.lamination_print_leftover_rolls)?
+            if is_laminatsiya && progress.lamination_layer_dispositions_attached {
+                valid_non_negative_optional_progress_qty(progress.lamination_print_leftover_rolls)?
+            } else {
+                valid_optional_progress_qty(progress.lamination_print_leftover_rolls)?
+            }
         } else {
             None
         },
         lamination_film_leftover_rolls: if is_complete && !allow_partial_station_completion {
-            valid_optional_progress_qty(progress.lamination_film_leftover_rolls)?
+            if is_laminatsiya && progress.lamination_layer_dispositions_attached {
+                valid_non_negative_optional_progress_qty(progress.lamination_film_leftover_rolls)?
+            } else {
+                valid_optional_progress_qty(progress.lamination_film_leftover_rolls)?
+            }
         } else {
             None
         },
@@ -118,7 +126,11 @@ pub(super) fn validated_progress_metrics(
         {
             None
         } else {
-            valid_optional_progress_qty(progress.total_waste)?
+            if is_laminatsiya && progress.lamination_layer_dispositions_attached {
+                valid_non_negative_optional_progress_qty(progress.total_waste)?
+            } else {
+                valid_optional_progress_qty(progress.total_waste)?
+            }
         },
         finished_goods_kg: if is_rezka {
             valid_optional_progress_qty(progress.finished_goods_kg.or(progress.gross_qty))?

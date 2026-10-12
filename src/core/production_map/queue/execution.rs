@@ -435,7 +435,10 @@ impl ProductionMapService {
                 event.payload_json["stage_work_report_submitted"] = serde_json::json!(true);
             }
         }
-        if matches!(queue_action, queue_state::ApparatusQueueAction::Start | queue_state::ApparatusQueueAction::Merge)
+        // Resume can claim a returned lamination input just like Start/Merge.
+        // Forward its trusted witnesses to the queue write so the transaction
+        // can revalidate the source and route before changing ownership.
+        if matches!(queue_action, queue_state::ApparatusQueueAction::Start | queue_state::ApparatusQueueAction::Merge | queue_state::ApparatusQueueAction::Resume)
             && let Some(input_event) = &progress.progress_event
         {
             for key in ["wip_input_map_fingerprint", "wip_input_expected_batch"] {

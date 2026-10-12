@@ -12,6 +12,15 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
     async fn record_layer_remainder(&self, input: crate::core::production_map::LayerRemainderInput, actor: QueueActionActor) -> Result<crate::core::production_map::LayerRemainderRecord, ProductionMapError> {
         PostgresProductionMapStore::record_layer_remainder(self, input, actor).await
     }
+    async fn laminatsiya_astatka_commit_by_request_id(&self, actor_ref: &str, request_id: &str) -> Result<Option<(serde_json::Value,crate::core::production_map::LaminatsiyaAstatkaCommitResult)>,ProductionMapError> {
+        PostgresProductionMapStore::laminatsiya_astatka_commit_by_request_id(self,actor_ref,request_id).await
+    }
+    async fn commit_laminatsiya_astatka(&self, request_id:String, request_json:serde_json::Value,
+        report:Option<LaminatsiyaAstatkaReport>, expected_session:OrderRunSession, actor:QueueActionActor,
+        queue_write:Option<QueueActionProgressWrite>,remainders:Vec<crate::core::production_map::LayerRemainderInput>,
+    ) -> Result<crate::core::production_map::LaminatsiyaAstatkaCommitResult,ProductionMapError> {
+        PostgresProductionMapStore::commit_laminatsiya_astatka(self,request_id,request_json,report,expected_session,actor,queue_write,remainders).await
+    }
     async fn paddon_management_settings(&self) -> Result<PaddonManagementSettings, ProductionMapError> {
         paddon_management::load(&self.pool).await
     }

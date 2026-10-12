@@ -14,7 +14,7 @@ use super::super::progress::{
 use super::super::service::QueueProgressRecords;
 use super::super::service_progress::ProgressBuildReadSnapshot;
 use super::super::service_progress_support::{
-    bosma_closing_output, session_progress_links, validate_bosma_closing_metrics,
+    bosma_closing_output, lamination_input_was_released, session_progress_links, validate_bosma_closing_metrics,
     wip_batch_was_consumed_by_producer,
 };
 use super::super::service_queue_support::*;
@@ -1225,6 +1225,21 @@ impl ProductionMapService {
                         interaction.material_intake_allowed = control == OrderControlState::Active;
                         interaction.assigned_materials_display_only =
                             control != OrderControlState::Active;
+                        if is_laminatsiya && control == OrderControlState::Active {
+                            interaction.resume_input_required = previous_stage.is_some()
+                                && active_session.is_some_and(lamination_input_was_released);
+                            if interaction.resume_input_required {
+                                interaction.previous_wip_mode = previous_wip_mode;
+                                interaction.opening_wip_mode = ApparatusQueuePreviousWipMode::NotRequired;
+                            }
+                            if active_session.is_some_and(|session| session.payload_json
+                                .get("lamination_astatka_raw_released")
+                                .and_then(serde_json::Value::as_bool) == Some(true))
+                            {
+                                interaction.start_materials_mode = ApparatusQueueStartMaterialsMode::ScanRequired;
+                                interaction.material_scan_required = true;
+                            }
+                        }
                         if !active_order_is_this {
                             interaction.blocking_reason_code = "apparatus_busy".to_string();
                         }

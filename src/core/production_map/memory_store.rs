@@ -751,8 +751,7 @@ impl MemoryProductionMapStore {
                 .map_err(|_| ProductionMapError::WipRouteChanged)?;
             let current = self.progress_batch(&expected.batch_id).await?
                 .ok_or(ProductionMapError::WipRouteChanged)?;
-            if current.is_layer_remainder()
-                && write.event.action == queue_state::ApparatusQueueAction::Resume
+            if write.event.action == queue_state::ApparatusQueueAction::Resume
             {
                 let proposed_session = write.session.as_ref().ok_or(ProductionMapError::WipRouteChanged)?;
                 let session = self.order_run_session(&proposed_session.session_id).await?
@@ -760,8 +759,11 @@ impl MemoryProductionMapStore {
                 if !matches!(session.status, OrderRunStatus::Paused | OrderRunStatus::RollDetached)
                     || session.payload_json.get("input_progress_batch_id")
                         .and_then(serde_json::Value::as_str).is_some_and(|id| !id.trim().is_empty())
-                    || session.payload_json.get("layer_remainder_detached_input_batch_id")
-                        .and_then(serde_json::Value::as_str) != Some(current.parent_batch_id.as_str())
+                    || (session.payload_json.get("lamination_astatka_shift_closed")
+                        .and_then(serde_json::Value::as_bool) != Some(true)
+                        && (!current.is_layer_remainder()
+                            || session.payload_json.get("layer_remainder_detached_input_batch_id")
+                                .and_then(serde_json::Value::as_str) != Some(current.parent_batch_id.as_str())))
                 {
                     return Err(ProductionMapError::ProgressBatchNotResumable);
                 }

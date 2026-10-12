@@ -190,6 +190,20 @@ fn is_warehouse_processing_marker(value: &str) -> bool {
 
 #[async_trait]
 pub trait ProductionMapStorePort: Send + Sync {
+    async fn laminatsiya_astatka_commit_by_request_id(
+        &self, _actor_ref: &str, _request_id: &str,
+    ) -> StoreResult<Option<(serde_json::Value, super::LaminatsiyaAstatkaCommitResult)>> {
+        Err(ProductionMapError::StoreFailed)
+    }
+    #[allow(clippy::too_many_arguments)]
+    async fn commit_laminatsiya_astatka(
+        &self, _request_id: String, _request_json: serde_json::Value,
+        _report: Option<LaminatsiyaAstatkaReport>, _expected_session: OrderRunSession,
+        _actor: QueueActionActor, _queue_write: Option<QueueActionProgressWrite>,
+        _remainders: Vec<super::LayerRemainderInput>,
+    ) -> StoreResult<super::LaminatsiyaAstatkaCommitResult> {
+        Err(ProductionMapError::StoreFailed)
+    }
     async fn layer_remainder_sources(&self, _apparatus: &str, _order_id: &str) -> StoreResult<Vec<super::LayerRemainderSource>> { Err(ProductionMapError::StoreFailed) }
     async fn layer_remainder_history(&self, _apparatus: &str, _order_id: &str) -> StoreResult<Vec<super::LayerRemainderRecord>> { Err(ProductionMapError::StoreFailed) }
     async fn layer_remainder_by_id(&self, _id: &str) -> StoreResult<Option<super::LayerRemainderRecord>> { Err(ProductionMapError::StoreFailed) }

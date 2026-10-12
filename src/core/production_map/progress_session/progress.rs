@@ -819,6 +819,7 @@ impl RezkaFrameProgressInput {
         inherit_global_waste: bool,
     ) -> QueueProgressInput {
         QueueProgressInput {
+            lamination_layer_dispositions_attached: false,
             complete_without_output: false,
             freeze_request_id: base.freeze_request_id.clone(),
             freeze_with_issue: base.freeze_with_issue,
@@ -878,6 +879,8 @@ impl RezkaFrameProgressInput {
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct QueueProgressInput {
+    /// Set only by the atomic lamination report after validating every physical layer.
+    pub lamination_layer_dispositions_attached: bool,
     /// Close an already recorded Bosma output without manufacturing another roll.
     /// progress_batch_id identifies the detached output shown in the server contract.
     pub complete_without_output: bool,

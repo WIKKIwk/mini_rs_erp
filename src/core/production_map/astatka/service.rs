@@ -202,7 +202,7 @@ impl ProductionMapService {
         Ok(report)
     }
 
-    async fn astatka_order_id(&self, order_id: &str) -> Result<String, ProductionMapError> {
+    pub(super) async fn astatka_order_id(&self, order_id: &str) -> Result<String, ProductionMapError> {
         self.store
             .maps()
             .await?
@@ -212,7 +212,7 @@ impl ProductionMapService {
             .ok_or(ProductionMapError::MapNotFound)
     }
 
-    async fn astatka_initial_from_at(
+    pub(super) async fn astatka_initial_from_at(
         &self,
         order_id: &str,
         apparatus: &str,

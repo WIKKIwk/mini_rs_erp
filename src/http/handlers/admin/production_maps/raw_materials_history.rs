@@ -177,11 +177,23 @@ pub async fn raw_material_assignment_lookup(
             Capability::AdminAccess,
             Capability::ProductionMapManage,
             Capability::RawMaterialAssign,
+            Capability::ApparatusQueueManage,
         ],
     )
     .await?;
     if method != Method::GET {
         return Err(method_not_allowed());
+    }
+    if query.barcode.trim().is_empty() {
+        return Err(production_map_error(ProductionMapError::RawMaterialInvalidInput));
+    }
+    // A scanner must distinguish a non-material QR from a failed material
+    // lookup. The shared assignment resolver intentionally uses invalid_input.
+    if state.gscale.raw_material_stock_by_barcode(query.barcode.trim()).await
+        .map_err(|_| server_error("raw material stock lookup failed"))?
+        .is_none()
+    {
+        return Err(not_found("raw_material_stock_not_found"));
     }
     let detail = lookup_raw_material_detail(&state, &principal, &query.barcode).await?;
     let mut value = serde_json::to_value(detail).unwrap_or_else(|_| serde_json::json!({}));
@@ -193,6 +205,14 @@ pub async fn raw_material_assignment_lookup(
         .map_err(production_map_error)?
         .into_iter()
         .find(|assignment| assignment.barcode.trim().to_ascii_uppercase() == normalized);
+    if principal.role == PrincipalRole::Aparatchi {
+        let assigned = state.admin.principal_assigned_apparatus(&principal).await;
+        if assignment.as_ref().is_none_or(|assignment| {
+            !assigned_apparatus_contains(assignment.apparatus_id.as_ref(), &assigned)
+        }) {
+            return Err(production_map_error(ProductionMapError::ApparatusNotAssigned));
+        }
+    }
     if let Some(object) = value.as_object_mut() {
         if let Some(assignment) = assignment {
             let order_id = assignment.order_id.trim().to_string();

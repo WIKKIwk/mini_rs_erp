@@ -105,6 +105,10 @@ pub struct ApparatusQueueWorkerInteraction {
     #[serde(default)]
     pub material_intake_allowed: bool,
     pub previous_wip_mode: ApparatusQueuePreviousWipMode,
+    /// A stopped lamination occurrence released its input roll. Resume must
+    /// scan and claim a physical input before work can continue.
+    #[serde(default)]
+    pub resume_input_required: bool,
     #[serde(default)]
     pub opening_wip_mode: ApparatusQueuePreviousWipMode,
     pub qolip_mode: ApparatusQueueQolipMode,

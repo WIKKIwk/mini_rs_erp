@@ -8,17 +8,17 @@ pub struct LayerRemainderQuery {
 }
 
 #[derive(Default, serde::Deserialize)]
-struct LayerRemainderPrintOptions {
+pub(super) struct LayerRemainderPrintOptions {
     #[serde(default)]
-    driver_url: String,
+    pub(super) driver_url: String,
     #[serde(default)]
-    printer: String,
+    pub(super) printer: String,
     #[serde(default)]
-    print_mode: String,
+    pub(super) print_mode: String,
     #[serde(default)]
-    print_transport: String,
+    pub(super) print_transport: String,
     #[serde(default)]
-    print_count: u32,
+    pub(super) print_count: u32,
 }
 
 #[derive(serde::Deserialize)]
@@ -108,6 +108,9 @@ pub async fn production_map_layer_remainder_reprint(
     {
         return Err(forbidden());
     }
+    if remainder.remaining_net_kg <= 0.0 || remainder.qr_payload.trim().is_empty() {
+        return Err(bad_request("layer_remainder_label_unavailable"));
+    }
     layer_remainder_response(&state, remainder, &input.print).await
 }
 
@@ -150,7 +153,7 @@ async fn layer_remainder_scope(
     Ok(())
 }
 
-fn validate_layer_print(input: &LayerRemainderPrintOptions) -> Result<(), AdminError> {
+pub(super) fn validate_layer_print(input: &LayerRemainderPrintOptions) -> Result<(), AdminError> {
     if input.print_count > 1 {
         return Err(bad_request("layer_remainder_single_label_required"));
     }
@@ -162,6 +165,17 @@ async fn layer_remainder_response(
     remainder: LayerRemainderRecord,
     options: &LayerRemainderPrintOptions,
 ) -> Result<Response, AdminError> {
+    let print = layer_remainder_print(state, &remainder, options).await?;
+    Ok(json_response(
+        serde_json::json!({"ok": true, "remainder": remainder, "print": print}),
+    ))
+}
+
+pub(super) async fn layer_remainder_print(
+    state: &AppState,
+    remainder: &LayerRemainderRecord,
+    options: &LayerRemainderPrintOptions,
+) -> Result<serde_json::Value, AdminError> {
     let mut request = ProgressLabelPrintRequest {
         driver_url: options.driver_url.clone(),
         printer: options.printer.clone(),
@@ -240,6 +254,7 @@ async fn layer_remainder_response(
         Err(error) => super::queue_actions::progress_print_failure_json(error),
     };
     if print.is_object() {
+        print["qr_payload"] = serde_json::json!(remainder.qr_payload);
         print["net_qty"] = serde_json::json!(remainder.remaining_net_kg);
         print["progress_qty"] = serde_json::json!(remainder.remaining_meter);
         if let Some(stock) = &remainder.raw_material_stock {
@@ -251,7 +266,5 @@ async fn layer_remainder_response(
             print["length_m"] = serde_json::json!(stock.length_m);
         }
     }
-    Ok(json_response(
-        serde_json::json!({"ok": true, "remainder": remainder, "print": print}),
-    ))
+    Ok(print)
 }

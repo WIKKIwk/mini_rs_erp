@@ -1675,8 +1675,11 @@ impl ProductionMapService {
         let mut batch = self
             .progress_batch_for_qr(&progress.progress_batch_id, &progress.qr_payload)
             .await?;
-        if batch.is_layer_remainder() {
-            return self.build_resumed_layer_remainder(context, batch).await;
+        let released_lamination_input = apparatus::uses_lamination_workflow(canonical)
+            && self.store.active_order_run_session(apparatus, order_id).await?
+                .as_ref().is_some_and(lamination_input_was_released);
+        if batch.is_layer_remainder() || released_lamination_input {
+            return self.build_resumed_lamination_input(context, batch).await;
         }
         if !batch.status.is_resumable()
             || !batch.action.creates_resumable_output()
@@ -1734,10 +1737,9 @@ impl ProductionMapService {
 }
 
 impl ProductionMapService {
-    /// A returned input is rescanned into its paused consuming session. Its
-    /// producer identity belongs to the earlier stage, so ordinary output-roll
-    /// Resume cannot claim it.
-    async fn build_resumed_layer_remainder(
+    /// Claim the next physical input after a lamination shift returned or
+    /// exhausted its mounted roll. This preserves the upstream producer.
+    async fn build_resumed_lamination_input(
         &self,
         context: ProgressBuildContext<'_>,
         mut batch: OrderProgressBatch,
@@ -1754,9 +1756,12 @@ impl ProductionMapService {
         let current = self.store.active_order_run_session(apparatus, order_id).await?
             .filter(|session| matches!(session.status, OrderRunStatus::Paused | OrderRunStatus::RollDetached))
             .ok_or(ProductionMapError::ProgressBatchNotResumable)?;
-        if !session_progress_links(&current).batch_id.trim().is_empty()
-            || current.payload_json.get("layer_remainder_detached_input_batch_id")
-                .and_then(serde_json::Value::as_str) != Some(batch.parent_batch_id.as_str())
+        let shift_closed = current.payload_json.get("lamination_astatka_shift_closed")
+            .and_then(serde_json::Value::as_bool) == Some(true);
+        if !lamination_input_was_released(&current)
+            || (!shift_closed && (!batch.is_layer_remainder()
+                || current.payload_json.get("layer_remainder_detached_input_batch_id")
+                    .and_then(serde_json::Value::as_str) != Some(batch.parent_batch_id.as_str())))
         {
             return Err(ProductionMapError::ProgressBatchNotResumable);
         }
@@ -1792,6 +1797,8 @@ impl ProductionMapService {
         write_order_run_input_links(&mut payload, &inputs);
         if let Some(object) = payload.as_object_mut() {
             object.remove("layer_remainder_detached_input_batch_id");
+            object.remove("lamination_astatka_shift_closed");
+            object.remove("lamination_astatka_raw_released");
         }
         let session = OrderRunSession {
             status: OrderRunStatus::Active, worker_role: actor.role.trim().into(),
@@ -1890,6 +1897,10 @@ impl ProductionMapService {
         }
         session.payload_json = resumed_handoff_session_payload(&session, &links);
         session.payload_json["resumed_without_progress_qr"] = serde_json::json!(true);
+        if let Some(payload) = session.payload_json.as_object_mut() {
+            payload.remove("lamination_astatka_shift_closed");
+            payload.remove("lamination_astatka_raw_released");
+        }
         session.status = OrderRunStatus::Active;
         session.worker_role = actor.role.trim().to_string();
         session.worker_ref = actor.ref_.trim().to_string();

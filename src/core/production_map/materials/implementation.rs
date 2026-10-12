@@ -11,7 +11,7 @@ use super::materials_support::*;
 use super::queue_state;
 use super::service_maps::compile_saved_maps;
 use super::{
-    ApparatusQueueActionResult, OrderControlState, PreparedApparatusQueueAction,
+    ApparatusQueueActionResult, OrderControlState, OrderRunStatus, PreparedApparatusQueueAction,
     ProductionMapError, ProductionMapSaved, ProductionMapService, ProductionQrRawMaterial,
     ProductionOrderLifecycleStatus, QueueActionActor, QueueProgressInput, chain,
 };
@@ -600,6 +600,12 @@ impl ProductionMapService {
             qolip_validation.as_ref(),
         )
         .await?;
+        let reacquire_materials = self.requires_material_reacquisition_for_action(
+            apparatus_id.as_str(), order_id, action,
+        ).await?;
+        if reacquire_materials && material_barcodes.is_empty() {
+            return Err(ProductionMapError::RawMaterialScanRequired);
+        }
         let skip_material_scan = matches!(action, queue_state::ApparatusQueueAction::Start)
             && self
                 .laminatsiya_material_scan_can_be_skipped_for_wip(
@@ -612,7 +618,7 @@ impl ProductionMapService {
             self.validate_material_scan(
                 apparatus,
                 order_id,
-                action,
+                if reacquire_materials { queue_state::ApparatusQueueAction::Start } else { action },
                 material_barcodes,
                 state_material_barcodes,
             )
@@ -629,7 +635,10 @@ impl ProductionMapService {
             )
             .await?;
         prepared.material_scan_skipped = skip_material_scan;
-        if action == queue_state::ApparatusQueueAction::Start && !skip_material_scan {
+        if reacquire_materials {
+            prepared.event.payload_json["lamination_raw_reacquisition"] = serde_json::json!(true);
+        }
+        if (action == queue_state::ApparatusQueueAction::Start || reacquire_materials) && !skip_material_scan {
             // Capture only the validated scans for this occurrence. Assignment
             // lists are plans; unscanned materials must never become use history.
             let scans = material_barcodes
@@ -638,10 +647,14 @@ impl ProductionMapService {
                 .collect::<BTreeSet<_>>();
             if scans.is_empty() {
                 prepared.attach_start_materials(Vec::new());
-            } else if let Ok(assignments) = self
-                .raw_material_assignments_for_order_apparatus(order_id, &apparatus_id)
-                .await
-            {
+            } else {
+                let assignments = match self
+                    .raw_material_assignments_for_order_apparatus(order_id, &apparatus_id).await
+                {
+                    Ok(assignments) => assignments,
+                    Err(error) if reacquire_materials => return Err(error),
+                    Err(_) => return Ok(prepared),
+                };
                 let materials = assignments
                     .into_iter()
                     .filter(|assignment| scans.contains(&normalize_barcode(&assignment.barcode)))
@@ -658,10 +671,33 @@ impl ProductionMapService {
                 // be proven, leave history unavailable rather than changing validation.
                 if materials.len() == scans.len() {
                     prepared.attach_start_materials(materials);
+                } else if reacquire_materials {
+                    return Err(ProductionMapError::RawMaterialMismatch);
                 }
             }
         }
         Ok(prepared)
+    }
+
+    pub async fn requires_material_reacquisition_for_action(
+        &self,
+        apparatus: &str,
+        order_id: &str,
+        action: queue_state::ApparatusQueueAction,
+    ) -> Result<bool, ProductionMapError> {
+        if action != queue_state::ApparatusQueueAction::Resume {
+            return Ok(false);
+        }
+        let canonical = self.resolve_canonical_apparatus_text(apparatus).await?;
+        if !super::apparatus::uses_lamination_workflow(&canonical) {
+            return Ok(false);
+        }
+        Ok(self.store.active_order_run_session(canonical.runtime.apparatus_id.as_str(), order_id)
+            .await?.is_some_and(|session| {
+                matches!(session.status, OrderRunStatus::Paused | OrderRunStatus::RollDetached)
+                    && session.payload_json.get("lamination_astatka_raw_released")
+                        .and_then(serde_json::Value::as_bool) == Some(true)
+            }))
     }
 
     async fn resolve_material_apparatus_options(

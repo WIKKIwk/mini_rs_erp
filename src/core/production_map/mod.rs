@@ -32,6 +32,12 @@ mod sequence_move;
 pub use sequence_move::{SequenceMove, SequenceMoveResult, SequenceMoveState};
 #[path = "astatka/service.rs"]
 mod service_astatka;
+#[path = "astatka/lamination_shift.rs"]
+mod service_lamination_astatka_shift;
+pub use service_lamination_astatka_shift::{
+    LaminatsiyaAstatkaCommitResult, LaminatsiyaAstatkaLayerInput,
+    LaminatsiyaAstatkaShiftInput, LaminatsiyaAstatkaSnapshot,
+};
 #[path = "astatka/bosma.rs"]
 mod service_bosma_astatka;
 pub use service_bosma_astatka::BosmaAstatkaReport;

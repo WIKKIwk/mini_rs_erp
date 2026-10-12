@@ -139,8 +139,12 @@ pub async fn production_map_queue_action(
         &input.apparatus, input.action, &input.progress,
         &input.materials.scan_barcodes, &input.materials.qolip_codes,
     ).await.map_err(production_map_error)?;
+    let material_start_required = input.action == queue_state::ApparatusQueueAction::Start
+        || state.production_maps.requires_material_reacquisition_for_action(
+            &input.apparatus, &input.order_id, input.action,
+        ).await.map_err(production_map_error)?;
     let mut usable_material_barcodes = Vec::new();
-    if matches!(input.action, queue_state::ApparatusQueueAction::Start) {
+    if material_start_required {
         let usable = super::raw_materials::raw_material_usable_barcodes(&state, &input.order_id, &input.apparatus).await?;
         for barcode in &input.materials.scan_barcodes {
             if !barcode.trim().is_empty() && !usable.iter().any(|candidate| candidate.eq_ignore_ascii_case(barcode.trim())) {
@@ -150,7 +154,7 @@ pub async fn production_map_queue_action(
         usable_material_barcodes = usable;
     }
     let mut state_material_barcodes =
-        if matches!(input.action, queue_state::ApparatusQueueAction::Start) {
+        if material_start_required {
             super::raw_materials::raw_material_state_barcodes_for_order_apparatus(
                 &state,
                 &input.order_id,
@@ -224,6 +228,7 @@ pub async fn production_map_queue_action(
                 &apparatus,
                 assigned_apparatus,
                 state_material_barcodes,
+                material_start_required,
                 returned_paint_report,
             )
             .await
