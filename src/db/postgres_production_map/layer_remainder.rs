@@ -196,16 +196,61 @@ fn wip_source(
     })
 }
 
+/// Older executions may omit start_resources after an additional intake or a
+/// new WIP Start. Recover only audited stock still mounted at this apparatus,
+/// and only for its latest execution; available and historical stocks are not inputs.
+async fn mounted_raw_source_ids(
+    tx: &mut Transaction<'_, Postgres>,
+    session: &OrderRunSession,
+) -> Result<Vec<String>, ProductionMapError> {
+    let latest: Option<String> = sqlx::query_scalar(
+        "SELECT session_id FROM mini_order_run_sessions
+         WHERE order_id=$1 AND canonical_apparatus_id=$2
+         ORDER BY started_at DESC,session_id DESC LIMIT 1",
+    )
+    .bind(&session.order_id)
+    .bind(&session.apparatus)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(database_error)?;
+    if latest.as_deref() != Some(session.session_id.as_str()) {
+        return Ok(Vec::new());
+    }
+    sqlx::query_scalar(
+        "SELECT DISTINCT s.id FROM mini_raw_material_stock s
+         JOIN mini_raw_material_assignments r ON lower(r.barcode)=lower(s.barcode)
+         JOIN mini_inventory_placements p ON p.asset_kind='raw_material' AND p.asset_ref=s.id
+         JOIN mini_inventory_locations l ON l.id=p.physical_location_id
+         JOIN mini_factory_location_apparatus_links a ON a.location_id=l.factory_location_id
+         WHERE r.order_id=$1 AND r.canonical_apparatus_id=$2
+           AND s.reserved_order_id=$1 AND s.status='in_use' AND s.uom='kg'
+           AND l.kind='state' AND l.active AND a.apparatus_id=$2
+           AND EXISTS(SELECT 1 FROM mini_raw_material_events e
+             WHERE lower(e.barcode)=lower(s.barcode) AND e.order_id=$1
+               AND e.canonical_apparatus_id=$2 AND e.event_type='usage_started')
+         ORDER BY s.id",
+    )
+    .bind(&session.order_id)
+    .bind(&session.apparatus)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(database_error)
+}
+
 async fn raw_source(
     tx: &mut Transaction<'_, Postgres>,
     s: &OrderRunSession,
     r: &RawRow,
 ) -> Result<LayerRemainderSource, ProductionMapError> {
-    let resources = ProductionQrSessionResources::recorded(s)
-        .ok_or(ProductionMapError::RawMaterialStockUnavailable)?;
-    if !resources.raw_materials.iter().any(|m| {
-        m.stock_id.as_deref() == Some(r.id.as_str()) && m.barcode.eq_ignore_ascii_case(&r.barcode)
-    }) || r.reserved_order_id != s.order_id
+    let recorded = ProductionQrSessionResources::recorded(s).is_some_and(|resources| {
+        resources.raw_materials.iter().any(|m| {
+            m.stock_id.as_deref() == Some(r.id.as_str()) && m.barcode.eq_ignore_ascii_case(&r.barcode)
+        })
+    });
+    if !recorded && !mounted_raw_source_ids(tx, s).await?.contains(&r.id) {
+        return Err(ProductionMapError::RawMaterialStockUnavailable);
+    }
+    if r.reserved_order_id != s.order_id
         || !matches!(r.status.as_str(), "in_use" | "consumed")
         || r.uom != "kg"
         || r.payload_json
@@ -832,8 +877,8 @@ pub(super) async fn session_sources_tx(
             Err(_) => {}
         }
     }
+    let mut raw_ids = mounted_raw_source_ids(tx, session).await?;
     if let Some(resources) = ProductionQrSessionResources::recorded(session) {
-        let mut seen = std::collections::BTreeSet::new();
         for material in resources.raw_materials {
             let Some(id) = material.stock_id else {
                 if strict {
@@ -841,22 +886,27 @@ pub(super) async fn session_sources_tx(
                 }
                 continue;
             };
-            if !seen.insert(id.clone()) || source_already_returned(tx, "raw_material", &id).await? {
-                continue;
+            raw_ids.push(id);
+        }
+    }
+    raw_ids.sort();
+    raw_ids.dedup();
+    for id in raw_ids {
+        if source_already_returned(tx, "raw_material", &id).await? {
+            continue;
+        }
+        let Some(row) = raw_row(tx, &id).await? else {
+            if strict {
+                return Err(ProductionMapError::RawMaterialStockUnavailable);
             }
-            let Some(row) = raw_row(tx, &id).await? else {
-                if strict {
-                    return Err(ProductionMapError::RawMaterialStockUnavailable);
-                }
-                continue;
-            };
-            match raw_source(tx, session, &row).await {
-                Ok(source) => sources.push(source),
-                Err(error) if strict || matches!(error, ProductionMapError::StoreFailed) => {
-                    return Err(error);
-                }
-                Err(_) => {}
+            continue;
+        };
+        match raw_source(tx, session, &row).await {
+            Ok(source) => sources.push(source),
+            Err(error) if strict || matches!(error, ProductionMapError::StoreFailed) => {
+                return Err(error);
             }
+            Err(_) => {}
         }
     }
     Ok(sources)

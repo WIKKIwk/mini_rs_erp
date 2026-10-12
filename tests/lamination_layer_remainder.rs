@@ -308,7 +308,14 @@ async fn checks(pool: PgPool) {
         .bind(ORDER).bind(LAM).bind(json!({"order_id":ORDER,"apparatus_id":LAM,"apparatus":LAM,"barcode":"RAW50","item_code":"FILM","item_name":"Film","item_group":"All Item Groups","assigned_by_role":"material_taminotchi","assigned_by_ref":"original-supplier","assigned_by_display_name":"Original Supplier","assigned_at":"2026-10-12"})).execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO mini_raw_material_events(event_id,idempotency_key,event_type,warehouse,barcode,item_code,item_name,qty_delta,uom,stock_status_before,stock_status_after,order_id,apparatus,canonical_apparatus_id,actor_role,actor_ref,actor_display_name,owner_role,owner_ref,owner_display_name,source_type,source_id) VALUES('consume-raw','consume-raw','consumption_posted','Raw W','RAW50','FILM','Film',-50,'kg','in_use','consumed',$1,$2,$2,'aparatchi','lam-worker','Laminator','material_taminotchi','original-supplier','Original Supplier','consumption',$1)").bind(ORDER).bind(LAM).execute(&pool).await.unwrap();
     let mut raw_run = session("raw-session", OrderRunStatus::Completed);
-    raw_run.started_at_unix = 100;
+    raw_run.started_at_unix = store
+        .order_run_sessions_for_order(ORDER)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|session| session.started_at_unix)
+        .max()
+        .unwrap_or(0) + 1;
     raw_run.payload_json = json!({"start_resources":{"session_id":"raw-session","raw_materials_available":true,"raw_materials":[{"barcode":"RAW50","item_code":"FILM","item_name":"Film","stock_id":"raw50","source_qty":50,"uom":"kg"}],"qolip_codes":[],"qolip_available":false}});
     store.put_order_run_session(raw_run).await.unwrap();
     let raw_source = service
@@ -389,6 +396,180 @@ async fn checks(pool: PgPool) {
             .unwrap_err(),
         ProductionMapError::OrderFrozen
     );
+    additional_intake_and_legacy_mounted_source(&pool, &store, &service).await;
     runtime.close().await;
     pool.close().await;
+}
+
+
+async fn additional_intake_and_legacy_mounted_source(
+    pool: &PgPool,
+    store: &PostgresProductionMapStore,
+    service: &ProductionMapService,
+) {
+    const EXTRA_ORDER: &str = "zakaz-additional-layer-intake";
+    let map: ProductionMapDefinition = serde_json::from_value(json!({
+        "id": EXTRA_ORDER, "product_code": "PRODUCT", "title": "Additional layer intake",
+        "nodes": [{"id":"start","kind":"start","title":"Start"},
+            {"id":"lam","kind":"apparatus","title":"Lamination","apparatus_id":LAM},
+            {"id":"end","kind":"end","title":"End"}],
+        "edges": [{"from":"start","to":"lam"},{"from":"lam","to":"end"}]
+    }))
+    .unwrap();
+    store.put_map(map).await.unwrap();
+    store
+        .put_apparatus_sequence(LAM, vec![EXTRA_ORDER.into()])
+        .await
+        .unwrap();
+    store
+        .put_apparatus_queue_states(
+            LAM,
+            BTreeMap::from([(EXTRA_ORDER.into(), "in_progress".into())]),
+        )
+        .await
+        .unwrap();
+    let mut run = session("additional-intake-session", OrderRunStatus::Active);
+    run.order_id = EXTRA_ORDER.into();
+    run.started_at_unix = 1000;
+    store.put_order_run_session(run.clone()).await.unwrap();
+    for (id, status, reserved) in [
+        ("extra25", "available", ""),
+        ("unreceived25", "available", ""),
+        ("unaudited25", "available", ""),
+    ] {
+        sqlx::query("INSERT INTO mini_raw_material_stock(id,warehouse,item_code,item_name,barcode,qty,width_mm,micron,length_m,uom,status,reserved_order_id,source_receipt_id,payload_json) VALUES($1,'Raw W','FILM','CPP',$1,25,1000,20,750,'kg',$2,$3,'additional-receipt','{\"gross_qty\":27,\"tare_kg\":2}')")
+            .bind(id).bind(status).bind(reserved).execute(pool).await.unwrap();
+        sqlx::query("INSERT INTO mini_inventory_placements(asset_kind,asset_ref,physical_location_id) VALUES('raw_material',$1,'inventory_location:state:lam-state')")
+            .bind(id).execute(pool).await.unwrap();
+        store
+            .put_raw_material_assignment(RawMaterialAssignment {
+                order_id: EXTRA_ORDER.into(),
+                apparatus_id: mini_rs_erp::core::apparatus_standard::ApparatusId::new(LAM).unwrap(),
+                apparatus: LAM.into(),
+                barcode: id.into(),
+                item_code: "FILM".into(),
+                item_name: "CPP".into(),
+                item_group: "All Item Groups".into(),
+                assigned_by_role: "material_taminotchi".into(),
+                assigned_by_ref: "original-supplier".into(),
+                assigned_by_display_name: "Original Supplier".into(),
+                assigned_at: "2026-10-13".into(),
+            })
+            .await
+            .unwrap();
+    }
+    sqlx::query("UPDATE mini_raw_material_stock SET status='in_use',reserved_order_id=$1 WHERE id='unaudited25'")
+        .bind(EXTRA_ORDER).execute(pool).await.unwrap();
+    let assignment: serde_json::Value = sqlx::query_scalar(
+        "SELECT payload_json FROM mini_raw_material_assignments WHERE barcode='extra25'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    store
+        .receive_raw_material_assignment(
+            serde_json::from_value(assignment.clone()).unwrap(),
+            &actor(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .receive_raw_material_assignment(serde_json::from_value(assignment).unwrap(), &actor())
+            .await
+            .unwrap_err(),
+        ProductionMapError::RawMaterialStockUnavailable
+    );
+    let saved = store
+        .order_run_session(&run.session_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        saved
+            .payload_json
+            .pointer("/start_resources/raw_materials/0/stock_id"),
+        Some(&json!("extra25"))
+    );
+    assert_eq!(
+        saved
+            .payload_json
+            .pointer("/start_resources/raw_materials/0/source_qty"),
+        Some(&json!(25.0))
+    );
+    assert_eq!(
+        saved
+            .payload_json
+            .pointer("/start_resources/raw_materials_available"),
+        Some(&json!(true))
+    );
+    let sources = service
+        .layer_remainder_sources(LAM, EXTRA_ORDER)
+        .await
+        .unwrap();
+    assert_eq!(
+        sources.len(),
+        1,
+        "unreceived or unaudited stock must be excluded"
+    );
+    assert_eq!(sources[0].source_id, "extra25");
+    assert_eq!(sources[0].source_net_kg, 25.0);
+    assert_eq!(sources[0].source_meter, 750.0);
+
+    // The user's existing execution has no start_resources. Its actual intake
+    // event and mounted stock must still supply the same layer in Astatka.
+    sqlx::query("UPDATE mini_order_run_sessions SET payload_json=payload_json-'start_resources' WHERE session_id=$1")
+        .bind(&run.session_id).execute(pool).await.unwrap();
+    let legacy = service
+        .layer_remainder_sources(LAM, EXTRA_ORDER)
+        .await
+        .unwrap();
+    assert_eq!(legacy, sources);
+    run.status = OrderRunStatus::Completed;
+    store.put_order_run_session(run.clone()).await.unwrap();
+    store
+        .put_apparatus_queue_states(
+            LAM,
+            BTreeMap::from([(EXTRA_ORDER.into(), "completed".into())]),
+        )
+        .await
+        .unwrap();
+    let source = service
+        .layer_remainder_sources(LAM, EXTRA_ORDER)
+        .await
+        .unwrap()
+        .remove(0);
+    let mut request = input(&source, 10.0, "additional-raw-remainder");
+    request.order_id = EXTRA_ORDER.into();
+    let record = service
+        .record_layer_remainder(request.clone(), actor())
+        .await
+        .unwrap();
+    assert_eq!(record.remaining_meter, 300.0);
+    assert_eq!(record.producer_name, "Original Supplier");
+    assert_eq!(record.recorded_by.ref_, "lam-worker");
+    let stock = record.raw_material_stock.as_ref().unwrap();
+    assert_eq!(stock.qty, 10.0);
+    assert_eq!(stock.status, "available");
+    assert_eq!(stock.source_receipt_id, "additional-receipt");
+    assert_eq!(
+        service
+            .record_layer_remainder(request, actor())
+            .await
+            .unwrap(),
+        record
+    );
+    let status: String =
+        sqlx::query_scalar("SELECT status FROM mini_raw_material_stock WHERE id='extra25'")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(status, "consumed");
+    assert!(
+        service
+            .layer_remainder_sources(LAM, EXTRA_ORDER)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }

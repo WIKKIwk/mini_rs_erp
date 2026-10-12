@@ -250,6 +250,16 @@ impl ProductionMapService {
         }
         let completing = input.action == queue_state::ApparatusQueueAction::Complete;
         if completing {
+            if !input.full_completion_report_required
+                && !self
+                    .queue_action_controls_for_apparatus(&input.apparatus)
+                    .await?
+                    .get(&input.apparatus)
+                    .and_then(|orders| orders.get(&order_id))
+                    .is_some_and(|control| control.complete_requires_full_report)
+            {
+                return Err(ProductionMapError::QueueActionNotAllowed);
+            }
             let count = |kind: &str| {
                 input
                     .layer_remainders

@@ -1105,6 +1105,62 @@ impl PostgresProductionMapStore {
             &assignment.apparatus,
         )
         .await?;
+        // Additional intake is a resource of the current execution as well as
+        // a stock transition. Keep both records in this same transaction.
+        if let Some(mut session) = stage_execution::sessions_tx(&mut tx, &assignment.order_id)
+            .await?
+            .into_iter()
+            .filter(|session| session.apparatus == assignment.apparatus_id.as_str())
+            .max_by_key(|session| (session.started_at_unix, session.session_id.clone()))
+            .filter(|session| {
+                matches!(
+                    session.status.as_str(),
+                    "active" | "paused" | "roll_detached"
+                )
+            })
+        {
+            sqlx::query(
+                "SELECT session_id FROM mini_order_run_sessions WHERE session_id=$1 FOR UPDATE",
+            )
+            .bind(&session.session_id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+            let (stock_id, item_name, qty, uom) = sqlx::query_as::<_, (String, String, f64, String)>(
+                    "SELECT id,item_name,qty::float8,uom FROM mini_raw_material_stock WHERE lower(barcode)=lower($1)",
+                )
+                .bind(&assignment.barcode)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(|_| ProductionMapError::StoreFailed)?;
+            let mut resources = ProductionQrSessionResources::for_session(&session);
+            if !resources
+                .raw_materials
+                .iter()
+                .any(|material| material.barcode.eq_ignore_ascii_case(&assignment.barcode))
+            {
+                resources
+                    .raw_materials
+                    .push(crate::core::production_map::ProductionQrRawMaterial {
+                        barcode: assignment.barcode.clone(),
+                        item_code: assignment.item_code.clone(),
+                        item_name,
+                        stock_id: Some(stock_id),
+                        source_qty: Some(qty),
+                        uom: Some(uom),
+                    });
+            }
+            resources.raw_materials_available = true;
+            resources.write_to_session(&mut session);
+            sqlx::query(
+                    "UPDATE mini_order_run_sessions SET payload_json=$2,updated_at=now() WHERE session_id=$1",
+                )
+                    .bind(&session.session_id)
+                    .bind(&session.payload_json)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|_| ProductionMapError::StoreFailed)?;
+        }
         tx.commit()
             .await
             .map_err(|_| ProductionMapError::StoreFailed)?;
