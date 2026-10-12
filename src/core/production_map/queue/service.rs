@@ -620,6 +620,8 @@ impl ProductionMapService {
         let active_sessions_by_order = active_sessions_by_order?;
         let progress_batches_by_order = progress_batches_by_order?;
         let opening_wip_records = opening_wip_records?;
+        #[cfg(feature = "projection-research")]
+        let _optimization_scope = super::super::optimization_research::begin(maps, &progress_batches_by_order);
         let now = super::super::progress::unix_seconds();
         let print_preflight_by_apparatus = active_print_preflight_holds?
             .into_iter()

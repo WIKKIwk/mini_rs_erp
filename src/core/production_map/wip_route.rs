@@ -18,6 +18,14 @@ pub struct WipInputRoute {
 }
 
 pub(crate) fn production_map_fingerprint(map: &ProductionMapDefinition) -> String {
+    #[cfg(feature = "projection-research")]
+    if let Some(value) = super::optimization_research::get_fingerprint(map) { return value; }
+    let value = production_map_fingerprint_uncached(map);
+    #[cfg(feature = "projection-research")]
+    super::optimization_research::put_fingerprint(map, &value);
+    value
+}
+pub(crate) fn production_map_fingerprint_uncached(map: &ProductionMapDefinition) -> String {
     format!(
         "{:x}",
         Sha256::digest(serde_json::to_vec(map).expect("serializable map"))
@@ -70,7 +78,16 @@ fn stage_apparatus<'a>(stages: &'a [chain::ChainStage], node_id: &str) -> Option
         .and_then(|stage| stage.apparatus_id.as_deref())
 }
 
-pub(crate) fn resolve_wip_input_route(
+pub(crate) fn resolve_wip_input_route(map: &ProductionMapDefinition, batch: &OrderProgressBatch)
+    -> Result<WipInputRoute, ProductionMapError> {
+    #[cfg(feature = "projection-research")]
+    if let Some(value) = super::optimization_research::get_route(map, batch) { return value; }
+    let value = resolve_wip_input_route_uncached(map, batch);
+    #[cfg(feature = "projection-research")]
+    super::optimization_research::put_route(map, batch, &value);
+    value
+}
+pub(crate) fn resolve_wip_input_route_uncached(
     map: &ProductionMapDefinition,
     batch: &OrderProgressBatch,
 ) -> Result<WipInputRoute, ProductionMapError> {

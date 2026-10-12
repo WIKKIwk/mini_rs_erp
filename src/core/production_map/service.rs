@@ -528,6 +528,11 @@ impl ProductionMapService {
             &frozen_order_ids,
         );
         let holds = self.store.active_print_preflight_holds().await?;
+        #[cfg(feature = "projection-research")]
+        let research_empty_batches = BTreeMap::new();
+        #[cfg(feature = "projection-research")]
+        let research_sequence_scope = (super::optimization_research::current_mode() >= 6)
+            .then(|| super::optimization_research::begin_labeled(&raw_maps, &research_empty_batches, "sequence_versions"));
         let mut sequence_versions = BTreeMap::new();
         for canonical in &canonical_apparatuses {
             let id = canonical.runtime.apparatus_id.as_str();
@@ -556,6 +561,8 @@ impl ProductionMapService {
             .map(|map| map.id.trim().to_string())
             .filter(|order_id| !order_id.is_empty())
             .collect::<Vec<_>>();
+        #[cfg(feature = "projection-research")]
+        drop(research_sequence_scope);
         let (queue_action_controls, queue_logs_by_order, lifecycles) = tokio::try_join!(
             async {
                 if let Some((ids, apparatus_ids)) = output_scope.as_ref() {

@@ -158,6 +158,10 @@ pub(crate) fn work_inputs(
     batches: &[OrderProgressBatch],
     opening: &[OpeningWipRecord],
 ) -> Vec<StageWorkInput> {
+    #[cfg(feature = "projection-research")]
+    let skip_terminal_input_route = super::optimization_research::skip_terminal_input_route();
+    #[cfg(not(feature = "projection-research"))]
+    let skip_terminal_input_route = false;
     let mut inputs = batches
         .iter()
         .map(|b| StageWorkInput {
@@ -167,9 +171,14 @@ pub(crate) fn work_inputs(
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or_default()
                 .into(),
-            target_node: super::wip_route::resolve_wip_input_route(map, b)
-                .map(|route| route.stage_node_id)
-                .unwrap_or_else(|_| super::service_queue_support::progress_batch_next_stage_node_id(b).to_string()),
+            target_node: if skip_terminal_input_route
+                && !matches!(b.wip_status, OrderProgressBatchWipStatus::Waiting | OrderProgressBatchWipStatus::InUse) {
+                super::service_queue_support::progress_batch_next_stage_node_id(b).to_string()
+            } else {
+                super::wip_route::resolve_wip_input_route(map, b)
+                    .map(|route| route.stage_node_id)
+                    .unwrap_or_else(|_| super::service_queue_support::progress_batch_next_stage_node_id(b).to_string())
+            },
             source_apparatus: b.apparatus.clone(),
             target_apparatus: b.next_apparatus.clone(),
             available: b.wip_status == OrderProgressBatchWipStatus::Waiting,

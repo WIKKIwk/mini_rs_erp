@@ -20,6 +20,7 @@ resolver = "3"
 [features]
 default = []
 mcp-readonly-prototype = []
+projection-research = []
 verification = ["dep:tower"]
 
 [dependencies]
@@ -85,3 +86,8 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
 name = "mcp_readonly_fixture"
 path = "examples/mcp_readonly_fixture.rs"
 required-features = ["mcp-readonly-prototype"]
+
+[[example]]
+name = "admin_projection_research"
+path = "examples/admin_projection_research.rs"
+required-features = ["projection-research"]

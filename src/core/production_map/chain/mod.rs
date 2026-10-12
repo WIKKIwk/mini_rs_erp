@@ -19,6 +19,14 @@ pub struct ChainStage {
 }
 
 pub fn linear_work_stages(map: &ProductionMapDefinition) -> Vec<ChainStage> {
+    #[cfg(feature = "projection-research")]
+    if let Some(value) = super::optimization_research::get_stages(map) { return value; }
+    let value = linear_work_stages_uncached(map);
+    #[cfg(feature = "projection-research")]
+    super::optimization_research::put_stages(map, &value);
+    value
+}
+pub fn linear_work_stages_uncached(map: &ProductionMapDefinition) -> Vec<ChainStage> {
     let mut stages = Vec::new();
     let mut seen_stage_ids = BTreeSet::<String>::new();
     let mut seen_apparatus = false;
@@ -58,7 +66,15 @@ pub fn previous_work_stage_station(
 
 /// Return all physical predecessors reached through the same branch-aware
 /// topology used by [`linear_work_stages`].
-pub fn previous_work_stage_stations(
+pub fn previous_work_stage_stations(map:&ProductionMapDefinition,station_id:&str)->Vec<String> {
+    #[cfg(feature = "projection-research")]
+    if let Some(value)=super::optimization_research::get_station_neighbors(map,station_id,true) {return value;}
+    let value=previous_work_stage_stations_uncached(map,station_id);
+    #[cfg(feature = "projection-research")]
+    super::optimization_research::put_station_neighbors(map,station_id,true,&value);
+    value
+}
+pub fn previous_work_stage_stations_uncached(
     map: &ProductionMapDefinition,
     station_id: &str,
 ) -> Vec<String> {
@@ -89,7 +105,15 @@ pub fn previous_work_stage_stations(
 /// A standalone first-stage apparatus remains valid for legacy/direct flows;
 /// an unresolvable station in a map that has physical stages is not treated as
 /// proof that no predecessor exists.
-pub fn previous_stage_resolution_is_unavailable(
+pub fn previous_stage_resolution_is_unavailable(map:&ProductionMapDefinition,station_id:&str)->bool {
+    #[cfg(feature = "projection-research")]
+    if let Some(value)=super::optimization_research::get_unavailable(map,station_id) {return value;}
+    let value=previous_stage_resolution_is_unavailable_uncached(map,station_id);
+    #[cfg(feature = "projection-research")]
+    super::optimization_research::put_unavailable(map,station_id,value);
+    value
+}
+pub fn previous_stage_resolution_is_unavailable_uncached(
     map: &ProductionMapDefinition,
     station_id: &str,
 ) -> bool {
@@ -128,7 +152,15 @@ pub fn next_work_stage_station(map: &ProductionMapDefinition, station_id: &str) 
 
 /// Return all physical successors reached through the same branch-aware
 /// topology used by [`linear_work_stages`].
-pub fn next_work_stage_stations(map: &ProductionMapDefinition, station_id: &str) -> Vec<String> {
+pub fn next_work_stage_stations(map:&ProductionMapDefinition,station_id:&str)->Vec<String> {
+    #[cfg(feature = "projection-research")]
+    if let Some(value)=super::optimization_research::get_station_neighbors(map,station_id,false) {return value;}
+    let value=next_work_stage_stations_uncached(map,station_id);
+    #[cfg(feature = "projection-research")]
+    super::optimization_research::put_station_neighbors(map,station_id,false,&value);
+    value
+}
+pub fn next_work_stage_stations_uncached(map: &ProductionMapDefinition, station_id: &str) -> Vec<String> {
     let physical_stage_node_ids = linear_work_stages(map)
         .into_iter()
         .filter_map(|stage| stage.apparatus_id.map(|_| stage.node_id))
@@ -153,7 +185,15 @@ pub fn next_work_stage_stations(map: &ProductionMapDefinition, station_id: &str)
 /// Resolve one physical stage occurrence. `preferred_node_id` is authoritative
 /// when supplied by WIP/session metadata; the canonical station fallback keeps
 /// legacy maps working when an apparatus occurs only once.
-pub fn work_stage_for_station(
+pub fn work_stage_for_station(map:&ProductionMapDefinition,station_id:&str,preferred_node_id:&str)->Option<ChainStage> {
+    #[cfg(feature = "projection-research")]
+    if let Some(value)=super::optimization_research::get_stage_lookup(map,station_id,preferred_node_id) {return value;}
+    let value=work_stage_for_station_uncached(map,station_id,preferred_node_id);
+    #[cfg(feature = "projection-research")]
+    super::optimization_research::put_stage_lookup(map,station_id,preferred_node_id,&value);
+    value
+}
+pub fn work_stage_for_station_uncached(
     map: &ProductionMapDefinition,
     station_id: &str,
     preferred_node_id: &str,
@@ -500,6 +540,16 @@ fn chain_stage_matches_station(stage: &ChainStage, station_id: &str) -> bool {
 }
 
 fn adjacent_physical_stages_for_node(
+    map: &ProductionMapDefinition, stage_node_id: &str, previous: bool,
+) -> Vec<ChainStage> {
+    #[cfg(feature = "projection-research")]
+    if let Some(value) = super::optimization_research::get_adjacent(map, stage_node_id, previous) { return value; }
+    let value = adjacent_physical_stages_for_node_uncached(map, stage_node_id, previous);
+    #[cfg(feature = "projection-research")]
+    super::optimization_research::put_adjacent(map, stage_node_id, previous, &value);
+    value
+}
+fn adjacent_physical_stages_for_node_uncached(
     map: &ProductionMapDefinition,
     stage_node_id: &str,
     previous: bool,
