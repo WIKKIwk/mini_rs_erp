@@ -504,7 +504,8 @@ pub(super) async fn load_progress_batches_for_worker(
              SELECT session_id, started_at, updated_at AS session_updated_at
              FROM mini_order_run_sessions
          ) AS session ON session.session_id = batch.session_id
-         WHERE batch.worker_ref = ANY($1)
+         WHERE COALESCE(batch.payload_json->>'origin', '') <> 'layer_remainder'
+           AND (batch.worker_ref = ANY($1)
             OR EXISTS (
                 SELECT 1
                 FROM mini_worker_identity_aliases AS alias
@@ -514,7 +515,7 @@ pub(super) async fn load_progress_batches_for_worker(
                   AND alias.alias_key = regexp_replace(batch.worker_ref, '[^0-9]', '', 'g')
                   AND batch.created_at >= alias.valid_from
                   AND (alias.valid_to IS NULL OR batch.created_at < alias.valid_to)
-            )
+            ))
          ORDER BY updated_at DESC, created_at DESC, batch_id DESC
          LIMIT $2",
     )

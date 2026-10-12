@@ -600,7 +600,18 @@ fn audit_progress_batch(
                     "progress batch lineage cannot cross order boundaries",
                 ));
             }
-            if !parent.next_apparatus.trim().is_empty()
+            if batch.is_layer_remainder() {
+                if !queue_state::apparatus_ids_match(&parent.apparatus, apparatus)
+                    || parent.worker_ref != batch.worker_ref
+                {
+                    violations.push(ProductionWorkflowAuditViolation::new(
+                        "layer_remainder_producer_mismatch",
+                        order_id,
+                        batch_id,
+                        "returned input must retain the source roll's producer apparatus and worker",
+                    ));
+                }
+            } else if !parent.next_apparatus.trim().is_empty()
                 && !queue_state::apparatus_ids_match(&parent.next_apparatus, apparatus)
             {
                 violations.push(ProductionWorkflowAuditViolation::new(

@@ -31,6 +31,7 @@ mod catalog_helpers;
 #[path = "postgres_production_map/completion/requests.rs"]
 mod completion_helpers;
 mod lifecycle;
+mod layer_remainder;
 mod sequence_move;
 #[cfg(test)]
 mod sequence_move_tests;

@@ -224,7 +224,7 @@ pub(super) async fn progress_batches_for_worker(
         .read()
         .await
         .values()
-        .filter(|batch| refs.contains(batch.worker_ref.trim()))
+        .filter(|batch| !batch.is_layer_remainder() && refs.contains(batch.worker_ref.trim()))
         .cloned()
         .collect::<Vec<_>>();
     batches.sort_by(|left, right| right.batch_id.cmp(&left.batch_id));
@@ -299,7 +299,7 @@ pub(super) async fn correct_progress_batch(
     if stored.worker_ref.trim() != actor.ref_.trim() {
         return Err(ProductionMapError::ProgressBatchCorrectionForbidden);
     }
-    if stored.wip_status != OrderProgressBatchWipStatus::Waiting {
+    if stored.is_layer_remainder() || stored.wip_status != OrderProgressBatchWipStatus::Waiting {
         return Err(ProductionMapError::ProgressBatchCorrectionLocked);
     }
     if stored.revision != input.expected_revision || stored.revision != current.revision {

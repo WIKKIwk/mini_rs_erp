@@ -232,6 +232,25 @@ async fn validate_wip_route_claim_tx(
     current: &OrderProgressBatch,
     proposed: &OrderProgressBatch,
 ) -> Result<(), ProductionMapError> {
+    let resumed_layer = current.is_layer_remainder()
+        && write.event.action == queue_state::ApparatusQueueAction::Resume
+        && current.wip_status == OrderProgressBatchWipStatus::Waiting;
+    if resumed_layer {
+        let session = write.session.as_ref().ok_or(ProductionMapError::WipRouteChanged)?;
+        let detached = sqlx::query_scalar::<_, bool>(
+            "SELECT status IN ('paused', 'roll_detached')
+                AND COALESCE(payload_json->>'input_progress_batch_id', '') = ''
+                AND payload_json->>'layer_remainder_detached_input_batch_id' = $4
+             FROM mini_order_run_sessions
+             WHERE session_id = $1 AND order_id = $2 AND canonical_apparatus_id = $3
+             FOR UPDATE",
+        ).bind(&session.session_id).bind(&write.event.order_id).bind(&write.apparatus)
+            .bind(&current.parent_batch_id).fetch_optional(&mut **tx).await
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        if detached != Some(true) {
+            return Err(ProductionMapError::ProgressBatchNotResumable);
+        }
+    }
     if current.wip_status == OrderProgressBatchWipStatus::InUse {
         // A resumed input belongs to its existing session and route. Do not
         // re-resolve it into a different operation after a graph edit.
@@ -249,7 +268,7 @@ async fn validate_wip_route_claim_tx(
     // next-stage route. Start/Merge may revisit the same physical apparatus
     // at a different graph occurrence, so canonical apparatus equality alone
     // must never bypass their map and source witness checks.
-    if current.apparatus == write.apparatus
+    if !resumed_layer && current.apparatus == write.apparatus
         && !matches!(
             write.event.action,
             queue_state::ApparatusQueueAction::Start | queue_state::ApparatusQueueAction::Merge
@@ -257,7 +276,7 @@ async fn validate_wip_route_claim_tx(
     {
         return Ok(());
     }
-    if !matches!(
+    if !resumed_layer && !matches!(
         write.event.action,
         queue_state::ApparatusQueueAction::Start | queue_state::ApparatusQueueAction::Merge
     ) {

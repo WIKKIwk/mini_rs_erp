@@ -3,7 +3,7 @@ const DEFAULT_MAX_CONNECTIONS: u32 = 16;
 const DEFAULT_ACQUIRE_TIMEOUT_MS: u64 = 500;
 const MIGRATION_LOCK_KEY: i64 = 6_514_811_918_052_026_001;
 
-const POSTGRES_MIGRATIONS: [(&str, &str); 141] = [
+const POSTGRES_MIGRATIONS: [(&str, &str); 142] = [
     (
         "0001_mini_erp_foundation",
         include_str!("../../../migrations/postgres/0001_mini_erp_foundation.sql"),
@@ -573,6 +573,10 @@ const POSTGRES_MIGRATIONS: [(&str, &str); 141] = [
     (
         "0141_paddon_worker_visibility",
         include_str!("../../../migrations/postgres/0141_paddon_worker_visibility.sql"),
+    ),
+    (
+        "0142_lamination_layer_remainder",
+        include_str!("../../../migrations/postgres/0142_lamination_layer_remainder.sql"),
     ),
 ];
 

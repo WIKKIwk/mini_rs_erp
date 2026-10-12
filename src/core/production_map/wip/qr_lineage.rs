@@ -76,40 +76,52 @@ pub(super) fn batch_lineage(
         let producer = sessions_by_id.get(batch.session_id.trim());
         let sources = progress_batch_input_links_from_payload(&batch.payload_json);
         let mut input_ids = BTreeSet::<String>::new();
-        match sources {
-            Ok(links) if !links.is_empty() => {
-                // Per-output source links are more precise than the last active
-                // parent or the session-wide merge list (especially Rezka frames).
-                input_ids.extend(
-                    links
-                        .iter()
-                        .map(|link| link.input_batch_id.trim().to_string()),
-                );
+        if batch.is_layer_remainder() {
+            // Returns retain source label metadata, but their immediate parent
+            // is the physical roll returned, not its earlier production inputs.
+            if batch.parent_batch_id.trim().is_empty() {
+                incomplete_ids.insert(id.to_string());
+            } else {
+                input_ids.insert(batch.parent_batch_id.trim().to_string());
             }
-            sources => {
-                if sources.is_err() {
-                    incomplete_ids.insert(id.to_string());
+        } else {
+            match sources {
+                Ok(links) if !links.is_empty() => {
+                    // Per-output source links are more precise than the last active
+                    // parent or the session-wide merge list (especially Rezka frames).
+                    input_ids.extend(
+                        links
+                            .iter()
+                            .map(|link| link.input_batch_id.trim().to_string()),
+                    );
                 }
-                if !batch.parent_batch_id.trim().is_empty() {
-                    input_ids.insert(batch.parent_batch_id.trim().to_string());
-                } else if !batch
-                    .payload_json
-                    .get("recovered_sibling_lineage")
-                    .is_some_and(|v| v == true)
-                    && !batch
+                sources => {
+                    if sources.is_err() {
+                        incomplete_ids.insert(id.to_string());
+                    }
+                    if !batch.parent_batch_id.trim().is_empty() {
+                        input_ids.insert(batch.parent_batch_id.trim().to_string());
+                    } else if !batch
                         .payload_json
-                        .get(SOURCE_INPUT_LINKS_PAYLOAD_FIELD)
-                        .is_some()
-                {
-                    match session_inputs.get(batch.session_id.trim()) {
-                        Some(Ok(ids)) if ids.len() == 1 => input_ids.extend(ids.iter().cloned()),
-                        Some(Ok(ids)) if ids.len() > 1 => {
-                            incomplete_ids.insert(id.to_string());
+                        .get("recovered_sibling_lineage")
+                        .is_some_and(|v| v == true)
+                        && !batch
+                            .payload_json
+                            .get(SOURCE_INPUT_LINKS_PAYLOAD_FIELD)
+                            .is_some()
+                    {
+                        match session_inputs.get(batch.session_id.trim()) {
+                            Some(Ok(ids)) if ids.len() == 1 => {
+                                input_ids.extend(ids.iter().cloned())
+                            }
+                            Some(Ok(ids)) if ids.len() > 1 => {
+                                incomplete_ids.insert(id.to_string());
+                            }
+                            Some(Err(())) => {
+                                incomplete_ids.insert(id.to_string());
+                            }
+                            _ => {}
                         }
-                        Some(Err(())) => {
-                            incomplete_ids.insert(id.to_string());
-                        }
-                        _ => {}
                     }
                 }
             }

@@ -17,6 +17,8 @@ mod materials_support;
 #[cfg(any(test, feature = "verification"))]
 mod memory_store;
 mod opening_wip;
+pub(crate) mod layer_remainder;
+pub use layer_remainder::{LayerRemainderInput, LayerRemainderSource, LayerRemainderRecord, LayerRemainderRawStock};
 #[path = "pechat/implementation.rs"]
 pub mod pechat;
 mod prepared_queue_action;

@@ -176,6 +176,14 @@ fn production_routes() -> Router<AppState> {
             any(admin::production_map_laminatsiya_astatka),
         )
         .route(
+            "/v1/mobile/admin/production-maps/layer-remainders",
+            any(admin::production_map_layer_remainders),
+        )
+        .route(
+            "/v1/mobile/admin/production-maps/layer-remainders/reprint",
+            any(admin::production_map_layer_remainder_reprint),
+        )
+        .route(
             "/v1/mobile/admin/production-maps/rezka-astatka",
             any(admin::production_map_rezka_astatka),
         )

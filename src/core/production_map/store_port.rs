@@ -190,6 +190,10 @@ fn is_warehouse_processing_marker(value: &str) -> bool {
 
 #[async_trait]
 pub trait ProductionMapStorePort: Send + Sync {
+    async fn layer_remainder_sources(&self, _apparatus: &str, _order_id: &str) -> StoreResult<Vec<super::LayerRemainderSource>> { Err(ProductionMapError::StoreFailed) }
+    async fn layer_remainder_history(&self, _apparatus: &str, _order_id: &str) -> StoreResult<Vec<super::LayerRemainderRecord>> { Err(ProductionMapError::StoreFailed) }
+    async fn layer_remainder_by_id(&self, _id: &str) -> StoreResult<Option<super::LayerRemainderRecord>> { Err(ProductionMapError::StoreFailed) }
+    async fn record_layer_remainder(&self, _input: super::LayerRemainderInput, _actor: QueueActionActor) -> StoreResult<super::LayerRemainderRecord> { Err(ProductionMapError::StoreFailed) }
     async fn commit_stage_astatka_report(
         &self, _report: super::StageAstatkaReport,
         _expected_session: Option<OrderRunSession>, _actor: QueueActionActor,

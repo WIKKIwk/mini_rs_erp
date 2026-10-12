@@ -12,6 +12,9 @@ impl ProductionMapService {
             .progress_batch(&input.batch_id)
             .await?
             .ok_or(ProductionMapError::ProgressBatchNotFound)?;
+        if current.is_layer_remainder() {
+            return Err(ProductionMapError::ProgressBatchCorrectionLocked);
+        }
         if actor.ref_.trim().is_empty() {
             return Err(ProductionMapError::ProgressBatchCorrectionForbidden);
         }

@@ -535,6 +535,7 @@ impl ProductionMapService {
         let Some(parent_batch) = batches.into_iter().find(|batch| {
             batch.batch_id.trim() == output_batch.parent_batch_id.trim()
                 && batch.order_id.trim() == order_id.trim()
+                && batch.payload_json.get("layer_remainder_operation_id").is_none()
                 && super::wip_route::resolve_wip_input_route(order_map, batch).is_ok_and(|route|
                     route.consumer_apparatus_ids.iter().any(|id| id == apparatus)
                         && chain::stage_node_ids_match_for_map(order_map, &route.stage_node_id, &stage.node_id))
@@ -1674,6 +1675,9 @@ impl ProductionMapService {
         let mut batch = self
             .progress_batch_for_qr(&progress.progress_batch_id, &progress.qr_payload)
             .await?;
+        if batch.is_layer_remainder() {
+            return self.build_resumed_layer_remainder(context, batch).await;
+        }
         if !batch.status.is_resumable()
             || !batch.action.creates_resumable_output()
             || batch.wip_status != OrderProgressBatchWipStatus::Waiting
@@ -1730,6 +1734,89 @@ impl ProductionMapService {
 }
 
 impl ProductionMapService {
+    /// A returned input is rescanned into its paused consuming session. Its
+    /// producer identity belongs to the earlier stage, so ordinary output-roll
+    /// Resume cannot claim it.
+    async fn build_resumed_layer_remainder(
+        &self,
+        context: ProgressBuildContext<'_>,
+        mut batch: OrderProgressBatch,
+    ) -> Result<QueueProgressRecords, ProductionMapError> {
+        let ProgressBuildContext {
+            apparatus, order_id, order_map, action, actor, canonical, now,
+        } = context;
+        if !apparatus::uses_lamination_workflow(canonical)
+            || batch.order_id.trim() != order_id
+            || !super::wip_route::actionable_wip(&batch)
+        {
+            return Err(ProductionMapError::ProgressBatchNotResumable);
+        }
+        let current = self.store.active_order_run_session(apparatus, order_id).await?
+            .filter(|session| matches!(session.status, OrderRunStatus::Paused | OrderRunStatus::RollDetached))
+            .ok_or(ProductionMapError::ProgressBatchNotResumable)?;
+        if !session_progress_links(&current).batch_id.trim().is_empty()
+            || current.payload_json.get("layer_remainder_detached_input_batch_id")
+                .and_then(serde_json::Value::as_str) != Some(batch.parent_batch_id.as_str())
+        {
+            return Err(ProductionMapError::ProgressBatchNotResumable);
+        }
+        let mut route = super::wip_route::resolve_wip_input_route(order_map, &batch)?;
+        if !route.consumer_apparatus_ids.iter().any(|id| id == apparatus)
+            || !chain::stage_node_ids_match_for_map(order_map, &route.stage_node_id, &current.stage_node_id)
+        {
+            return Err(ProductionMapError::ProgressBatchNotResumable);
+        }
+        let expected = self.store.progress_batch(&batch.batch_id).await?
+            .ok_or(ProductionMapError::ProgressBatchNotFound)?;
+        if super::wip_route::normalized_route_batch(&expected) != batch {
+            return Err(ProductionMapError::WipRouteChanged);
+        }
+        let mut links = progress_links_from_batch(&batch);
+        links.stage_node_id = current.stage_node_id.clone();
+        let mut payload = resumed_handoff_session_payload(&current, &links);
+        let mut inputs = order_run_input_links_from_payload(&payload)
+            .map_err(|_| ProductionMapError::ProgressBatchNotResumable)?;
+        if inputs.iter().any(|link| link.status == OrderRunInputStatus::InUse
+            || link.input_batch_id == batch.batch_id)
+        {
+            return Err(ProductionMapError::ProgressBatchNotResumable);
+        }
+        let sequence_no = inputs.iter().map(|link| link.sequence_no).max().unwrap_or(0)
+            .checked_add(1).ok_or(ProductionMapError::ProgressInputInvalid)?;
+        inputs.push(OrderRunInputLink {
+            input_batch_id: batch.batch_id.clone(), input_qr_payload: batch.qr_payload.clone(),
+            source_apparatus: batch.apparatus.clone(), source_kind: OrderRunInputSourceKind::ProgressBatch,
+            stage_node_id: current.stage_node_id.clone(), sequence_no,
+            status: OrderRunInputStatus::InUse, linked_at_unix: now, processed_at_unix: None,
+        });
+        write_order_run_input_links(&mut payload, &inputs);
+        if let Some(object) = payload.as_object_mut() {
+            object.remove("layer_remainder_detached_input_batch_id");
+        }
+        let session = OrderRunSession {
+            status: OrderRunStatus::Active, worker_role: actor.role.trim().into(),
+            worker_ref: actor.ref_.trim().into(), worker_display_name: actor.display_name.trim().into(),
+            updated_at_unix: now, payload_json: payload, ..current
+        };
+        route.stage_node_id = session.stage_node_id.clone();
+        batch.payload_json["wip_route_binding"] = serde_json::to_value(route)
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        let mut event = zero_quantity_event(
+            ProgressRecordContext { session: &session, apparatus, order_id, action, actor },
+            batch.batch_id.clone(), batch.qr_payload.clone(), resume_event_payload(),
+        );
+        event.payload_json["wip_input_expected_batch"] = serde_json::to_value(expected)
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        event.payload_json["wip_input_map_fingerprint"] = serde_json::json!(
+            super::wip_route::production_map_fingerprint(order_map));
+        let input = wip_batch_in_use(batch, apparatus, &session.session_id, now);
+        Ok(QueueProgressRecords {
+            session: Some(session), progress_event: Some(event), progress_batch: None,
+            progress_batches: Vec::new(), progress_batch_updates: vec![input],
+            opening_wip_batch_updates: Vec::new(),
+        })
+    }
+
     async fn build_resumed_work_session(
         &self,
         context: ProgressBuildContext<'_>,

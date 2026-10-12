@@ -26,6 +26,9 @@ pub(crate) fn work_inputs_projected(
 ) -> Vec<StageWorkInput> {
     let mut inputs = batches
         .iter()
+        // Returned layers are optional inventory for a later execution. They
+        // must not reopen the completed operation that returned the material.
+        .filter(|b| !b.is_layer_remainder())
         .map(|b| StageWorkInput {
             source_node: b
                 .payload_json

@@ -1032,7 +1032,8 @@ pub(super) fn wip_batch_in_use(
 }
 
 pub(super) fn wip_batch_was_consumed_by_producer(batch: &OrderProgressBatch) -> bool {
-    batch.action.creates_resumable_output()
+    batch.payload_json.get("layer_remainder_operation_id").is_none()
+        && batch.action.creates_resumable_output()
         && batch.wip_status == OrderProgressBatchWipStatus::Processed
         && super::types::apparatus_ids_match(&batch.processed_by_apparatus, &batch.apparatus)
         && (batch.used_by_apparatus.trim().is_empty()

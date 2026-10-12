@@ -497,6 +497,9 @@ pub(super) async fn correct_progress_batch(
     input: &ProgressBatchCorrectionInput,
     actor: &QueueActionActor,
 ) -> Result<OrderProgressBatch, ProductionMapError> {
+    if current.is_layer_remainder() {
+        return Err(ProductionMapError::ProgressBatchCorrectionLocked);
+    }
     let expected_revision = i64::try_from(input.expected_revision)
         .map_err(|_| ProductionMapError::ProgressBatchCorrectionConflict)?;
     let corrected = current.corrected(input);
@@ -529,6 +532,7 @@ pub(super) async fn correct_progress_batch(
          WHERE batch_id = $16
            AND revision = $17
            AND wip_status = 'waiting'
+           AND COALESCE(payload_json->>'origin', '') <> 'layer_remainder'
            AND (
                worker_ref = $18
                OR EXISTS (

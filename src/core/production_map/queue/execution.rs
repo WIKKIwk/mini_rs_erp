@@ -971,6 +971,7 @@ fn has_unprocessed_previous_wips_from_batches<'a>(
     }
     batches
         .into_iter()
+        .filter(|batch| !batch.is_layer_remainder())
         .filter(|batch| {
             let source_node = batch.payload_json.get("stage_node_id")
                 .and_then(serde_json::Value::as_str).unwrap_or_default().trim();

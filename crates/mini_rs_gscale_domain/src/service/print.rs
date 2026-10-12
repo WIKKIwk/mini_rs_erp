@@ -109,6 +109,31 @@ impl GscaleService {
         ))
     }
 
+    /// Reprint already recorded material inventory without posting a receipt.
+    pub async fn print_existing_material_label(
+        &self,
+        request: ProgressLabelPrintRequest,
+        warehouse: &str,
+    ) -> Result<ProgressLabelPrintResponse, GscaleServiceError> {
+        let job = NormalizedProgressLabelJob::from_request(&request)?;
+        if job.label_kind != "material_product" || warehouse.trim().is_empty() {
+            return Err(GscaleServiceError::InvalidInput(
+                "material_label_warehouse_required".to_string(),
+            ));
+        }
+        let driver = self.driver()?;
+        let mut print_request = job.driver_request();
+        print_request.warehouse = warehouse.trim().to_string();
+        let print = completed_print(driver.print_material_receipt(print_request).await)?;
+        Ok(progress_label_response(
+            "printed",
+            print.printer,
+            print.mode,
+            print.printer_status,
+            job,
+        ))
+    }
+
     pub async fn print_material_receipt_driver_first_with_late_error(
         &self,
         request: MaterialReceiptPrintRequest,

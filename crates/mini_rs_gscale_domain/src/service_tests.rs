@@ -363,6 +363,54 @@ fn progress_label_can_be_prepared_without_calling_a_driver() {
 }
 
 #[tokio::test]
+async fn existing_material_label_keeps_qr_warehouse_and_owner_without_receipt() {
+    struct Capture(Mutex<Option<ScaleDriverPrintRequest>>);
+    #[async_trait]
+    impl ScaleDriverPort for Capture {
+        async fn print_material_receipt(
+            &self,
+            request: ScaleDriverPrintRequest,
+        ) -> Result<ScaleDriverPrintResponse, GscalePortError> {
+            *self.0.lock().unwrap() = Some(request);
+            Ok(ScaleDriverPrintResponse {
+                ok: true,
+                status: "done".into(),
+                ..Default::default()
+            })
+        }
+    }
+    let driver = Arc::new(Capture(Mutex::new(None)));
+    let service = GscaleService::new().with_driver(driver.clone());
+    let result = service
+        .print_existing_material_label(
+            ProgressLabelPrintRequest {
+                qr_payload: "2001REMAINDER20".into(),
+                item_code: "CPP".into(),
+                item_name: "CPP 1000/25".into(),
+                executor_name: "Original supplier".into(),
+                label_kind: "material_product".into(),
+                gross_qty: 22.0,
+                tare_kg: 2.0,
+                tare_enabled: true,
+                progress_qty: 600.0,
+                print_count: 1,
+                ..Default::default()
+            },
+            "Film warehouse",
+        )
+        .await
+        .unwrap();
+    assert!(result.ok);
+    let request = driver.0.lock().unwrap().take().unwrap();
+    assert_eq!(request.epc, "2001REMAINDER20");
+    assert_eq!(request.warehouse, "Film warehouse");
+    assert_eq!(request.executor_name, "Original supplier");
+    assert_eq!(request.gross_qty, 22.0);
+    assert_eq!(request.tare_kg, 2.0);
+    assert_eq!(request.qty, Some(600.0));
+}
+
+#[tokio::test]
 async fn material_receipt_client_print_records_only_after_usb_confirmation() {
     const EPC: &str = "303132333435363738394142";
     let events = Arc::new(Mutex::new(Vec::new()));

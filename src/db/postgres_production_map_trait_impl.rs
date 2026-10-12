@@ -1,5 +1,17 @@
 #[async_trait]
 impl ProductionMapStorePort for PostgresProductionMapStore {
+    async fn layer_remainder_sources(&self, apparatus: &str, order_id: &str) -> Result<Vec<crate::core::production_map::LayerRemainderSource>, ProductionMapError> {
+        PostgresProductionMapStore::layer_remainder_sources(self, apparatus, order_id).await
+    }
+    async fn layer_remainder_history(&self, apparatus: &str, order_id: &str) -> Result<Vec<crate::core::production_map::LayerRemainderRecord>, ProductionMapError> {
+        PostgresProductionMapStore::layer_remainder_history(self, apparatus, order_id).await
+    }
+    async fn layer_remainder_by_id(&self, id: &str) -> Result<Option<crate::core::production_map::LayerRemainderRecord>, ProductionMapError> {
+        PostgresProductionMapStore::layer_remainder_by_id(self, id).await
+    }
+    async fn record_layer_remainder(&self, input: crate::core::production_map::LayerRemainderInput, actor: QueueActionActor) -> Result<crate::core::production_map::LayerRemainderRecord, ProductionMapError> {
+        PostgresProductionMapStore::record_layer_remainder(self, input, actor).await
+    }
     async fn paddon_management_settings(&self) -> Result<PaddonManagementSettings, ProductionMapError> {
         paddon_management::load(&self.pool).await
     }

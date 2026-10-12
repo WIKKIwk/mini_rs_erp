@@ -7,12 +7,21 @@ use super::progress::{
 use super::ProductionOrderLifecycleRecord;
 
 impl OrderProgressBatch {
+    /// A returned layer is existing material with a new inventory QR, not a
+    /// second production output by the worker who made the original roll.
+    pub fn is_layer_remainder(&self) -> bool {
+        self.payload_json.get("origin").and_then(serde_json::Value::as_str)
+            == Some("layer_remainder")
+    }
+
     pub fn refresh_status_detail(&mut self) {
         self.status_detail = OrderProgressBatchStatusDetail::from_batch(self);
     }
 
     pub fn is_finished_goods_output(&self) -> bool {
-        self.next_apparatus.trim().is_empty() && self.has_consistent_action_status()
+        !self.is_layer_remainder()
+            && self.next_apparatus.trim().is_empty()
+            && self.has_consistent_action_status()
     }
 
     pub(crate) fn has_consistent_action_status(&self) -> bool {

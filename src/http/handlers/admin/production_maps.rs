@@ -26,6 +26,8 @@ use crate::core::production_map::{
 use crate::google_sheets::is_sheet_order_map;
 
 mod astatka;
+mod layer_remainders;
+pub use layer_remainders::{production_map_layer_remainders, production_map_layer_remainder_reprint};
 mod completion;
 mod live_delta;
 mod worker_snapshot;

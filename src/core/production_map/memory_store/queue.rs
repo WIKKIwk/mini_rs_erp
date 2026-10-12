@@ -149,7 +149,7 @@ pub(crate) async fn refresh_production_order_lifecycles(
         let mut in_use_wip_count = 0;
         let mut accepted_wip_count = 0;
         for batch in store.order_progress_batches.read().await.values() {
-            if batch.order_id.trim() != order_id {
+            if batch.order_id.trim() != order_id || batch.is_layer_remainder() {
                 continue;
             }
             match super::super::types::OrderProgressBatchStatusDetail::flow_status_for_batch(batch)
