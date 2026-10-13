@@ -125,6 +125,14 @@ impl PreparedApparatusQueueAction {
         self.material_scan_skipped
     }
 
+    /// Raw materials belong to the station's work across input rolls. Only
+    /// the server-resolved final report can settle the remaining stock.
+    pub fn settles_completion_materials(&self) -> bool {
+        self.event.action == super::queue_state::ApparatusQueueAction::Complete
+            && self.event.payload_json.get("stage_work_report_submitted")
+                .and_then(serde_json::Value::as_bool) == Some(true)
+    }
+
     pub(crate) fn attach_start_materials(&mut self, materials: Vec<ProductionQrRawMaterial>) {
         if let Some(session) = &mut self.session {
             let mut resources = ProductionQrSessionResources::for_session(session);

@@ -66,7 +66,13 @@ async fn exact_balance_identity_retry_and_reusable_wip_and_raw_stock() {
         .await
         .unwrap();
     let check_pool = pool.clone();
-    let result = tokio::spawn(async move { checks(check_pool).await }).await;
+    // SQL recovery executes on one borrowed connection. Keep panic isolation
+    // for database cleanup without moving that transaction across threads.
+    let result = tokio::task::LocalSet::new()
+        .run_until(async move {
+            tokio::task::spawn_local(async move { checks(check_pool).await }).await
+        })
+        .await;
     pool.close().await;
     sqlx::query(&format!("DROP DATABASE {name} WITH (FORCE)"))
         .execute(&admin)
@@ -526,7 +532,58 @@ async fn additional_intake_and_legacy_mounted_source(
         .unwrap();
     assert_eq!(legacy, sources);
     run.status = OrderRunStatus::Completed;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+    run.updated_at_unix = now;
+    run.payload_json["last_action"] = json!("complete");
     store.put_order_run_session(run.clone()).await.unwrap();
+    let mut next_run = run.clone();
+    next_run.session_id = "additional-next-wip-session".into();
+    next_run.status = OrderRunStatus::Active;
+    next_run.started_at_unix = now + 1;
+    next_run.updated_at_unix = now + 1;
+    next_run.payload_json = json!({});
+    store.put_order_run_session(next_run.clone()).await.unwrap();
+    let continued = service.layer_remainder_sources(LAM, EXTRA_ORDER).await.unwrap();
+    assert_eq!(continued.len(), 1);
+    assert_eq!(continued[0].source_id, "extra25");
+    assert_eq!(continued[0].session_id, next_run.session_id);
+    assert_eq!(continued[0].source_net_kg, 25.0);
+
+    // Reproduce the historical bug, then run the same guarded audit recovery
+    // used for local 0054. The original debit must remain immutable.
+    sqlx::query("INSERT INTO mini_raw_material_events(event_id,idempotency_key,event_type,warehouse,barcode,item_code,item_name,qty_delta,uom,stock_status_before,stock_status_after,order_id,apparatus,canonical_apparatus_id,actor_role,actor_ref,actor_display_name,owner_role,owner_ref,owner_display_name,source_type,source_id,occurred_at) VALUES('premature-source-event',$1,'consumption_posted','Raw W','EXTRA25','FILM','CPP',-25,'kg','in_use','consumed',$2,$3,$3,'aparatchi','lam-worker','Laminator','material_taminotchi','original-supplier','Original Supplier','consumption',$2,to_timestamp($4))")
+        .bind(format!("consumption_posted:EXTRA25:{EXTRA_ORDER}:{LAM}"))
+        .bind(EXTRA_ORDER).bind(LAM).bind(now as f64).execute(pool).await.unwrap();
+    sqlx::query("UPDATE mini_raw_material_stock SET status='consumed' WHERE id='extra25'")
+        .execute(pool).await.unwrap();
+    let recovery = include_str!("../tools/db/repairs/0054_lamination_raw_consumption.sql")
+        .replace("zakaz-0054", EXTRA_ORDER)
+        .replace("30DDE6C27B4A9230F0A13CA9", "EXTRA25")
+        .replace("rme_47f878e2c7b58a2accf76db6c208329c", "premature-source-event")
+        .replace(&format!("order-run:1791844578597507000:apparatus-default-asset-007:{EXTRA_ORDER}:worker-d5f3bafec0949a7e26073f5d"), &run.session_id);
+    let mut connection = pool.acquire().await.unwrap();
+    sqlx::query("UPDATE mini_order_run_sessions SET payload_json=payload_json || '{\"stage_work_report\":{}}' WHERE session_id=$1")
+        .bind(&run.session_id).execute(&mut *connection).await.unwrap();
+    assert!(sqlx::raw_sql(&recovery).execute(&mut *connection).await.is_err());
+    sqlx::query("ROLLBACK").execute(&mut *connection).await.unwrap();
+    let still_consumed: String = sqlx::query_scalar("SELECT status FROM mini_raw_material_stock WHERE id='extra25'")
+        .fetch_one(&mut *connection).await.unwrap();
+    assert_eq!(still_consumed, "consumed");
+    sqlx::query("UPDATE mini_order_run_sessions SET payload_json=payload_json-'stage_work_report' WHERE session_id=$1")
+        .bind(&run.session_id).execute(&mut *connection).await.unwrap();
+    sqlx::raw_sql(&recovery).execute(&mut *connection).await.unwrap();
+    sqlx::raw_sql(&recovery).execute(&mut *connection).await.unwrap();
+    let recovery_events: i64 = sqlx::query_scalar("SELECT count(*) FROM mini_raw_material_events WHERE event_type='consumption_reversed' AND barcode='EXTRA25'")
+        .fetch_one(&mut *connection).await.unwrap();
+    assert_eq!(recovery_events, 1);
+    let restored: f64 = sqlx::query_scalar("SELECT sum(qty_delta)::float8 FROM mini_raw_material_events WHERE barcode='EXTRA25' AND event_type IN ('consumption_posted','consumption_reversed')")
+        .fetch_one(&mut *connection).await.unwrap();
+    assert_eq!(restored, 0.0);
+    drop(connection);
+    next_run.status = OrderRunStatus::Completed;
+    next_run.updated_at_unix = now + 2;
+    store.put_order_run_session(next_run).await.unwrap();
     store
         .put_apparatus_queue_states(
             LAM,
@@ -565,6 +622,12 @@ async fn additional_intake_and_legacy_mounted_source(
             .await
             .unwrap();
     assert_eq!(status, "consumed");
+    let net_consumption: f64 = sqlx::query_scalar("SELECT sum(qty_delta)::float8 FROM mini_raw_material_events WHERE order_id=$1 AND event_type IN ('consumption_posted','consumption_reversed','layer_remainder_returned')")
+        .bind(EXTRA_ORDER).fetch_one(pool).await.unwrap();
+    assert_eq!(net_consumption, -15.0);
+    let debits: i64 = sqlx::query_scalar("SELECT count(*) FROM mini_raw_material_events WHERE barcode='EXTRA25' AND event_type='consumption_posted'")
+        .fetch_one(pool).await.unwrap();
+    assert_eq!(debits, 2, "the corrected debit cannot suppress the actual final settlement");
     assert!(
         service
             .layer_remainder_sources(LAM, EXTRA_ORDER)

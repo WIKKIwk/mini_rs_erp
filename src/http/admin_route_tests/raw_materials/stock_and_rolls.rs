@@ -1,6 +1,101 @@
 use super::*;
 
 #[tokio::test]
+async fn lamination_roll_completion_preserves_material_for_next_wip() {
+    use crate::core::production_map::{
+        OrderProgressBatch, ProductionMapDefinition, ProductionMapStorePort,
+        RawMaterialAssignment, QueueActionActor, QueueProgressInput, queue_state,
+    };
+    const ORDER: &str = "zakaz-lamination-material-lifecycle";
+    const PRINT: &str = "apparatus:default:bosma_7";
+    const LAM: &str = "apparatus:default:asset-007";
+    let material_store = Arc::new(RawMaterialStockLookup::default());
+    material_store.set_stock_status("30AA", "in_use", ORDER).await;
+    let production_store = Arc::new(MemoryProductionMapStore::new());
+    let mut state = test_state();
+    state.production_maps = production_map_service_with_store(&state, production_store.clone());
+    state.gscale = GscaleService::new().with_receipt_store(material_store.clone());
+    let map: ProductionMapDefinition = serde_json::from_value(serde_json::json!({
+        "id":ORDER,"product_code":"PRODUCT","title":"Lamination material lifecycle",
+        "nodes":[{"id":"start","kind":"start","title":"Start"},
+            {"id":"print","kind":"apparatus","title":"Print","apparatus_id":PRINT},
+            {"id":"lam","kind":"apparatus","title":"Lamination","apparatus_id":LAM},
+            {"id":"end","kind":"end","title":"End"}],
+        "edges":[{"from":"start","to":"print"},{"from":"print","to":"lam"},
+            {"from":"lam","to":"end"}]
+    })).unwrap();
+    production_store.put_map(map).await.unwrap();
+    production_store.put_apparatus_queue_states(PRINT,
+        BTreeMap::from([(ORDER.into(),"completed".into())])).await.unwrap();
+    production_store.put_apparatus_sequence(LAM, vec![ORDER.into()]).await.unwrap();
+    production_store.put_raw_material_assignment(RawMaterialAssignment {
+        order_id: ORDER.into(), apparatus_id: ApparatusId::new(LAM).unwrap(),
+        apparatus: LAM.into(), barcode: "30AA".into(), item_code: "FILM".into(),
+        item_name: "CPP".into(), item_group: "Kraska".into(),
+        assigned_by_role: "material_taminotchi".into(), assigned_by_ref: "supplier".into(),
+        assigned_by_display_name: "Supplier".into(), assigned_at: "2026-10-13".into(),
+    }).await.unwrap();
+    for id in ["first", "second"] {
+        let roll: OrderProgressBatch = serde_json::from_value(serde_json::json!({
+            "batch_id":id,"session_id":"print-session","started_at_unix":1,"completed_at_unix":2,
+            "apparatus":PRINT,"order_id":ORDER,"action":"complete","status":"completed",
+            "produced_qty":100.0,"uom":"m","qr_payload":format!("qr-{id}"),
+            "label_item_code":"PRODUCT","label_item_name":"Printed film","executor_name":"Printer",
+            "worker_role":"aparatchi","worker_ref":"printer","worker_display_name":"Printer",
+            "wip_status":"waiting","next_apparatus":LAM,
+            "payload_json":{"stage_node_id":"print","next_stage_node_id":"lam"}
+        })).unwrap();
+        production_store.put_order_progress_batch(roll).await.unwrap();
+    }
+    state.admin.upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+        principal_role: PrincipalRole::Aparatchi,
+        principal_ref: "lamination-material-lifecycle-worker".into(),
+        role_id: "aparatchi".into(), assigned_apparatus: vec![LAM.into()],
+        assigned_item_groups: Vec::new(),
+    }).await.unwrap();
+    let token = session_for(&state, PrincipalRole::Aparatchi, "lamination-material-lifecycle-worker").await;
+    let production_service = state.production_maps.clone();
+    let router = build_router(state);
+    for (index, id) in ["first", "second"].into_iter().enumerate() {
+        let started = router.clone().oneshot(request_with_body(
+            "POST", "/v1/mobile/admin/production-maps/queue-action", &token,
+            &serde_json::json!({"apparatus":LAM,"order_id":ORDER,"action":"start",
+                "qr_payload":format!("qr-{id}")}).to_string(),
+        )).await.unwrap();
+        let status = started.status();
+        let body = json_body(started).await;
+        assert_eq!(status, StatusCode::OK, "start {id}: {body:?}");
+        let mounted = material_store.raw_material_stock_by_barcode("30AA").await.unwrap().unwrap();
+        assert_eq!(mounted.status, "in_use", "the same raw roll continues into the next WIP");
+        if index == 1 {
+            let prepared = production_service.prepare_apparatus_queue_action_with_progress(
+                LAM, ORDER, queue_state::ApparatusQueueAction::Complete, &[LAM.into()],
+                QueueActionActor { role:"aparatchi".into(),
+                    ref_:"lamination-material-lifecycle-worker".into(), display_name:"Worker".into() },
+                QueueProgressInput { produced_qty:Some(100.0),uom:"m".into(),
+                    finished_goods_meter:Some(100.0),finished_goods_kg:Some(10.0),bobina_kg:Some(1.0),
+                    lamination_print_leftover_rolls:Some(0.0),lamination_film_leftover_rolls:Some(0.0),
+                    total_waste:Some(1.0),lamination_layer_dispositions_attached:true,..Default::default() },
+            ).await.unwrap();
+            assert!(prepared.settles_completion_materials(), "the actual station report still settles material");
+            break;
+        }
+        let report = serde_json::json!({"apparatus":LAM,"order_id":ORDER,"action":"complete",
+            "produced_qty":100,"uom":"m","finished_goods_meter":100,"finished_goods_kg":10,
+            "bobina_kg":1,"printer":"zebra","print_mode":"plain","print_transport":"offline"});
+        let completed = router.clone().oneshot(request_with_body(
+            "POST", "/v1/mobile/admin/production-maps/queue-action", &token, &report.to_string(),
+        )).await.unwrap();
+        let status = completed.status();
+        let body = json_body(completed).await;
+        assert_eq!(status, StatusCode::OK, "complete {id}: {body:?}");
+        let mounted = material_store.raw_material_stock_by_barcode("30AA").await.unwrap().unwrap();
+        assert_eq!(mounted.status, "in_use");
+        assert_eq!(mounted.reserved_order_id, ORDER);
+    }
+}
+
+#[tokio::test]
 async fn queue_start_rejects_raw_material_stock_reserved_for_other_order() {
     let material_store = Arc::new(RawMaterialStockLookup::default());
     let mut state = test_state();

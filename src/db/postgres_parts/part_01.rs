@@ -3,7 +3,7 @@ const DEFAULT_MAX_CONNECTIONS: u32 = 16;
 const DEFAULT_ACQUIRE_TIMEOUT_MS: u64 = 500;
 const MIGRATION_LOCK_KEY: i64 = 6_514_811_918_052_026_001;
 
-const POSTGRES_MIGRATIONS: [(&str, &str); 143] = [
+const POSTGRES_MIGRATIONS: [(&str, &str); 144] = [
     (
         "0001_mini_erp_foundation",
         include_str!("../../../migrations/postgres/0001_mini_erp_foundation.sql"),
@@ -581,6 +581,10 @@ const POSTGRES_MIGRATIONS: [(&str, &str); 143] = [
     (
         "0143_lamination_astatka_transaction",
         include_str!("../../../migrations/postgres/0143_lamination_astatka_transaction.sql"),
+    ),
+    (
+        "0144_raw_material_consumption_reversal",
+        include_str!("../../../migrations/postgres/0144_raw_material_consumption_reversal.sql"),
     ),
 ];
 

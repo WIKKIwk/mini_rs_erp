@@ -798,6 +798,13 @@ impl ProductionMapService {
         qolip_checkouts: Vec<crate::core::qolip::QolipCheckout>,
         returned_paint_report: Option<crate::core::returned_paint::ReturnedPaintRequest>,
     ) -> Result<ApparatusQueueActionResult, ProductionMapError> {
+        let raw_material_stock_transitions = raw_material_stock_transitions
+            .into_iter()
+            .filter(|transition| {
+                transition.kind != super::super::RawMaterialStockTransitionKind::Complete
+                    || prepared.settles_completion_materials()
+            })
+            .collect();
         if let Some(session) = prepared.session.as_mut() {
             session.release_frozen_qolips();
         }

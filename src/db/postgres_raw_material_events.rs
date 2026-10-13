@@ -193,7 +193,44 @@ pub async fn insert_raw_material_event_tx(
     tx: &mut Transaction<'_, Postgres>,
     draft: RawMaterialEventDraft,
 ) -> Result<Option<String>, sqlx::Error> {
-    let draft = normalize_draft(draft)?;
+    let mut draft = normalize_draft(draft)?;
+    if draft.event_type == "consumption_posted"
+        && draft.order_id.is_some()
+        && draft.apparatus.is_some()
+    {
+        // A compensating audit leaves the original event immutable. The next
+        // real settlement must use a new, stable key rather than replaying it.
+        let recovery: Option<String> = sqlx::query_scalar(
+            "SELECT correction.event_id FROM mini_raw_material_events correction
+             JOIN mini_raw_material_events original
+               ON original.event_id = correction.payload_json->>'reversed_event_id'
+             WHERE correction.event_type = 'consumption_reversed'
+               AND correction.source_type = 'consumption'
+               AND correction.payload_json->>'reason_code' = 'premature_wip_completion'
+               AND correction.barcode = $2 AND correction.order_id = $3
+               AND correction.canonical_apparatus_id = $4
+               AND original.event_type = 'consumption_posted'
+               AND original.barcode = correction.barcode
+               AND original.order_id = correction.order_id
+               AND original.canonical_apparatus_id = correction.canonical_apparatus_id
+               AND correction.qty_delta = -original.qty_delta
+               AND (original.idempotency_key = $1
+                    OR strpos(original.idempotency_key, $1 || ':recovery:') = 1)
+             ORDER BY correction.id DESC LIMIT 1",
+        )
+        .bind(&draft.idempotency_key)
+        .bind(&draft.barcode)
+        .bind(&draft.order_id)
+        .bind(&draft.apparatus)
+        .fetch_optional(&mut **tx)
+        .await?;
+        if let Some(recovery) = recovery {
+            draft.idempotency_key = format!("{}:recovery:{recovery}", draft.idempotency_key);
+            if let Some(payload) = draft.payload_json.as_object_mut() {
+                payload.insert("consumption_recovery_event_id".into(), recovery.into());
+            }
+        }
+    }
     sqlx::query_scalar::<_, String>(
         "INSERT INTO mini_raw_material_events (
              event_id, idempotency_key, event_type, warehouse, barcode, item_code, item_name,

@@ -84,7 +84,7 @@ async fn execute_queue_action(
         }
     }
     let completed_material_barcodes =
-        if matches!(action, queue_state::ApparatusQueueAction::Complete) {
+        if prepared.settles_completion_materials() {
             raw_material_barcodes_for_order_apparatus(state, &order_id, &input_apparatus)
                 .await?
         } else {
