@@ -24,11 +24,18 @@ pub struct OrderMaterialTask {
 
 /// Prepared maps and the exact calculation must become visible together.
 pub struct NewProductionOrder {
+    pub creation: Option<OrderCreationIdentity>,
     pub map: ProductionMapDefinition,
     pub template_map: Option<ProductionMapDefinition>,
     pub template: CalculateOrderTemplate,
     pub quick_template: Option<CalculateOrderTemplate>,
     pub owner_key: String,
+}
+
+#[derive(Clone)]
+pub struct OrderCreationIdentity {
+    pub key: String,
+    pub fingerprint: String,
 }
 
 #[derive(Debug, Error)]
@@ -39,6 +46,16 @@ pub enum MiniOrderError {
 
 #[async_trait]
 pub trait MiniOrderSink: Send + Sync {
+    async fn save_template_map_atomic(
+        &self, _map: &ProductionMapDefinition, _template: &CalculateOrderTemplate, _owner: &str,
+    ) -> Result<CalculateOrderTemplate, ProductionMapError> { Err(ProductionMapError::StoreFailed) }
+    async fn order_creation_result(
+        &self,
+        _owner: &str,
+        _key: &str,
+    ) -> Result<Option<(String, serde_json::Value)>, ProductionMapError> {
+        Ok(None)
+    }
     async fn order_material_tasks(
         &self,
         _order_ids: &[String],

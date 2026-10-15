@@ -276,13 +276,16 @@ pub struct ProductionMapsQuery {
     id: String,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize)]
 struct ProductionMapSaveWithOrderRequest {
     #[serde(default)]
     pending_order_id: String,
     map: ProductionMapDefinition,
     #[serde(default)]
     template: Option<CalculateOrderTemplate>,
+    /// `use` opens an independent order; `fork` also creates a reusable variant.
+    #[serde(default)]
+    template_action: String,
 }
 
 #[derive(serde::Deserialize)]
@@ -333,6 +336,7 @@ pub async fn production_map_auto_open(
     // fields; never mutate or clone the reusable template identity supplied by
     // the client.
     template.id.clear();
+    template.variant_id.clear();
     template.code.clear();
     template.order_number.clear();
     template.source_map_id.clear();
@@ -365,6 +369,7 @@ pub async fn production_map_auto_open(
             pending_order_id: String::new(),
             map,
             template: Some(template),
+            template_action: String::new(),
         },
     )
     .await
@@ -378,6 +383,29 @@ async fn save_production_map_with_order(
     if !input.pending_order_id.is_empty() {
         return complete_pending_order(state, principal, input).await;
     }
+    if !matches!(
+        input.template_action.as_str(),
+        "" | "use" | "update" | "fork"
+    ) {
+        return Err(bad_request("template_action_invalid"));
+    }
+    if input.template_action == "use" && !is_sheet_order_map(&input.map)
+        && !input.map.id.starts_with("zakaz-draft-") {
+        return Err(bad_request("template_action_invalid"));
+    }
+    let owner_key = principal_owner_key(principal);
+    let creation = order_creation_identity(&input);
+    if let Some(response) = replay_order_creation(state, &owner_key, creation.as_ref()).await? {
+        return Ok(json_response(response));
+    }
+    let fork_template = input.template_action == "fork";
+    validate_quick_template_identity(state, &owner_key, &input).await?;
+    // The calculate draft owns the photo. Synchronize it before deriving a
+    // template fork so the order and its independent source map agree.
+    if let Some(template) = input.template.as_ref() {
+        input.map.image_id = template.image_id.trim().to_string();
+    }
+    let mut fork_map = prepare_template_fork(state, &mut input).await?;
     if let Some(template) = &input.template {
         validate_template(template).map_err(calculate_order_error)?;
         input.map.print_val_size_mm = template.print_val_size_mm;
@@ -394,26 +422,17 @@ async fn save_production_map_with_order(
     let order_number_was_generated = assign_order_number_if_missing(state, &mut input.map)
         .await
         .map_err(production_map_error)?;
-    // Link the calculate-page photo to the map itself (not only to the
-    // template): templates are skipped for quick-clone orders, but the map is
-    // always persisted, so the bottom sheet can resolve the image later.
-    if let Some(template) = input.template.as_ref() {
-        let image_id = template.image_id.trim();
-        if !image_id.is_empty() && input.map.image_id.trim().is_empty() {
-            input.map.image_id = image_id.to_string();
-        }
-    }
     if order_number_was_generated {
         let order_number = input.map.order_number.trim().to_string();
         if let Some(template) = input.template.as_mut() {
             template.order_number = order_number;
         }
     }
-    let opens_quick_template_as_order = input
-        .template
-        .as_ref()
-        .is_some_and(|template| is_quick_template_order_clone(&input.map, template));
-    let owner_key = principal_owner_key(principal);
+    let opens_quick_template_as_order = !fork_template
+        && input
+            .template
+            .as_ref()
+            .is_some_and(|template| is_quick_template_order_clone(&input.map, template));
     let map_id = input.map.id.trim().to_string();
     let previous = state
         .production_maps
@@ -421,16 +440,21 @@ async fn save_production_map_with_order(
         .await
         .map_err(production_map_error)?;
     if previous.is_none()
-        && is_sheet_order_map(&input.map)
+        && (is_sheet_order_map(&input.map) || fork_template)
         && let Some(template) = input.template.as_ref()
     {
         let cut_apparatus_ids = canonical_cut_apparatus_ids(state).await?;
-        apply_order_rezka_kadr_count(&mut input.map, template, &cut_apparatus_ids);
+        apply_order_rezka_kadr_count(&mut input.map, template, &cut_apparatus_ids)?;
+        if let Some(map) = fork_map.as_mut() {
+            apply_order_rezka_kadr_count(map, template, &cut_apparatus_ids)?;
+        }
     }
-    let template_map = input
-        .template
-        .as_ref()
-        .and_then(|template| template_map_copy_for_save(&input.map, template));
+    let template_map = fork_map.or_else(|| {
+        input
+            .template
+            .as_ref()
+            .and_then(|template| template_map_copy_for_save(&input.map, template))
+    });
     let template_map_id = template_map.as_ref().map(|map| map.id.trim().to_string());
     let previous_template_map = match &template_map_id {
         Some(template_map_id) => state
@@ -472,23 +496,38 @@ async fn save_production_map_with_order(
             None
         } else {
             let mut quick = template.clone();
+            if fork_template {
+                quick.kg = 0.0;
+                quick.order_number.clear();
+            }
             quick.source_map_id = template_map
                 .as_ref()
                 .map(|m| m.id.clone())
                 .unwrap_or_else(|| template_source_map_id_for_save(&saved.map, template));
             Some(quick)
         };
-        let saved_template = state
+        let created = state
             .production_orders
             .create_order_atomic(&crate::core::mini_orders::NewProductionOrder {
+                creation: creation.clone(),
                 map: saved.map.clone(),
                 template_map,
                 template: snapshot.clone(),
                 quick_template,
                 owner_key: owner_key.clone(),
             })
-            .await
-            .map_err(production_map_error)?;
+            .await;
+        let saved_template = match created {
+            Ok(template) => template,
+            Err(error) => {
+                if let Some(response) =
+                    replay_order_creation(state, &owner_key, creation.as_ref()).await?
+                {
+                    return Ok(json_response(response));
+                }
+                return Err(production_map_error(error));
+            }
+        };
         state.production_maps.notify_live();
         spawn_order_sheet_append(
             state.order_sheets.clone(),
@@ -498,6 +537,15 @@ async fn save_production_map_with_order(
         return Ok(json_response(serde_json::json!({
             "ok": true, "saved": saved, "template": saved_template,
         })));
+    }
+    if !is_sheet_order_map(&input.map) && state.production_orders.enabled()
+        && let Some(mut template) = input.template.clone() {
+        let _guard=state.production_maps.queue_action_guard().await;
+        let saved=state.production_maps.prepare_map_for_save(input.map.clone()).await.map_err(production_map_error)?;
+        template.source_map_id=template_source_map_id_for_save(&saved.map,&template);
+        let saved_template=state.production_orders.save_template_map_atomic(&saved.map,&template,&owner_key).await.map_err(production_map_error)?;
+        state.production_maps.notify_live();
+        return Ok(json_response(serde_json::json!({"ok":true,"saved":saved,"template":saved_template})));
     }
     let saved_map = if let Some(template_map) = template_map {
         state
@@ -587,6 +635,7 @@ async fn save_production_map_with_order(
 }
 
 include!("../production_maps_save_helpers.rs");
+include!("../production_maps_template_intent.rs");
 include!("../production_maps_pending_order.rs");
 include!("../production_maps_order_edit.rs");
 

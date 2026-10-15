@@ -71,6 +71,22 @@ pub async fn calculate_orders_route(
         Method::POST => {
             let template: CalculateOrderTemplate = serde_json::from_slice(&body)
                 .map_err(|_| bad_request("invalid_json", "invalid json"))?;
+            if !template.source_map_id.trim().is_empty() && !template.item_code.trim().is_empty() {
+                let existing = state
+                    .calculate_orders
+                    .list(&key)
+                    .await
+                    .map_err(calculate_order_error)?;
+                if existing.iter().any(|other| {
+                    other
+                        .source_map_id
+                        .eq_ignore_ascii_case(&template.source_map_id)
+                        && !other.item_code.is_empty()
+                        && other.item_code != template.item_code
+                }) {
+                    return Err(calculate_order_error(CalculateOrderError::IdentityConflict));
+                }
+            }
             let saved = state
                 .calculate_orders
                 .upsert(&key, template)
@@ -305,6 +321,13 @@ fn unix_micros() -> u128 {
 fn calculate_order_error(error: CalculateOrderError) -> (StatusCode, Json<CalculateErrorResponse>) {
     match error {
         CalculateOrderError::InvalidInput(detail) => bad_request("invalid_input", detail),
+        CalculateOrderError::IdentityConflict => (
+            StatusCode::CONFLICT,
+            Json(CalculateErrorResponse::new(
+                "template_identity_conflict",
+                error.to_string(),
+            )),
+        ),
         CalculateOrderError::StoreFailed => store_error(CalculateOrderError::StoreFailed),
     }
 }

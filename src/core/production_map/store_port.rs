@@ -284,6 +284,16 @@ pub trait ProductionMapStorePort: Send + Sync {
     }
     async fn put_map(&self, map: ProductionMapDefinition) -> StoreResult<()>;
     async fn put_maps_batch(&self, maps: &[ProductionMapDefinition]) -> StoreResult<()>;
+    /// Persist a pending apparatus move and its queue positions together.
+    /// Reject stale queue snapshots instead of overwriting a concurrent reorder.
+    async fn put_maps_with_sequences(
+        &self,
+        _maps: &[ProductionMapDefinition],
+        _expected_sequences: &ApparatusSequenceMap,
+        _sequences: &ApparatusSequenceMap,
+    ) -> StoreResult<()> {
+        Err(ProductionMapError::StoreFailed)
+    }
     async fn next_order_number(&self) -> StoreResult<String> {
         let max_order_number = self
             .maps()

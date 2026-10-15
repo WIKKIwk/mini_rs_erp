@@ -540,6 +540,11 @@ impl ProductionMapService {
             .map(|id| id.trim().to_ascii_lowercase())
             .filter(|id| !id.is_empty())
             .collect();
+        let mut seen = BTreeSet::new();
+        let map_ids = map_ids
+            .into_iter()
+            .filter(|id| seen.insert(id.clone()))
+            .collect::<Vec<_>>();
         if map_ids.is_empty() {
             return Err(ProductionMapError::MissingId);
         }
@@ -580,15 +585,21 @@ impl ProductionMapService {
             updated.push(next);
         }
 
-        self.store.put_maps_batch(&updated).await?;
-        self.notify_live();
-        updated
+        let saved = updated
             .into_iter()
             .map(|map| {
                 let program = compile_map(&map)?;
                 Ok(ProductionMapSaved { map, program })
             })
-            .collect()
+            .collect::<Result<Vec<_>, ProductionMapError>>()?;
+        let updated = saved
+            .iter()
+            .map(|saved| saved.map.clone())
+            .collect::<Vec<_>>();
+        self.persist_pending_move_maps(&maps, &updated, from_id.as_str(), to_id.as_str())
+            .await?;
+        self.notify_live();
+        Ok(saved)
     }
 
     /// Moves an order between apparatus, validating pechat rules server-side.
@@ -616,7 +627,7 @@ impl ProductionMapService {
             return Err(ProductionMapError::MoveNotAllowed);
         }
         let maps = self.store.maps().await?;
-        let Some(map) = maps.into_iter().find(|map| map.id.trim() == map_id) else {
+        let Some(map) = maps.iter().find(|map| map.id.trim() == map_id).cloned() else {
             return Err(ProductionMapError::MapNotFound);
         };
         if !move_allowed_by_id(&map, &from_id, &to_id)
@@ -637,7 +648,69 @@ impl ProductionMapService {
         {
             return Err(ProductionMapError::MoveNotAllowed);
         }
-        self.upsert_map_under_queue_guard(next).await
+        if !next.id.starts_with("template-")
+            && let Some(previous) = maps.iter().find(|map| map.id == next.id)
+            && !previous.order_number.trim().is_empty()
+            && crate::core::order_edit::calculation_map_changed(previous, &next)
+        {
+            return Err(ProductionMapError::OpenedOrderCalculationLocked);
+        }
+        let saved = self.prepare_map_for_save(next).await?;
+        self.persist_pending_move_maps(
+            &maps,
+            std::slice::from_ref(&saved.map),
+            from_id.as_str(),
+            to_id.as_str(),
+        )
+        .await?;
+        self.notify_live();
+        Ok(saved)
+    }
+
+    async fn persist_pending_move_maps(
+        &self,
+        previous_maps: &[ProductionMapDefinition],
+        updated_maps: &[ProductionMapDefinition],
+        from: &str,
+        to: &str,
+    ) -> Result<(), ProductionMapError> {
+        let (stored, controls) = tokio::join!(
+            self.store.apparatus_sequences(),
+            self.store.order_control_states()
+        );
+        let stored = stored?;
+        let frozen = controls?
+            .into_iter()
+            .filter_map(|(id, control)| (control.state == OrderControlState::Frozen).then_some(id))
+            .collect();
+        let mut effective =
+            Self::effective_apparatus_sequences_for_maps(previous_maps, &stored, &frozen);
+        super::apparatus::filter_unselected_print_orders(
+            previous_maps,
+            &self.active_canonical_apparatuses().await?,
+            &mut effective,
+        );
+        let moved = updated_maps
+            .iter()
+            .map(|map| map.id.as_str())
+            .collect::<BTreeSet<_>>();
+        let mut sequences = std::collections::BTreeMap::new();
+        let mut expected = std::collections::BTreeMap::new();
+        for apparatus in [from, to] {
+            expected.insert(
+                apparatus.to_string(),
+                stored.get(apparatus).cloned().unwrap_or_default(),
+            );
+            let mut sequence = effective.remove(apparatus).unwrap_or_default();
+            sequence.retain(|id| !moved.contains(id.as_str()));
+            if apparatus == to {
+                sequence.extend(updated_maps.iter().map(|map| map.id.clone()));
+            }
+            sequences.insert(apparatus.to_string(), sequence);
+        }
+        self.store
+            .put_maps_with_sequences(updated_maps, &expected, &sequences)
+            .await
     }
 
     pub async fn run_map(

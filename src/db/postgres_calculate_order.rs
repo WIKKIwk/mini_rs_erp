@@ -23,6 +23,24 @@ impl PostgresCalculateOrderStore {
 
 #[async_trait]
 impl CalculateOrderStorePort for PostgresCalculateOrderStore {
+    async fn validate_read_identity(&self, owner: &str, template: &CalculateOrderTemplate) -> Result<(), CalculateOrderError> {
+        let mut tx=self.pool.begin().await.map_err(|_| CalculateOrderError::StoreFailed)?;
+        resolve_template_identity_tx(&mut tx,owner,template,true).await?;
+        Ok(())
+    }
+    async fn validate_identity(
+        &self,
+        owner: &str,
+        template: &CalculateOrderTemplate,
+    ) -> Result<(), CalculateOrderError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| CalculateOrderError::StoreFailed)?;
+        resolve_template_identity_tx(&mut tx, owner, template, false).await?;
+        Ok(())
+    }
     async fn image_id_for_order(
         &self, lookup: &OrderImageLookup,
     ) -> Result<Option<String>, CalculateOrderError> {
@@ -207,13 +225,29 @@ pub(crate) async fn upsert_template_tx(
     mut template: CalculateOrderTemplate,
 ) -> Result<CalculateOrderTemplate, CalculateOrderError> {
     validate_template(&template)?;
+    // Serialize both identity lookups, including absent rows, for owner retries.
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("quick-template:{}", owner_key.trim()))
+        .execute(&mut **tx)
+        .await
+        .map_err(|_| CalculateOrderError::StoreFailed)?;
     if template.code.trim().is_empty() {
-        template.code = format!("Z-{}", new_id());
+        template.code = format!(
+            "Z-{}",
+            if template.id.trim().is_empty() {
+                new_id()
+            } else {
+                template.id.trim().to_string()
+            }
+        );
     }
-    let existing = existing_id_by_code(tx, owner_key, &template.code).await?;
-    let saved = stamp_template(template, existing);
+    let existing = resolve_template_identity_tx(tx, owner_key, &template, false).await?;
+    if let Some(identity) = &existing {
+        template.variant_id = identity.variant_id.clone();
+    }
+    let saved = stamp_template(template, existing.map(|row| row.id));
     let payload = serde_json::to_value(&saved).map_err(|_| CalculateOrderError::StoreFailed)?;
-    sqlx::query(
+    let written = sqlx::query(
         "INSERT INTO mini_quick_order_templates
             (id, owner_key, code, name, item_code, product_name, customer_ref,
              customer_name, payload_json, quick_key, saved_at)
@@ -223,7 +257,9 @@ pub(crate) async fn upsert_template_tx(
             item_code = excluded.item_code, product_name = excluded.product_name,
             customer_ref = excluded.customer_ref, customer_name = excluded.customer_name,
             payload_json = excluded.payload_json, quick_key = excluded.quick_key,
-            saved_at = excluded.saved_at",
+            saved_at = excluded.saved_at
+         WHERE mini_quick_order_templates.owner_key = excluded.owner_key
+           AND (btrim(mini_quick_order_templates.item_code) = '' OR mini_quick_order_templates.item_code = excluded.item_code)",
     )
     .bind(&saved.id)
     .bind(owner_key.trim())
@@ -238,26 +274,10 @@ pub(crate) async fn upsert_template_tx(
     .execute(&mut **tx)
     .await
     .map_err(|_| CalculateOrderError::StoreFailed)?;
+    if written.rows_affected() != 1 {
+        return Err(CalculateOrderError::IdentityConflict);
+    }
     Ok(saved)
-}
-
-async fn existing_id_by_code(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    owner_key: &str,
-    code: &str,
-) -> Result<Option<String>, CalculateOrderError> {
-    sqlx::query_scalar(
-        "SELECT id
-         FROM mini_quick_order_templates
-         WHERE owner_key = $1 AND lower(code) = lower($2)
-         ORDER BY saved_at DESC
-         LIMIT 1",
-    )
-    .bind(owner_key.trim())
-    .bind(code.trim())
-    .fetch_optional(&mut **tx)
-    .await
-    .map_err(|_| CalculateOrderError::StoreFailed)
 }
 
 fn json_rows_to_templates(
@@ -316,6 +336,7 @@ pub(crate) fn stamp_template(
     template.third_layer_micron = template.third_layer_micron.trim().to_string();
     template.note = template.note.trim().to_string();
     template.source_map_id = template.source_map_id.trim().to_string();
+    template.variant_id = template.variant_id.trim().to_string();
     template.saved_at = unix_micros().to_string();
     template
 }
@@ -350,6 +371,9 @@ fn dedupe_templates(templates: Vec<CalculateOrderTemplate>) -> Vec<CalculateOrde
 }
 
 pub(crate) fn quick_template_key(template: &CalculateOrderTemplate) -> String {
+    if !template.variant_id.is_empty() {
+        return format!("variant:{}", template.variant_id);
+    }
     let product_key = [
         template.item_code.as_str(),
         template.product.as_str(),
@@ -421,4 +445,35 @@ fn unix_micros() -> u128 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_micros())
         .unwrap_or_default()
+}
+
+async fn resolve_template_identity_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    owner_key: &str,
+    template: &CalculateOrderTemplate,
+    read_only: bool,
+) -> Result<Option<crate::core::calculate_orders::TemplateIdentity>, CalculateOrderError> {
+    let by_id = sqlx::query_as::<_, (String, String, String, String)>(
+        "SELECT id, owner_key, item_code, coalesce(payload_json->>'variant_id','') FROM mini_quick_order_templates WHERE id = $1")
+        .bind(template.id.trim()).fetch_optional(&mut **tx).await.map_err(|_| CalculateOrderError::StoreFailed)?;
+    let by_code = sqlx::query_as::<_, (String, String, String, String)>(
+        "SELECT id, owner_key, item_code, coalesce(payload_json->>'variant_id','') FROM mini_quick_order_templates WHERE owner_key = $1 AND lower(code) = lower($2) ORDER BY saved_at DESC LIMIT 1")
+        .bind(owner_key.trim()).bind(template.code.trim()).fetch_optional(&mut **tx).await.map_err(|_| CalculateOrderError::StoreFailed)?;
+    let identity =
+        |(id, owner, item_code, variant_id)| crate::core::calculate_orders::TemplateIdentity {
+            id,
+            owner,
+            item_code,
+            variant_id,
+        };
+    if read_only {
+        let existing = if template.id.trim().is_empty() { by_code } else { by_id };
+        return crate::core::calculate_orders::checked_template_read_identity(owner_key,template,existing.map(identity));
+    }
+    return crate::core::calculate_orders::checked_template_identity(
+        owner_key,
+        template,
+        by_id.map(identity),
+        by_code.map(identity),
+    );
 }

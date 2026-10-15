@@ -69,6 +69,44 @@ pub(super) async fn put_maps_batch(
     Ok(())
 }
 
+pub(super) async fn put_maps_with_sequences(
+    store: &MemoryProductionMapStore,
+    maps: &[ProductionMapDefinition],
+    expected_sequences: &BTreeMap<String, Vec<String>>,
+    sequences: &BTreeMap<String, Vec<String>>,
+) -> Result<(), ProductionMapError> {
+    for apparatus in sequences.keys() {
+        ApparatusId::new(apparatus.clone()).map_err(|_| ProductionMapError::StoreFailed)?;
+    }
+    let mut existing_maps = store.maps.write().await;
+    let mut stored_sequences = store.sequences.write().await;
+    for (apparatus, expected) in expected_sequences {
+        if stored_sequences
+            .get(apparatus)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+            != expected.as_slice()
+        {
+            return Err(ProductionMapError::QueueReorderConflict);
+        }
+    }
+    let mut next_maps = existing_maps.clone();
+    for map in maps {
+        reject_order_number_immutable(&next_maps, map)?;
+        if !map.order_number.trim().is_empty()
+            && next_maps.values().any(|existing| {
+                existing.order_number.trim() == map.order_number.trim() && existing.id != map.id
+            })
+        {
+            return Err(ProductionMapError::DuplicateOrderNumber);
+        }
+        next_maps.insert(map.id.clone(), map.clone());
+    }
+    *existing_maps = next_maps;
+    stored_sequences.extend(sequences.clone());
+    Ok(())
+}
+
 pub(super) async fn delete_map(
     store: &MemoryProductionMapStore,
     map_id: &str,

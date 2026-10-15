@@ -24,6 +24,26 @@ impl PostgresMiniOrderSink {
 
 #[async_trait]
 impl MiniOrderSink for PostgresMiniOrderSink {
+    async fn save_template_map_atomic(
+        &self, map: &ProductionMapDefinition, template: &CalculateOrderTemplate, owner: &str,
+    ) -> Result<CalculateOrderTemplate, ProductionMapError> {
+        let mut tx=self.pool.begin().await.map_err(|_| ProductionMapError::StoreFailed)?;
+        super::postgres_production_map::save_edited_map_tx(&mut tx,map).await?;
+        let saved=super::postgres_calculate_order::upsert_template_tx(&mut tx,owner,template.clone()).await.map_err(|error| match error {
+            crate::core::calculate_orders::CalculateOrderError::IdentityConflict => ProductionMapError::TemplateIdentityConflict,
+            _ => ProductionMapError::StoreFailed,
+        })?;
+        tx.commit().await.map_err(|_| ProductionMapError::StoreFailed)?;
+        Ok(saved)
+    }
+    async fn order_creation_result(
+        &self,
+        owner: &str,
+        key: &str,
+    ) -> Result<Option<(String, serde_json::Value)>, ProductionMapError> {
+        sqlx::query_as("SELECT fingerprint, response_json FROM mini_order_creation_receipts WHERE owner_key = $1 AND request_key = $2")
+            .bind(owner).bind(key).fetch_optional(&self.pool).await.map_err(|_| ProductionMapError::StoreFailed)
+    }
     async fn order_material_tasks(
         &self,
         order_ids: &[String],
@@ -134,6 +154,21 @@ impl MiniOrderSink for PostgresMiniOrderSink {
             .begin()
             .await
             .map_err(|_| ProductionMapError::StoreFailed)?;
+        if let Some(creation) = &order.creation {
+            sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+                .bind(format!(
+                    "order-creation:{}:{}",
+                    order.owner_key, creation.key
+                ))
+                .execute(&mut *tx)
+                .await
+                .map_err(|_| ProductionMapError::StoreFailed)?;
+            let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM mini_order_creation_receipts WHERE owner_key = $1 AND request_key = $2)")
+                .bind(&order.owner_key).bind(&creation.key).fetch_one(&mut *tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
+            if exists {
+                return Err(ProductionMapError::DuplicateOrderNumber);
+            }
+        }
         super::postgres_production_map::create_order_maps_tx(
             &mut tx,
             &order.map,
@@ -148,18 +183,26 @@ impl MiniOrderSink for PostgresMiniOrderSink {
                     template.clone(),
                 )
                 .await
-                .map_err(|_| ProductionMapError::StoreFailed)?,
+                .map_err(|error| match error {
+                    crate::core::calculate_orders::CalculateOrderError::IdentityConflict => {
+                        ProductionMapError::TemplateIdentityConflict
+                    }
+                    _ => ProductionMapError::StoreFailed,
+                })?,
             )
         } else {
             None
         };
-        save_order_tx(
-            &mut tx,
-            &order.map,
-            quick_template.as_ref().unwrap_or(&order.template),
-        )
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)?;
+        save_order_tx(&mut tx, &order.map, &order.template)
+            .await
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        if let Some(creation) = &order.creation {
+            let program = crate::core::production_map::compile_map(&order.map)?;
+            let response = serde_json::json!({"ok":true,"saved":{"map":order.map,"program":program},"template":quick_template});
+            sqlx::query("INSERT INTO mini_order_creation_receipts(owner_key, request_key, fingerprint, map_id, response_json) VALUES ($1,$2,$3,$4,$5)")
+                .bind(&order.owner_key).bind(&creation.key).bind(&creation.fingerprint).bind(&order.map.id).bind(response)
+                .execute(&mut *tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
+        }
         tx.commit()
             .await
             .map_err(|_| ProductionMapError::StoreFailed)?;

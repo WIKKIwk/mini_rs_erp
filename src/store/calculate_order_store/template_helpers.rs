@@ -1,29 +1,9 @@
 use std::collections::BTreeSet;
 
-use rusqlite::{Connection, OptionalExtension, params};
-
 use crate::core::calculate_orders::{
     CalculateOrderError, CalculateOrderImage, CalculateOrderTemplate, hydrate_template_layers,
 };
 use crate::core::formula::{DEFAULT_EDGE_ALLOWANCE_MM, derive_width_mm};
-
-pub(super) fn existing_id_by_code(
-    conn: &Connection,
-    owner_key: &str,
-    code: &str,
-) -> Result<Option<String>, CalculateOrderError> {
-    conn.query_row(
-        "SELECT id
-         FROM calculate_order_templates
-         WHERE owner_key = ?1 AND lower_code = ?2
-         ORDER BY saved_at DESC
-         LIMIT 1",
-        params![owner_key.trim(), normalize_key(code)],
-        |row| row.get(0),
-    )
-    .optional()
-    .map_err(|_| CalculateOrderError::StoreFailed)
-}
 
 pub(super) fn stamp_template(
     template: CalculateOrderTemplate,
@@ -67,6 +47,7 @@ pub(super) fn stamp_template(
     template.third_layer_micron = template.third_layer_micron.trim().to_string();
     template.note = template.note.trim().to_string();
     template.source_map_id = template.source_map_id.trim().to_string();
+    template.variant_id = template.variant_id.trim().to_string();
     template.saved_at = unix_micros().to_string();
     template
 }
@@ -120,6 +101,9 @@ pub(super) fn unix_micros() -> u128 {
 }
 
 fn quick_template_key(template: &CalculateOrderTemplate) -> String {
+    if !template.variant_id.is_empty() {
+        return format!("variant:{}", template.variant_id);
+    }
     let product_key = [
         template.item_code.as_str(),
         template.product.as_str(),

@@ -286,6 +286,50 @@ impl PostgresProductionMapStore {
             .map_err(|_| ProductionMapError::StoreFailed)
     }
 
+    async fn put_maps_with_sequences(
+        &self,
+        maps: &[ProductionMapDefinition],
+        expected_sequences: &BTreeMap<String, Vec<String>>,
+        sequences: &BTreeMap<String, Vec<String>>,
+    ) -> Result<(), ProductionMapError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        let order_ids = maps.iter().map(|map| map.id.as_str()).collect::<Vec<_>>();
+        let apparatus_ids = sequences.keys().map(String::as_str).collect::<Vec<_>>();
+        lock_orders_and_apparatuses_tx(&mut tx, &order_ids, &apparatus_ids).await?;
+        for (apparatus, expected) in expected_sequences {
+            let payload = sqlx::query_scalar::<_, serde_json::Value>(
+                "SELECT order_ids FROM mini_queue_sequences WHERE canonical_apparatus_id = $1",
+            )
+            .bind(apparatus)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+            let current = payload
+                .map(serde_json::from_value::<Vec<String>>)
+                .transpose()
+                .map_err(|_| ProductionMapError::StoreFailed)?
+                .unwrap_or_default();
+            if current != *expected {
+                return Err(ProductionMapError::QueueReorderConflict);
+            }
+        }
+        for map in maps {
+            reject_order_number_immutable_tx(&mut tx, map).await?;
+            reject_duplicate_order_number_tx(&mut tx, map).await?;
+            put_map_inner_tx(&mut tx, map).await?;
+        }
+        for (apparatus, order_ids) in sequences {
+            catalog_helpers::save_apparatus_sequence_tx(&mut tx, apparatus, order_ids).await?;
+        }
+        tx.commit()
+            .await
+            .map_err(|_| ProductionMapError::StoreFailed)
+    }
+
     async fn delete_map(&self, map_id: &str) -> Result<(), ProductionMapError> {
         delete_map_by_id(&self.pool, map_id).await
     }

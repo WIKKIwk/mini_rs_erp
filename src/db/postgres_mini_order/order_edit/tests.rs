@@ -436,6 +436,7 @@ async fn order_edit_postgres_atomic_save_history_and_races() {
         template.order_number = number.into();
         template.source_map_id = template_map.id.clone();
         NewProductionOrder {
+            creation: None,
             map,
             template_map: save_quick.then_some(template_map),
             quick_template: save_quick.then_some(template.clone()),

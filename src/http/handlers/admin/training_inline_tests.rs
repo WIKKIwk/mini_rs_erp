@@ -163,7 +163,8 @@ mod tests {
             &mut map,
             &template,
             &cut_apparatus_ids,
-        );
+        )
+        .expect("valid implicit cutting plan");
 
         assert_eq!(map.nodes[1].rezka_kadr_count, Some(4));
 
@@ -177,7 +178,8 @@ mod tests {
                 &mut map,
                 &edited_template,
                 &cut_apparatus_ids,
-            );
+            )
+            .expect("valid implicit cutting plan");
         }
 
         assert_eq!(map.nodes[1].rezka_kadr_count, Some(4));

@@ -48,7 +48,7 @@ async fn complete_pending_order(
     apply_authoritative_calculation(&mut input.map, &template, &materials)?;
     template.width_mm = input.map.width_mm.unwrap_or_default();
     let cut_ids = canonical_cut_apparatus_ids(state).await?;
-    apply_order_rezka_kadr_count(&mut input.map, &template, &cut_ids);
+    apply_order_rezka_kadr_count(&mut input.map, &template, &cut_ids)?;
     let saved = state
         .production_maps
         .prepare_map_for_save(input.map)

@@ -30,6 +30,9 @@ fn is_production_progress_qr(value: &str) -> bool {
 fn training_calculate_error(error: CalculateOrderError) -> TrainingWorkspaceError {
     match error {
         CalculateOrderError::InvalidInput(detail) => TrainingWorkspaceError::InvalidInput(detail),
+        CalculateOrderError::IdentityConflict => {
+            TrainingWorkspaceError::InvalidInput(error.to_string())
+        }
         CalculateOrderError::StoreFailed => TrainingWorkspaceError::StoreFailed,
     }
 }

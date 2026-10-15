@@ -143,6 +143,7 @@ async fn production_map_auto_open_reuses_automatic_routing_and_saves_order() {
     let body = serde_json::json!({
         "template": {
             "id": "reusable-template",
+            "variant_id": "reusable-template",
             "code": "Z-1234",
             "name": "automatic mahsulot",
             "product": "automatic mahsulot",

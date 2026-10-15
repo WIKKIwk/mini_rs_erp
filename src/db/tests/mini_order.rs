@@ -240,6 +240,7 @@ fn test_node(id: &str, kind: ProductionMapNodeKind, title: &str, y: f64) -> Prod
 
 fn test_template() -> CalculateOrderTemplate {
     CalculateOrderTemplate {
+        variant_id: String::new(),
         production_options: None,
         print_val_size_mm: None,
         id: String::new(),

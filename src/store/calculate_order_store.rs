@@ -16,8 +16,7 @@ mod tests;
 
 use self::migration::{configure_connection, migrate};
 use self::template_helpers::{
-    dedupe_templates, existing_id_by_code, new_id, normalize_key, stamp_image, stamp_template,
-    unix_micros,
+    dedupe_templates, new_id, normalize_key, stamp_image, stamp_template, unix_micros,
 };
 
 #[derive(Clone)]
@@ -51,6 +50,23 @@ impl CalculateOrderStore {
 
 #[async_trait]
 impl CalculateOrderStorePort for CalculateOrderStore {
+    async fn validate_read_identity(&self, owner: &str, template: &CalculateOrderTemplate) -> Result<(), CalculateOrderError> {
+        let conn=self.conn.lock().map_err(|_| CalculateOrderError::StoreFailed)?;
+        resolve_template_identity(&conn,owner,template,true)?;
+        Ok(())
+    }
+    async fn validate_identity(
+        &self,
+        owner: &str,
+        template: &CalculateOrderTemplate,
+    ) -> Result<(), CalculateOrderError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| CalculateOrderError::StoreFailed)?;
+        resolve_template_identity(&conn, owner, template, false)?;
+        Ok(())
+    }
     async fn list(
         &self,
         owner_key: &str,
@@ -112,31 +128,47 @@ impl CalculateOrderStorePort for CalculateOrderStore {
         template: CalculateOrderTemplate,
     ) -> Result<CalculateOrderTemplate, CalculateOrderError> {
         validate_template(&template)?;
-        let conn = self
+        let mut conn = self
             .conn
             .lock()
             .map_err(|_| CalculateOrderError::StoreFailed)?;
+        // The same file can be opened by multiple store instances.
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|_| CalculateOrderError::StoreFailed)?;
         let mut incoming = template;
         if incoming.code.trim().is_empty() {
-            incoming.code = format!("Z-{}", new_id());
+            incoming.code = format!(
+                "Z-{}",
+                if incoming.id.trim().is_empty() {
+                    new_id()
+                } else {
+                    incoming.id.trim().to_string()
+                }
+            );
         }
-        let existing = existing_id_by_code(&conn, owner_key, &incoming.code)?;
-        let saved = stamp_template(incoming, existing);
+        let existing = resolve_template_identity(&tx, owner_key, &incoming, false)?;
+        if let Some(identity) = &existing {
+            incoming.variant_id = identity.variant_id.clone();
+        }
+        let saved = stamp_template(incoming, existing.map(|row| row.id));
         let lower_code = normalize_key(&saved.code);
         let lower_name = normalize_key(&saved.name);
         let payload =
             serde_json::to_string(&saved).map_err(|_| CalculateOrderError::StoreFailed)?;
-        conn.execute(
+        let written = tx.execute(
             "INSERT INTO calculate_order_templates
                 (id, owner_key, code, lower_code, name, lower_name, saved_at, payload_json)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-             ON CONFLICT(owner_key, lower_code) DO UPDATE SET
-                id = excluded.id,
+             ON CONFLICT(id) DO UPDATE SET
                 code = excluded.code,
+                lower_code = excluded.lower_code,
                 name = excluded.name,
                 lower_name = excluded.lower_name,
                 saved_at = excluded.saved_at,
-                payload_json = excluded.payload_json",
+                payload_json = excluded.payload_json
+             WHERE calculate_order_templates.owner_key = excluded.owner_key
+               AND (coalesce(json_extract(calculate_order_templates.payload_json,'$.item_code'),'') = ''
+                    OR json_extract(calculate_order_templates.payload_json,'$.item_code') = json_extract(excluded.payload_json,'$.item_code'))",
             params![
                 saved.id,
                 owner_key.trim(),
@@ -149,6 +181,8 @@ impl CalculateOrderStorePort for CalculateOrderStore {
             ],
         )
         .map_err(|_| CalculateOrderError::StoreFailed)?;
+        if written != 1 { return Err(CalculateOrderError::IdentityConflict); }
+        tx.commit().map_err(|_| CalculateOrderError::StoreFailed)?;
         Ok(saved)
     }
 
@@ -263,4 +297,39 @@ impl CalculateOrderStorePort for CalculateOrderStore {
         .optional()
         .map_err(|_| CalculateOrderError::StoreFailed)
     }
+}
+
+fn resolve_template_identity(
+    conn: &Connection,
+    owner_key: &str,
+    template: &CalculateOrderTemplate,
+    read_only: bool,
+) -> Result<Option<crate::core::calculate_orders::TemplateIdentity>, CalculateOrderError> {
+    let read_identity = |sql: &str, a: &str, b: &str| {
+        conn.query_row(sql, params![a, b], |row| {
+            Ok(crate::core::calculate_orders::TemplateIdentity {
+                id: row.get(0)?,
+                owner: row.get(1)?,
+                item_code: row.get(2)?,
+                variant_id: row.get(3)?,
+            })
+        })
+        .optional()
+        .map_err(|_| CalculateOrderError::StoreFailed)
+    };
+    let by_id = read_identity(
+        "SELECT id, owner_key, coalesce(json_extract(payload_json, '$.item_code'), ''), coalesce(json_extract(payload_json, '$.variant_id'), '') FROM calculate_order_templates WHERE id = ?1 AND ?2 = ?2",
+        template.id.trim(),
+        "",
+    )?;
+    let by_code = read_identity(
+        "SELECT id, owner_key, coalesce(json_extract(payload_json, '$.item_code'), ''), coalesce(json_extract(payload_json, '$.variant_id'), '') FROM calculate_order_templates WHERE owner_key = ?1 AND lower_code = ?2",
+        owner_key.trim(),
+        &normalize_key(&template.code),
+    )?;
+    if read_only {
+        let existing = if template.id.trim().is_empty() { by_code } else { by_id };
+        return crate::core::calculate_orders::checked_template_read_identity(owner_key,template,existing);
+    }
+    crate::core::calculate_orders::checked_template_identity(owner_key, template, by_id, by_code)
 }

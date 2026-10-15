@@ -306,6 +306,8 @@ impl ProductionMapService {
     ) -> Result<(), ProductionMapError> {
         let order_id = order_id.trim();
         let now = super::progress::unix_seconds();
+        // Rerouting a pending order does not operate the press. Only the
+        // moved order's own reservation locks this operation.
         if self
             .store
             .active_print_preflight_holds()
@@ -313,6 +315,7 @@ impl ProductionMapService {
             .into_iter()
             .any(|hold| {
                 hold.is_live_at(now)
+                    && hold.order_id.trim() == order_id
                     && queue_state::apparatus_ids_match(&hold.apparatus, apparatus)
             })
         {

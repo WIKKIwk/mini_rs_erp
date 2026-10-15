@@ -7,6 +7,7 @@ mod fixtures;
 mod map_edit;
 mod opening_wip;
 mod order_control;
+mod pending_move;
 mod print_dispatch;
 mod print_preflight;
 mod queue_controls;

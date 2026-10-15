@@ -9,6 +9,7 @@ fn training_store(state: &AppState) -> Result<&PostgresTrainingWorkspaceStore, A
 fn training_calculate_error(error: CalculateOrderError) -> AdminError {
     match error {
         CalculateOrderError::InvalidInput(detail) => bad_request(detail),
+        CalculateOrderError::IdentityConflict => conflict("template_identity_conflict"),
         CalculateOrderError::StoreFailed => server_error("calculate order save failed"),
     }
 }

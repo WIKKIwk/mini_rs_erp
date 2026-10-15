@@ -18,7 +18,7 @@ async fn snapshot_new_training_order_rezka_kadr_count(
 ) -> Result<(), AdminError> {
     if map.order_number.trim().is_empty() {
         let cut_apparatus_ids = super::production_maps::canonical_cut_apparatus_ids(state).await?;
-        super::production_maps::apply_order_rezka_kadr_count(map, template, &cut_apparatus_ids);
+        super::production_maps::apply_order_rezka_kadr_count(map, template, &cut_apparatus_ids)?;
     }
     Ok(())
 }

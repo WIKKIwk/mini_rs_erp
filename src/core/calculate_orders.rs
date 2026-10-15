@@ -10,6 +10,9 @@ pub use image_reference::OrderImageLookup;
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 pub struct CalculateOrderTemplate {
+    /// Explicit independent variants opt out of legacy business-key merging.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub variant_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub production_options: Option<super::production_map::automatic::OrderProductionOptions>,
     #[serde(default)]
@@ -96,12 +99,71 @@ pub struct CalculateOrderImage {
 pub enum CalculateOrderError {
     #[error("invalid input: {0}")]
     InvalidInput(String),
+    #[error(
+        "Shablon identitysi boshqa mahsulot yoki egaga tegishli. Yangi variant uchun mustaqil ID va kod ishlating."
+    )]
+    IdentityConflict,
     #[error("store failed")]
     StoreFailed,
 }
 
+/// ID and owner/code are independent lookup paths. Both must name the same SKU.
+/// Display-name edits are deliberately not identity changes. Legacy empty SKUs
+/// may be hydrated, but an established SKU may never be silently replaced.
+pub(crate) struct TemplateIdentity {
+    pub id: String,
+    pub owner: String,
+    pub item_code: String,
+    pub variant_id: String,
+}
+
+pub(crate) fn checked_template_identity(
+    owner: &str,
+    incoming: &CalculateOrderTemplate,
+    by_id: Option<TemplateIdentity>,
+    by_code: Option<TemplateIdentity>,
+) -> Result<Option<TemplateIdentity>, CalculateOrderError> {
+    for existing in by_id.iter().chain(by_code.iter()) {
+        if existing.owner != owner.trim()
+            || (!existing.item_code.trim().is_empty()
+                && existing.item_code.trim() != incoming.item_code.trim())
+        {
+            return Err(CalculateOrderError::IdentityConflict);
+        }
+    }
+    if let (Some(id), Some(code)) = (&by_id, &by_code)
+        && id.id != code.id
+    {
+        return Err(CalculateOrderError::IdentityConflict);
+    }
+    Ok(by_code.or(by_id))
+}
+
+pub(crate) fn checked_template_read_identity(
+    owner: &str, incoming: &CalculateOrderTemplate, existing: Option<TemplateIdentity>,
+) -> Result<Option<TemplateIdentity>, CalculateOrderError> {
+    if let Some(identity)=&existing {
+        let readable=identity.owner == owner.trim()
+            || (owner.starts_with("admin:") && identity.owner.starts_with("telegram:"));
+        if !readable || (!identity.item_code.trim().is_empty() && identity.item_code.trim()!=incoming.item_code.trim()) {
+            return Err(CalculateOrderError::IdentityConflict);
+        }
+    }
+    Ok(existing)
+}
+
 #[async_trait]
 pub trait CalculateOrderStorePort: Send + Sync {
+    async fn validate_read_identity(&self, owner: &str, template: &CalculateOrderTemplate) -> Result<(), CalculateOrderError> {
+        self.validate_identity(owner,template).await
+    }
+    async fn validate_identity(
+        &self,
+        _owner: &str,
+        _template: &CalculateOrderTemplate,
+    ) -> Result<(), CalculateOrderError> {
+        Ok(())
+    }
     async fn list(
         &self,
         owner_key: &str,
@@ -146,6 +208,9 @@ pub trait CalculateOrderStorePort: Send + Sync {
 }
 
 pub fn validate_template(template: &CalculateOrderTemplate) -> Result<(), CalculateOrderError> {
+    if !template.variant_id.is_empty() && template.variant_id.trim() != template.id.trim() {
+        return Err(CalculateOrderError::IdentityConflict);
+    }
     if template
         .production_options
         .as_ref()

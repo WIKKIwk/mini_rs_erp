@@ -194,6 +194,15 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         MemoryProductionMapStore::put_maps_batch(self, maps).await
     }
 
+    async fn put_maps_with_sequences(
+        &self,
+        maps: &[ProductionMapDefinition],
+        expected_sequences: &BTreeMap<String, Vec<String>>,
+        sequences: &BTreeMap<String, Vec<String>>,
+    ) -> Result<(), ProductionMapError> {
+        maps::put_maps_with_sequences(self, maps, expected_sequences, sequences).await
+    }
+
     async fn delete_map(&self, map_id: &str) -> Result<(), ProductionMapError> {
         MemoryProductionMapStore::delete_map(self, map_id).await
     }

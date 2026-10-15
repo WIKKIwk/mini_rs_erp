@@ -66,7 +66,8 @@ pub(super) async fn training_queue_action(
             &mut training_map,
             &template,
             &cut_apparatus_ids,
-        );
+        )
+        .map_err(|error| TrainingWorkspaceError::InvalidInput(error.1.error.clone()))?;
         if training_rezka_frame_count(&training_map, &apparatus).is_ok() {
             store.save_map(training_map.clone()).await?;
         }

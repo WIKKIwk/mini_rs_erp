@@ -12,6 +12,7 @@ async fn calculate_order_sqlite_store_round_trips_and_upserts_templates() {
         .upsert(
             "admin:admin",
             CalculateOrderTemplate {
+                variant_id: String::new(),
                 production_options: None,
                 print_val_size_mm: None,
                 id: String::new(),
@@ -168,6 +169,7 @@ async fn calculate_order_sqlite_store_dedupes_same_quick_template_across_order_c
     let store = CalculateOrderStore::new(dir.path().join("orders.sqlite"));
 
     let base = CalculateOrderTemplate {
+        variant_id: String::new(),
         production_options: None,
         print_val_size_mm: None,
         id: String::new(),
@@ -305,6 +307,7 @@ async fn calculate_order_sqlite_store_dedupes_legacy_same_code_rows() {
     .expect("legacy schema");
 
     let old = CalculateOrderTemplate {
+        variant_id: String::new(),
         production_options: None,
         print_val_size_mm: None,
         id: "old-id".to_string(),
@@ -447,6 +450,7 @@ async fn calculate_order_sqlite_store_hydrates_legacy_width_only_payload() {
 
 fn test_template(code: &str) -> CalculateOrderTemplate {
     CalculateOrderTemplate {
+        variant_id: String::new(),
         production_options: None,
         print_val_size_mm: None,
         id: String::new(),

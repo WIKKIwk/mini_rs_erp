@@ -76,6 +76,8 @@ fn order_template_snapshot_for_map(
     template: &CalculateOrderTemplate,
 ) -> CalculateOrderTemplate {
     let mut snapshot = template.clone();
+    snapshot.id = format!("order-snapshot-{}", map.id.trim());
+    snapshot.variant_id.clear();
     let order_number = map.order_number.trim();
     let code = map.code.trim();
     if !order_number.is_empty() {
@@ -114,12 +116,50 @@ pub(super) fn apply_order_rezka_kadr_count(
     map: &mut ProductionMapDefinition,
     template: &CalculateOrderTemplate,
     cut_apparatus_ids: &std::collections::BTreeSet<ApparatusId>,
-) {
+) -> Result<(), AdminError> {
     let frame_count = template.frame_count.round();
-    if !template.frame_count.is_finite() || frame_count <= 0.0 {
-        return;
+    if !template.frame_count.is_finite()
+        || frame_count <= 0.0
+        || frame_count >= i64::MAX as f64
+    {
+        return Err(bad_request("rezka_frame_groups_invalid"));
     }
     let frame_count = frame_count as i64;
+    // A saved distribution is an explicit physical output plan, even [1,1,...].
+    // Only absent groups have the legacy implicit per-frame distribution.
+    // Validate every cutting occurrence before changing any part of the map.
+    let mut conflicts = Vec::new();
+    for node in &map.nodes {
+        if node.kind != ProductionMapNodeKind::Apparatus
+            || !node
+                .canonical_apparatus_id()
+                .is_some_and(|id| cut_apparatus_ids.contains(&id))
+            || node.rezka_frame_groups.is_empty()
+        {
+            continue;
+        }
+        let total = node.rezka_frame_groups.iter().try_fold(0_i64, |sum, n| {
+            if *n > 0 { sum.checked_add(*n) } else { None }
+        });
+        if total != Some(frame_count) {
+            conflicts.push(serde_json::json!({
+                "node_id": node.id, "apparatus_id": node.apparatus_id,
+                "title": node.title, "planned_frames": total,
+                "required_frames": frame_count,
+            }));
+        }
+    }
+    if !conflicts.is_empty() {
+        let messages = conflicts.iter().map(|c| format!(
+            "{} ({}): kesish rejasida {} kadr taqsimlangan, mahsulot uchun {} kadr kerak. Kesish rejasini tekshiring.",
+            c["title"].as_str().unwrap_or("Rezka"), c["node_id"].as_str().unwrap_or(""),
+            c["planned_frames"].as_i64().map(|n| n.to_string()).unwrap_or_else(|| "noto‘g‘ri".into()), frame_count
+        )).collect::<Vec<_>>();
+        let mut response = AdminErrorResponse::new("rezka_frame_groups_invalid");
+        response.message = Some(messages.join("\n"));
+        response.cutting_plan_conflicts = Some(conflicts);
+        return Err((StatusCode::BAD_REQUEST, Json(response)));
+    }
     for node in &mut map.nodes {
         if node.kind != ProductionMapNodeKind::Apparatus
             || !node
@@ -130,6 +170,7 @@ pub(super) fn apply_order_rezka_kadr_count(
         }
         node.rezka_kadr_count = Some(frame_count);
     }
+    Ok(())
 }
 
 pub(super) async fn canonical_cut_apparatus_ids(

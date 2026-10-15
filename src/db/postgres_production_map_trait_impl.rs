@@ -137,6 +137,21 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         PostgresProductionMapStore::put_maps_batch(self, maps).await
     }
 
+    async fn put_maps_with_sequences(
+        &self,
+        maps: &[ProductionMapDefinition],
+        expected_sequences: &BTreeMap<String, Vec<String>>,
+        sequences: &BTreeMap<String, Vec<String>>,
+    ) -> Result<(), ProductionMapError> {
+        PostgresProductionMapStore::put_maps_with_sequences(
+            self,
+            maps,
+            expected_sequences,
+            sequences,
+        )
+        .await
+    }
+
     async fn delete_map(&self, map_id: &str) -> Result<(), ProductionMapError> {
         PostgresProductionMapStore::delete_map(self, map_id).await
     }

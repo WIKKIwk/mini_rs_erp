@@ -219,12 +219,14 @@ pub(super) fn raw_material_stock_status_error(
 pub(super) fn calculate_order_error(error: CalculateOrderError) -> AdminError {
     match error {
         CalculateOrderError::InvalidInput(detail) => bad_request(detail),
+        CalculateOrderError::IdentityConflict => conflict("template_identity_conflict"),
         CalculateOrderError::StoreFailed => server_error("calculate order save failed"),
     }
 }
 
 pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
     match error {
+        ProductionMapError::TemplateIdentityConflict => conflict("template_identity_conflict"),
         ProductionMapError::MissingId => bad_request("map_id_required"),
         ProductionMapError::MissingProductCode => bad_request("map_product_code_required"),
         ProductionMapError::MissingTitle => bad_request("map_title_required"),
