@@ -479,6 +479,10 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
             StatusCode::FORBIDDEN,
             Json(AdminErrorResponse::new("paddon_unlock_forbidden")),
         ),
+        ProductionMapError::PaddonTransferForbidden => (
+            StatusCode::FORBIDDEN,
+            Json(AdminErrorResponse::new("paddon_transfer_forbidden")),
+        ),
         ProductionMapError::ActivePaddonRequired => conflict("active_paddon_required"),
         ProductionMapError::PaddonReceiptConflict => conflict("paddon_receipt_conflict"),
         ProductionMapError::PaddonAlreadyReceived => conflict("paddon_already_received"),

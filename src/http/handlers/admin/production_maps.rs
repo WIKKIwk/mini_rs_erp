@@ -43,6 +43,8 @@ mod order_image;
 mod paddons;
 mod paddon_print_lock;
 mod paddon_management;
+mod paddon_transfer;
+pub use paddon_transfer::production_map_paddon_items_transfer;
 mod print_preflight;
 mod progress_qr;
 mod qolip_validation;

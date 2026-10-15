@@ -76,6 +76,14 @@ pub struct PaddonCreateInput {
     pub actor_display_name: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PaddonTransferInput {
+    pub source_code: String,
+    pub target_code: String,
+    pub progress_batch_ids: Vec<String>,
+}
+
 pub(crate) fn paddon_unlock_actor_allowed(
     locked_by_ref: &str,
     free_movement_enabled: bool,

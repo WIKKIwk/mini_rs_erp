@@ -35,6 +35,19 @@ The mobile API retains the `/v1/mobile/*` namespace. Current endpoint definition
 are maintained in [the HTTP router](src/http/router), and the versioned database
 schema is maintained in [PostgreSQL migrations](migrations/postgres).
 
+### Paddon WIP transfers
+
+`POST /v1/mobile/admin/production-maps/paddons/items/transfer` accepts
+`{"source_code":"00001","target_code":"00002","progress_batch_ids":["batch-id"]}`.
+Administrators and workers assigned to cutting equipment with queue management
+access can move selected WIPs in one PostgreSQL transaction. Both paddons must
+be visible, unlocked, and unreceived. Workers need free movement permission to
+move another worker's paddon contents; visibility alone does not grant it.
+Only waiting, unreceived WIPs still assigned to the named source can move.
+All selected items move together or none move. Membership history records the
+authenticated actor; WIP identity, quantities, and lineage remain intact.
+Free movement also requires unlocked paddons on the legacy add/remove routes.
+
 ## Setup
 
 Requirements:

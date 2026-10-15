@@ -715,6 +715,14 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         PostgresProductionMapStore::add_paddon_items(self, code, progress_batch_ids, actor).await
     }
 
+    async fn transfer_paddon_items(
+        &self,
+        input: &crate::core::production_map::PaddonTransferInput,
+        actor: &QueueActionActor,
+    ) -> Result<(), ProductionMapError> {
+        paddon_transfer::transfer(&self.pool, input, actor).await
+    }
+
     async fn remove_paddon_item(
         &self,
         code: &str,

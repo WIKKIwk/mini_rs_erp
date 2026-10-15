@@ -114,7 +114,14 @@ async fn paddon_free_movement_is_atomic_audited_and_preserves_receipts() {
         "manager"
     );
     let detail = service.paddon_snapshot(&target.code).await.unwrap();
-    assert!(detail.free_movement_enabled && detail.can_manage_items);
+    assert!(detail.free_movement_enabled && !detail.can_manage_items);
+    assert!(detail.available_items.is_empty());
+    assert_eq!(service.add_paddon_items(&target.code, &ids, &worker).await,
+        Err(ProductionMapError::PaddonLocked));
+    service.unlock_paddon(&source.code, &worker).await.unwrap();
+    service.unlock_paddon(&target.code, &worker).await.unwrap();
+    let detail = service.paddon_snapshot(&target.code).await.unwrap();
+    assert!(detail.can_manage_items);
     assert!(
         ids.iter()
             .all(|id| detail.available_items.iter().any(|b| &b.batch_id == id))
@@ -175,6 +182,7 @@ async fn paddon_free_movement_is_atomic_audited_and_preserves_receipts() {
         .add_paddon_item(&target.code, &ids[1], &worker)
         .await
         .unwrap();
+    service.confirm_paddon_print(&target.code, &worker).await.unwrap();
     service
         .update_paddon_management_settings(false, &manager)
         .await

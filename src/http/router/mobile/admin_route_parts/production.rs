@@ -235,6 +235,7 @@ fn production_routes() -> Router<AppState> {
         .route("/v1/mobile/admin/production-maps/paddons/active/next", post(admin::production_map_paddon_next))
         .route("/v1/mobile/admin/production-maps/paddons/management-settings", any(admin::production_map_paddon_management_settings))
         .route("/v1/mobile/admin/production-maps/paddons/unlock", any(admin::production_map_paddon_unlock))
+        .route("/v1/mobile/admin/production-maps/paddons/items/transfer", any(admin::production_map_paddon_items_transfer))
         .route(
             "/v1/mobile/admin/production-maps/paddons/qr/print",
             any(admin::production_map_paddon_qr_print),

@@ -273,6 +273,8 @@ pub enum ProductionMapError {
     PaddonLocked,
     #[error("another worker's paddon cannot be unlocked without free movement permission")]
     PaddonUnlockForbidden,
+    #[error("moving another worker's paddon requires free movement permission")]
+    PaddonTransferForbidden,
     #[error("select an active paddon before recording a cutting output")]
     ActivePaddonRequired,
     #[error("paddon changed; scan again")]

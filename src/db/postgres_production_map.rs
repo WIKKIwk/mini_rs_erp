@@ -61,6 +61,8 @@ mod paddon_print_lock;
 mod paddon_management;
 #[path = "postgres_production_map/paddon/movement.rs"]
 mod paddon_movement;
+#[path = "postgres_production_map/paddon/transfer.rs"]
+mod paddon_transfer;
 #[path = "postgres_production_map/paddon/receipts.rs"]
 mod paddon_receipts;
 #[path = "postgres_production_map/print_preflight.rs"]

@@ -26,6 +26,33 @@ fn normalize_paddon_batch_ids(
 }
 
 impl ProductionMapService {
+    pub async fn transfer_paddon_items(
+        &self,
+        input: PaddonTransferInput,
+        actor: &QueueActionActor,
+    ) -> Result<PaddonTransferInput, ProductionMapError> {
+        let source_code = input.source_code.trim();
+        let target_code = input.target_code.trim();
+        if source_code.is_empty()
+            || target_code.is_empty()
+            || source_code == target_code
+            || source_code.len() > 128
+            || target_code.len() > 128
+            || actor.ref_.trim().is_empty()
+            || !matches!(actor.role.as_str(), "admin" | "aparatchi")
+        {
+            return Err(ProductionMapError::PaddonInvalidInput);
+        }
+        let input = PaddonTransferInput {
+            source_code: source_code.to_string(),
+            target_code: target_code.to_string(),
+            progress_batch_ids: normalize_paddon_batch_ids(&input.progress_batch_ids)?,
+        };
+        self.store.transfer_paddon_items(&input, actor).await?;
+        self.notify_live();
+        Ok(input)
+    }
+
     pub async fn paddon_management_settings(&self) -> Result<PaddonManagementSettings, ProductionMapError> {
         self.store.paddon_management_settings().await
     }

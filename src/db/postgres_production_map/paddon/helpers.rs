@@ -114,7 +114,7 @@ async fn load_snapshot_by_code(
     );
     let receipt = super::paddon_receipts::load(pool, code).await?;
     let free_movement_enabled = super::paddon_management::load(pool).await?.free_movement_enabled;
-    let can_manage_items = receipt.is_none() && (paddon.locked_at_unix.is_none() || free_movement_enabled);
+    let can_manage_items = receipt.is_none() && paddon.locked_at_unix.is_none();
     if let Some(receipt) = receipt {
         paddon.total_gross_kg = receipt.paddon.total_gross_kg;
         paddon.total_net_kg = receipt.paddon.total_net_kg;
@@ -420,7 +420,7 @@ pub(super) async fn remove_paddon_items(
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
     let allow_printed = super::paddon_management::lock_enabled(&mut tx).await?;
-    let paddon = lock_paddon(&mut tx, code, allow_printed).await?;
+    let paddon = lock_paddon(&mut tx, code, false).await?;
     let mut item_ids = Vec::with_capacity(progress_batch_ids.len());
     let mut batch_ids = progress_batch_ids.to_vec();
     batch_ids.sort();

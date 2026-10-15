@@ -782,6 +782,13 @@ pub trait ProductionMapStorePort: Send + Sync {
     ) -> StoreResult<PaddonSnapshot> {
         Err(ProductionMapError::StoreFailed)
     }
+    async fn transfer_paddon_items(
+        &self,
+        _input: &PaddonTransferInput,
+        _actor: &QueueActionActor,
+    ) -> StoreResult<()> {
+        Err(ProductionMapError::StoreFailed)
+    }
     async fn remove_paddon_item(
         &self,
         _code: &str,

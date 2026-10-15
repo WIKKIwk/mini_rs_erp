@@ -22,6 +22,8 @@ mod paddon_receipt;
 mod paddon_delete;
 #[path = "paddon_movement.rs"]
 mod paddon_movement;
+#[path = "paddon_transfer.rs"]
+mod paddon_transfer;
 #[path = "paddon_unlock.rs"]
 mod paddon_unlock;
 #[path = "paddon_visibility.rs"]

@@ -39,7 +39,7 @@ pub use production_maps::{
     production_map_order_scan_bootstrap, production_map_rezka_output_report, production_map_paddon_create,
     production_map_paddon_delete, production_map_paddon_detail, production_map_paddon_item_add,
     production_map_paddon_item_remove, production_map_paddon_items_add,
-    production_map_paddon_items_remove, production_map_paddon_qr_print,
+    production_map_paddon_items_remove, production_map_paddon_items_transfer, production_map_paddon_qr_print,
     production_map_paddon_qr_report, production_map_paddons, production_map_print_preflight,
     production_map_paddon_print_confirm, production_map_paddon_next,
     production_map_paddon_management_settings,

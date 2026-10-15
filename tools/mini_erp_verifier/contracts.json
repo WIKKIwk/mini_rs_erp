@@ -1,8 +1,8 @@
 {
   "protocol": 1,
   "route_snapshot": {
-    "count": 305,
-    "sha256": "e498d0295622c67ac9c8cc1cb63bad2f22503a0b3c852a7fe964c30659815b9c"
+    "count": 308,
+    "sha256": "20d68ef3d5a70aeedc0e37c7a12a0135e25524b12d9f510e78121127c54ea63d"
   },
   "access_matrices": [
     {
@@ -89,6 +89,14 @@
     }
   ],
   "cases": [
+    {"name":"paddon_transfer_requires_auth","request":{"method":"POST","uri":"/v1/mobile/admin/production-maps/paddons/items/transfer","body":{"source_code":"00001","target_code":"00002","progress_batch_ids":["roll-1"]}},"expect":{"status":401}},
+    {"name":"paddon_transfer_requires_cut_assignment","request":{"method":"POST","uri":"/v1/mobile/admin/production-maps/paddons/items/transfer","role":"aparatchi","body":{"source_code":"00001","target_code":"00002","progress_batch_ids":["roll-1"]}},"expect":{"status":403}},
+    {"name":"paddon_transfer_denies_supplier","request":{"method":"POST","uri":"/v1/mobile/admin/production-maps/paddons/items/transfer","role":"supplier","body":{"source_code":"00001","target_code":"00002","progress_batch_ids":["roll-1"]}},"expect":{"status":403}},
+    {"name":"paddon_transfer_denies_warehouse","request":{"method":"POST","uri":"/v1/mobile/admin/production-maps/paddons/items/transfer","role":"werka","body":{"source_code":"00001","target_code":"00002","progress_batch_ids":["roll-1"]}},"expect":{"status":403}},
+    {"name":"paddon_transfer_rejects_read","request":{"method":"GET","uri":"/v1/mobile/admin/production-maps/paddons/items/transfer","role":"admin"},"expect":{"status":405}},
+    {"name":"paddon_transfer_rejects_same_paddon","request":{"method":"POST","uri":"/v1/mobile/admin/production-maps/paddons/items/transfer","role":"admin","body":{"source_code":"00001","target_code":"00001","progress_batch_ids":["roll-1"]}},"expect":{"status":400,"body":{"error":"paddon_invalid_input"}}},
+    {"name":"paddon_transfer_rejects_empty_selection","request":{"method":"POST","uri":"/v1/mobile/admin/production-maps/paddons/items/transfer","role":"admin","body":{"source_code":"00001","target_code":"00002","progress_batch_ids":[]}},"expect":{"status":400}},
+    {"name":"paddon_transfer_rejects_forged_actor","request":{"method":"POST","uri":"/v1/mobile/admin/production-maps/paddons/items/transfer","role":"admin","body":{"source_code":"00001","target_code":"00002","progress_batch_ids":["roll-1"],"actor_ref":"other-worker"}},"expect":{"status":400}},
     {"name":"warehouse_qr_preview_anonymous","request":{"method":"GET","uri":"/v1/mobile/werka/qr/preview?qr_payload=missing"},"expect":{"status":401}},
     {"name":"warehouse_qr_receive_anonymous","request":{"method":"POST","uri":"/v1/mobile/werka/wip/receive","body":{"progress_batch_id":"missing","qr_payload":"missing","warehouse":"WH-1","snapshot_token":"missing"}},"expect":{"status":401}},
     {"name":"warehouse_qr_preview_admin","request":{"method":"GET","uri":"/v1/mobile/werka/qr/preview?qr_payload=missing","role":"admin"},"expect":{"status":403}},

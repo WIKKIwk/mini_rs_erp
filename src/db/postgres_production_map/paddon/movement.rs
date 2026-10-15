@@ -14,7 +14,7 @@ pub(super) async fn load_available(
            AND COALESCE(b.payload_json->>'received_warehouse', '')=''
            AND NOT EXISTS (SELECT 1 FROM mini_paddon_items i JOIN mini_paddons p ON p.id=i.paddon_id
                WHERE i.progress_batch_id=b.batch_id AND i.removed_at IS NULL
-                 AND (p.id=$1 OR p.receipt_json IS NOT NULL))
+                 AND (p.id=$1 OR p.receipt_json IS NOT NULL OR p.locked_at IS NOT NULL))
          ORDER BY b.updated_at DESC, b.batch_id LIMIT 500",
     )
     .bind(target_id)
@@ -42,18 +42,21 @@ pub(super) async fn move_items(
     lock_ids.insert(target.clone());
     // Lock source and destination in one stable order, then the rolls in order.
     // Receipt takes the same pallet and roll locks and remains authoritative.
-    let locked = sqlx::query_as::<_, (String, Option<serde_json::Value>)>(
-        "SELECT id, receipt_json FROM mini_paddons WHERE id=ANY($1) ORDER BY id FOR UPDATE",
+    let locked = sqlx::query_as::<_, (String, Option<serde_json::Value>, bool)>(
+        "SELECT id, receipt_json, locked_at IS NOT NULL FROM mini_paddons WHERE id=ANY($1) ORDER BY id FOR UPDATE",
     )
     .bind(lock_ids.iter().cloned().collect::<Vec<_>>())
     .fetch_all(&mut **tx)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
-    if !locked.iter().any(|(id, _)| id == &target) {
+    if !locked.iter().any(|(id, _, _)| id == &target) {
         return Err(ProductionMapError::PaddonNotFound);
     }
-    if locked.iter().any(|(_, receipt)| receipt.is_some()) {
+    if locked.iter().any(|(_, receipt, _)| receipt.is_some()) {
         return Err(ProductionMapError::PaddonAlreadyReceived);
+    }
+    if locked.iter().any(|(_, _, printed)| *printed) {
+        return Err(ProductionMapError::PaddonLocked);
     }
     let mut changed = BTreeSet::new();
     let mut batch_ids = batch_ids.to_vec();

@@ -124,7 +124,7 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         let Some(paddon) = self.paddons.read().await.get(code).cloned() else { return Ok(None); };
         let enabled = self.paddon_management_settings.read().await.free_movement_enabled;
         Ok(Some(PaddonSnapshot {
-            can_manage_items: paddon.locked_at_unix.is_none() || enabled,
+            can_manage_items: paddon.locked_at_unix.is_none(),
             paddon, items: Vec::new(), available_items: Vec::new(), free_movement_enabled: enabled,
         }))
     }
