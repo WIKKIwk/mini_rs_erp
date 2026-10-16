@@ -289,6 +289,8 @@ pub(super) async fn ensure_qolip_access(
 pub(super) fn qolip_error(error: QolipError) -> (StatusCode, Json<QolipErrorResponse>) {
     match error {
         QolipError::AccessDenied => forbidden(),
+        QolipError::SetChanged => conflict("qolip_set_changed"),
+        QolipError::SetAmbiguous => conflict("qolip_set_ambiguous"),
         QolipError::ProductTransferConflict => conflict("qolip_product_transfer_conflict"),
         QolipError::StoreFailed => (
             StatusCode::INTERNAL_SERVER_ERROR,

@@ -8,6 +8,10 @@ async fn save_product_spec_tx(
              SELECT 1
              FROM mini_qolip_product_specs
              WHERE lower(qolip_code) = $1
+             UNION ALL
+             SELECT 1 FROM mini_qolip_sets sets WHERE lower(sets.set_id) = $1 OR (
+                 lower(sets.display_code) = $1 AND EXISTS (
+                     SELECT 1 FROM mini_qolip_product_specs member WHERE member.qolip_set_id = sets.set_id))
          )",
     )
     .bind(&normalized_qolip_code)
@@ -111,6 +115,12 @@ pub(super) async fn rename_product_spec(
             "SELECT EXISTS (
                  SELECT 1 FROM mini_qolip_product_specs WHERE lower(qolip_code) = $1
                  UNION ALL
+                 SELECT 1 FROM mini_qolip_sets sets
+                 WHERE (lower(sets.set_id) = $1 OR (
+                     lower(sets.display_code) = $1 AND EXISTS (
+                         SELECT 1 FROM mini_qolip_product_specs member WHERE member.qolip_set_id = sets.set_id)))
+                   AND sets.set_id <> $2
+                 UNION ALL
                  SELECT 1 FROM mini_qolip_locations WHERE lower(qolip_code) = $1
                  UNION ALL
                  SELECT 1 FROM mini_qolip_checkouts
@@ -136,6 +146,7 @@ pub(super) async fn rename_product_spec(
              )",
         )
         .bind(&next)
+        .bind(spec.set_id())
         .fetch_one(&mut *tx)
         .await
         .map_err(|_| QolipError::StoreFailed)?;

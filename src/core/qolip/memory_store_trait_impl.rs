@@ -1,5 +1,8 @@
 #[async_trait]
 impl QolipStorePort for MemoryQolipStore {
+    async fn resolve_shared_set(&self, identifier: &str) -> Result<Option<super::QolipSetSnapshot>, QolipError> { self.memory_resolve_set(identifier).await }
+    async fn linked_product_specs(&self, item_code: &str) -> Result<Vec<QolipProductSpec>, QolipError> { Ok(self.memory_linked_specs(item_code).await) }
+    async fn reuse_shared_set(&self, set_id: &str, item_code: &str, fingerprint: &str, _principal: &Principal, allowed: &[String]) -> Result<super::QolipSetSnapshot, QolipError> { self.memory_reuse_set(set_id, item_code, fingerprint, allowed).await }
     async fn transfer_product_specs(
         &self,
         input: &QolipProductTransfer,
@@ -15,10 +18,11 @@ impl QolipStorePort for MemoryQolipStore {
             if !item_codes.iter().any(|code| code.trim().eq_ignore_ascii_case(product.code.trim())) {
                 continue;
             }
-            let specs = self.product_specs(&product.code).await?;
+            let mut specs = self.product_specs(&product.code).await?;
+            specs.extend(self.memory_linked_specs(&product.code).await);
             let has_qolip_spec = !product.item_group.trim().is_empty() && specs.iter().any(|spec| {
-                spec.item_code.trim().eq_ignore_ascii_case(product.code.trim())
-                    && spec.item_group.trim().eq_ignore_ascii_case(product.item_group.trim())
+                (!spec.item_code.trim().eq_ignore_ascii_case(product.code.trim())
+                    || spec.item_group.trim().eq_ignore_ascii_case(product.item_group.trim()))
                     && !spec.qolip_code.trim().is_empty()
             });
             result.push(QolipProduct {

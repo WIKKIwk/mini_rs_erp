@@ -243,6 +243,10 @@ pub struct QolipLocationUpsert {
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum QolipError {
+    #[error("qolip set changed; confirm the current complete set")]
+    SetChanged,
+    #[error("qolip identifier resolves to more than one set")]
+    SetAmbiguous,
     #[error("qolip access denied")]
     AccessDenied,
     #[error("qolip product transfer conflicts with current state")]

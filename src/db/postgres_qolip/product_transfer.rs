@@ -67,69 +67,40 @@ pub(super) async fn transfer(
     }
 
     let mut previous = Vec::new();
-    let mut transferred_sets = std::collections::BTreeMap::new();
     let mut specs = Vec::new();
+    let mut sets = std::collections::BTreeSet::new();
     for code in &input.qolip_codes {
         reject_in_use(&mut tx, code).await?;
         let old = load_spec(&mut tx, code).await?;
         ensure_owner(&old, allowed)?;
-        if !old
-            .item_code
-            .trim()
-            .eq_ignore_ascii_case(&input.from_item_code)
-        {
+        let linked = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM mini_qolip_set_products WHERE set_id = $1 AND item_code_key = lower(btrim($2)))"
+        ).bind(old.set_id()).bind(&input.from_item_code).fetch_one(&mut *tx).await
+            .map_err(|_| QolipError::StoreFailed)?;
+        if !linked { return Err(QolipError::ProductTransferConflict); }
+        sets.insert(old.set_id());
+        let mut projected = old.clone();
+        projected.item_code = target.0.clone();
+        projected.item_name = target.1.clone();
+        projected.item_group = target.2.clone();
+        previous.push(old);
+        specs.push(projected);
+    }
+    for set_id in sets {
+        let members = sqlx::query_scalar::<_, String>(
+            "SELECT lower(qolip_code) FROM mini_qolip_product_specs WHERE qolip_set_id = $1 ORDER BY lower(qolip_code) FOR SHARE"
+        ).bind(&set_id).fetch_all(&mut *tx).await.map_err(|_| QolipError::StoreFailed)?;
+        if members.is_empty() || members.iter().any(|code| !input.qolip_codes.contains(code)) {
             return Err(QolipError::ProductTransferConflict);
         }
-        let mut spec = old.clone();
-        spec.qolip_set_id = transferred_sets.entry(old.set_id())
-            .or_insert_with(|| format!("qolip-set:{:032x}", rand::random::<u128>())).clone();
-        spec.item_code = target.0.clone();
-        spec.item_name = target.1.clone();
-        spec.item_group = target.2.clone();
-        previous.push(old);
-        specs.push(spec);
+        sqlx::query("INSERT INTO mini_qolip_set_products(set_id, item_code, created_by_role, created_by_ref, created_by_name)
+            VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING")
+            .bind(&set_id).bind(&target.0).bind(crate::core::qolip::role_code(&principal.role))
+            .bind(&principal.ref_).bind(&principal.display_name).execute(&mut *tx).await
+            .map_err(|_| QolipError::StoreFailed)?;
+        sqlx::query("DELETE FROM mini_qolip_set_products WHERE set_id = $1 AND item_code_key = lower(btrim($2))")
+            .bind(&set_id).bind(&input.from_item_code).execute(&mut *tx).await.map_err(|_| QolipError::StoreFailed)?;
     }
-    for spec in &specs {
-        super::catalog_locations::update_product_locations_tx(
-            &mut tx,
-            &spec.qolip_code.to_lowercase(),
-            spec,
-        )
-        .await?;
-        sqlx::query(
-            "INSERT INTO mini_qolip_product_specs
-                (item_code, item_name, item_group, qolip_code, size,
-                 created_by_role, created_by_ref, created_by_name, payload_json)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-             ON CONFLICT (lower(qolip_code)) DO UPDATE SET
-                item_code = EXCLUDED.item_code, item_name = EXCLUDED.item_name,
-                item_group = EXCLUDED.item_group, payload_json = EXCLUDED.payload_json,
-                updated_at = now()",
-        )
-        .bind(&spec.item_code)
-        .bind(&spec.item_name)
-        .bind(&spec.item_group)
-        .bind(&spec.qolip_code)
-        .bind(spec.size)
-        .bind(&spec.created_by_role)
-        .bind(&spec.created_by_ref)
-        .bind(&spec.created_by_name)
-        .bind(serde_json::to_value(spec).map_err(|_| QolipError::StoreFailed)?)
-        .execute(&mut *tx)
-        .await
-        .map_err(|_| QolipError::StoreFailed)?;
-    }
-    sqlx::query(
-        "UPDATE mini_items SET payload_json = jsonb_set(
-             COALESCE(payload_json, '{}'::jsonb), '{qolip_first_code}', to_jsonb($2::text), true
-         ), updated_at = now()
-         WHERE code = $1 AND COALESCE(btrim(payload_json->>'qolip_first_code'), '') = ''",
-    )
-    .bind(&target.0)
-    .bind(&specs[0].qolip_code)
-    .execute(&mut *tx)
-    .await
-    .map_err(|_| QolipError::StoreFailed)?;
     // Record the correction and its response in the same transaction. A lost
     // response can be retried without moving the QR twice or rewriting history.
     sqlx::query(

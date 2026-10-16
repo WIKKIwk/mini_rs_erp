@@ -6,11 +6,15 @@ impl QolipService {
         principal: &Principal,
     ) -> Result<QolipLocation, QolipError> {
         if input.qolip_code.trim().is_empty() || input.size <= 0 {
-            let spec = self
+            let native = self
                 .store
                 .product_spec(&input.item_code)
-                .await?
-                .ok_or(QolipError::MissingQolipCode)?;
+                .await?;
+            let spec = match native {
+                Some(spec) => spec,
+                None => self.store.linked_product_specs(&input.item_code).await?
+                    .into_iter().next().ok_or(QolipError::MissingQolipCode)?,
+            };
             if input.item_name.trim().is_empty() {
                 input.item_name = spec.item_name.clone();
             }
@@ -25,6 +29,11 @@ impl QolipService {
                 || !spec.warehouse.trim().eq_ignore_ascii_case(input.warehouse.trim()) {
                 return Err(QolipError::LocationIdentityMismatch);
             }
+            // Catalog projections may show a compatible product. Stock retains the physical identity.
+            input.item_code = spec.item_code;
+            input.item_name = spec.item_name;
+            input.item_group = spec.item_group;
+            input.size = spec.size;
         }
         let normalized = normalize_location(input, principal)?;
         self.store.put_location(normalized).await

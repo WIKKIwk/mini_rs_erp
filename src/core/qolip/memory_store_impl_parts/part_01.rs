@@ -105,6 +105,7 @@ impl MemoryQolipStore {
                 .collect::<BTreeSet<_>>()
         };
         let products = self.products.read().await.clone();
+        let shared_links = self.shared_links.read().await.clone();
         let products_by_code = products
             .iter()
             .enumerate()
@@ -124,7 +125,7 @@ impl MemoryQolipStore {
                 if !is_visible(&spec.warehouse) {
                     continue;
                 }
-                let item_key = spec.item_code.trim().to_lowercase();
+                for item_key in memory_set_targets(&shared_links, &spec.set_id(), &spec.item_code) {
                 item_codes_with_qolip.insert(item_key.clone());
                 let base = products_by_code
                     .get(&item_key)
@@ -132,7 +133,7 @@ impl MemoryQolipStore {
                 let item = QolipProduct {
                     qolip_set_id: spec.set_id(),
                     warehouse: spec.warehouse.clone(),
-                    code: spec.item_code.clone(),
+                    code: base.map(|product| product.code.clone()).unwrap_or_else(|| spec.item_code.clone()),
                     name: base
                         .map(|product| product.name.clone())
                         .filter(|name| !name.trim().is_empty())
@@ -156,6 +157,7 @@ impl MemoryQolipStore {
                 };
                 if memory_product_matches(&item, &query) {
                     items.push(item);
+                }
                 }
             }
         }
@@ -337,12 +339,14 @@ impl MemoryQolipStore {
 
     async fn product_specs(&self, item_code: &str) -> Result<Vec<QolipProductSpec>, QolipError> {
         let item_code = item_code.trim();
+        let shared_links = self.shared_links.read().await.clone();
         let mut specs = self
             .product_specs
             .read()
             .await
             .values()
-            .filter(|spec| spec.item_code.trim().eq_ignore_ascii_case(item_code))
+            .filter(|spec| spec.item_code.trim().eq_ignore_ascii_case(item_code)
+                && memory_set_targets(&shared_links, &spec.set_id(), &spec.item_code).contains(&item_code.to_lowercase()))
             .cloned()
             .collect::<Vec<_>>();
         let mut seen = specs

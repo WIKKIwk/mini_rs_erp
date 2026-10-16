@@ -150,9 +150,11 @@ impl QolipService {
                 if !existing.warehouse.trim().is_empty() {
                     normalized.warehouse = existing.warehouse.clone();
                 }
-                if normalized.item_code.eq_ignore_ascii_case(&existing.item_code) {
-                    normalized.qolip_set_id = existing.set_id();
-                }
+                // Editing through a compatible product never reassigns the physical mold.
+                normalized.qolip_set_id = existing.set_id();
+                normalized.item_code = existing.item_code.clone();
+                normalized.item_name = existing.item_name.clone();
+                normalized.item_group = existing.item_group.clone();
                 normalized.created_by_role = existing.created_by_role;
                 normalized.created_by_ref = existing.created_by_ref;
                 normalized.created_by_name = existing.created_by_name;
@@ -242,14 +244,7 @@ impl QolipService {
             .order_product(item_code, item_name)
             .await?
             .ok_or(QolipError::QolipCodeMismatch)?;
-        let mut specs = self
-            .store
-            .product_specs(&expected_product.code)
-            .await?
-            .into_iter()
-            .filter(|spec| qolip_spec_matches_order(spec, &expected_product))
-            .filter(|spec| !spec.qolip_code.trim().is_empty())
-            .collect::<Vec<_>>();
+        let mut specs = self.compatible_specs_for_product(&expected_product).await?;
         specs.sort_by_key(|spec| spec.qolip_code.trim().to_lowercase());
         specs.dedup_by(|left, right| {
             left.qolip_code
@@ -264,7 +259,8 @@ impl QolipService {
         if item_code.is_empty() {
             return Ok(false);
         }
-        Ok(self.store.product_spec(item_code).await?.is_some())
+        Ok(!self.store.product_specs(item_code).await?.is_empty()
+            || !self.store.linked_product_specs(item_code).await?.is_empty())
     }
 
     pub async fn order_product_requires_qolip(
@@ -340,7 +336,8 @@ impl QolipService {
             .order_product(expected_item_code, expected_item_name)
             .await?
             .ok_or(QolipError::QolipCodeMismatch)?;
-        if !qolip_spec_matches_order(&spec, &expected_product) {
+        if !self.compatible_specs_for_product(&expected_product).await?.iter()
+            .any(|candidate| candidate.set_id() == spec.set_id() && candidate.qolip_code.eq_ignore_ascii_case(&spec.qolip_code)) {
             return Err(QolipError::QolipCodeMismatch);
         }
         let existing_checkout = self.store.open_checkout_by_qolip_code(qolip_code).await?;

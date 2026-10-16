@@ -41,6 +41,8 @@ pub fn stage_ids_match(left: &str, right: &str) -> bool {
 /// title-derived value cannot become lineage state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct QolipLineage {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) qolip_set_snapshot: Option<serde_json::Value>,
     #[serde(default)]
     pub(crate) qolip_set_id: String,
     pub(crate) qolip_code: String,
@@ -63,6 +65,7 @@ impl QolipLineage {
             normalized.push(code.to_string());
         }
         normalized.first().cloned().map(|qolip_code| Self {
+            qolip_set_snapshot: None,
             qolip_set_id: String::new(),
             qolip_code,
             qolip_codes: normalized,
@@ -90,6 +93,7 @@ impl QolipLineage {
             codes.insert(0, primary);
         }
         let mut lineage = Self::from_codes(&codes)?;
+        lineage.qolip_set_snapshot = payload.get("qolip_set_snapshot").filter(|value| value.is_object()).cloned();
         lineage.qolip_set_id = payload.get("qolip_set_id").and_then(serde_json::Value::as_str).unwrap_or_default().to_string();
         Some(lineage)
     }
@@ -103,6 +107,9 @@ impl QolipLineage {
         }
         payload["qolip_code"] = serde_json::json!(self.qolip_code);
         payload["qolip_codes"] = serde_json::json!(self.qolip_codes);
+        if let Some(snapshot) = &self.qolip_set_snapshot {
+            payload["qolip_set_snapshot"] = snapshot.clone();
+        }
     }
 }
 

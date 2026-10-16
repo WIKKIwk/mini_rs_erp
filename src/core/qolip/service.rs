@@ -27,10 +27,8 @@ impl QolipService {
         let allowed = self.warehouses_for_principal(principal, false).await?;
         let mut products = self.store.order_products(item_codes).await?;
         for product in &mut products {
-            product.has_qolip_spec = self.store.product_specs(&product.code).await?.iter().any(|spec| {
-                spec.item_code.trim().eq_ignore_ascii_case(product.code.trim())
-                    && spec.item_group.trim().eq_ignore_ascii_case(product.item_group.trim())
-                    && !spec.qolip_code.trim().is_empty()
+            product.has_qolip_spec = self.compatible_specs_for_product(product).await?.iter().any(|spec| {
+                !spec.qolip_code.trim().is_empty()
                     && !spec.warehouse.trim().is_empty() && allowed.iter().any(|warehouse| {
                     warehouse.trim().eq_ignore_ascii_case(spec.warehouse.trim())
                 })
@@ -48,6 +46,7 @@ include!("service_impl_parts/part_01.rs");
 include!("service_impl_parts/part_02.rs");
 
 include!("service_matches.rs");
+include!("service_shared_sets.rs");
 
 impl QolipService {
     pub async fn transfer_product_specs(

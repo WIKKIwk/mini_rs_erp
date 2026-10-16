@@ -4,6 +4,7 @@ pub(crate) mod normalize;
 mod normalize_qr;
 mod ports;
 mod service;
+mod shared_sets;
 #[cfg(test)]
 mod service_tests;
 
@@ -19,3 +20,5 @@ pub use normalize::role_code;
 pub use normalize_qr::qolip_scan_code_from_qr;
 pub use ports::QolipStorePort;
 pub use service::QolipService;
+pub use shared_sets::{QolipSetProduct, QolipSetReuse, QolipSetSnapshot};
+pub(crate) use shared_sets::candidate_codes;

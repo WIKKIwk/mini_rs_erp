@@ -147,10 +147,24 @@ impl PreparedApparatusQueueAction {
     }
 
     pub fn attach_qolip_set(&mut self, qolip_codes: &[String], set_id: &str) {
+        self.attach_qolip_set_details(qolip_codes, set_id, None);
+    }
+
+    pub fn attach_qolip_catalog_set(&mut self, specs: &[crate::core::qolip::QolipProductSpec]) {
+        let Some(first) = specs.first() else { return; };
+        let codes = specs.iter().map(|spec| spec.qolip_code.clone()).collect::<Vec<_>>();
+        let snapshot = serde_json::json!({"set_id": first.set_id(), "members": specs.iter().map(|spec| {
+            serde_json::json!({"qolip_code": spec.qolip_code, "size": spec.size, "color": spec.color})
+        }).collect::<Vec<_>>()});
+        self.attach_qolip_set_details(&codes, &first.set_id(), Some(snapshot));
+    }
+
+    fn attach_qolip_set_details(&mut self, qolip_codes: &[String], set_id: &str, snapshot: Option<serde_json::Value>) {
         let Some(mut lineage) = QolipLineage::from_codes(qolip_codes) else {
             return;
         };
         lineage.qolip_set_id = set_id.to_string();
+        lineage.qolip_set_snapshot = snapshot;
         if let Some(session) = &mut self.session {
             if session.qolip_reacquisition_required() {
                 self.event.payload_json["qolip_reacquired_after_freeze"] = serde_json::json!(true);

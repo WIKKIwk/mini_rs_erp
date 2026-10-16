@@ -93,15 +93,21 @@ pub(super) async fn load_products(
         ),
         qolip_sources AS (
             SELECT
-                spec.item_code,
-                spec.item_name,
-                spec.item_group,
+                linked_item.code AS item_code,
+                linked_item.name AS item_name,
+                linked_item.item_group,
                 spec.qolip_code,
                 spec.size,
                 COALESCE(spec.payload_json->>'warehouse', '') AS warehouse,
                 COALESCE(spec.payload_json->>'color', '') AS color,
                 spec.created_at
             FROM mini_qolip_product_specs spec
+            JOIN mini_qolip_set_products link ON link.set_id = spec.qolip_set_id
+            JOIN eligible_items linked_item ON linked_item.code = link.item_code
+            UNION ALL
+            SELECT spec.item_code, spec.item_name, spec.item_group, spec.qolip_code, spec.size,
+                COALESCE(spec.payload_json->>'warehouse', ''), COALESCE(spec.payload_json->>'color', ''), spec.created_at
+            FROM mini_qolip_product_specs spec WHERE spec.qolip_set_id IS NULL
             UNION ALL
             SELECT
                 location.item_code,
@@ -323,6 +329,8 @@ pub(super) async fn load_product_specs(
                 spec.updated_at
             FROM mini_qolip_product_specs spec
             WHERE lower(spec.item_code) = lower($1)
+              AND (spec.qolip_set_id IS NULL OR EXISTS (SELECT 1 FROM mini_qolip_set_products link
+                          WHERE link.set_id = spec.qolip_set_id AND link.item_code_key = lower(btrim($1))))
             UNION ALL
             SELECT
                 location.item_code,

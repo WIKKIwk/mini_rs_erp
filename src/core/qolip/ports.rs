@@ -9,6 +9,9 @@ use super::models::{
 
 #[async_trait]
 pub trait QolipStorePort: Send + Sync {
+    async fn resolve_shared_set(&self, _identifier: &str) -> Result<Option<super::QolipSetSnapshot>, QolipError> { Ok(None) }
+    async fn reuse_shared_set(&self, _set_id: &str, _item_code: &str, _fingerprint: &str, _principal: &Principal, _allowed: &[String]) -> Result<super::QolipSetSnapshot, QolipError> { Err(QolipError::StoreFailed) }
+    async fn linked_product_specs(&self, _item_code: &str) -> Result<Vec<QolipProductSpec>, QolipError> { Ok(Vec::new()) }
     async fn transfer_product_specs(
         &self,
         _input: &QolipProductTransfer,
