@@ -1,5 +1,6 @@
 fn production_routes() -> Router<AppState> {
     Router::new()
+        .route("/v1/mobile/admin/production-maps/re-pause", post(admin::production_map_re_pause))
         .route(
             "/v1/mobile/admin/production-maps/order-alert",
             any(admin::production_map_order_alert),

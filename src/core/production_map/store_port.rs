@@ -447,6 +447,14 @@ pub trait ProductionMapStorePort: Send + Sync {
     ) -> StoreResult<()> {
         Err(ProductionMapError::PrintPreflightNotReady)
     }
+    /// Only stores with atomic checkpoint validation expose output-free re-pause.
+    fn supports_resume_pause(&self) -> bool { false }
+    async fn re_pause_resumed_work(
+        &self, _apparatus: &str, _order_id: &str, _resume_id: &str,
+        _actor: &QueueActionActor, _assigned_apparatus: &[String],
+    ) -> StoreResult<()> {
+        Err(ProductionMapError::QueueActionNotAllowed)
+    }
     async fn apparatus_queue_states(&self) -> StoreResult<ApparatusQueueStateMap>;
     async fn put_apparatus_queue_states(
         &self,

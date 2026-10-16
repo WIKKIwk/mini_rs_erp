@@ -1,5 +1,15 @@
 #[async_trait]
 impl ProductionMapStorePort for PostgresProductionMapStore {
+    fn supports_resume_pause(&self) -> bool { true }
+
+    async fn re_pause_resumed_work(
+        &self, apparatus: &str, order_id: &str, resume_id: &str,
+        actor: &QueueActionActor, assigned_apparatus: &[String],
+    ) -> Result<(), ProductionMapError> {
+        re_pause::re_pause(self, apparatus, order_id, resume_id, actor, assigned_apparatus).await
+    }
+
+
     async fn layer_remainder_sources(&self, apparatus: &str, order_id: &str) -> Result<Vec<crate::core::production_map::LayerRemainderSource>, ProductionMapError> {
         PostgresProductionMapStore::layer_remainder_sources(self, apparatus, order_id).await
     }

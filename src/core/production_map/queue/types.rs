@@ -129,6 +129,8 @@ pub struct ApparatusQueueOrderActionControl {
     pub work_activity: Option<super::ApparatusQueueWorkActivity>,
     /// Persisted activity for this machine and stage; presentation only.
     pub last_worked_at_unix: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub re_pause: Option<crate::core::production_map::ResumePauseControl>,
     pub state: queue_state::ApparatusQueueOrderState,
     #[serde(default)]
     pub allowed_actions: Vec<queue_state::ApparatusQueueAction>,

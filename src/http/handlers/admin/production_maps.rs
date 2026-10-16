@@ -49,6 +49,8 @@ mod print_preflight;
 mod progress_qr;
 mod qolip_validation;
 mod queue_actions;
+mod re_pause;
+pub use re_pause::production_map_re_pause;
 mod raw_material_details;
 mod material_link_requests;
 pub use material_link_requests::material_link_requests;

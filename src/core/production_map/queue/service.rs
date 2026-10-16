@@ -1338,6 +1338,10 @@ impl ProductionMapService {
                 apparatus_controls.insert(
                     order_id.trim().to_string(),
                     ApparatusQueueOrderActionControl {
+                        re_pause: if state == queue_state::ApparatusQueueOrderState::InProgress
+                            && control == OrderControlState::Active {
+                            active_session.and_then(super::super::re_pause::control)
+                        } else { None },
                         stage_work,
                         work_activity: ApparatusQueueWorkActivity::from_session(
                             active_session,

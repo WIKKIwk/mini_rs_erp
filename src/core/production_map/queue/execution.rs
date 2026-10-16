@@ -12,6 +12,8 @@ impl ProductionMapService {
         let order_id = order_id.trim();
         validate_queue_action_request(apparatus, order_id, assigned_apparatus)?;
         let control = self.order_control_state(order_id).await?;
+        let resume_pause_allowed = self.store.supports_resume_pause()
+            && control.state == OrderControlState::Active && control.early_close.is_none();
         let freeze_request_finalization = control.state == OrderControlState::FreezeRequested
             && (requested_action.creates_resumable_output()
                 || requested_action == queue_state::ApparatusQueueAction::Freeze);
@@ -583,7 +585,7 @@ impl ProductionMapService {
         } else {
             BTreeMap::new()
         };
-        Ok(PreparedApparatusQueueAction {
+        let mut prepared = PreparedApparatusQueueAction {
             apparatus: storage_key,
             states: serialized_queue_states(parsed),
             sequence_updates,
@@ -600,7 +602,11 @@ impl ProductionMapService {
             print_preflight_hold_id: None,
             print_preflight_cancel_hold_id: print_preflight_hold
                 .map(|hold| hold.hold_id.trim().to_string()),
-        })
+        };
+        if resume_pause_allowed && let Some(previous) = active_session.as_ref() {
+            super::super::re_pause::attach_checkpoint(previous, &mut prepared);
+        }
+        Ok(prepared)
     }
 
     async fn previous_progress_ready_for_action(

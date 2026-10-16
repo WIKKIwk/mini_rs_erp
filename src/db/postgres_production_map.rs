@@ -34,6 +34,7 @@ mod lifecycle;
 mod layer_remainder;
 mod lamination_astatka;
 mod sequence_move;
+mod re_pause;
 #[cfg(test)]
 mod sequence_move_tests;
 mod stage_execution;
@@ -1355,6 +1356,7 @@ pub(super) async fn apply_queue_progress_tx(
             .await?;
         }
         validate_queue_action_event_transition_tx(tx, &write.event).await?;
+        re_pause::validate_resume_checkpoint_tx(tx, write).await?;
         stage_execution::validate_input_claims_tx(tx, write).await?;
         let output_paddon = output_paddon_assignment::lock_for_output(tx, write).await?;
         if let Some(expected) = write.event.payload_json.get("bosma_closing_expected_payload") {
