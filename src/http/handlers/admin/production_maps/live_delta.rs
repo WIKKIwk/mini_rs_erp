@@ -34,6 +34,7 @@ async fn read_view(
     include_requests: bool,
     worker_scope: bool,
     reuse_history: Option<(&LiveView, u64)>,
+    window: &super::worker_snapshot::WorkerQueueWindow,
 ) -> Result<LiveView, AdminError> {
     let service = &state.production_maps;
     loop {
@@ -48,7 +49,7 @@ async fn read_view(
             (before.completed.clone(), before.requests.clone(), before.decisions.clone())
         } else {
             tokio::try_join!(
-                service.completed_queue_orders_for_actor(&actor.ref_, 200),
+                service.completed_queue_orders_for_actor(&actor.ref_, window.history_limit()),
                 async {
                     if include_requests { service.completion_requests(200).await }
                     else { Ok(Vec::new()) }
@@ -59,7 +60,8 @@ async fn read_view(
         let (snapshot, revision, scope) = if worker_scope {
             super::worker_snapshot::read_for_principal(state, principal,
                 completed.iter().map(|order| order.order_id.clone())
-                    .chain(decisions.iter().map(|decision| decision.order_id.clone())),
+                    .chain(decisions.iter().take(window.history_limit()).map(|decision| decision.order_id.clone())),
+                window,
             ).await?
         } else {
             let (snapshot, revision) = service.live_snapshot_shared_with_revision()
@@ -226,12 +228,13 @@ pub(super) fn production_map_state_live_socket(
     client_revision: Option<u64>,
     worker_scope: bool,
     client_scope: String,
+    window: super::worker_snapshot::WorkerQueueWindow,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
     Box::pin(async move {
         // Subscribe before reading: updates during bootstrap must not be lost.
         let mut events = state.production_maps.subscribe_live();
         let mut baseline =
-            match read_view(&state, &principal, include_requests, worker_scope, None).await {
+            match read_view(&state, &principal, include_requests, worker_scope, None, &window).await {
                 Ok(view) => view,
                 Err(error) => {
                     let _ = send(&mut socket, json!(error.1.0)).await;
@@ -267,7 +270,7 @@ pub(super) fn production_map_state_live_socket(
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     };
                     let next = match read_view(&state, &principal, include_requests, worker_scope,
-                        colour_revision.map(|revision| (&baseline, revision))).await {
+                        colour_revision.map(|revision| (&baseline, revision)), &window).await {
                         Ok(view) => view,
                         Err(error) => { let _ = send(&mut socket, json!(error.1.0)).await; break; }
                     };
@@ -289,8 +292,8 @@ pub(super) fn production_map_state_live_socket(
                 _ = heartbeat.tick() => {
                     if worker_scope {
                         match super::worker_snapshot::scope_token(&state, &principal).await {
-                            Ok((_, scope)) if scope != baseline.scope => {
-                                let next = match read_view(&state, &principal, include_requests, worker_scope, None).await {
+                            Ok((_, scope)) if window.scope(&scope) != baseline.scope => {
+                                let next = match read_view(&state, &principal, include_requests, worker_scope, None, &window).await {
                                     Ok(view) => view,
                                     Err(error) => { let _ = send(&mut socket, json!(error.1.0)).await; break; }
                                 };

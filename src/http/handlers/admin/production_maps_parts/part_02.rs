@@ -16,6 +16,10 @@ pub struct ProductionMapSequenceQuery {
     if_scope: String,
     #[serde(default)]
     wait_ms: u64,
+    #[serde(default)]
+    queue_limit: Option<usize>,
+    #[serde(default)]
+    queue_search: String,
 }
 
 pub async fn production_map_sequence(
@@ -38,6 +42,7 @@ pub async fn production_map_sequence(
         ],
     )
     .await?;
+    let window = worker_snapshot::WorkerQueueWindow::new(query.queue_limit, &query.queue_search, query.worker_scope)?;
     match method {
         Method::GET => {
             let apparatus = query.apparatus.trim();
@@ -49,7 +54,7 @@ pub async fn production_map_sequence(
             }
             if query.worker_scope && apparatus.is_empty() && query.if_rev.is_some()
                 && worker_snapshot::snapshot_unchanged(&state, &principal,
-                    &query.if_epoch, query.if_rev, &query.if_scope, query.wait_ms).await?
+                    &query.if_epoch, query.if_rev, &query.if_scope, query.wait_ms, &window).await?
             {
                 return Ok(Response::builder().status(StatusCode::NOT_MODIFIED)
                     .header("Cache-Control", "no-store")
@@ -63,7 +68,7 @@ pub async fn production_map_sequence(
                     let history_revision = state.production_maps.snapshot_revision();
                     let actor = queue_action_actor(&principal);
                     let (completed, requests, decisions) = tokio::try_join!(
-                        state.production_maps.completed_queue_orders_for_actor(&actor.ref_, 200),
+                        state.production_maps.completed_queue_orders_for_actor(&actor.ref_, window.history_limit()),
                         async {
                             if matches!(principal.role, PrincipalRole::Admin) {
                                 state.production_maps.completion_requests(200).await
@@ -74,7 +79,8 @@ pub async fn production_map_sequence(
                     let (snapshot, revision, scope) = worker_snapshot::read_for_principal(
                         &state, &principal,
                         completed.iter().map(|order| order.order_id.clone())
-                            .chain(decisions.iter().map(|decision| decision.order_id.clone())),
+                            .chain(decisions.iter().take(window.history_limit()).map(|decision| decision.order_id.clone())),
+                        &window,
                     ).await?;
                     if revision != history_revision { continue; }
                     break (snapshot, revision, scope, completed, requests, decisions);

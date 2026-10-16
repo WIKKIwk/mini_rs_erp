@@ -33,6 +33,8 @@ pub async fn production_map_live(
     let include_completion_requests = matches!(principal.role, PrincipalRole::Admin);
     let delta_enabled = query.protocol.as_deref() == Some("delta");
     let state_delta_enabled = query.protocol.as_deref() == Some("state_delta_v1");
+    let window = super::worker_snapshot::WorkerQueueWindow::new(
+        query.queue_limit, &query.queue_search, query.worker_scope && state_delta_enabled)?;
     Ok(ws
         .on_upgrade(move |socket| {
             if state_delta_enabled {
@@ -45,6 +47,7 @@ pub async fn production_map_live(
                     query.rev,
                     query.worker_scope,
                     query.scope,
+                    window,
                 );
             }
             // Box both protocol futures to retain the legacy wire contract.
@@ -76,6 +79,10 @@ pub struct ProductionMapLiveQuery {
     worker_scope: bool,
     #[serde(default)]
     scope: String,
+    #[serde(default)]
+    queue_limit: Option<usize>,
+    #[serde(default)]
+    queue_search: String,
 }
 
 async fn authenticated_principal_for_live(

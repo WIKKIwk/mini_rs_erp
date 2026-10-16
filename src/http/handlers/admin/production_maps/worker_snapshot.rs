@@ -4,6 +4,10 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+#[path = "worker_queue_window.rs"]
+mod window;
+pub(super) use window::WorkerQueueWindow;
+
 fn cursor_matches(epoch: &str, revision: u64, scope: &str,
     client_epoch: &str, client_revision: Option<u64>, client_scope: &str) -> bool {
     !client_epoch.is_empty() && !client_scope.is_empty()
@@ -14,10 +18,11 @@ fn cursor_matches(epoch: &str, revision: u64, scope: &str,
 /// Subscribe first so a commit during the cursor check wakes the bounded wait.
 pub(super) async fn snapshot_unchanged(
     state: &AppState, principal: &Principal, epoch: &str, revision: Option<u64>,
-    scope: &str, wait_ms: u64,
+    scope: &str, wait_ms: u64, window: &WorkerQueueWindow,
 ) -> Result<bool, AdminError> {
     let mut events = state.production_maps.subscribe_live();
-    let (_, current_scope) = scope_token(state, principal).await?;
+    let (_, assignment_scope) = scope_token(state, principal).await?;
+    let current_scope = window.scope(&assignment_scope);
     if !cursor_matches(state.production_maps.snapshot_epoch(),
         state.production_maps.snapshot_revision(), &current_scope, epoch, revision, scope) {
         return Ok(false);
@@ -26,7 +31,8 @@ pub(super) async fn snapshot_unchanged(
         let _ = tokio::time::timeout(std::time::Duration::from_millis(wait_ms.min(6000)),
             events.recv()).await;
     }
-    let (_, current_scope) = scope_token(state, principal).await?;
+    let (_, assignment_scope) = scope_token(state, principal).await?;
+    let current_scope = window.scope(&assignment_scope);
     Ok(cursor_matches(state.production_maps.snapshot_epoch(),
         state.production_maps.snapshot_revision(), &current_scope, epoch, revision, scope))
 }
@@ -135,6 +141,7 @@ pub(super) async fn read_for_principal(
     state: &AppState,
     principal: &Principal,
     history_order_ids: impl IntoIterator<Item = String>,
+    window: &WorkerQueueWindow,
 ) -> Result<(Arc<ProductionMapLiveSnapshot>, u64, String), AdminError> {
     let history = history_order_ids.into_iter().collect::<Vec<_>>();
     loop {
@@ -151,9 +158,19 @@ pub(super) async fn read_for_principal(
         if latest_scope != scope || state.production_maps.snapshot_revision() != revision {
             continue;
         }
-        let snapshot = if state.worker_show_all_apparatus_tabs {
-            snapshot
-        } else { Arc::new(project(&snapshot, &assigned, history.iter().cloned())) };
+        let scope = window.scope(&scope);
+        let snapshot = if window.limit.is_some() {
+            let customers = if window.search_active() {
+                production_map_order_customers(state, &snapshot.maps).await
+            } else { BTreeMap::new() };
+            let (_, latest_assignment_scope) = scope_token(state, principal).await?;
+            if window.scope(&latest_assignment_scope) != scope || state.production_maps.snapshot_revision() != revision { continue; }
+            let apparatus_scope = if state.worker_show_all_apparatus_tabs {
+                snapshot.visible_order_ids.keys().cloned().collect()
+            } else { assigned };
+            Arc::new(window.project(&snapshot, &apparatus_scope, &history, &customers))
+        } else if state.worker_show_all_apparatus_tabs { snapshot }
+        else { Arc::new(project(&snapshot, &assigned, history.iter().cloned())) };
         return Ok((snapshot, revision, scope));
     }
 }
