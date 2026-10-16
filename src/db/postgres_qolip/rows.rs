@@ -8,6 +8,8 @@ pub(super) struct QolipBlockRow {
 
 #[derive(sqlx::FromRow)]
 pub(super) struct QolipProductRow {
+    #[sqlx(default)]
+    pub(super) is_extension: bool,
     pub(super) qolip_set_id: String,
     pub(super) warehouse: String,
     pub(super) code: String,
@@ -24,6 +26,8 @@ pub(super) struct QolipProductRow {
 
 #[derive(sqlx::FromRow)]
 pub(super) struct QolipProductSpecRow {
+    #[sqlx(default)]
+    is_extension: bool,
     #[sqlx(default)]
     qolip_set_id: String,
     warehouse: String,
@@ -114,6 +118,7 @@ pub(super) fn row_to_location(row: QolipLocationRow) -> QolipLocation {
 
 pub(super) fn row_to_product_spec(row: QolipProductSpecRow) -> QolipProductSpec {
     QolipProductSpec {
+        is_extension: row.is_extension,
         qolip_set_id: row.qolip_set_id,
         warehouse: row.warehouse,
         item_code: row.item_code,

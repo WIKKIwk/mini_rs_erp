@@ -34,8 +34,12 @@ async fn snapshot_identifiers(
         "SELECT {COLUMNS} FROM mini_qolip_product_specs spec WHERE spec.qolip_set_id = $1 ORDER BY lower(spec.qolip_code)"
     )).bind(&id).fetch_all(&mut *conn).await.map_err(|_| QolipError::StoreFailed)?;
     let products = sqlx::query_as::<_, (String, String)>(
-        "SELECT DISTINCT item.code, item.name FROM mini_qolip_set_products link
-         JOIN mini_items item ON item.code = link.item_code WHERE link.set_id = $1 ORDER BY item.code",
+        "SELECT DISTINCT item.code, item.name FROM mini_items item
+         WHERE EXISTS (SELECT 1 FROM mini_qolip_set_products link WHERE link.set_id = $1 AND link.item_code = item.code)
+            OR EXISTS (SELECT 1 FROM mini_qolip_effective_product_molds effective
+                JOIN mini_qolip_product_specs spec ON spec.qolip_code = effective.qolip_code
+                WHERE effective.item_code = item.code AND spec.qolip_set_id = $1)
+         ORDER BY item.code",
     ).bind(&id).fetch_all(&mut *conn).await.map_err(|_| QolipError::StoreFailed)?
         .into_iter().map(|(code, name)| QolipSetProduct { code, name }).collect();
     Ok(Some(QolipSetSnapshot::new(
@@ -73,8 +77,8 @@ pub(super) async fn linked_specs(
     item_code: &str,
 ) -> Result<Vec<QolipProductSpec>, QolipError> {
     let rows = sqlx::query_as::<_, QolipProductSpecRow>(&format!(
-        "SELECT {COLUMNS} FROM mini_qolip_product_specs spec
-         JOIN mini_qolip_set_products link ON link.set_id = spec.qolip_set_id
+        "SELECT {COLUMNS}, link.is_extension FROM mini_qolip_product_specs spec
+         JOIN mini_qolip_effective_product_molds link ON link.qolip_code = spec.qolip_code
          JOIN mini_items item ON item.code = link.item_code
          WHERE link.item_code_key = lower(btrim($1))
            AND (lower(btrim(spec.item_code)) <> link.item_code_key OR lower(btrim(spec.item_group)) = lower(btrim(item.item_group)))
@@ -92,6 +96,11 @@ pub(super) async fn reuse(
     allowed: &[String],
 ) -> Result<QolipSetSnapshot, QolipError> {
     let mut tx = pool.begin().await.map_err(|_| QolipError::StoreFailed)?;
+    super::product_transfer::lock_composition(&mut tx).await?;
+    let item_exists = sqlx::query_scalar::<_, String>(
+        "SELECT code FROM mini_items WHERE lower(btrim(code)) = lower(btrim($1)) FOR KEY SHARE"
+    ).bind(item_code).fetch_optional(&mut *tx).await.map_err(|_| QolipError::StoreFailed)?;
+    if item_exists.is_none() { return Err(QolipError::MissingItem); }
     // A short catalog operation: freeze membership and metadata until the confirmed link is saved.
     // This also prevents new members appearing between the fingerprint check and commit.
     sqlx::query("LOCK TABLE mini_qolip_product_specs IN SHARE MODE")
@@ -114,6 +123,7 @@ pub(super) async fn reuse(
     {
         return Err(QolipError::AccessDenied);
     }
+    super::product_transfer::reject_product_in_use(&mut tx, item_code).await?;
     let written = sqlx::query(
         "INSERT INTO mini_qolip_set_products(set_id, item_code, created_by_role, created_by_ref, created_by_name)
          SELECT $1, code, $3, $4, $5 FROM mini_items WHERE lower(btrim(code)) = lower(btrim($2))
@@ -125,7 +135,14 @@ pub(super) async fn reuse(
     if !linked {
         return Err(QolipError::MissingItem);
     }
-    if written.rows_affected() > 0 {
+    // The user confirmed the complete physical set, including any members
+    // previously excluded for this product. Other products keep their overrides.
+    let restored = sqlx::query("DELETE FROM mini_qolip_product_overrides override
+        USING mini_qolip_product_specs spec
+        WHERE override.item_code_key = lower(btrim($1))
+          AND override.qolip_code = spec.qolip_code AND spec.qolip_set_id = $2")
+        .bind(item_code).bind(set_id).execute(&mut *tx).await.map_err(|_| QolipError::StoreFailed)?;
+    if written.rows_affected() > 0 || restored.rows_affected() > 0 {
         sqlx::query("INSERT INTO mini_engine_events(event_id, domain, action, entity_id, actor_key, idempotency_key, payload_json)
             VALUES ($1, 'qolip', 'set_reuse', $2, $3, $1, $4)")
             .bind(format!("qolip-set-reuse:{:032x}", rand::random::<u128>())).bind(item_code)

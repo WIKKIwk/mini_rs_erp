@@ -139,6 +139,7 @@ async fn panton_colors_are_reusable_after_all_global_numbers_are_used() {
 
 fn spec(item: &str, set: &str, code: &str, color: &str) -> QolipProductSpec {
     QolipProductSpec {
+        is_extension: false,
         item_code: item.into(),
         item_name: item.into(),
         item_group: "Products".into(),

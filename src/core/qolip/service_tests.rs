@@ -15,6 +15,7 @@ async fn batch_product_spec_save_is_atomic() {
     let store = std::sync::Arc::new(MemoryQolipStore::new());
     store
         .seed_products(vec![QolipProduct {
+            is_extension: false,
             qolip_set_id: String::new(),
             warehouse: "Qolip ombor".to_string(),
             code: "ITEM-BATCH".to_string(),
@@ -93,6 +94,7 @@ async fn order_start_accepts_slash_code_without_inventing_checkout() {
     let store = std::sync::Arc::new(MemoryQolipStore::new());
     store
         .seed_products(vec![QolipProduct {
+            is_extension: false,
             qolip_set_id: String::new(),
             warehouse: "Qolip ombor".to_string(),
             code: "ITEM-ORDER".to_string(),
@@ -153,6 +155,7 @@ async fn legacy_stocked_qolip_can_be_promoted_to_colored_spec() {
     let store = std::sync::Arc::new(MemoryQolipStore::new());
     store
         .seed_products(vec![QolipProduct {
+            is_extension: false,
             qolip_set_id: String::new(),
             warehouse: "Qolip ombor".to_string(),
             code: "ITEM-LEGACY".to_string(),
@@ -217,6 +220,7 @@ async fn order_start_accepts_existing_checkout_for_same_worker() {
     let store = std::sync::Arc::new(MemoryQolipStore::new());
     store
         .seed_products(vec![QolipProduct {
+            is_extension: false,
             qolip_set_id: String::new(),
             warehouse: "Qolip ombor".to_string(),
             code: "ITEM-ORDER".to_string(),
@@ -346,6 +350,7 @@ async fn order_start_rejects_qolip_from_another_finished_product_group() {
     let store = std::sync::Arc::new(MemoryQolipStore::new());
     store
         .seed_products(vec![QolipProduct {
+            is_extension: false,
             qolip_set_id: String::new(),
             warehouse: "Qolip ombor".to_string(),
             code: "ITEM-ORDER".to_string(),
@@ -417,6 +422,7 @@ async fn order_start_rejects_another_products_qolip_from_same_group() {
     store
         .seed_products(vec![
             QolipProduct {
+                is_extension: false,
                 qolip_set_id: String::new(),
                 warehouse: "Qolip ombor".to_string(),
                 code: "ITEM-ORDER".to_string(),
@@ -431,6 +437,7 @@ async fn order_start_rejects_another_products_qolip_from_same_group() {
                 is_in_use: false,
             },
             QolipProduct {
+                is_extension: false,
                 qolip_set_id: String::new(),
                 warehouse: "Qolip ombor".to_string(),
                 code: "ITEM-OTHER".to_string(),

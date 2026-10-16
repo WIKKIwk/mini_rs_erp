@@ -19,6 +19,6 @@ pub use models::{
 pub use normalize::role_code;
 pub use normalize_qr::qolip_scan_code_from_qr;
 pub use ports::QolipStorePort;
-pub use service::QolipService;
+pub use service::{QolipService, selected_product_specs};
 pub use shared_sets::{QolipSetProduct, QolipSetReuse, QolipSetSnapshot};
 pub(crate) use shared_sets::candidate_codes;

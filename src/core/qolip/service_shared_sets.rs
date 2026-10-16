@@ -8,7 +8,7 @@ impl QolipService {
             .product_specs(&product.code)
             .await?
             .into_iter()
-            .filter(|spec| qolip_spec_matches_order(spec, product))
+            .filter(|spec| spec.qolip_set_id.is_empty() && qolip_spec_matches_order(spec, product))
             .collect::<Vec<_>>();
         specs.extend(self.store.linked_product_specs(&product.code).await?);
         specs.retain(|spec| !spec.qolip_code.trim().is_empty());
@@ -66,4 +66,12 @@ impl QolipService {
             )
             .await
     }
+}
+
+/// A product uses one alternative base set and every product-local extension.
+/// Scanning an extension first keeps the alternative choice open.
+pub fn selected_product_specs<'a>(specs: &'a [QolipProductSpec], scanned_code: &str) -> Vec<&'a QolipProductSpec> {
+    let selected = specs.iter().find(|spec| spec.qolip_code.eq_ignore_ascii_case(scanned_code));
+    let selected_id = selected.filter(|spec| !spec.is_extension).map(|spec| spec.set_id());
+    specs.iter().filter(|spec| spec.is_extension || selected_id.as_ref().is_none_or(|id| spec.set_id() == *id)).collect()
 }

@@ -15,10 +15,20 @@ fn memory_set_targets(
     }
 }
 
+fn memory_effective_binding(spec: &QolipProductSpec, item: &str,
+    links: &BTreeSet<(String, String)>, overrides: &BTreeMap<(String, String), bool>) -> Option<bool> {
+    let item = item.trim().to_lowercase();
+    let extra = overrides.get(&(item.clone(), spec.qolip_code.trim().to_lowercase()));
+    if extra == Some(&false) { return None; }
+    if memory_set_targets(links, &spec.set_id(), &spec.item_code).contains(&item) { return Some(false); }
+    (extra == Some(&true)).then_some(true)
+}
+
 fn memory_shared_snapshot(
     specs: &BTreeMap<String, QolipProductSpec>,
     products: &[QolipProduct],
     links: &BTreeSet<(String, String)>,
+    overrides: &BTreeMap<(String, String), bool>,
     identifier: &str,
 ) -> Result<Option<super::QolipSetSnapshot>, QolipError> {
     let mut groups = BTreeMap::<String, Vec<QolipProductSpec>>::new();
@@ -55,7 +65,9 @@ fn memory_shared_snapshot(
         .max_by_key(|spec| (spec.qolip_code.len(), spec.qolip_code.clone()))
         .map(|spec| spec.qolip_code.clone())
         .unwrap_or_default();
-    let targets = memory_set_targets(links, id, &members[0].item_code);
+    let mut targets = memory_set_targets(links, id, &members[0].item_code);
+    targets.extend(overrides.iter().filter(|((_, code), include)| **include && members.iter().any(|spec| spec.qolip_code.eq_ignore_ascii_case(code)))
+        .map(|((item, _), _)| item.clone()));
     let products = products
         .iter()
         .filter(|product| targets.contains(&product.code.trim().to_lowercase()))
@@ -75,6 +87,7 @@ fn memory_shared_snapshot(
 impl MemoryQolipStore {
     async fn memory_linked_specs(&self, item_code: &str) -> Vec<QolipProductSpec> {
         let links = self.shared_links.read().await.clone();
+        let overrides = self.product_overrides.read().await.clone();
         let products = self.products.read().await.clone();
         let group = products
             .iter()
@@ -84,12 +97,14 @@ impl MemoryQolipStore {
             .read()
             .await
             .values()
-            .filter(|spec| {
-                links.contains(&(spec.set_id(), item_code.trim().to_lowercase()))
-                    && (!spec.item_code.eq_ignore_ascii_case(item_code)
-                        || group.is_some_and(|group| group.eq_ignore_ascii_case(&spec.item_group)))
+            .filter_map(|spec| {
+                let is_extension = memory_effective_binding(spec, item_code, &links, &overrides)?;
+                if spec.item_code.eq_ignore_ascii_case(item_code)
+                    && !group.is_some_and(|group| group.eq_ignore_ascii_case(&spec.item_group)) { return None; }
+                let mut effective = spec.clone();
+                effective.is_extension = is_extension;
+                Some(effective)
             })
-            .cloned()
             .collect()
     }
 
@@ -100,7 +115,8 @@ impl MemoryQolipStore {
         let specs = self.product_specs.read().await.clone();
         let products = self.products.read().await.clone();
         let links = self.shared_links.read().await.clone();
-        memory_shared_snapshot(&specs, &products, &links, identifier)
+        let overrides = self.product_overrides.read().await.clone();
+        memory_shared_snapshot(&specs, &products, &links, &overrides, identifier)
     }
 
     async fn memory_reuse_set(
@@ -119,7 +135,8 @@ impl MemoryQolipStore {
             return Err(QolipError::MissingItem);
         }
         let mut links = self.shared_links.write().await;
-        let current = memory_shared_snapshot(&specs, &products, &links, set_id)?
+        let mut overrides = self.product_overrides.write().await;
+        let current = memory_shared_snapshot(&specs, &products, &links, &overrides, set_id)?
             .ok_or(QolipError::SetChanged)?;
         if current.fingerprint != fingerprint {
             return Err(QolipError::SetChanged);
@@ -138,6 +155,9 @@ impl MemoryQolipStore {
             }
         }
         links.insert((set_id.to_string(), item_code.trim().to_lowercase()));
-        memory_shared_snapshot(&specs, &products, &links, set_id)?.ok_or(QolipError::SetChanged)
+        for member in &current.members {
+            overrides.remove(&(item_code.trim().to_lowercase(), member.qolip_code.trim().to_lowercase()));
+        }
+        memory_shared_snapshot(&specs, &products, &links, &overrides, set_id)?.ok_or(QolipError::SetChanged)
     }
 }

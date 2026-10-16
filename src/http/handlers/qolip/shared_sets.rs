@@ -10,6 +10,7 @@ pub struct SharedSetQuery {
 
 fn product(spec: crate::core::qolip::QolipProductSpec) -> QolipProduct {
     QolipProduct {
+        is_extension: spec.is_extension,
         qolip_set_id: spec.set_id(),
         warehouse: spec.warehouse,
         code: spec.item_code,

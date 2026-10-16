@@ -105,7 +105,7 @@ pub async fn production_map_qolip_validate(
                 crate::core::qolip::QolipError::QolipCodeMismatch,
             ));
         }
-        let selected = required_qolips.iter().filter(|required| required.set_id() == spec.set_id()).collect::<Vec<_>>();
+        let selected = crate::core::qolip::selected_product_specs(&required_qolips, &spec.qolip_code);
         let required_qolip_codes = selected.iter().map(|spec| spec.qolip_code.trim().to_string()).collect::<Vec<_>>();
         let required_qolip_count = selected.len();
         let required_qolips_payload = selected.into_iter().map(required_qolip_payload).collect::<Vec<_>>();
@@ -189,7 +189,7 @@ pub async fn production_map_qolip_validate(
             .await
     }
     .map_err(qolip_queue_error)?;
-    let selected = required_qolips.iter().filter(|required| required.set_id() == preparation.spec.set_id()).collect::<Vec<_>>();
+    let selected = crate::core::qolip::selected_product_specs(&required_qolips, &preparation.spec.qolip_code);
     let required_qolip_codes = selected.iter().map(|spec| spec.qolip_code.trim().to_string()).collect::<Vec<_>>();
     let required_qolip_count = selected.len();
     let required_qolips_payload = selected.into_iter().map(required_qolip_payload).collect::<Vec<_>>();
@@ -210,5 +210,6 @@ fn required_qolip_payload(spec: &crate::core::qolip::QolipProductSpec) -> serde_
         "qolip_code": spec.qolip_code.as_str(),
         "color": spec.color.as_str(),
         "qolip_set_id": spec.set_id(),
+        "is_extension": spec.is_extension,
     })
 }

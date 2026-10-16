@@ -14,13 +14,8 @@ pub(super) async fn load(pool: &PgPool, codes: &[String]) -> Result<Vec<QolipPro
         SELECT item.code, item.name, item.item_group,
             btrim(item.item_group) <> '' AND (
                 EXISTS (
-                    SELECT 1 FROM mini_qolip_product_specs spec
-                    WHERE ((spec.qolip_set_id IS NULL AND lower(btrim(spec.item_code)) = lower(btrim(item.code)))
-                           OR EXISTS (SELECT 1 FROM mini_qolip_set_products link
-                                  WHERE link.set_id = spec.qolip_set_id AND link.item_code_key = lower(btrim(item.code))))
-                      AND (lower(btrim(spec.item_code)) <> lower(btrim(item.code))
-                           OR lower(btrim(spec.item_group)) = lower(btrim(item.item_group)))
-                      AND btrim(spec.qolip_code) <> ''
+                    SELECT 1 FROM mini_qolip_effective_product_molds mold
+                    WHERE mold.item_code_key = lower(btrim(item.code)) AND btrim(mold.qolip_code) <> ''
                 ) OR EXISTS (
                     SELECT 1 FROM mini_qolip_locations location
                     WHERE lower(btrim(location.item_code)) = lower(btrim(item.code))

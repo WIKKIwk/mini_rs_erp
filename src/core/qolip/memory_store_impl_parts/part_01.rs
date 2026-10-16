@@ -106,6 +106,7 @@ impl MemoryQolipStore {
         };
         let products = self.products.read().await.clone();
         let shared_links = self.shared_links.read().await.clone();
+        let overrides = self.product_overrides.read().await.clone();
         let products_by_code = products
             .iter()
             .enumerate()
@@ -125,12 +126,16 @@ impl MemoryQolipStore {
                 if !is_visible(&spec.warehouse) {
                     continue;
                 }
-                for item_key in memory_set_targets(&shared_links, &spec.set_id(), &spec.item_code) {
+                let mut targets = memory_set_targets(&shared_links, &spec.set_id(), &spec.item_code).into_iter().collect::<BTreeSet<_>>();
+                targets.extend(overrides.iter().filter(|((_, code), include)| *code == qolip_key && **include).map(|((item, _), _)| item.clone()));
+                for item_key in targets {
+                let Some(is_extension) = memory_effective_binding(spec, &item_key, &shared_links, &overrides) else { continue; };
                 item_codes_with_qolip.insert(item_key.clone());
                 let base = products_by_code
                     .get(&item_key)
                     .map(|index| &products[*index]);
                 let item = QolipProduct {
+                    is_extension,
                     qolip_set_id: spec.set_id(),
                     warehouse: spec.warehouse.clone(),
                     code: base.map(|product| product.code.clone()).unwrap_or_else(|| spec.item_code.clone()),
@@ -178,6 +183,7 @@ impl MemoryQolipStore {
                     .get(&item_key)
                     .map(|index| &products[*index]);
                 let item = QolipProduct {
+                    is_extension: false,
                     qolip_set_id: String::new(),
                     warehouse: location.warehouse.clone(),
                     code: location.item_code.clone(),
@@ -226,6 +232,7 @@ impl MemoryQolipStore {
                     .get(&item_key)
                     .map(|index| &products[*index]);
                 let item = QolipProduct {
+                    is_extension: false,
                     qolip_set_id: String::new(),
                     warehouse: checkout.warehouse.clone(),
                     code: checkout.item_code.clone(),
@@ -340,19 +347,18 @@ impl MemoryQolipStore {
     async fn product_specs(&self, item_code: &str) -> Result<Vec<QolipProductSpec>, QolipError> {
         let item_code = item_code.trim();
         let shared_links = self.shared_links.read().await.clone();
+        let overrides = self.product_overrides.read().await.clone();
         let mut specs = self
             .product_specs
             .read()
             .await
             .values()
             .filter(|spec| spec.item_code.trim().eq_ignore_ascii_case(item_code)
-                && memory_set_targets(&shared_links, &spec.set_id(), &spec.item_code).contains(&item_code.to_lowercase()))
+                && memory_effective_binding(spec, item_code, &shared_links, &overrides).is_some())
             .cloned()
             .collect::<Vec<_>>();
-        let mut seen = specs
-            .iter()
-            .map(|spec| spec.qolip_code.trim().to_lowercase())
-            .collect::<BTreeSet<_>>();
+        // A removed physical member must not reappear through legacy stock.
+        let mut seen = self.product_specs.read().await.keys().cloned().collect::<BTreeSet<_>>();
         let item_group = self.product_item_group(item_code).await;
         for location in self
             .locations

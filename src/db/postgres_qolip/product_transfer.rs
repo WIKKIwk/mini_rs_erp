@@ -11,6 +11,7 @@ pub(super) async fn transfer(
     allowed: &[String],
 ) -> Result<Vec<QolipProductSpec>, QolipError> {
     let mut tx = pool.begin().await.map_err(|_| QolipError::StoreFailed)?;
+    lock_composition(&mut tx).await?;
     let actor = format!("qolipchi:{}", principal.ref_.trim());
     let event_id = format!("qolip-product-transfer:{actor}:{}", input.request_id);
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
@@ -54,52 +55,67 @@ pub(super) async fn transfer(
             .await
             .map_err(|_| QolipError::StoreFailed)?;
     }
-    let target = sqlx::query_as::<_, (String, String, String)>(
-        "SELECT code, name, item_group FROM mini_items WHERE lower(code) = lower($1) FOR UPDATE",
-    )
-    .bind(&input.to_item_code)
-    .fetch_optional(&mut *tx)
+    let products = sqlx::query_as::<_, (String, String, String)>(
+        "SELECT code, name, item_group FROM mini_items
+         WHERE lower(btrim(code)) = ANY($1) ORDER BY code FOR UPDATE",
+    ).bind(vec![input.from_item_code.to_lowercase(), input.to_item_code.to_lowercase()])
+    .fetch_all(&mut *tx)
     .await
-    .map_err(|_| QolipError::StoreFailed)?
+    .map_err(|_| QolipError::StoreFailed)?;
+    let source = products.iter().find(|product| product.0.eq_ignore_ascii_case(&input.from_item_code))
+        .ok_or(QolipError::MissingItem)?;
+    let target = products.iter().find(|product| product.0.eq_ignore_ascii_case(&input.to_item_code))
     .ok_or(QolipError::MissingItem)?;
     if target.2.trim().is_empty() {
         return Err(QolipError::MissingItemGroup);
     }
 
+    reject_product_in_use(&mut tx, &source.0).await?;
+    reject_product_in_use(&mut tx, &target.0).await?;
     let mut previous = Vec::new();
     let mut specs = Vec::new();
-    let mut sets = std::collections::BTreeSet::new();
     for code in &input.qolip_codes {
         reject_in_use(&mut tx, code).await?;
         let old = load_spec(&mut tx, code).await?;
         ensure_owner(&old, allowed)?;
+        if old.item_code.eq_ignore_ascii_case(&target.0)
+            && !old.item_group.eq_ignore_ascii_case(&target.2) {
+            return Err(QolipError::ProductTransferConflict);
+        }
         let linked = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS (SELECT 1 FROM mini_qolip_set_products WHERE set_id = $1 AND item_code_key = lower(btrim($2)))"
-        ).bind(old.set_id()).bind(&input.from_item_code).fetch_one(&mut *tx).await
+            "SELECT EXISTS (SELECT 1 FROM mini_qolip_effective_product_molds
+             WHERE qolip_code_key = $1 AND item_code_key = lower(btrim($2)))"
+        ).bind(code).bind(&source.0).fetch_one(&mut *tx).await
             .map_err(|_| QolipError::StoreFailed)?;
         if !linked { return Err(QolipError::ProductTransferConflict); }
-        sets.insert(old.set_id());
+        let already_linked = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM mini_qolip_effective_product_molds
+             WHERE qolip_code_key = $1 AND item_code_key = lower(btrim($2)))"
+        ).bind(code).bind(&target.0).fetch_one(&mut *tx).await
+            .map_err(|_| QolipError::StoreFailed)?;
+        if already_linked { return Err(QolipError::ProductTransferConflict); }
+        let target_base = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM mini_qolip_set_products
+             WHERE set_id = $1 AND item_code_key = lower(btrim($2)))"
+        ).bind(old.set_id()).bind(&target.0).fetch_one(&mut *tx).await
+            .map_err(|_| QolipError::StoreFailed)?;
         let mut projected = old.clone();
+        projected.is_extension = !target_base;
         projected.item_code = target.0.clone();
         projected.item_name = target.1.clone();
         projected.item_group = target.2.clone();
+        // Keep a product-local exclusion even for a removed extension. A later
+        // physical catalog edit must not silently reintroduce this mold.
+        write_override(&mut tx, &source.0, &old.qolip_code, "exclude", principal).await?;
+        if target_base {
+            sqlx::query("DELETE FROM mini_qolip_product_overrides
+                WHERE item_code_key = lower(btrim($1)) AND qolip_code_key = $2")
+                .bind(&target.0).bind(code).execute(&mut *tx).await.map_err(|_| QolipError::StoreFailed)?;
+        } else {
+            write_override(&mut tx, &target.0, &old.qolip_code, "include", principal).await?;
+        }
         previous.push(old);
         specs.push(projected);
-    }
-    for set_id in sets {
-        let members = sqlx::query_scalar::<_, String>(
-            "SELECT lower(qolip_code) FROM mini_qolip_product_specs WHERE qolip_set_id = $1 ORDER BY lower(qolip_code) FOR SHARE"
-        ).bind(&set_id).fetch_all(&mut *tx).await.map_err(|_| QolipError::StoreFailed)?;
-        if members.is_empty() || members.iter().any(|code| !input.qolip_codes.contains(code)) {
-            return Err(QolipError::ProductTransferConflict);
-        }
-        sqlx::query("INSERT INTO mini_qolip_set_products(set_id, item_code, created_by_role, created_by_ref, created_by_name)
-            VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING")
-            .bind(&set_id).bind(&target.0).bind(crate::core::qolip::role_code(&principal.role))
-            .bind(&principal.ref_).bind(&principal.display_name).execute(&mut *tx).await
-            .map_err(|_| QolipError::StoreFailed)?;
-        sqlx::query("DELETE FROM mini_qolip_set_products WHERE set_id = $1 AND item_code_key = lower(btrim($2))")
-            .bind(&set_id).bind(&input.from_item_code).execute(&mut *tx).await.map_err(|_| QolipError::StoreFailed)?;
     }
     // Record the correction and its response in the same transaction. A lost
     // response can be retried without moving the QR twice or rewriting history.
@@ -121,6 +137,37 @@ pub(super) async fn transfer(
     .map_err(|_| QolipError::StoreFailed)?;
     tx.commit().await.map_err(|_| QolipError::StoreFailed)?;
     Ok(specs)
+}
+
+pub(super) async fn lock_composition(tx: &mut Transaction<'_, Postgres>) -> Result<(), QolipError> {
+    // Taken before physical mold locks, matching the session writer's shared lock.
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('qolip:product-composition', 0))")
+        .execute(&mut **tx).await.map_err(|_| QolipError::StoreFailed)?;
+    Ok(())
+}
+
+pub(super) async fn reject_product_in_use(tx: &mut Transaction<'_, Postgres>, item_code: &str) -> Result<(), QolipError> {
+    let busy = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM mini_order_run_sessions session
+         JOIN mini_production_maps map ON map.id = session.order_id
+         WHERE lower(btrim(map.product_code)) = lower(btrim($1))
+           AND session.status IN ('active','paused','frozen','roll_detached')
+           AND session.payload_json->>'qolip_lock_owner' = 'true')"
+    ).bind(item_code).fetch_one(&mut **tx).await.map_err(|_| QolipError::StoreFailed)?;
+    if busy { return Err(QolipError::QolipInUse); }
+    Ok(())
+}
+
+async fn write_override(tx: &mut Transaction<'_, Postgres>, item: &str, code: &str, mode: &str, principal: &Principal) -> Result<(), QolipError> {
+    sqlx::query("INSERT INTO mini_qolip_product_overrides
+        (item_code, qolip_code, mode, created_by_role, created_by_ref, created_by_name)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT (item_code_key, qolip_code_key) DO UPDATE
+        SET mode = EXCLUDED.mode, created_by_role = EXCLUDED.created_by_role,
+            created_by_ref = EXCLUDED.created_by_ref, created_by_name = EXCLUDED.created_by_name, updated_at = now()")
+        .bind(item).bind(code).bind(mode).bind(crate::core::qolip::role_code(&principal.role))
+        .bind(&principal.ref_).bind(&principal.display_name).execute(&mut **tx).await.map_err(|_| QolipError::StoreFailed)?;
+    Ok(())
 }
 
 fn ensure_owner(spec: &QolipProductSpec, allowed: &[String]) -> Result<(), QolipError> {

@@ -227,38 +227,39 @@ pub(super) async fn validate_qolip_set_tx(
         "SELECT product_code FROM mini_production_maps WHERE id = $1",
     ).bind(&session.order_id).fetch_one(&mut **tx).await
         .map_err(|_| ProductionMapError::StoreFailed)?;
-    let mut rows = sqlx::query_as::<_, (String, String, String, i32, String)>(
-        "SELECT qolip_code, COALESCE(payload_json->>'qolip_set_id', ''),
-                COALESCE(payload_json->>'warehouse', ''), size, COALESCE(payload_json->>'color', '')
-         FROM mini_qolip_product_specs WHERE ((qolip_set_id IS NULL AND lower(item_code) = lower($1)) OR EXISTS (
-             SELECT 1 FROM mini_qolip_set_products link
-             WHERE link.set_id = mini_qolip_product_specs.qolip_set_id AND link.item_code_key = lower(btrim($1))))
-           AND (payload_json->>'qolip_set_id' = $2 OR
-                (COALESCE(btrim(payload_json->>'qolip_set_id'), '') = '' AND
-                 'legacy:' || length(lower(btrim(item_code)))::text || ':' || lower(btrim(item_code))
-                   || ':' || lower(btrim(COALESCE(payload_json->>'warehouse', ''))) = $2))
-         ORDER BY lower(qolip_code) FOR SHARE",
-    ).bind(&item_code).bind(set_id).fetch_all(&mut **tx).await
+    let mut rows = sqlx::query_as::<_, (String, String, String, i32, String, bool)>(
+        "SELECT spec.qolip_code, COALESCE(spec.qolip_set_id, ''),
+                COALESCE(spec.payload_json->>'warehouse', ''), spec.size,
+                COALESCE(spec.payload_json->>'color', ''), effective.is_extension
+         FROM mini_qolip_product_specs spec
+         JOIN mini_qolip_effective_product_molds effective ON effective.qolip_code = spec.qolip_code
+         WHERE effective.item_code_key = lower(btrim($1))
+         ORDER BY lower(spec.qolip_code) FOR SHARE OF spec",
+    ).bind(&item_code).fetch_all(&mut **tx).await
         .map_err(|_| ProductionMapError::StoreFailed)?;
-    let legacy = sqlx::query_as::<_, (String, String, String, i32, String)>(
+    let legacy = sqlx::query_as::<_, (String, String, String, i32, String, bool)>(
         "SELECT l.qolip_code, ''::text,
-                COALESCE(mini_qolip_assigned_warehouse(l.created_by_role, l.created_by_ref), ''), l.size, COALESCE(l.payload_json->>'color', '')
+                COALESCE(mini_qolip_assigned_warehouse(l.created_by_role, l.created_by_ref), ''), l.size, COALESCE(l.payload_json->>'color', ''), false
          FROM mini_qolip_locations l WHERE lower(l.item_code) = lower($1)
            AND NOT EXISTS (SELECT 1 FROM mini_qolip_product_specs s WHERE lower(s.qolip_code) = lower(l.qolip_code))
          UNION ALL
          SELECT c.qolip_code, ''::text,
-                COALESCE(mini_qolip_assigned_warehouse(c.issued_by_role, c.issued_by_ref), ''), c.size, COALESCE(c.payload_json->>'color', '')
+                COALESCE(mini_qolip_assigned_warehouse(c.issued_by_role, c.issued_by_ref), ''), c.size, COALESCE(c.payload_json->>'color', ''), false
          FROM mini_qolip_checkouts c WHERE lower(c.item_code) = lower($1) AND c.status = 'open'
            AND NOT EXISTS (SELECT 1 FROM mini_qolip_product_specs s WHERE lower(s.qolip_code) = lower(c.qolip_code))",
     ).bind(&item_code).fetch_all(&mut **tx).await
         .map_err(|_| ProductionMapError::StoreFailed)?;
     rows.extend(legacy);
-    let required = rows.into_iter().filter_map(|(code, id, warehouse, size, color)| {
+    let mut has_base = false;
+    let mut selected_base = false;
+    let required = rows.into_iter().filter_map(|(code, id, warehouse, size, color, is_extension)| {
         let spec = crate::core::qolip::QolipProductSpec {
             qolip_set_id: id, item_code: item_code.clone(), warehouse,
             ..Default::default()
         };
-        (spec.set_id() == set_id).then(|| (code.trim().to_lowercase(), (size, color)))
+        has_base |= !is_extension;
+        selected_base |= !is_extension && spec.set_id() == set_id;
+        (is_extension || spec.set_id() == set_id).then(|| (code.trim().to_lowercase(), (size, color)))
     }).collect::<std::collections::BTreeMap<_, _>>();
     let scanned = session.payload_json.get("qolip_codes")
         .and_then(serde_json::Value::as_array).into_iter().flatten()
@@ -272,7 +273,8 @@ pub(super) async fn validate_qolip_set_tx(
         ))).collect::<std::collections::BTreeMap<_, _>>();
         if expected.len() != members.len() || expected != required { return Err(ProductionMapError::QolipCodeMismatch); }
     }
-    if required.is_empty() || required.keys().cloned().collect::<std::collections::BTreeSet<_>>() != scanned {
+    if required.is_empty() || (has_base && !selected_base)
+        || required.keys().cloned().collect::<std::collections::BTreeSet<_>>() != scanned {
         return Err(ProductionMapError::QolipCodeMismatch);
     }
     Ok(())

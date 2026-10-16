@@ -100,14 +100,11 @@ pub(super) async fn load_products(
                 spec.size,
                 COALESCE(spec.payload_json->>'warehouse', '') AS warehouse,
                 COALESCE(spec.payload_json->>'color', '') AS color,
-                spec.created_at
+                spec.created_at,
+                link.is_extension
             FROM mini_qolip_product_specs spec
-            JOIN mini_qolip_set_products link ON link.set_id = spec.qolip_set_id
+            JOIN mini_qolip_effective_product_molds link ON link.qolip_code = spec.qolip_code
             JOIN eligible_items linked_item ON linked_item.code = link.item_code
-            UNION ALL
-            SELECT spec.item_code, spec.item_name, spec.item_group, spec.qolip_code, spec.size,
-                COALESCE(spec.payload_json->>'warehouse', ''), COALESCE(spec.payload_json->>'color', ''), spec.created_at
-            FROM mini_qolip_product_specs spec WHERE spec.qolip_set_id IS NULL
             UNION ALL
             SELECT
                 location.item_code,
@@ -117,7 +114,8 @@ pub(super) async fn load_products(
                 location.size,
                 location.warehouse,
                 location.color,
-                location.created_at
+                location.created_at,
+                false AS is_extension
             FROM legacy_locations location
             UNION ALL
             SELECT
@@ -128,7 +126,8 @@ pub(super) async fn load_products(
                 checkout.size,
                 checkout.warehouse,
                 checkout.color,
-                checkout.created_at
+                checkout.created_at,
+                false AS is_extension
             FROM legacy_checkouts checkout
         ),
         visible_sources AS (
@@ -162,6 +161,7 @@ pub(super) async fn load_products(
                 source.size,
                 source.warehouse,
                 source.color,
+                COALESCE(source.is_extension, false) AS is_extension,
                 source.qolip_code IS NOT NULL AS has_qolip_spec
             FROM eligible_items items
             FULL OUTER JOIN visible_sources source
@@ -212,6 +212,7 @@ pub(super) async fn load_products(
             COALESCE(product.color, '') AS color,
             COALESCE(set_spec.payload_json->>'qolip_set_id', '') AS qolip_set_id,
             product.has_qolip_spec,
+            product.is_extension,
             in_use.code IS NOT NULL AS is_in_use
         FROM product_rows product
         LEFT JOIN mini_qolip_product_specs set_spec ON lower(set_spec.qolip_code) = lower(product.qolip_code)
@@ -241,6 +242,7 @@ pub(super) async fn load_products(
     Ok(rows
         .into_iter()
         .map(|row| QolipProduct {
+            is_extension: row.is_extension,
             qolip_set_id: row.qolip_set_id,
             warehouse: row.warehouse,
             code: row.code,
@@ -329,8 +331,8 @@ pub(super) async fn load_product_specs(
                 spec.updated_at
             FROM mini_qolip_product_specs spec
             WHERE lower(spec.item_code) = lower($1)
-              AND (spec.qolip_set_id IS NULL OR EXISTS (SELECT 1 FROM mini_qolip_set_products link
-                          WHERE link.set_id = spec.qolip_set_id AND link.item_code_key = lower(btrim($1))))
+              AND EXISTS (SELECT 1 FROM mini_qolip_effective_product_molds link
+                  WHERE link.qolip_code = spec.qolip_code AND link.item_code_key = lower(btrim($1)))
             UNION ALL
             SELECT
                 location.item_code,

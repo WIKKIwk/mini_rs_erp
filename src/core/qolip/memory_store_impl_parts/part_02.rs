@@ -29,6 +29,7 @@ impl MemoryQolipStore {
             product.has_qolip_spec = true;
         } else {
             products.push(QolipProduct {
+                    is_extension: false,
                     qolip_set_id: spec.set_id(),
                     warehouse: spec.warehouse.clone(),
                 code: spec.item_code.clone(),
@@ -81,6 +82,7 @@ impl MemoryQolipStore {
                 product.has_qolip_spec = true;
             } else {
                 products.push(QolipProduct {
+                    is_extension: false,
                     qolip_set_id: spec.set_id(),
                     warehouse: spec.warehouse.clone(),
                     code: spec.item_code.clone(),
@@ -138,7 +140,14 @@ impl MemoryQolipStore {
         if specs.remove(&previous_key).is_none() {
             return Err(QolipError::QolipCodeNotFound);
         }
-        specs.insert(next_key, spec.clone());
+        specs.insert(next_key.clone(), spec.clone());
+        if previous_key != next_key {
+            let mut overrides = self.product_overrides.write().await;
+            let moved = overrides.iter().filter(|((_, code), _)| code == &previous_key)
+                .map(|((item, _), include)| ((item.clone(), next_key.clone()), *include)).collect::<Vec<_>>();
+            overrides.retain(|(_, code), _| code != &previous_key);
+            overrides.extend(moved);
+        }
         drop(specs);
         let mut products = self.products.write().await;
         if let Some(product) = products.iter_mut().find(|product| {
@@ -210,6 +219,7 @@ impl MemoryQolipStore {
         );
         let mut specs = self.product_specs.write().await;
         specs.retain(|code, _| !normalized.contains(&code.trim().to_lowercase()));
+        self.product_overrides.write().await.retain(|(_, code), _| !normalized.contains(code));
         drop(specs);
         self.locations
             .write()

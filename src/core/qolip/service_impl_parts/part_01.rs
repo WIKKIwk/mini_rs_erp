@@ -327,7 +327,7 @@ impl QolipService {
         if qolip_code.is_empty() {
             return Err(QolipError::MissingQolipCode);
         }
-        let spec = self
+        let mut spec = self
             .store
             .product_spec_by_qolip_code(qolip_code)
             .await?
@@ -336,10 +336,11 @@ impl QolipService {
             .order_product(expected_item_code, expected_item_name)
             .await?
             .ok_or(QolipError::QolipCodeMismatch)?;
-        if !self.compatible_specs_for_product(&expected_product).await?.iter()
-            .any(|candidate| candidate.set_id() == spec.set_id() && candidate.qolip_code.eq_ignore_ascii_case(&spec.qolip_code)) {
-            return Err(QolipError::QolipCodeMismatch);
-        }
+        let compatible = self.compatible_specs_for_product(&expected_product).await?;
+        let candidate = compatible.iter().find(|candidate| candidate.set_id() == spec.set_id()
+            && candidate.qolip_code.eq_ignore_ascii_case(&spec.qolip_code))
+            .ok_or(QolipError::QolipCodeMismatch)?;
+        spec.is_extension = candidate.is_extension;
         let existing_checkout = self.store.open_checkout_by_qolip_code(qolip_code).await?;
         let location = self.store.location_by_qolip_code(qolip_code).await?;
         if let Some(checkout) = &existing_checkout {

@@ -20,6 +20,7 @@ pub struct MemoryQolipStore {
     products: RwLock<Vec<QolipProduct>>,
     product_specs: RwLock<BTreeMap<String, QolipProductSpec>>,
     shared_links: RwLock<BTreeSet<(String, String)>>,
+    product_overrides: RwLock<BTreeMap<(String, String), bool>>,
     locations: RwLock<Vec<QolipLocation>>,
     cell_qrs: RwLock<BTreeMap<String, QolipCellQr>>,
     checkouts: RwLock<Vec<QolipCheckout>>,
@@ -53,6 +54,7 @@ impl MemoryQolipStore {
 
     fn legacy_spec(location: &QolipLocation, item_group: Option<&str>) -> QolipProductSpec {
         QolipProductSpec {
+            is_extension: false,
             qolip_set_id: String::new(),
             warehouse: location.warehouse.clone(),
             item_code: location.item_code.clone(),
@@ -72,6 +74,7 @@ impl MemoryQolipStore {
         item_group: Option<&str>,
     ) -> QolipProductSpec {
         QolipProductSpec {
+            is_extension: false,
             qolip_set_id: String::new(),
             warehouse: checkout.warehouse.clone(),
             item_code: checkout.item_code.clone(),

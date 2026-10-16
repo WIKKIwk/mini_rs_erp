@@ -1428,6 +1428,10 @@ pub(super) async fn apply_queue_progress_tx(
             put_map_inner_tx(tx, map).await?;
         }
         if let Some(session) = &write.session {
+            // Composition writers take the exclusive form before mold locks.
+            // Keep the effective requirement stable through session commit.
+            sqlx::query("SELECT pg_advisory_xact_lock_shared(hashtextextended('qolip:product-composition', 0))")
+                .execute(&mut **tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
             reject_qolip_in_use_tx(tx, session).await?;
             if matches!(event.action, crate::core::production_map::queue_state::ApparatusQueueAction::Start)
                 || event.payload_json.get("qolip_reacquired_after_freeze")

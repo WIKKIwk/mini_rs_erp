@@ -151,10 +151,11 @@ impl PreparedApparatusQueueAction {
     }
 
     pub fn attach_qolip_catalog_set(&mut self, specs: &[crate::core::qolip::QolipProductSpec]) {
-        let Some(first) = specs.first() else { return; };
+        let Some(first) = specs.iter().find(|spec| !spec.is_extension).or_else(|| specs.first()) else { return; };
         let codes = specs.iter().map(|spec| spec.qolip_code.clone()).collect::<Vec<_>>();
         let snapshot = serde_json::json!({"set_id": first.set_id(), "members": specs.iter().map(|spec| {
-            serde_json::json!({"qolip_code": spec.qolip_code, "size": spec.size, "color": spec.color})
+            serde_json::json!({"qolip_code": spec.qolip_code, "size": spec.size, "color": spec.color,
+                "qolip_set_id": spec.set_id(), "is_extension": spec.is_extension})
         }).collect::<Vec<_>>()});
         self.attach_qolip_set_details(&codes, &first.set_id(), Some(snapshot));
     }

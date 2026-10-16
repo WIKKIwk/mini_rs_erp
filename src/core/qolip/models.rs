@@ -9,6 +9,8 @@ pub struct QolipBlock {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QolipProduct {
     #[serde(default)]
+    pub is_extension: bool,
+    #[serde(default)]
     pub qolip_set_id: String,
     #[serde(default)]
     pub warehouse: String,
@@ -30,6 +32,8 @@ pub struct QolipProduct {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QolipProductSpec {
+    #[serde(default)]
+    pub is_extension: bool,
     #[serde(default)]
     pub qolip_set_id: String,
     #[serde(default)]
