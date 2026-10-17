@@ -54,6 +54,17 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
     ) -> Result<crate::core::production_map::SequenceMoveResult, ProductionMapError> {
         sequence_move::commit(&self.pool, canonical, command, actor).await
     }
+    async fn rezka_astatka_commit_by_request_id(
+        &self, actor: &QueueActionActor, request_id: &str,
+    ) -> Result<Option<(serde_json::Value, RezkaAstatkaReport)>, ProductionMapError> {
+        stage_execution::rezka_receipt(&self.pool, actor, request_id).await
+    }
+    async fn commit_rezka_astatka_report(
+        &self, request_id: String, request_json: serde_json::Value,
+        report: RezkaAstatkaReport, expected_session: OrderRunSession, actor: QueueActionActor,
+    ) -> Result<RezkaAstatkaReport, ProductionMapError> {
+        stage_execution::commit_rezka_report(&self.pool, request_id, request_json, report, expected_session, actor).await
+    }
     async fn commit_stage_astatka_report(&self, report: crate::core::production_map::StageAstatkaReport,
         expected: Option<OrderRunSession>, actor: QueueActionActor) -> Result<(), ProductionMapError> {
         stage_execution::commit_report(&self.pool, report, expected, actor).await

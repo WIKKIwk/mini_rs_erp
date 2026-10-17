@@ -95,6 +95,8 @@ async fn rezka_astatka_uses_the_execution_stage_in_every_work_state() {
                         None,
                         "",
                         other_stage,
+                        "run",
+                        "test-request-1",
                     )
                     .await,
                 Err(ProductionMapError::QueueActionNotAllowed)
@@ -115,6 +117,8 @@ async fn rezka_astatka_uses_the_execution_stage_in_every_work_state() {
                         None,
                         "",
                         stage,
+                        "run",
+                        "test-request-2",
                     )
                     .await,
                 Err(ProductionMapError::RezkaAstatkaMetricsRequired)
@@ -134,6 +138,8 @@ async fn rezka_astatka_uses_the_execution_stage_in_every_work_state() {
                         None,
                         "",
                         stage,
+                        "run",
+                        "test-request-3",
                     )
                     .await,
                 Err(ProductionMapError::RezkaAstatkaMetricsRequired)
@@ -154,6 +160,8 @@ async fn rezka_astatka_uses_the_execution_stage_in_every_work_state() {
                         None,
                         "",
                         stage,
+                        "run",
+                        &format!("waste-report-{waste}"),
                     )
                     .await;
                 if intermediate {
@@ -181,6 +189,8 @@ async fn rezka_astatka_uses_the_execution_stage_in_every_work_state() {
                     None,
                     "",
                     stage,
+                    "run",
+                    "test-request-5",
                 )
                 .await
                 .unwrap();
@@ -198,4 +208,218 @@ async fn rezka_astatka_uses_the_execution_stage_in_every_work_state() {
             );
         }
     }
+}
+
+async fn receipt_fixture() -> (
+    ProductionMapService,
+    Arc<MemoryProductionMapStore>,
+    QueueActionActor,
+) {
+    let store = Arc::new(MemoryProductionMapStore::new());
+    let service = default_service_with_store(store.clone()).await;
+    service.upsert_map(serde_json::from_value(serde_json::json!({
+        "id":"zakaz-rezka-receipt", "product_code":"RECEIPT", "title":"Receipts",
+        "nodes":[
+            {"id":"start","kind":"start","title":"Start"},
+            {"id":"cut","kind":"apparatus","title":"Cut","apparatus_id":REZKA_ID},
+            {"id":"lam","kind":"apparatus","title":"Lamination","apparatus_id":LAMINATION_1_ID},
+            {"id":"end","kind":"end","title":"End"}
+        ],
+        "edges":[{"from":"start","to":"cut"},{"from":"cut","to":"lam"},{"from":"lam","to":"end"}]
+    })).unwrap()).await.unwrap();
+    let actor = QueueActionActor {
+        role: "aparatchi".into(),
+        ref_: "cut-worker".into(),
+        display_name: "Worker".into(),
+    };
+    store
+        .put_order_run_session(OrderRunSession {
+            session_id: "original-run".into(),
+            order_id: "zakaz-rezka-receipt".into(),
+            apparatus: REZKA_ID.into(),
+            stage_node_id: "cut".into(),
+            status: OrderRunStatus::Completed,
+            started_at_unix: 100,
+            updated_at_unix: 101,
+            worker_role: actor.role.clone(),
+            worker_ref: actor.ref_.clone(),
+            worker_display_name: actor.display_name.clone(),
+            payload_json: serde_json::json!({"stage_work_protocol":1}),
+        })
+        .await
+        .unwrap();
+    (service, store, actor)
+}
+
+async fn receipt_submit(
+    service: &ProductionMapService,
+    actor: &QueueActionActor,
+    session: &str,
+    request: &str,
+    waste: f64,
+) -> Result<RezkaAstatkaReport, ProductionMapError> {
+    service
+        .record_rezka_astatka(
+            REZKA_ID,
+            "zakaz-rezka-receipt",
+            actor.clone(),
+            Some(waste),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            "",
+            "cut",
+            session,
+            request,
+        )
+        .await
+}
+
+#[tokio::test]
+async fn rezka_astatka_retry_is_one_report_and_distinct_reports_still_add() {
+    let (service, store, actor) = receipt_fixture().await;
+    let (first, retry) = tokio::join!(
+        receipt_submit(
+            &service,
+            &actor,
+            "original-run",
+            "lost-response-request",
+            2.5
+        ),
+        receipt_submit(
+            &service,
+            &actor,
+            "original-run",
+            "lost-response-request",
+            2.5
+        ),
+    );
+    let first = first.unwrap();
+    assert_eq!(first, retry.unwrap());
+    assert_eq!(
+        receipt_submit(
+            &service,
+            &actor,
+            "original-run",
+            "lost-response-request",
+            9.0
+        )
+        .await,
+        Err(ProductionMapError::ProgressInputInvalid)
+    );
+    let reports = store
+        .rezka_astatka_reports_for_order("zakaz-rezka-receipt")
+        .await
+        .unwrap();
+    assert_eq!(reports.len(), 1);
+    assert_eq!(reports[0].total_waste, 2.5);
+    receipt_submit(
+        &service,
+        &actor,
+        "original-run",
+        "additional-report-request",
+        0.5,
+    )
+    .await
+    .unwrap();
+    let reports = store
+        .rezka_astatka_reports_for_order("zakaz-rezka-receipt")
+        .await
+        .unwrap();
+    assert_eq!(reports.len(), 2);
+    assert_eq!(reports.iter().map(|r| r.total_waste).sum::<f64>(), 3.0);
+}
+
+#[tokio::test]
+async fn rezka_astatka_stale_form_rejected_but_committed_receipt_survives_reactivation() {
+    let (service, store, actor) = receipt_fixture().await;
+    let snapshot = service
+        .rezka_astatka_snapshot(REZKA_ID, "zakaz-rezka-receipt", &actor, "")
+        .await
+        .unwrap();
+    assert_eq!(snapshot["session_id"], "original-run");
+    let saved = receipt_submit(
+        &service,
+        &actor,
+        "original-run",
+        "saved-report-request",
+        2.5,
+    )
+    .await
+    .unwrap();
+    let mut replacement = store
+        .order_run_sessions_for_order("zakaz-rezka-receipt")
+        .await
+        .unwrap()[0]
+        .clone();
+    replacement.session_id = "reactivated-run".into();
+    replacement.started_at_unix = 102;
+    replacement.updated_at_unix = 103;
+    replacement.payload_json = serde_json::json!({"stage_work_protocol":1});
+    store.put_order_run_session(replacement).await.unwrap();
+    assert_eq!(
+        receipt_submit(&service, &actor, "original-run", "stale-form-request", 5.0).await,
+        Err(ProductionMapError::QueueActionNotAllowed)
+    );
+    assert_eq!(
+        receipt_submit(
+            &service,
+            &actor,
+            "original-run",
+            "saved-report-request",
+            2.5
+        )
+        .await
+        .unwrap(),
+        saved
+    );
+    let replay = service
+        .rezka_astatka_snapshot(
+            REZKA_ID,
+            "zakaz-rezka-receipt",
+            &actor,
+            "saved-report-request",
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        replay["request_result"]["report"]["report_id"],
+        saved.report_id
+    );
+    let current = store
+        .order_run_sessions_for_order("zakaz-rezka-receipt")
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|s| s.session_id == "reactivated-run")
+        .unwrap();
+    assert!(current.payload_json.get("stage_work_report").is_none());
+    assert_eq!(
+        store
+            .rezka_astatka_reports_for_order("zakaz-rezka-receipt")
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    receipt_submit(
+        &service,
+        &actor,
+        "reactivated-run",
+        "new-session-request",
+        0.0,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        receipt_submit(&service, &actor, "", "missing-session-request", 1.0).await,
+        Err(ProductionMapError::ProgressInputInvalid)
+    );
+    assert_eq!(
+        receipt_submit(&service, &actor, "reactivated-run", "", 1.0).await,
+        Err(ProductionMapError::ProgressInputInvalid)
+    );
 }

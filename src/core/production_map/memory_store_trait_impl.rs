@@ -150,6 +150,26 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         successors.insert(key, paddon.code.clone());
         Ok(paddon)
     }
+    async fn rezka_astatka_commit_by_request_id(
+        &self, actor: &QueueActionActor, request_id: &str,
+    ) -> Result<Option<(serde_json::Value, RezkaAstatkaReport)>, ProductionMapError> {
+        Ok(self.rezka_astatka_receipts.lock().await
+            .get(&(actor.role.clone(), actor.ref_.clone(), request_id.to_string())).cloned())
+    }
+    async fn commit_rezka_astatka_report(
+        &self, request_id: String, request_json: serde_json::Value,
+        report: RezkaAstatkaReport, expected_session: OrderRunSession, actor: QueueActionActor,
+    ) -> Result<RezkaAstatkaReport, ProductionMapError> {
+        let mut receipts = self.rezka_astatka_receipts.lock().await;
+        let key = (actor.role.clone(), actor.ref_.clone(), request_id);
+        if let Some((previous, report)) = receipts.get(&key) {
+            return if previous == &request_json { Ok(report.clone()) }
+                else { Err(ProductionMapError::ProgressInputInvalid) };
+        }
+        self.commit_stage_astatka_report(StageAstatkaReport::Cut(report.clone()), Some(expected_session), actor).await?;
+        receipts.insert(key, (request_json, report.clone()));
+        Ok(report)
+    }
     async fn commit_stage_astatka_report(&self, report: StageAstatkaReport,
         expected: Option<OrderRunSession>, actor: QueueActionActor) -> Result<(), ProductionMapError> {
         let (order_id, apparatus, report_id) = report.identity();

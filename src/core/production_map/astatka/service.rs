@@ -121,6 +121,8 @@ impl ProductionMapService {
         bobina_kg: Option<f64>,
         description: &str,
         expected_stage_node_id: &str,
+        expected_session_id: &str,
+        request_id: &str,
     ) -> Result<RezkaAstatkaReport, ProductionMapError> {
         let apparatus = apparatus.trim();
         let order_id = order_id.trim();
@@ -144,9 +146,32 @@ impl ProductionMapService {
             }
         }
 
+        let request_id = request_id.trim();
+        let expected_session_id = expected_session_id.trim();
+        if !(8..=128).contains(&request_id.len()) || expected_session_id.is_empty()
+            || actor.ref_.trim().is_empty()
+        {
+            return Err(ProductionMapError::ProgressInputInvalid);
+        }
         let order_id = self.astatka_order_id(order_id).await?;
+        let request_json = serde_json::json!({
+            "apparatus": apparatus, "order_id": order_id,
+            "session_id": expected_session_id, "stage_node_id": expected_stage_node_id.trim(),
+            "total_waste": total_waste, "rezka_bosma_waste": rezka_bosma_waste,
+            "rezka_lamination_waste": rezka_lamination_waste, "rezka_edge_waste": rezka_edge_waste,
+            "finished_goods_meter": finished_goods_meter, "finished_goods_kg": finished_goods_kg,
+            "bobina_kg": bobina_kg, "description": description.trim(),
+        });
         let _guard = self.queue_action_guard().await;
+        // Recognize a committed request before looking at mutable execution state.
+        if let Some((previous, report)) = self.store.rezka_astatka_commit_by_request_id(&actor, request_id).await? {
+            return if previous == request_json { Ok(report) }
+                else { Err(ProductionMapError::ProgressInputInvalid) };
+        }
         let anchor = self.astatka_execution_anchor(&order_id, apparatus).await?;
+        if anchor.as_ref().is_none_or(|session| session.session_id != expected_session_id) {
+            return Err(ProductionMapError::QueueActionNotAllowed);
+        }
         let saved = self.map(&order_id).await?.ok_or(ProductionMapError::MapNotFound)?;
         // Use the execution occurrence, since one machine can be both an
         // intermediate and the final Rezka in the same order. Unresolved legacy
@@ -222,9 +247,43 @@ impl ProductionMapService {
             description: description.trim().to_string(),
             created_at_unix,
         };
-        self.store.commit_stage_astatka_report(StageAstatkaReport::Cut(report.clone()), anchor, actor).await?;
+        let report = self.store.commit_rezka_astatka_report(
+            request_id.to_string(), request_json, report, anchor.expect("validated session"), actor,
+        ).await?;
         self.notify_live();
         Ok(report)
+    }
+
+    pub async fn rezka_astatka_snapshot(
+        &self,
+        apparatus: &str,
+        order_id: &str,
+        actor: &QueueActionActor,
+        request_id: &str,
+    ) -> Result<serde_json::Value, ProductionMapError> {
+        let order_id = self.astatka_order_id(order_id.trim()).await?;
+        if !request_id.trim().is_empty() {
+            if let Some((_, report)) = self
+                .store
+                .rezka_astatka_commit_by_request_id(actor, request_id.trim())
+                .await?
+            {
+                if report.order_id != order_id || report.apparatus != apparatus.trim() {
+                    return Err(ProductionMapError::ProgressInputInvalid);
+                }
+                return Ok(
+                    serde_json::json!({"ok": true, "request_result": {"ok": true, "report": report}}),
+                );
+            }
+        }
+        let session = self
+            .astatka_execution_anchor(&order_id, apparatus.trim())
+            .await?
+            .ok_or(ProductionMapError::OrderNotStarted)?;
+        Ok(
+            serde_json::json!({"ok": true, "session_id": session.session_id,
+            "stage_node_id": session.stage_node_id, "request_result": null}),
+        )
     }
 
     pub(super) async fn astatka_order_id(&self, order_id: &str) -> Result<String, ProductionMapError> {

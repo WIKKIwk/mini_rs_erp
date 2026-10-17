@@ -130,24 +130,37 @@ pub(super) async fn commit_report(
     expected: Option<OrderRunSession>,
     actor: QueueActionActor,
 ) -> Result<(), ProductionMapError> {
-    let (order_id, apparatus, report_id) = report.identity();
+    let (order_id, apparatus, _) = report.identity();
     let mut tx = pool
         .begin()
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
     super::transaction_locks::lock_order_and_apparatuses_tx(&mut tx, order_id, &[apparatus])
         .await?;
+    commit_report_tx(&mut tx, &report, expected, &actor).await?;
+    tx.commit()
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)
+}
+
+async fn commit_report_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    report: &StageAstatkaReport,
+    expected: Option<OrderRunSession>,
+    actor: &QueueActionActor,
+) -> Result<(), ProductionMapError> {
+    let (order_id, apparatus, report_id) = report.identity();
     let control = sqlx::query_scalar::<_, String>(
         "SELECT state FROM mini_order_control_states WHERE order_id = $1 FOR UPDATE",
     )
     .bind(order_id)
-    .fetch_optional(&mut *tx)
+    .fetch_optional(&mut **tx)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
     if control.as_deref() == Some("frozen") {
         return Err(ProductionMapError::OrderFrozen);
     }
-    let sessions = sessions_tx(&mut tx, order_id).await?;
+    let sessions = sessions_tx(tx, order_id).await?;
     let current = sessions
         .iter()
         .filter(|s| s.apparatus == apparatus)
@@ -155,36 +168,132 @@ pub(super) async fn commit_report(
     if current != expected.as_ref() {
         return Err(ProductionMapError::QueueActionNotAllowed);
     }
-    match &report {
+    match report {
         StageAstatkaReport::Laminate(r) => {
-            super::astatka_helpers::put_laminatsiya_astatka_report_tx(&mut tx, r).await?
+            super::astatka_helpers::put_laminatsiya_astatka_report_tx(tx, r).await?
         }
         StageAstatkaReport::Cut(r) => {
-            super::astatka_helpers::put_rezka_astatka_report_tx(&mut tx, r).await?
+            super::astatka_helpers::put_rezka_astatka_report_tx(tx, r).await?
         }
         StageAstatkaReport::Bosma(r) => {
             sqlx::query("INSERT INTO mini_bosma_astatka_reports (report_id, order_id, apparatus, from_at_unix, to_at_unix, report_json)
                 VALUES ($1, $2, $3, $4, $5, $6)")
                 .bind(&r.report_id).bind(&r.order_id).bind(&r.apparatus).bind(r.from_at_unix).bind(r.to_at_unix)
                 .bind(serde_json::to_value(r).map_err(|_| ProductionMapError::StoreFailed)?)
-                .execute(&mut *tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
+                .execute(&mut **tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
         }
     }
     if let Some(mut session) = expected.filter(|s| s.status == OrderRunStatus::Completed) {
-        stamp_report_tx(&mut tx, &mut session, report_id, &actor).await?;
-        super::progress_helpers::put_order_run_session_tx(&mut tx, &session).await?;
+        stamp_report_tx(tx, &mut session, report_id, actor).await?;
+        super::progress_helpers::put_order_run_session_tx(tx, &session).await?;
         super::lifecycle::refresh_production_order_lifecycle_tx(
-            &mut tx,
+            tx,
             order_id,
-            &actor,
+            actor,
             report_id,
             "stage_astatka",
         )
         .await?;
     }
+    Ok(())
+}
+
+pub(super) async fn rezka_receipt(
+    pool: &PgPool,
+    actor: &QueueActionActor,
+    request_id: &str,
+) -> Result<Option<(serde_json::Value, RezkaAstatkaReport)>, ProductionMapError> {
+    let row: Option<(serde_json::Value, serde_json::Value)> = sqlx::query_as(
+        "SELECT request_json, report_json FROM mini_rezka_astatka_operations
+         WHERE actor_role=$1 AND actor_ref=$2 AND request_id=$3",
+    )
+    .bind(&actor.role)
+    .bind(&actor.ref_)
+    .bind(request_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    row.map(|(request, report)| {
+        serde_json::from_value(report)
+            .map(|report| (request, report))
+            .map_err(|_| ProductionMapError::StoreFailed)
+    })
+    .transpose()
+}
+
+pub(super) async fn commit_rezka_report(
+    pool: &PgPool,
+    request_id: String,
+    request_json: serde_json::Value,
+    report: RezkaAstatkaReport,
+    expected: OrderRunSession,
+    actor: QueueActionActor,
+) -> Result<RezkaAstatkaReport, ProductionMapError> {
+    if !(8..=128).contains(&request_id.len())
+        || actor.ref_.trim().is_empty()
+        || expected.session_id.is_empty()
+        || expected.order_id != report.order_id
+        || expected.apparatus != report.apparatus
+        || request_json
+            .get("session_id")
+            .and_then(serde_json::Value::as_str)
+            != Some(expected.session_id.as_str())
+    {
+        return Err(ProductionMapError::ProgressInputInvalid);
+    }
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    super::transaction_locks::lock_order_and_apparatuses_tx(
+        &mut tx,
+        &report.order_id,
+        &[&report.apparatus],
+    )
+    .await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
+        .bind(format!(
+            "rezka-astatka:{}:{}:{}",
+            actor.role, actor.ref_, request_id
+        ))
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    let replay: Option<(serde_json::Value, serde_json::Value)> = sqlx::query_as(
+        "SELECT request_json, report_json FROM mini_rezka_astatka_operations
+         WHERE actor_role=$1 AND actor_ref=$2 AND request_id=$3",
+    )
+    .bind(&actor.role)
+    .bind(&actor.ref_)
+    .bind(&request_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    if let Some((previous, report)) = replay {
+        if previous != request_json {
+            return Err(ProductionMapError::ProgressInputInvalid);
+        }
+        return serde_json::from_value(report).map_err(|_| ProductionMapError::StoreFailed);
+    }
+    let session_id = expected.session_id.clone();
+    commit_report_tx(
+        &mut tx,
+        &StageAstatkaReport::Cut(report.clone()),
+        Some(expected),
+        &actor,
+    )
+    .await?;
+    sqlx::query("INSERT INTO mini_rezka_astatka_operations
+        (actor_role, actor_ref, request_id, order_id, apparatus, session_id, report_id, request_json, report_json)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)")
+        .bind(&actor.role).bind(&actor.ref_).bind(request_id).bind(&report.order_id)
+        .bind(&report.apparatus).bind(session_id).bind(&report.report_id).bind(request_json)
+        .bind(serde_json::to_value(&report).map_err(|_| ProductionMapError::StoreFailed)?)
+        .execute(&mut *tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
     tx.commit()
         .await
-        .map_err(|_| ProductionMapError::StoreFailed)
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    Ok(report)
 }
 
 pub(super) async fn validate_input_claims_tx(

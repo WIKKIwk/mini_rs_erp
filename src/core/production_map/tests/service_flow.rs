@@ -4220,6 +4220,8 @@ async fn rezka_astatka_uses_order_timeline_and_accepts_zero_metrics() {
             None,
             "birinchi astatka",
             "",
+            "session-rezka-astatka",
+            "first-report-request",
         )
         .await
         .expect("first astatka");
@@ -4240,6 +4242,8 @@ async fn rezka_astatka_uses_order_timeline_and_accepts_zero_metrics() {
             None,
             "ikkinchi astatka",
             "",
+            "session-rezka-astatka",
+            "second-report-request",
         )
         .await
         .expect("second astatka");

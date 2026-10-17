@@ -149,6 +149,10 @@ struct RezkaAstatkaRequest {
     #[serde(default)]
     stage_node_id: String,
     #[serde(default)]
+    session_id: String,
+    #[serde(default)]
+    request_id: String,
+    #[serde(default)]
     total_waste: Option<f64>,
     #[serde(default)]
     rezka_bosma_waste: Option<f64>,
@@ -300,6 +304,7 @@ pub async fn production_map_rezka_astatka(
     State(state): State<AppState>,
     method: Method,
     headers: HeaderMap,
+    uri: axum::http::Uri,
     body: Bytes,
 ) -> Result<Response, AdminError> {
     let principal = authorize_any_capability(
@@ -312,10 +317,15 @@ pub async fn production_map_rezka_astatka(
         ],
     )
     .await?;
-    if method != Method::POST {
+    if method != Method::GET && method != Method::POST {
         return Err(method_not_allowed());
     }
-    let input: RezkaAstatkaRequest = parse_json(&body)?;
+    let input: RezkaAstatkaRequest = if method == Method::GET {
+        let Query(query) = Query::<LaminatsiyaAstatkaQuery>::try_from_uri(&uri)
+            .map_err(|_| bad_request("apparatus and order_id are required"))?;
+        RezkaAstatkaRequest { apparatus: query.apparatus, order_id: query.order_id,
+            request_id: query.request_id, ..Default::default() }
+    } else { parse_json(&body)? };
     if input.apparatus.trim().is_empty() || input.order_id.trim().is_empty() {
         return Err(bad_request("apparatus and order_id are required"));
     }
@@ -330,6 +340,12 @@ pub async fn production_map_rezka_astatka(
                 ProductionMapError::ApparatusNotAssigned,
             ));
         }
+    }
+    if method == Method::GET {
+        let snapshot = state.production_maps.rezka_astatka_snapshot(
+            &input.apparatus, &input.order_id, &queue_action_actor(&principal), &input.request_id,
+        ).await.map_err(production_map_error)?;
+        return Ok(json_response(snapshot));
     }
     let report = state
         .production_maps
@@ -346,6 +362,8 @@ pub async fn production_map_rezka_astatka(
             input.bobina_kg,
             &input.description,
             &input.stage_node_id,
+            &input.session_id,
+            &input.request_id,
         )
         .await
         .map_err(production_map_error)?;

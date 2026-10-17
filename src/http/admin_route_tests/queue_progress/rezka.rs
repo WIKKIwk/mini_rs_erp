@@ -1896,3 +1896,110 @@ async fn grouped_rezka_wip_survives_lamination_and_reenters_same_final_rezka() {
         "completed"
     );
 }
+
+#[tokio::test]
+async fn rezka_astatka_http_captures_session_and_replays_request() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+    let router = build_router(state);
+    let station = "apparatus:default:asset-010";
+    let order = "zakaz-rezka-astatka-http";
+    let saved = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &token,
+            &pechat_order_map_json(order, "Cut receipts", "ASTHTTP", station),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(saved.status(), StatusCode::OK);
+    let (status, _) = queue_action_json(
+        &router,
+        &token,
+        serde_json::json!({"apparatus":station,"order_id":order,"action":"start"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let endpoint = "/v1/mobile/admin/production-maps/rezka-astatka";
+    let query = format!("{endpoint}?apparatus={station}&order_id={order}");
+    let snapshot = router
+        .clone()
+        .oneshot(request("GET", &query, &token))
+        .await
+        .unwrap();
+    assert_eq!(snapshot.status(), StatusCode::OK);
+    let snapshot = json_body(snapshot).await;
+    assert!(
+        snapshot["session_id"]
+            .as_str()
+            .is_some_and(|id| !id.is_empty())
+    );
+    let mut body = serde_json::json!({"apparatus":station,"order_id":order,
+        "stage_node_id":snapshot["stage_node_id"], "total_waste":2.5,
+        "rezka_bosma_waste":0.0,"rezka_lamination_waste":0.0,"rezka_edge_waste":0.0});
+    let unguarded = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            endpoint,
+            &token,
+            &body.to_string(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(unguarded.status(), StatusCode::BAD_REQUEST);
+    body["session_id"] = snapshot["session_id"].clone();
+    body["request_id"] = serde_json::json!("http-report-request");
+    let first = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            endpoint,
+            &token,
+            &body.to_string(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    let first = json_body(first).await;
+    let retry = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            endpoint,
+            &token,
+            &body.to_string(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(retry.status(), StatusCode::OK);
+    assert_eq!(json_body(retry).await["report"], first["report"]);
+    let replay = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            &format!("{query}&request_id=http-report-request"),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(replay.status(), StatusCode::OK);
+    assert_eq!(
+        json_body(replay).await["request_result"]["report"],
+        first["report"]
+    );
+    body["total_waste"] = serde_json::json!(8.0);
+    let collision = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            endpoint,
+            &token,
+            &body.to_string(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(collision.status(), StatusCode::BAD_REQUEST);
+}

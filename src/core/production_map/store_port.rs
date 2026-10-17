@@ -190,6 +190,17 @@ fn is_warehouse_processing_marker(value: &str) -> bool {
 
 #[async_trait]
 pub trait ProductionMapStorePort: Send + Sync {
+    async fn rezka_astatka_commit_by_request_id(
+        &self, _actor: &QueueActionActor, _request_id: &str,
+    ) -> StoreResult<Option<(serde_json::Value, RezkaAstatkaReport)>> {
+        Err(ProductionMapError::StoreFailed)
+    }
+    async fn commit_rezka_astatka_report(
+        &self, _request_id: String, _request_json: serde_json::Value,
+        _report: RezkaAstatkaReport, _expected_session: OrderRunSession, _actor: QueueActionActor,
+    ) -> StoreResult<RezkaAstatkaReport> {
+        Err(ProductionMapError::StoreFailed)
+    }
     async fn laminatsiya_astatka_commit_by_request_id(
         &self, _actor_ref: &str, _request_id: &str,
     ) -> StoreResult<Option<(serde_json::Value, super::LaminatsiyaAstatkaCommitResult)>> {
