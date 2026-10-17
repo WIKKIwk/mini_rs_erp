@@ -845,8 +845,10 @@ impl ProductionMapService {
             .store
             .put_apparatus_queue_states_with_event_and_progress(&write)
             .await?;
-        let order_status = self.order_status_detail(&write.event.order_id).await?;
+        // The write is durable. Invalidate before response reads can fail or
+        // be cancelled, so live consumers cannot retain the pre-commit view.
         self.notify_live();
+        let order_status = self.order_status_detail(&write.event.order_id).await?;
         let QueueActionProgressWrite {
             states,
             session,
