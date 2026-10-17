@@ -273,7 +273,7 @@ async fn prepare(
         if external {
             deny!("source_not_free");
         }
-        let previously_used:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM mini_order_run_input_links WHERE input_batch_id=$1 AND session_id<>$2) OR EXISTS(SELECT 1 FROM mini_order_run_sessions WHERE session_id<>$2 AND (payload_json->>'input_progress_batch_id'=$1 OR EXISTS(SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(payload_json->'input_lineage')='array' THEN payload_json->'input_lineage' ELSE '[]'::jsonb END) link WHERE link->>'input_batch_id'=$1)))")
+        let previously_used:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM mini_order_run_sessions WHERE session_id<>$2 AND (payload_json->>'input_progress_batch_id'=$1 OR EXISTS(SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(payload_json->'input_lineage')='array' THEN payload_json->'input_lineage' ELSE '[]'::jsonb END) link WHERE link->>'input_batch_id'=$1)))")
             .bind(id).bind(&session.session_id).fetch_one(&mut **tx).await.map_err(|_|ProductionMapError::StoreFailed)?;
         if previously_used {
             deny!("source_not_free");
