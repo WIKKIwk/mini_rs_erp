@@ -66,6 +66,20 @@ impl ProductionMapService {
         }
         Ok(pechat::is_pechat_apparatus(&canonical))
     }
+    /// A matching immutable receipt acknowledges a retry without reading or
+    /// preparing resources for whatever work is current now.
+    pub async fn reactivation_was_applied(
+        &self, target: &ReactivationTarget, assigned: &[String], actor: &QueueActionActor,
+    ) -> Result<bool, ProductionMapError> {
+        self.validate_reactivation_selector(&ReactivationSelector {
+            apparatus: target.apparatus.clone(), order_id: target.order_id.clone(),
+            batch_id: target.batch_id.clone(),
+        }, assigned, actor).await?;
+        if target.token.len() != 64 || target.session_id.is_empty() || target.stage_node_id.is_empty() {
+            return Err(ProductionMapError::QueueActionNotAllowed);
+        }
+        self.store.reactivation_was_applied(target, actor).await
+    }
     pub async fn preview_reactivation(
         &self,
         selector: &ReactivationSelector,

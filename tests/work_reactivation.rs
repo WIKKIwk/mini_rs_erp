@@ -794,3 +794,80 @@ async fn cutting_continuation_records_frames_and_releases_previous_output_once()
     assert_eq!(total, (2, 125.0));
     f.release().await;
 }
+
+#[tokio::test]
+#[ignore = "requires REACTIVATION_TEST_DATABASE_URL on a disposable server"]
+async fn http_reactivation_retry_after_another_completion_acknowledges_original_receipt() {
+    use mini_rs_erp::{app::AppState, config::AppConfig,
+        core::{auth::models::{Principal, PrincipalRole}, authz::RoleAssignmentUpsert},
+        http::router::build_router};
+    use axum::{body::Body, http::{Request, StatusCode}};
+    use tower::ServiceExt;
+    let f = Fixture::new(PRESS, false).await;
+    let dir = tempfile::tempdir().unwrap();
+    struct RestoreDirectory(std::path::PathBuf);
+    impl Drop for RestoreDirectory {
+        fn drop(&mut self) { std::env::set_current_dir(&self.0).unwrap(); }
+    }
+    let _restore = RestoreDirectory(std::env::current_dir().unwrap());
+    std::env::set_current_dir(dir.path()).unwrap();
+    let mut state = AppState::verification(AppConfig {
+        bind_addr: "127.0.0.1:0".parse().unwrap(), default_target_warehouse: String::new(),
+        http_timeout: std::time::Duration::from_secs(5),
+        session_store_path: dir.path().join("sessions"), profile_store_path: dir.path().join("profiles"),
+        push_token_store_path: dir.path().join("push"), session_ttl_seconds: Some(3600),
+        supplier_prefix: "10".into(), werka_prefix: "20".into(), werka_code: String::new(),
+        werka_name: String::new(), werka_phone: String::new(), material_taminotchi_code: String::new(),
+        material_taminotchi_name: String::new(), material_taminotchi_phone: String::new(),
+        admin_phone: String::new(), admin_name: String::new(), admin_code: String::new(),
+    });
+    state.apparatus = postgres::canonical_apparatus_service(f.pool.clone());
+    state.production_maps = f.service.clone();
+    state.admin.upsert_role_assignment(RoleAssignmentUpsert {
+        principal_role: PrincipalRole::Aparatchi, principal_ref: actor().ref_,
+        role_id: "aparatchi".into(), assigned_apparatus: vec![PRESS.into()], assigned_item_groups: vec![],
+    }).await.unwrap();
+    let token = state.sessions.create(Principal {
+        role: PrincipalRole::Aparatchi, ref_: actor().ref_, display_name: "Worker".into(),
+        legal_name: String::new(), avatar_url: String::new(), phone: String::new(),
+    }).await.unwrap();
+    let router = build_router(state);
+    let target = f.preview().await.target.unwrap();
+    let post = |body: &ReactivationTarget| Request::builder().method("POST")
+        .uri("/v1/mobile/admin/production-maps/reactivation")
+        .header("authorization", format!("Bearer {token}"))
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(body).unwrap())).unwrap();
+    assert_eq!(router.clone().oneshot(post(&target)).await.unwrap().status(), StatusCode::OK);
+    f.service.apply_apparatus_queue_action_with_progress(PRESS, &f.order, Action::Complete,
+        &[PRESS.into()], actor(), QueueProgressInput {
+            produced_qty: Some(25.0), uom: "m".into(), finished_goods_meter: Some(25.0),
+            finished_goods_kg: Some(2.5), bobina_kg: Some(0.5), return_ink_kg: Some(0.5),
+            total_waste: Some(1.0), ..Default::default()
+        }).await.unwrap();
+    let next = f.preview().await;
+    assert!(next.available, "{next:?}");
+    assert_ne!(next.target.unwrap().token, target.token);
+    let before = json!({
+        "sessions": f.store.order_run_sessions_for_order(&f.order).await.unwrap(),
+        "batches": f.store.progress_batches_for_order(&f.order).await.unwrap(),
+        "events": f.service.queue_action_logs_for_order(&f.order).await.unwrap(),
+    });
+    assert_eq!(router.clone().oneshot(post(&target)).await.unwrap().status(), StatusCode::OK);
+    for field in ["stage", "session", "batch", "token"] {
+        let mut tampered = target.clone();
+        match field {
+            "stage" => tampered.stage_node_id = "different-stage".into(),
+            "session" => tampered.session_id = "different-session".into(),
+            "batch" => tampered.batch_id = "different-batch".into(),
+            _ => tampered.token = "0".repeat(64),
+        }
+        assert!(!router.clone().oneshot(post(&tampered)).await.unwrap().status().is_success(), "{field}");
+    }
+    assert_eq!(before, json!({
+        "sessions": f.store.order_run_sessions_for_order(&f.order).await.unwrap(),
+        "batches": f.store.progress_batches_for_order(&f.order).await.unwrap(),
+        "events": f.service.queue_action_logs_for_order(&f.order).await.unwrap(),
+    }));
+    f.release().await;
+}

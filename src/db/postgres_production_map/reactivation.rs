@@ -549,6 +549,28 @@ pub(super) async fn preview(
     })
 }
 
+type ReactivationReceipt = (String, String, String, String, String, Value);
+
+fn receipt_matches(receipt: &ReactivationReceipt, target: &ReactivationTarget, actor: &QueueActionActor) -> Result<bool, ProductionMapError> {
+    if receipt.0 != target.order_id || receipt.1 != target.apparatus
+        || receipt.2 != actor.role || receipt.3 != actor.ref_
+        || receipt.4 != target.stage_node_id
+        || field(&receipt.5, "source_session_id") != target.session_id
+        || field(&receipt.5, "batch_id") != target.batch_id
+    {
+        return Err(ProductionMapError::QueueActionNotAllowed);
+    }
+    Ok(true)
+}
+
+pub(super) async fn was_applied(store: &PostgresProductionMapStore, target: &ReactivationTarget, actor: &QueueActionActor) -> Result<bool, ProductionMapError> {
+    let receipt: Option<ReactivationReceipt> = sqlx::query_as(
+        "SELECT order_id,canonical_apparatus_id,actor_role,actor_ref,stage_node_id,payload_json FROM mini_queue_action_events WHERE event_id=$1"
+    ).bind(format!("reactivation:{}", target.token)).fetch_optional(&store.pool).await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    receipt.as_ref().map(|receipt| receipt_matches(receipt, target, actor)).transpose().map(|result| result.unwrap_or(false))
+}
+
 pub(super) async fn execute(
     store: &PostgresProductionMapStore,
     target: &ReactivationTarget,
@@ -577,16 +599,7 @@ pub(super) async fn execute(
     let event_id = format!("reactivation:{}", target.token);
     let receipt:Option<(String,String,String,String,String,Value)>=sqlx::query_as("SELECT order_id,canonical_apparatus_id,actor_role,actor_ref,stage_node_id,payload_json FROM mini_queue_action_events WHERE event_id=$1").bind(&event_id).fetch_optional(&mut *tx).await.map_err(|_|ProductionMapError::StoreFailed)?;
     if let Some(receipt) = receipt {
-        if receipt.0 != target.order_id
-            || receipt.1 != target.apparatus
-            || receipt.2 != actor.role
-            || receipt.3 != actor.ref_
-            || receipt.4 != target.stage_node_id
-            || field(&receipt.5, "source_session_id") != target.session_id
-            || field(&receipt.5, "batch_id") != target.batch_id
-        {
-            return Err(ProductionMapError::QueueActionNotAllowed);
-        }
+        receipt_matches(&receipt, target, actor)?;
         return Ok(());
     }
     let prepared = prepare(

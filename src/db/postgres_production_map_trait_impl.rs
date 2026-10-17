@@ -1,5 +1,8 @@
 #[async_trait]
 impl ProductionMapStorePort for PostgresProductionMapStore {
+    async fn reactivation_was_applied(&self, target: &crate::core::production_map::ReactivationTarget, actor: &QueueActionActor) -> Result<bool, ProductionMapError> {
+        reactivation::was_applied(self, target, actor).await
+    }
     async fn preview_reactivation(&self, selector: &crate::core::production_map::ReactivationSelector, actor: &QueueActionActor, is_print: bool) -> Result<crate::core::production_map::ReactivationPreview, ProductionMapError> {
         reactivation::preview(self, selector, actor, is_print).await
     }

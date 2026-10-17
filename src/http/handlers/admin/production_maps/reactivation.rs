@@ -37,6 +37,11 @@ pub async fn production_map_reactivation(
     let target: ReactivationTarget = parse_json(&body)?;
     let assigned = state.admin.principal_assigned_apparatus(&principal).await;
     let actor = queue_action_actor(&principal);
+    if state.production_maps.reactivation_was_applied(&target, &assigned, &actor)
+        .await.map_err(production_map_error)?
+    {
+        return Ok(reactivation_ack(&state));
+    }
     // Validate scope before reading resources or preparing any checkout. A replay
     // can acknowledge its existing receipt without attempting tooling again.
     let selector = ReactivationSelector {
@@ -58,6 +63,12 @@ pub async fn production_map_reactivation(
             || current.session_id != target.session_id
             || current.stage_node_id != target.stage_node_id
         {
+            // Another request may have committed while preview was loading.
+            if state.production_maps.reactivation_was_applied(&target, &assigned, &actor)
+                .await.map_err(production_map_error)?
+            {
+                return Ok(reactivation_ack(&state));
+            }
             return Err(production_map_error(
                 ProductionMapError::ReactivationDenied("stale_target".into()),
             ));
@@ -135,7 +146,9 @@ pub async fn production_map_reactivation(
                 .notify_updated(&warehouse, "raw_material_stock");
         }
     }
-    Ok(json_response(
-        serde_json::json!({"ok":true,"rev":state.production_maps.snapshot_revision(),"epoch":state.production_maps.snapshot_epoch()}),
-    ))
+    Ok(reactivation_ack(&state))
+}
+
+fn reactivation_ack(state: &AppState) -> Response {
+    json_response(serde_json::json!({"ok":true,"rev":state.production_maps.snapshot_revision(),"epoch":state.production_maps.snapshot_epoch()}))
 }

@@ -455,6 +455,9 @@ pub trait ProductionMapStorePort: Send + Sync {
     ) -> StoreResult<()> {
         Err(ProductionMapError::QueueActionNotAllowed)
     }
+    async fn reactivation_was_applied(&self, _target: &super::ReactivationTarget, _actor: &QueueActionActor) -> StoreResult<bool> {
+        Ok(false)
+    }
     async fn preview_reactivation(&self, _selector: &super::ReactivationSelector, _actor: &QueueActionActor, _is_print: bool) -> StoreResult<super::ReactivationPreview> {
         Ok(super::ReactivationPreview::denied("unsupported_history"))
     }
