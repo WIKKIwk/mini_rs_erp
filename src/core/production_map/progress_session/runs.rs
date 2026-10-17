@@ -334,6 +334,9 @@ pub(super) async fn wip_progress_batches(
     query: WipProgressBatchQuery,
 ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
     let WipProgressBatchQuery {
+        producer_apparatus,
+        worker_ref,
+        before_batch_id,
         apparatus,
         next_apparatus,
         current_location,
@@ -344,6 +347,11 @@ pub(super) async fn wip_progress_batches(
     } = query;
     if limit == 0 {
         return Ok(Vec::new());
+    }
+    let producer_apparatus = producer_apparatus.trim();
+    if !producer_apparatus.is_empty() {
+        ApparatusId::new(producer_apparatus.to_string())
+            .map_err(|_| ProductionMapError::StoreFailed)?;
     }
     let apparatus = apparatus.trim();
     if !apparatus.is_empty() {
@@ -362,9 +370,16 @@ pub(super) async fn wip_progress_batches(
         .await
         .values()
         .filter(|batch| {
-            (apparatus.is_empty()
-                || super::super::types::apparatus_ids_match(&batch.current_apparatus, apparatus)
-                || super::super::types::apparatus_ids_match(&batch.apparatus, apparatus))
+            (producer_apparatus.is_empty() || batch.apparatus.trim() == producer_apparatus)
+                && (worker_ref.is_empty() || batch.worker_ref.trim() == worker_ref.trim())
+                && (before_batch_id.is_empty()
+                    || batch.batch_id.as_str() < before_batch_id.as_str())
+                && (apparatus.is_empty()
+                    || super::super::types::apparatus_ids_match(
+                        &batch.current_apparatus,
+                        apparatus,
+                    )
+                    || super::super::types::apparatus_ids_match(&batch.apparatus, apparatus))
                 && (current_location.is_empty()
                     || batch.current_location.trim() == current_location)
                 && (next_apparatus.is_empty()

@@ -217,6 +217,11 @@ impl ProgressBatchInputLink {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct WipProgressBatchQuery {
+    /// Original producing apparatus, independent of the WIP current location.
+    pub producer_apparatus: String,
+    pub worker_ref: String,
+    /// Stable keyset cursor for producer history, ordered by immutable batch ID.
+    pub before_batch_id: String,
     pub apparatus: String,
     pub next_apparatus: String,
     pub current_location: String,
@@ -237,6 +242,9 @@ impl WipProgressBatchQuery {
         limit: usize,
     ) -> Self {
         Self {
+            producer_apparatus: String::new(),
+            worker_ref: String::new(),
+            before_batch_id: String::new(),
             apparatus: apparatus.trim().to_string(),
             next_apparatus: next_apparatus.trim().to_string(),
             current_location: current_location.trim().to_string(),

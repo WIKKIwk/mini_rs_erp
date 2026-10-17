@@ -768,3 +768,116 @@ async fn wip_batches_endpoint_forbids_worker_unassigned_or_unscoped_listing() {
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 }
+
+#[tokio::test]
+async fn producer_history_pages_owned_output_and_keeps_order_read_authorization() {
+    use crate::core::production_map::{OrderProgressBatch, ProductionMapStorePort};
+    let mut state = test_state();
+    let store = Arc::new(MemoryProductionMapStore::new());
+    state.production_maps = production_map_service_with_store(&state, store.clone());
+    let producer = "apparatus:default:bosma_7";
+    let downstream = "apparatus:default:asset-007";
+    let worker_ref = "producer-history-worker";
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::Aparatchi,
+            principal_ref: worker_ref.into(),
+            role_id: "aparatchi".into(),
+            assigned_apparatus: vec![producer.into()],
+            assigned_item_groups: vec![],
+        })
+        .await
+        .unwrap();
+    let order = "zakaz-producer-history-route";
+    state
+        .production_maps
+        .upsert_map(
+            serde_json::from_str(&two_apparatus_order_map_json(
+                order,
+                "Producer history",
+                "9450",
+                producer,
+                downstream,
+            ))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    for (id, apparatus, owner) in [
+        ("b-owned", producer, worker_ref),
+        ("a-owned-free", producer, worker_ref),
+        ("z-other-stage", downstream, worker_ref),
+        ("z-other-worker", producer, "someone-else"),
+    ] {
+        let batch: OrderProgressBatch = serde_json::from_value(serde_json::json!({
+            "batch_id":id,"session_id":"history-run","apparatus":apparatus,"order_id":order,
+            "action":"complete","status":"completed","produced_qty":10,"uom":"m",
+        "started_at_unix":1,"completed_at_unix":2,"label_item_code":"HISTORY",
+        "label_item_name":"History","executor_name":"Worker","worker_display_name":"Worker",
+        "payload_json":{},
+            "qr_payload":format!("qr-{id}"),"worker_ref":owner,"worker_role":"aparatchi",
+            "wip_status":if id == "a-owned-free" {"waiting"} else {"processed"},
+            "current_apparatus":downstream,"next_apparatus":downstream,
+        }))
+        .unwrap();
+        store.put_order_progress_batch(batch).await.unwrap();
+    }
+    let token = session_for(&state, PrincipalRole::Aparatchi, worker_ref).await;
+    let router = build_router(state);
+    let base = format!(
+        "/v1/mobile/admin/production-maps/wip-batches?order_id={order}&producer_apparatus={producer}&own_worker=true&status=all&limit=1"
+    );
+    let response = router
+        .clone()
+        .oneshot(request("GET", &base, &token))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let first = json_body(response).await;
+    assert_eq!(first["batches"].as_array().unwrap().len(), 1);
+    assert_eq!(first["batches"][0]["batch_id"], "b-owned");
+    assert_eq!(first["batches"][0]["current_apparatus"], downstream);
+    assert_eq!(first["next_before_batch_id"], "b-owned");
+    let response = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            &format!("{base}&before_batch_id=b-owned"),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let second = json_body(response).await;
+    assert_eq!(second["batches"][0]["batch_id"], "a-owned-free");
+    // Neither a caller-supplied worker ref nor the cursor can widen ownership.
+    let response = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            &format!("{base}&worker_ref=someone-else"),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        json_body(response).await["batches"][0]["worker_ref"],
+        worker_ref
+    );
+    let forbidden = base.replace(order, "unknown-order");
+    let response = router
+        .clone()
+        .oneshot(request("GET", &forbidden, &token))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let unscoped = format!(
+        "/v1/mobile/admin/production-maps/wip-batches?producer_apparatus={producer}&own_worker=true&status=all"
+    );
+    let response = router
+        .oneshot(request("GET", &unscoped, &token))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}

@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::production_map::OrderProgressBatch;
 
 /// Reading the history of an order is distinct from operating its apparatuses.
 /// Only an explicit order containing an assigned canonical apparatus is allowed;
@@ -36,6 +37,12 @@ pub(super) async fn require_wip_order_read_scope(
 #[derive(Default, serde::Deserialize)]
 pub struct WipBatchesQuery {
     #[serde(default)]
+    producer_apparatus: String,
+    #[serde(default)]
+    own_worker: bool,
+    #[serde(default)]
+    before_batch_id: String,
+    #[serde(default)]
     apparatus: String,
     #[serde(default)]
     next_apparatus: String,
@@ -68,6 +75,34 @@ pub async fn production_map_wip_batches(
     if method != Method::GET {
         return Err(method_not_allowed());
     }
+    let producer_history = !query.producer_apparatus.trim().is_empty();
+    if producer_history {
+        // Producer history has one stable sort/filter contract across pages.
+        if query.order_id.trim().is_empty()
+            || !query.apparatus.trim().is_empty()
+            || !query.next_apparatus.trim().is_empty()
+            || !query.current_location.trim().is_empty()
+            || !query.status.trim().eq_ignore_ascii_case("all")
+        {
+            return Err(bad_request("invalid producer history scope"));
+        }
+        crate::core::apparatus_standard::ApparatusId::new(
+            query.producer_apparatus.trim().to_string(),
+        )
+        .map_err(|_| bad_request("invalid producer apparatus"))?;
+    } else if query.own_worker || !query.before_batch_id.trim().is_empty() {
+        return Err(bad_request("producer history scope required"));
+    }
+    let worker_ref = if query.own_worker {
+        let worker_ref = principal.ref_.trim();
+        if worker_ref.is_empty() {
+            return Err(forbidden());
+        }
+        worker_ref
+    } else {
+        ""
+    };
+    let limit = positive_int(query.limit.as_deref(), 100).min(500);
     let can_view_all = state
         .admin
         .principal_has_capability(&principal, Capability::AdminAccess)
@@ -96,11 +131,15 @@ pub async fn production_map_wip_batches(
         )
         .await
         .map_err(super::super::training::training_workspace_error)?;
-        let batches = batches
+        let mut batches = batches
             .into_iter()
             .filter(|batch| {
-                (query.apparatus.trim().is_empty()
-                    || queue_state::apparatus_ids_match(&batch.apparatus, &query.apparatus))
+                (!producer_history || batch.apparatus.trim() == query.producer_apparatus.trim())
+                    && (worker_ref.is_empty() || batch.worker_ref.trim() == worker_ref)
+                    && (query.before_batch_id.trim().is_empty()
+                        || batch.batch_id.as_str() < query.before_batch_id.trim())
+                    && (query.apparatus.trim().is_empty()
+                        || queue_state::apparatus_ids_match(&batch.apparatus, &query.apparatus))
                     && (query.next_apparatus.trim().is_empty()
                         || queue_state::apparatus_ids_match(
                             &batch.next_apparatus,
@@ -115,11 +154,12 @@ pub async fn production_map_wip_batches(
                             .trim()
                             .eq_ignore_ascii_case(batch.wip_status.as_str()))
             })
-            .take(positive_int(query.limit.as_deref(), 100))
             .collect::<Vec<_>>();
-        return Ok(json_response(serde_json::json!({
-            "batches": batches,
-        })));
+        if producer_history {
+            batches.sort_by(|left, right| right.batch_id.cmp(&left.batch_id));
+        }
+        batches.truncate(limit);
+        return Ok(wip_batches_response(batches, producer_history, limit));
     }
     let include_processed = query.status.trim().eq_ignore_ascii_case("all");
     let status = if query.status.trim().is_empty() || include_processed {
@@ -130,22 +170,40 @@ pub async fn production_map_wip_batches(
                 .ok_or_else(|| bad_request("invalid wip status"))?,
         )
     };
+    let mut store_query = WipProgressBatchQuery::new(
+        &query.apparatus,
+        &query.next_apparatus,
+        &query.current_location,
+        status,
+        include_processed,
+        &query.order_id,
+        limit,
+    );
+    store_query.producer_apparatus = query.producer_apparatus.trim().to_string();
+    store_query.worker_ref = worker_ref.to_string();
+    store_query.before_batch_id = query.before_batch_id.trim().to_string();
     let batches = state
         .production_maps
-        .wip_progress_batches(WipProgressBatchQuery::new(
-            &query.apparatus,
-            &query.next_apparatus,
-            &query.current_location,
-            status,
-            include_processed,
-            &query.order_id,
-            positive_int(query.limit.as_deref(), 100),
-        ))
+        .wip_progress_batches(store_query)
         .await
         .map_err(production_map_error)?;
-    Ok(json_response(serde_json::json!({
+    Ok(wip_batches_response(batches, producer_history, limit))
+}
+
+fn wip_batches_response(
+    batches: Vec<OrderProgressBatch>,
+    producer_history: bool,
+    limit: usize,
+) -> Response {
+    let next_before_batch_id = if producer_history && batches.len() == limit {
+        batches.last().map(|batch| batch.batch_id.clone())
+    } else {
+        None
+    };
+    json_response(serde_json::json!({
         "batches": batches,
-    })))
+        "next_before_batch_id": next_before_batch_id,
+    }))
 }
 
 #[derive(Default, serde::Deserialize)]

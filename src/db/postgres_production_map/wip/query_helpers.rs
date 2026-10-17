@@ -25,6 +25,9 @@ async fn load_wip_progress_batches_inner(
     exclude_assigned_paddon_items: bool,
 ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
     let WipProgressBatchQuery {
+        producer_apparatus,
+        worker_ref,
+        before_batch_id,
         apparatus,
         next_apparatus,
         current_location,
@@ -35,6 +38,11 @@ async fn load_wip_progress_batches_inner(
     } = query;
     if limit == 0 {
         return Ok(Vec::new());
+    }
+    let producer_apparatus = producer_apparatus.trim();
+    if !producer_apparatus.is_empty() {
+        ApparatusId::new(producer_apparatus.to_string())
+            .map_err(|_| ProductionMapError::StoreFailed)?;
     }
     let apparatus_id = if apparatus.trim().is_empty() {
         None
@@ -114,8 +122,12 @@ async fn load_wip_progress_batches_inner(
              $5 = ''
              OR COALESCE(batch.canonical_next_apparatus_id, '') = $5
            )
+           AND ($8 = '' OR batch.canonical_apparatus_id = $8)
+           AND ($9 = '' OR worker_ref = $9)
+           AND ($10 = '' OR batch.batch_id < $10)
            {paddon_filter}
-         ORDER BY updated_at DESC, created_at DESC, batch_id DESC
+         ORDER BY CASE WHEN $8 <> '' THEN batch.batch_id END DESC,
+                  updated_at DESC, created_at DESC, batch.batch_id DESC
          LIMIT $6"
     );
     let rows = sqlx::query_as::<_, ProgressBatchRow>(&sql)
@@ -126,6 +138,9 @@ async fn load_wip_progress_batches_inner(
         .bind(&next_apparatus_key)
         .bind(limit)
         .bind(include_processed)
+        .bind(producer_apparatus)
+        .bind(worker_ref.trim())
+        .bind(before_batch_id.trim())
         .fetch_all(pool)
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
