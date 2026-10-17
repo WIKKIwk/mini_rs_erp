@@ -199,6 +199,11 @@ async fn prepare(
                 .and_then(Value::as_str)
         })
         .unwrap_or_default();
+    // A later astatka report has its own report ID. Prefer a real queue receipt;
+    // otherwise require a single completion at the source session boundary.
+    let exact_anchor:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM mini_queue_action_events WHERE event_id=$1 AND order_id=$2 AND canonical_apparatus_id=$3 AND stage_node_id=$4 AND action='complete')")
+        .bind(report_id).bind(&selector.order_id).bind(&selector.apparatus).bind(&session.stage_node_id).fetch_one(&mut **tx).await.map_err(|_|ProductionMapError::StoreFailed)?;
+    let report_id = if exact_anchor { report_id } else { "" };
     let mut closings: Vec<(Value,String)> = sqlx::query_as("SELECT payload_json,policy FROM mini_queue_action_events WHERE order_id=$1 AND canonical_apparatus_id=$2 AND stage_node_id=$3 AND action='complete' AND actor_role=$4 AND actor_ref=$5 AND (($6<>'' AND event_id=$6) OR ($6='' AND extract(epoch FROM created_at)>=$7 AND extract(epoch FROM created_at)<$8)) ORDER BY id DESC LIMIT 2")
         .bind(&selector.order_id).bind(&selector.apparatus).bind(&session.stage_node_id).bind(&actor.role).bind(&actor.ref_).bind(report_id).bind(session.updated_at_unix as f64).bind((session.updated_at_unix+1) as f64).fetch_all(&mut **tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
     if closings.len() != 1 {
