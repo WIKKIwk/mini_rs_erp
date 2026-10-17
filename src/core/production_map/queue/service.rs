@@ -1209,7 +1209,8 @@ impl ProductionMapService {
                                 };
                                 complete_requires_full_report =
                                     is_final_stage && !has_unprocessed_previous_wips;
-                                complete_requires_rezka_total_waste_only = !is_final_stage;
+                                complete_requires_rezka_total_waste_only =
+                                    !is_final_stage && !has_unprocessed_previous_wips;
                             } else {
                                 complete_requires_full_report =
                                     !is_laminatsiya || !has_unprocessed_previous_wips;

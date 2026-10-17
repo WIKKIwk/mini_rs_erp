@@ -275,16 +275,16 @@ fn validate_progress_metrics(
         return Err(ProductionMapError::LaminatsiyaCompletionMetricsRequired);
     }
     let missing_rezka_waste = is_complete
+        && !allow_partial_station_completion
         && if rezka_total_waste_only_completion {
             metrics.total_waste.is_none()
         } else {
-            !allow_partial_station_completion
-                && !rezka_progress_metrics_are_complete(
-                    metrics.total_waste,
-                    metrics.rezka_bosma_waste,
-                    metrics.rezka_lamination_waste,
-                    metrics.rezka_edge_waste,
-                )
+            !rezka_progress_metrics_are_complete(
+                metrics.total_waste,
+                metrics.rezka_bosma_waste,
+                metrics.rezka_lamination_waste,
+                metrics.rezka_edge_waste,
+            )
         };
     let missing_rezka_quantity = !rezka_quantity_metrics_are_complete(
         progress.produced_qty,
