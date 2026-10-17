@@ -220,6 +220,9 @@ pub(super) async fn completed_queue_orders_for_actor(
     let mut seen = BTreeSet::new();
     let mut completed = Vec::new();
     for (index, event) in events.iter().enumerate().rev() {
+        let reactivation = event.action == queue_state::ApparatusQueueAction::Resume
+            && event.payload_json.get("event").and_then(serde_json::Value::as_str)
+                == Some("reactivation");
         if event.actor.ref_.trim() != actor_ref
             || event
                 .payload_json
@@ -231,6 +234,7 @@ pub(super) async fn completed_queue_orders_for_actor(
         }
         if event.action != queue_state::ApparatusQueueAction::Freeze
             && !event.action.records_progress_output()
+            && !reactivation
         {
             continue;
         }
@@ -251,6 +255,7 @@ pub(super) async fn completed_queue_orders_for_actor(
                 CompletedQueueOrderStatus::Completed
             }
             action if action.records_progress_output() => CompletedQueueOrderStatus::InProgress,
+            _ if reactivation => CompletedQueueOrderStatus::InProgress,
             _ => continue,
         };
         completed.push(CompletedQueueOrder {

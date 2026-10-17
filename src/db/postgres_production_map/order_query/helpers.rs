@@ -39,7 +39,10 @@ pub(super) async fn load_completed_queue_orders_for_actor(
                 END AS history_status
             FROM mini_queue_action_events
             WHERE actor_ref = $1
-              AND action IN ('pause', 'freeze', 'detach_roll', 'roll_complete', 'complete')
+              AND (
+                  action IN ('pause', 'freeze', 'detach_roll', 'roll_complete', 'complete')
+                  OR (action = 'resume' AND payload_json->>'event' = 'reactivation')
+              )
               AND COALESCE(payload_json->>'completion_request', 'false') <> 'true'
             ORDER BY order_id, canonical_apparatus_id, created_at DESC, id DESC
          )
