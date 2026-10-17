@@ -89,6 +89,7 @@ async fn memory_producer_history_filters_before_limit_and_pages_to_old_free_outp
 }
 
 #[tokio::test]
+#[ignore = "requires WIP_HISTORY_TEST_DATABASE_URL pointing at a disposable PostgreSQL server"]
 async fn postgres_producer_history_filters_before_limit_and_pages_to_old_free_output() {
     let admin_url = std::env::var("WIP_HISTORY_TEST_DATABASE_URL")
         .expect("WIP_HISTORY_TEST_DATABASE_URL must be a disposable PostgreSQL server");

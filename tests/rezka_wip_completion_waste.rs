@@ -93,6 +93,16 @@ async fn fixture(
     upstream_closed: bool,
 ) -> (ProductionMapService, Arc<MemoryProductionMapStore>) {
     let store = Arc::new(MemoryProductionMapStore::new());
+    let service = fixture_with_store(intermediate, input_count, upstream_closed, store.clone()).await;
+    (service, store)
+}
+
+async fn fixture_with_store(
+    intermediate: bool,
+    input_count: usize,
+    upstream_closed: bool,
+    store: Arc<dyn ProductionMapStorePort>,
+) -> ProductionMapService {
     let service = ProductionMapService::new(store.clone(), resolver());
     let mut nodes = vec![
         json!({"id":"start", "kind":"start", "title":"Start"}),
@@ -164,7 +174,7 @@ async fn fixture(
             "payload_json":{"stage_node_id":"press", "next_stage_node_id":"cut"},
         })).unwrap()).await.unwrap();
     }
-    (service, store)
+    service
 }
 
 async fn start(service: &ProductionMapService, index: usize) {
@@ -384,4 +394,66 @@ async fn next_roll_does_not_erase_or_repeat_issue_cycle_waste() {
     let waste: Vec<_> = logs.iter().filter_map(|log| log.zero_output_waste.as_ref()).collect();
     assert_eq!(waste.len(), 1, "Later roll must neither erase nor repeat waste");
     assert_eq!(waste[0]["total_waste"], 2.5);
+}
+
+#[tokio::test]
+#[ignore = "requires WASTE_TEST_DATABASE_URL pointing at a disposable PostgreSQL server"]
+async fn postgres_unsaved_issue_waste_survives_order_and_closed_history_reads() {
+    use mini_rs_erp::db::{postgres, postgres_production_map::PostgresProductionMapStore};
+    let url = std::env::var("WASTE_TEST_DATABASE_URL").expect("disposable database URL required");
+    let admin = sqlx::PgPool::connect(&url).await.unwrap();
+    for intermediate in [false, true] {
+        let name = format!("issue_waste_test_{:032x}", rand::random::<u128>());
+        sqlx::query(&format!("CREATE DATABASE {name}")).execute(&admin).await.unwrap();
+        let options = url.parse::<sqlx::postgres::PgConnectOptions>().unwrap().database(&name);
+        let pool = sqlx::PgPool::connect_with(options.clone()).await.unwrap();
+        postgres::apply_postgres_migrations_through_version(&pool, "0121").await.unwrap();
+        postgres::canonical_apparatus_service(pool.clone()).bootstrap_factory_defaults().await.unwrap();
+        postgres::apply_foundation_migration(&pool).await.unwrap();
+        let store = Arc::new(PostgresProductionMapStore::new(pool.clone()));
+        let service = fixture_with_store(intermediate, 1, true, store.clone()).await;
+        start(&service, 0).await;
+        let result = service.apply_apparatus_queue_action_with_progress(
+            CUT, ORDER, queue_state::ApparatusQueueAction::Complete,
+            &[CUT.into()], actor(), QueueProgressInput {
+                rezka_frames: vec![RezkaFrameProgressInput { issue_note: "Every output damaged".into(), ..Default::default() }],
+                total_waste: Some(2.5), rezka_bosma_waste: (!intermediate).then_some(1.0),
+                rezka_lamination_waste: (!intermediate).then_some(1.0),
+                rezka_edge_waste: (!intermediate).then_some(0.5), ..Default::default()
+            },
+        ).await.unwrap();
+        assert!(result.progress_batches.is_empty());
+        let persisted: serde_json::Value = sqlx::query_scalar(
+            "SELECT payload_json->'zero_output_waste' FROM mini_queue_action_events WHERE order_id=$1 AND action='complete'")
+            .bind(ORDER).fetch_one(&pool).await.unwrap();
+        assert_eq!(persisted["total_waste"], 2.5);
+        assert_eq!(persisted["rezka_bosma_waste"], if intermediate { json!(null) } else { json!(1.0) });
+        assert!(store.progress_batches_for_order(ORDER).await.unwrap().iter().all(|b| b.apparatus != CUT));
+        pool.close().await;
+        // Both SQL projections and the closed-order serializer read the durable
+        // event after reconnect, without relying on a session/cache payload.
+        let pool = sqlx::PgPool::connect_with(options).await.unwrap();
+        let service = ProductionMapService::new(Arc::new(PostgresProductionMapStore::new(pool.clone())), resolver());
+        let logs = service.queue_action_logs_for_order(ORDER).await.unwrap();
+        let order_reports: Vec<_> = logs.iter().filter_map(|log| log.zero_output_waste.as_ref()).collect();
+        assert_eq!(order_reports, vec![&persisted]);
+        let logs = service.queue_action_logs_for_worker(&[actor().ref_], "Worker", 100).await.unwrap();
+        let worker_reports: Vec<_> = logs.iter().filter_map(|log| log.zero_output_waste.as_ref()).collect();
+        assert_eq!(worker_reports, vec![&persisted]);
+        assert!(serde_json::to_value(&logs).unwrap().as_array().unwrap().iter()
+            .any(|log| log.get("zero_output_waste") == Some(&persisted)));
+        let closed = service.fully_completed_orders(100).await.unwrap();
+        if intermediate {
+            assert!(closed.iter().all(|order| order.order_id != ORDER));
+        } else {
+            let order = closed.iter().find(|order| order.order_id == ORDER).expect("closed final-cut order");
+            let closed_json = serde_json::to_value(order).unwrap();
+            let closed_reports: Vec<_> = closed_json["logs"].as_array().unwrap().iter()
+                .filter_map(|log| log.get("zero_output_waste")).collect();
+            assert_eq!(closed_reports, vec![&persisted]);
+        }
+        pool.close().await;
+        sqlx::query(&format!("DROP DATABASE {name}")).execute(&admin).await.unwrap();
+    }
+    admin.close().await;
 }
