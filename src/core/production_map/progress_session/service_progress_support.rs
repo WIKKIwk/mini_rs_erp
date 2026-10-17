@@ -759,6 +759,9 @@ pub(super) fn preserve_qolip_lineage(
         replacement["qolip_lock_owner"] = owner.clone();
     }
     for field in [
+        "_reactivation_of_session_id",
+        "_reactivation_reserved_outputs",
+        "reactivation_token",
         START_RESOURCES_PAYLOAD_FIELD,
         INPUT_LINEAGE_PAYLOAD_FIELD,
         REZKA_ACTIVE_PARTIAL_ROLLS_PAYLOAD_FIELD,

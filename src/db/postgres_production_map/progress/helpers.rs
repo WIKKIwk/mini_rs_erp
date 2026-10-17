@@ -82,6 +82,7 @@ pub(super) async fn put_order_run_session_tx(
     validate_rezka_merge_payload(session)?;
     lock_order_and_apparatuses_tx(tx, &session.order_id, &[&session.apparatus]).await?;
     let mut session = session.clone();
+    super::reactivation::release_reservations_tx(tx, &mut session).await?;
     if session.status == OrderRunStatus::Frozen {
         let previous = sqlx::query_scalar::<_, serde_json::Value>(
             "SELECT payload_json FROM mini_order_run_sessions WHERE session_id = $1 FOR UPDATE",

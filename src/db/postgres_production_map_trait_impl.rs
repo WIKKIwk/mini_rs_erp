@@ -1,5 +1,11 @@
 #[async_trait]
 impl ProductionMapStorePort for PostgresProductionMapStore {
+    async fn preview_reactivation(&self, selector: &crate::core::production_map::ReactivationSelector, actor: &QueueActionActor, is_print: bool) -> Result<crate::core::production_map::ReactivationPreview, ProductionMapError> {
+        reactivation::preview(self, selector, actor, is_print).await
+    }
+    async fn reactivate_completed_work(&self, target: &crate::core::production_map::ReactivationTarget, actor: &QueueActionActor, assigned: &[String], checkouts: &[crate::core::qolip::QolipCheckout], is_print: bool) -> Result<(), ProductionMapError> {
+        reactivation::execute(self, target, actor, assigned, checkouts, is_print).await
+    }
     fn supports_resume_pause(&self) -> bool { true }
 
     async fn re_pause_resumed_work(

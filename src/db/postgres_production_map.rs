@@ -35,6 +35,7 @@ mod layer_remainder;
 mod lamination_astatka;
 mod sequence_move;
 mod re_pause;
+mod reactivation;
 #[cfg(test)]
 mod sequence_move_tests;
 mod stage_execution;
@@ -1499,6 +1500,14 @@ pub(super) async fn apply_queue_progress_tx(
             }
             if event.payload_json.get("stage_work_report_submitted").and_then(serde_json::Value::as_bool) == Some(true) {
                 stage_execution::stamp_report_tx(tx, &mut stored_session, &event.event_id, &event.actor).await?;
+            }
+            if stored_session.status == crate::core::production_map::OrderRunStatus::Completed
+                && event.action == crate::core::production_map::queue_state::ApparatusQueueAction::Complete {
+                if let Some(previous) = sqlx::query_scalar::<_, serde_json::Value>("SELECT payload_json FROM mini_order_run_sessions WHERE session_id=$1 FOR UPDATE")
+                    .bind(&stored_session.session_id).fetch_optional(&mut **tx).await.map_err(|_| ProductionMapError::StoreFailed)? {
+                    stored_session.payload_json["_completion_reactivation_payload"] = previous;
+                }
+                stored_session.payload_json["_completion_queue_event_id"] = serde_json::json!(event.event_id);
             }
             put_order_run_session_tx(tx, &stored_session).await?;
         }

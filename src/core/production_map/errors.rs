@@ -2,6 +2,8 @@ use thiserror::Error;
 
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum ProductionMapError {
+    #[error("reactivation denied: {0}")]
+    ReactivationDenied(String),
     #[error("template identity belongs to another SKU or owner")]
     TemplateIdentityConflict,
     #[error("map id is required")]

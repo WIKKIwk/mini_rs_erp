@@ -50,6 +50,8 @@ mod progress_qr;
 mod qolip_validation;
 mod queue_actions;
 mod re_pause;
+mod reactivation;
+pub use reactivation::{production_map_reactivation, production_map_reactivation_preview};
 pub use re_pause::production_map_re_pause;
 mod raw_material_details;
 mod material_link_requests;

@@ -226,6 +226,7 @@ pub(super) fn calculate_order_error(error: CalculateOrderError) -> AdminError {
 
 pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
     match error {
+        ProductionMapError::ReactivationDenied(reason) => conflict(format!("reactivation_{reason}")),
         ProductionMapError::TemplateIdentityConflict => conflict("template_identity_conflict"),
         ProductionMapError::MissingId => bad_request("map_id_required"),
         ProductionMapError::MissingProductCode => bad_request("map_product_code_required"),
