@@ -23,6 +23,7 @@ struct Prepared {
     raw: Vec<Value>,
     queue_state: String,
     latest_started: i64,
+    latest_session_id: String,
 }
 macro_rules! deny {
     ($reason:literal) => {
@@ -480,6 +481,12 @@ async fn prepare(
             .map(|s| s.started_at_unix)
             .max()
             .unwrap_or(0),
+        latest_session_id: sessions
+            .iter()
+            .filter(|s| s.apparatus == selector.apparatus)
+            .max_by_key(|s| (s.started_at_unix, &s.session_id))
+            .map(|s| s.session_id.clone())
+            .unwrap_or_default(),
     }))
 }
 
@@ -566,8 +573,23 @@ pub(super) async fn execute(
         ));
     }
     let source = &prepared.session;
-    let now =
-        crate::core::production_map::stage_execution::report_now().max(prepared.latest_started + 1);
+    let now = crate::core::production_map::stage_execution::report_now();
+    if prepared.latest_started > now {
+        return Err(ProductionMapError::ReactivationDenied(
+            "unsupported_history".into(),
+        ));
+    }
+    // Preserve wall time while making a continuation the latest execution when
+    // several sessions start in the same second. Extending the maximum ID is
+    // strictly greater than that ID under the projection's existing ordering.
+    let continuation_id = if prepared.latest_started == now {
+        format!(
+            "{}:continuation:{}",
+            prepared.latest_session_id, target.token
+        )
+    } else {
+        format!("continuation:{}", target.token)
+    };
     let mut payload = json!({"stage_work_protocol":1,"_reactivation_of_session_id":source.session_id,"_reactivation_reserved_outputs":prepared.outputs.iter().map(|b|b.batch_id.clone()).collect::<Vec<_>>(),"reactivation_token":target.token});
     let original = source
         .payload_json
@@ -606,7 +628,7 @@ pub(super) async fn execute(
     payload["rezka_output_cycle"] = json!(format!("progress:{cycle_stamp}:reactivation"));
     payload["rezka_output_revision"] = json!(0);
     let mut session = OrderRunSession {
-        session_id: format!("continuation:{}", target.token),
+        session_id: continuation_id,
         apparatus: source.apparatus.clone(),
         order_id: source.order_id.clone(),
         stage_node_id: source.stage_node_id.clone(),
