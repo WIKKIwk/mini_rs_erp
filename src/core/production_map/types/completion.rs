@@ -131,6 +131,8 @@ pub struct ProductionOrderLogEntry {
     pub transfer: Option<ProductionOrderTransferDetails>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub freeze: Option<ProductionOrderFreezeDetails>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zero_output_waste: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

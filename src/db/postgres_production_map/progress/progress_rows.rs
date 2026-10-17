@@ -72,6 +72,7 @@ pub(super) struct QueueActionLogRow {
     pub(super) created_at_unix: i64,
     pub(super) completed_with_issue: bool,
     pub(super) issue_note: String,
+    pub(super) zero_output_waste: Option<serde_json::Value>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -129,6 +130,7 @@ pub(super) fn queue_action_log_from_row(
         created_at_unix: row.created_at_unix,
         completed_with_issue: row.completed_with_issue,
         issue_note: row.issue_note,
+        zero_output_waste: row.zero_output_waste,
         transfer: None,
         freeze: None,
     })

@@ -1285,20 +1285,28 @@ impl ProductionMapService {
             event.payload_json["rezka_previously_recorded_batches"] = serde_json::json!(
                 report.saved.iter().filter(|slot| !slot.batch_id.is_empty()).map(|slot| &slot.batch_id).collect::<Vec<_>>()
             );
-            // Waste belongs to the closing report even when its first healthy
-            // roll was already printed or every card was resolved as an issue.
-            // Keep any newly produced roll's quantity metrics on this event.
-            if first_healthy_index.is_none_or(|index| report.is_saved(index)) {
-                event.total_waste = session_metrics.total_waste;
-                event.rezka_bosma_waste = session_metrics.rezka_bosma_waste;
-                event.rezka_lamination_waste = session_metrics.rezka_lamination_waste;
-                event.rezka_edge_waste = session_metrics.rezka_edge_waste;
-                for (key, value) in [
-                    ("total_waste", session_metrics.total_waste),
-                    ("rezka_bosma_waste", session_metrics.rezka_bosma_waste),
-                    ("rezka_lamination_waste", session_metrics.rezka_lamination_waste),
-                    ("rezka_edge_waste", session_metrics.rezka_edge_waste),
-                ] { event.payload_json[key] = serde_json::json!(value); }
+        }
+        // Closing waste belongs to the durable event even if every output is
+        // an unsaved issue. A later roll replaces the mutable session payload.
+        if !recording && apparatus::is_rezka_apparatus(canonical)
+            && matches!(action, queue_state::ApparatusQueueAction::Complete | queue_state::ApparatusQueueAction::RollComplete)
+            && first_healthy_index.is_none_or(|index| report.as_ref().is_some_and(|report| report.is_saved(index)))
+        {
+            event.total_waste = session_metrics.total_waste;
+            event.rezka_bosma_waste = session_metrics.rezka_bosma_waste;
+            event.rezka_lamination_waste = session_metrics.rezka_lamination_waste;
+            event.rezka_edge_waste = session_metrics.rezka_edge_waste;
+            let waste = serde_json::json!({
+                "total_waste": session_metrics.total_waste,
+                "rezka_bosma_waste": session_metrics.rezka_bosma_waste,
+                "rezka_lamination_waste": session_metrics.rezka_lamination_waste,
+                "rezka_edge_waste": session_metrics.rezka_edge_waste,
+            });
+            for (key, value) in waste.as_object().expect("waste object") {
+                event.payload_json[key] = value.clone();
+            }
+            if first_healthy_index.is_none() && waste.as_object().unwrap().values().any(|value| !value.is_null()) {
+                event.payload_json["zero_output_waste"] = waste;
             }
         }
         if frame_issues

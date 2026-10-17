@@ -96,7 +96,8 @@ pub(super) async fn load_queue_action_logs_for_orders(
                 actor_role, actor_ref, actor_display_name,
                 EXTRACT(EPOCH FROM created_at)::bigint AS created_at_unix,
                 COALESCE((payload_json->>'completed_with_issue')::boolean, false) AS completed_with_issue,
-                COALESCE(payload_json->>'issue_note', '') AS issue_note
+                COALESCE(payload_json->>'issue_note', '') AS issue_note,
+                payload_json->'zero_output_waste' AS zero_output_waste
          FROM mini_queue_action_events
          WHERE order_id = ANY($1)
          ORDER BY created_at ASC, id ASC",
@@ -131,7 +132,8 @@ pub(super) async fn load_queue_action_logs_for_worker(
                 actor_role, actor_ref, actor_display_name,
                 EXTRACT(EPOCH FROM created_at)::bigint AS created_at_unix,
                 COALESCE((payload_json->>'completed_with_issue')::boolean, false) AS completed_with_issue,
-                COALESCE(payload_json->>'issue_note', '') AS issue_note
+                COALESCE(payload_json->>'issue_note', '') AS issue_note,
+                payload_json->'zero_output_waste' AS zero_output_waste
          FROM mini_queue_action_events AS event
          WHERE event.actor_ref = ANY($1)
             OR EXISTS (

@@ -429,6 +429,11 @@ impl ProductionMapService {
             )
             .await?
         };
+        if let Some(waste) = progress.progress_event.as_ref()
+            .and_then(|event| event.payload_json.get("zero_output_waste"))
+        {
+            event.payload_json["zero_output_waste"] = waste.clone();
+        }
         if let Some(session) = &mut progress.session {
             session.payload_json[super::super::stage_execution::WORK_PROTOCOL] = serde_json::json!(1);
             // This intent is assigned a durable, order-scoped sequence in the

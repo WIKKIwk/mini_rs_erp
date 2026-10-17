@@ -226,6 +226,7 @@ impl ProductionMapService {
                         material_barcodes: transfer.material_barcodes.clone(),
                     }),
                     freeze: None,
+                    zero_output_waste: None,
                 });
             }
             for freeze in freeze_requests
@@ -779,6 +780,7 @@ fn closed_order_freeze_log_entry(freeze: &OrderFreezeAuditRecord) -> ProductionO
         completed_with_issue: false,
         issue_note: String::new(),
         transfer: None,
+        zero_output_waste: None,
         freeze: Some(ProductionOrderFreezeDetails {
             request_id: request.request_id.clone(),
             status: status.to_string(),

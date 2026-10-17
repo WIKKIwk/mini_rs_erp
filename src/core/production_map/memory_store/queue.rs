@@ -504,6 +504,7 @@ fn production_order_log_entry(
         issue_note: json_string_field(&event.payload_json, "issue_note"),
         transfer: None,
         freeze: None,
+        zero_output_waste: event.payload_json.get("zero_output_waste").cloned(),
     }
 }
 

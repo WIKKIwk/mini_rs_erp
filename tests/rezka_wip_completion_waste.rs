@@ -330,3 +330,58 @@ async fn intermediate_rezka_defers_waste_while_upstream_is_open() {
         .expect("upstream can still produce WIP: defer accounting");
     assert_eq!(result.states[ORDER], "pending");
 }
+
+#[tokio::test]
+async fn unsaved_issue_outputs_preserve_waste_in_durable_history() {
+    for intermediate in [false, true] {
+        let (service, store) = fixture(intermediate, 1, true).await;
+        start(&service, 0).await;
+        let result = service
+            .apply_apparatus_queue_action_with_progress(
+                CUT, ORDER, queue_state::ApparatusQueueAction::Complete,
+                &[CUT.into()], actor(), QueueProgressInput {
+                    rezka_frames: vec![RezkaFrameProgressInput {
+                        issue_note: "All output damaged".into(), ..Default::default()
+                    }],
+                    total_waste: Some(2.5),
+                    rezka_bosma_waste: (!intermediate).then_some(1.0),
+                    rezka_lamination_waste: (!intermediate).then_some(1.0),
+                    rezka_edge_waste: (!intermediate).then_some(0.5),
+                    ..Default::default()
+                },
+            ).await.unwrap();
+        let event = result.progress_event.unwrap();
+        assert_eq!(event.total_waste, Some(2.5));
+        assert_eq!(event.payload_json["total_waste"], 2.5);
+        assert_eq!(event.rezka_bosma_waste, (!intermediate).then_some(1.0));
+        assert!(store.progress_batches_for_order(ORDER).await.unwrap()
+            .iter().all(|batch| batch.apparatus != CUT), "No invented output batch");
+        let logs = service.queue_action_logs_for_order(ORDER).await.unwrap();
+        let reports: Vec<_> = logs.iter().filter_map(|log| log.zero_output_waste.as_ref()).collect();
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0]["total_waste"], 2.5);
+    }
+}
+
+#[tokio::test]
+async fn next_roll_does_not_erase_or_repeat_issue_cycle_waste() {
+    let (service, _) = fixture(false, 1, true).await;
+    start(&service, 0).await;
+    service.apply_apparatus_queue_action_with_progress(
+        CUT, ORDER, queue_state::ApparatusQueueAction::RollComplete,
+        &[CUT.into()], actor(), QueueProgressInput {
+            rezka_frames: vec![RezkaFrameProgressInput {
+                issue_note: "Damaged roll".into(), ..Default::default()
+            }], total_waste: Some(2.5), ..Default::default()
+        },
+    ).await.unwrap();
+    let next = service.apply_apparatus_queue_action_with_progress(
+        CUT, ORDER, queue_state::ApparatusQueueAction::RollComplete,
+        &[CUT.into()], actor(), output(),
+    ).await.unwrap();
+    assert_eq!(next.progress_event.unwrap().total_waste, None);
+    let logs = service.queue_action_logs_for_order(ORDER).await.unwrap();
+    let waste: Vec<_> = logs.iter().filter_map(|log| log.zero_output_waste.as_ref()).collect();
+    assert_eq!(waste.len(), 1, "Later roll must neither erase nor repeat waste");
+    assert_eq!(waste[0]["total_waste"], 2.5);
+}
