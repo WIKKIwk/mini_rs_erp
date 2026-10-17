@@ -192,6 +192,9 @@ fn training_queue_action_controls(
                             apparatus,
                         )
                     }),
+                    rezka_total_waste_only: saved_map.is_some_and(|saved| {
+                        training_complete_requires_rezka_total_waste_only(&saved.map, apparatus)
+                    }),
                     closing_output_batch_id: String::new(),
                     freeze_request: None,
                     print_preflight_allowed: false,

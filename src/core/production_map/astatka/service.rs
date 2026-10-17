@@ -120,6 +120,7 @@ impl ProductionMapService {
         finished_goods_kg: Option<f64>,
         bobina_kg: Option<f64>,
         description: &str,
+        expected_stage_node_id: &str,
     ) -> Result<RezkaAstatkaReport, ProductionMapError> {
         let apparatus = apparatus.trim();
         let order_id = order_id.trim();
@@ -134,15 +135,8 @@ impl ProductionMapService {
         {
             return Err(ProductionMapError::ProgressInputInvalid);
         }
-        for metric in [
-            total_waste,
-            rezka_bosma_waste,
-            rezka_lamination_waste,
-            rezka_edge_waste,
-        ] {
-            if !metric.is_some_and(|value| value.is_finite() && value >= 0.0) {
-                return Err(ProductionMapError::RezkaAstatkaMetricsRequired);
-            }
+        if !total_waste.is_some_and(|value| value.is_finite() && value >= 0.0) {
+            return Err(ProductionMapError::RezkaAstatkaMetricsRequired);
         }
         for metric in [finished_goods_meter, finished_goods_kg, bobina_kg] {
             if metric.is_some_and(|value| positive_erp_quantity(value).is_none()) {
@@ -153,6 +147,37 @@ impl ProductionMapService {
         let order_id = self.astatka_order_id(order_id).await?;
         let _guard = self.queue_action_guard().await;
         let anchor = self.astatka_execution_anchor(&order_id, apparatus).await?;
+        let saved = self.map(&order_id).await?.ok_or(ProductionMapError::MapNotFound)?;
+        // Use the execution occurrence, since one machine can be both an
+        // intermediate and the final Rezka in the same order. Unresolved legacy
+        // sessions retain the full-report requirement.
+        let stage = anchor.as_ref().and_then(|session| {
+            (!session.stage_node_id.trim().is_empty()).then(|| {
+                chain::work_stage_for_station(&saved.map, apparatus, &session.stage_node_id)
+            }).flatten()
+        });
+        if !expected_stage_node_id.trim().is_empty()
+            && !stage.as_ref().is_some_and(|stage| {
+                chain::stage_node_ids_match_for_map(
+                    &saved.map, &stage.node_id, expected_stage_node_id,
+                )
+            })
+        {
+            return Err(ProductionMapError::QueueActionNotAllowed);
+        }
+        let total_waste_only = stage.as_ref().is_some_and(|stage| {
+            !chain::is_final_work_stage_node(&saved.map, &stage.node_id)
+        });
+        let waste_category = |value: Option<f64>| {
+            // Existing SQL columns remain numeric. Only a proven intermediate
+            // stage may omit categories; older clients' supplied values survive.
+            value.or(total_waste_only.then_some(0.0))
+                .filter(|value| value.is_finite() && *value >= 0.0)
+                .ok_or(ProductionMapError::RezkaAstatkaMetricsRequired)
+        };
+        let rezka_bosma_waste = waste_category(rezka_bosma_waste)?;
+        let rezka_lamination_waste = waste_category(rezka_lamination_waste)?;
+        let rezka_edge_waste = waste_category(rezka_edge_waste)?;
         let previous_reports = self
             .store
             .rezka_astatka_reports_for_order(&order_id)
@@ -185,9 +210,9 @@ impl ProductionMapService {
             from_at_unix,
             to_at_unix,
             total_waste: total_waste.expect("validated rezka astatka metric"),
-            rezka_bosma_waste: rezka_bosma_waste.expect("validated rezka astatka metric"),
-            rezka_lamination_waste: rezka_lamination_waste.expect("validated rezka astatka metric"),
-            rezka_edge_waste: rezka_edge_waste.expect("validated rezka astatka metric"),
+            rezka_bosma_waste,
+            rezka_lamination_waste,
+            rezka_edge_waste,
             finished_goods_meter,
             finished_goods_kg,
             bobina_kg,

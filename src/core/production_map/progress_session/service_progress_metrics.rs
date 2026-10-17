@@ -126,7 +126,9 @@ pub(super) fn validated_progress_metrics(
         {
             None
         } else {
-            if is_laminatsiya && progress.lamination_layer_dispositions_attached {
+            if rezka_total_waste_only_completion
+                || (is_laminatsiya && progress.lamination_layer_dispositions_attached)
+            {
                 valid_non_negative_optional_progress_qty(progress.total_waste)?
             } else {
                 valid_optional_progress_qty(progress.total_waste)?

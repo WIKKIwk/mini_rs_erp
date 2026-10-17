@@ -147,6 +147,8 @@ struct RezkaAstatkaRequest {
     #[serde(default)]
     order_id: String,
     #[serde(default)]
+    stage_node_id: String,
+    #[serde(default)]
     total_waste: Option<f64>,
     #[serde(default)]
     rezka_bosma_waste: Option<f64>,
@@ -343,6 +345,7 @@ pub async fn production_map_rezka_astatka(
             input.finished_goods_kg,
             input.bobina_kg,
             &input.description,
+            &input.stage_node_id,
         )
         .await
         .map_err(production_map_error)?;

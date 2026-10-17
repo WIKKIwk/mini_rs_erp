@@ -157,6 +157,8 @@ pub struct ApparatusQueueOrderActionControl {
     pub closing_output_batch_id: String,
     #[serde(default)]
     pub complete_requires_rezka_total_waste_only: bool,
+    /// Waste report mode of this concrete stage, including paused/completed work.
+    pub rezka_total_waste_only: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub freeze_request: Option<OrderFreezeRequest>,
     /// Colour matching does not require production materials or tooling.

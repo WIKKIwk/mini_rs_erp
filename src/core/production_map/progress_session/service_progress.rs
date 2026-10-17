@@ -1071,8 +1071,14 @@ impl ProductionMapService {
                 if !recording && matches!(action,
                     queue_state::ApparatusQueueAction::Complete | queue_state::ApparatusQueueAction::RollComplete)
                 {
+                    let allow_zero_waste = action == queue_state::ApparatusQueueAction::Complete
+                        && !chain::is_final_work_stage_node(order_map, &stage.node_id);
                     let valid = |value: Option<f64>| -> Result<Option<f64>, ProductionMapError> {
-                        value.map(|value| crate::core::quantity::positive_erp_quantity(value)
+                        value.map(|value| (if allow_zero_waste && value == 0.0 {
+                            Some(0.0)
+                        } else {
+                            crate::core::quantity::positive_erp_quantity(value)
+                        })
                             .ok_or(ProductionMapError::ProgressInputInvalid)).transpose()
                     };
                     metrics.total_waste = valid(progress.total_waste)?;

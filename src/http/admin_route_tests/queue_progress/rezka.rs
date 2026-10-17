@@ -1483,6 +1483,7 @@ async fn grouped_rezka_wip_survives_lamination_and_reenters_same_final_rezka() {
     let active_intermediate_snapshot = json_body(active_intermediate_snapshot).await;
     let active_intermediate_control = &active_intermediate_snapshot["queue_action_controls"]["apparatus:default:asset-010"]
         [order_id];
+    assert_eq!(active_intermediate_control["rezka_total_waste_only"], true);
     assert_eq!(
         active_intermediate_control["complete_requires_full_report"],
         false
@@ -1536,7 +1537,7 @@ async fn grouped_rezka_wip_survives_lamination_and_reenters_same_final_rezka() {
             "order_id": order_id,
             "action": "complete",
             "uom": "m",
-            "total_waste": 0.3,
+            "total_waste": 0.0,
             "rezka_frames": [
                 {"produced_qty": 120, "gross_qty": 12, "diameter": 45},
                 {"produced_qty": 120, "gross_qty": 12, "diameter": 45}
@@ -1549,6 +1550,7 @@ async fn grouped_rezka_wip_survives_lamination_and_reenters_same_final_rezka() {
         .as_array()
         .expect("grouped Rezka outputs");
     assert_eq!(grouped_outputs.len(), 2);
+    assert_eq!(grouped_outputs[0]["total_waste"], 0.0);
     assert_eq!(
         grouped_outputs
             .iter()
@@ -1840,6 +1842,9 @@ async fn grouped_rezka_wip_survives_lamination_and_reenters_same_final_rezka() {
         .await
         .expect("active final Rezka controls");
     let active_final_snapshot = json_body(active_final_snapshot).await;
+    assert_eq!(
+        active_final_snapshot["queue_action_controls"]["apparatus:default:asset-010"][order_id]["rezka_total_waste_only"], false,
+    );
     assert_eq!(
         active_final_snapshot["queue_action_controls"]["apparatus:default:asset-010"][order_id]["complete_requires_full_report"],
         true

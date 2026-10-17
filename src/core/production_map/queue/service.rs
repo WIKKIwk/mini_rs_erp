@@ -940,6 +940,8 @@ impl ProductionMapService {
                     continue;
                 };
                 let stage_node_id = stage.node_id.clone();
+                let rezka_total_waste_only = is_rezka
+                    && !chain::is_final_work_stage_node(order_map, &stage_node_id);
                 let stage_work = super::super::stage_execution::work_control_projected(
                     projection,
                     &storage_key,
@@ -1368,6 +1370,7 @@ impl ProductionMapService {
                         previous_stage: previous_stage.unwrap_or_default(),
                         stage_node_id,
                         previous_stage_ready,
+                        rezka_total_waste_only,
                         rezka_output_kadr_counts,
                         rezka_output_report: if is_rezka {
                             active_session

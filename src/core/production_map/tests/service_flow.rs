@@ -39,6 +39,8 @@ mod cold_glue_workflow;
 mod wip_route_continuity;
 #[path = "progress_qr_lineage.rs"]
 mod progress_qr_lineage;
+#[path = "service_flow_rezka_astatka.rs"]
+mod rezka_astatka;
 
 const FLOW_REZKA_ID: &str = "apparatus:test:flow-rezka";
 const FLOW_PECHAT_ID: &str = "apparatus:test:flow-pechat";
@@ -4217,6 +4219,7 @@ async fn rezka_astatka_uses_order_timeline_and_accepts_zero_metrics() {
             None,
             None,
             "birinchi astatka",
+            "",
         )
         .await
         .expect("first astatka");
@@ -4236,6 +4239,7 @@ async fn rezka_astatka_uses_order_timeline_and_accepts_zero_metrics() {
             None,
             None,
             "ikkinchi astatka",
+            "",
         )
         .await
         .expect("second astatka");
