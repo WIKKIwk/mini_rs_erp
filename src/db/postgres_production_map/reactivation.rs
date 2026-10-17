@@ -285,7 +285,7 @@ async fn prepare(
     let opening_input = if source_kind == "opening_wip" {
         let row:Option<Value>=sqlx::query_scalar("SELECT to_jsonb(b) FROM mini_opening_wip_batches b WHERE batch_id=$1 AND order_id=$2 FOR UPDATE")
             .bind(input_id).bind(&selector.order_id).fetch_optional(&mut **tx).await.map_err(|_|ProductionMapError::StoreFailed)?;
-        let Some(row) = row else {
+        let Some(mut row) = row else {
             deny!("source_not_free");
         };
         if field(&row, "wip_status") != "processed"
@@ -294,6 +294,40 @@ async fn prepare(
         {
             deny!("source_not_free");
         }
+        let intake: Option<Value> = sqlx::query_scalar(
+            "SELECT to_jsonb(i) || jsonb_build_object(
+                'resume_apparatus', COALESCE(resume_apparatus, ''),
+                'actor', jsonb_build_object('role', actor_role, 'ref_', actor_ref, 'display_name', actor_display_name),
+                'created_at_unix', extract(epoch FROM created_at)::bigint,
+                'updated_at_unix', extract(epoch FROM updated_at)::bigint)
+             FROM mini_opening_wip_intakes i WHERE intake_id=$1 FOR SHARE",
+        )
+        .bind(field(&row, "intake_id"))
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+        let Some(intake_json) = intake else {
+            deny!("source_not_free");
+        };
+        let intake: crate::core::production_map::OpeningWipIntake =
+            serde_json::from_value(intake_json.clone())
+                .map_err(|_| ProductionMapError::StoreFailed)?;
+        if intake.status != crate::core::production_map::OpeningWipIntakeStatus::Confirmed
+            || intake.order_id != selector.order_id
+        {
+            deny!("source_not_free");
+        }
+        if crate::core::production_map::ProductionMapService::opening_wip_target_stage(
+            &map,
+            &intake,
+            &selector.apparatus,
+            &session.stage_node_id,
+        )
+        .is_none_or(|stage| stage.node_id != session.stage_node_id)
+        {
+            deny!("stale_target");
+        }
+        row["_reactivation_intake_snapshot"] = intake_json;
         Some(row)
     } else {
         None

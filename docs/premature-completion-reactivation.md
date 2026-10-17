@@ -54,3 +54,26 @@ lineage snapshot for safe continuation of merged cutting runs.
 No schema change is required; existing queue/progress receipts and material
 reversal constraints are used. No production database is accessed by development
 verification.
+
+Opening WIP inputs also require a confirmed intake whose current route resolves
+to the exact producing occurrence. The locked intake snapshot participates in
+the preview token; cancelled or remapped intakes cannot be restored.
+
+## Focused verification
+
+Use an explicitly disposable PostgreSQL server with the `mini_rs_erp` runtime
+login role already provisioned. The suite creates random isolated databases;
+it never falls back to an application database or reads `.env`.
+
+```sh
+REACTIVATION_TEST_DATABASE_URL=postgres://postgres@127.0.0.1:56319/postgres \
+RE_PAUSE_TEST_DATABASE_URL=postgres://postgres@127.0.0.1:56319/postgres \
+cargo test --locked --features verification \
+  --test work_reactivation --test resume_re_pause -- --ignored --test-threads=1
+```
+
+Coverage includes print/lamination/cutting continuation, independent runtime
+services racing the same receipt, immutable output quantities, downstream use,
+stale revisions, final closure, worker/assignment ownership, reservation release
+on freeze and cutting boundaries, incremental completion and another reopening,
+opening intake validity, and compensating material consumption accounting.
