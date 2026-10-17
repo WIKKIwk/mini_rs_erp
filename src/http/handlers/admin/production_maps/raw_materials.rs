@@ -96,6 +96,16 @@ pub struct RawMaterialAssignmentsQuery {
     barcode: String,
 }
 
+impl RawMaterialAssignmentsQuery {
+    pub(super) fn for_bootstrap(order_id: &str, apparatus: &str) -> Self {
+        Self {
+            order_id: order_id.to_string(),
+            apparatus: apparatus.to_string(),
+            ..Default::default()
+        }
+    }
+}
+
 #[derive(Debug, serde::Serialize)]
 struct RawMaterialAssignmentCandidateResponse {
     barcode: String,

@@ -56,6 +56,19 @@ pub struct WipBatchesQuery {
     limit: Option<String>,
 }
 
+impl WipBatchesQuery {
+    pub(super) fn for_scan_bootstrap(order_id: &str) -> Self {
+        Self {
+            order_id: order_id.to_string(),
+            status: "waiting".to_string(),
+            limit: Some("500".to_string()),
+            // Keep both apparatus filters empty: alternative routes are
+            // resolved from the batch and map by the existing consumer.
+            ..Default::default()
+        }
+    }
+}
+
 pub async fn production_map_wip_batches(
     State(state): State<AppState>,
     Query(query): Query<WipBatchesQuery>,

@@ -2,7 +2,9 @@
 //! an atomic inventory/Qolip snapshot; Start must still validate every resource.
 use super::*;
 use crate::core::authz::capability_code;
-use crate::core::production_map::{ApparatusQueueQolipMode, ApparatusQueueStartMaterialsMode};
+use crate::core::production_map::{
+    ApparatusQueuePreviousWipMode, ApparatusQueueQolipMode, ApparatusQueueStartMaterialsMode,
+};
 use axum::body::to_bytes;
 use axum::extract::rejection::QueryRejection;
 use sha2::{Digest, Sha256};
@@ -114,9 +116,13 @@ async fn bootstrap(
         let needs_materials = control.interaction.start_materials_mode
             == ApparatusQueueStartMaterialsMode::ScanRequired;
         let needs_qolips = control.interaction.qolip_mode == ApparatusQueueQolipMode::ScanRequired;
+        let include_prepared_sections = query.include_context && query.include_sections;
+        let needs_input_progress = control.interaction.previous_wip_mode
+            == ApparatusQueuePreviousWipMode::ScanRequired
+            && !control.previous_stage.trim().is_empty();
         // Reuse the existing handlers, including their distinct capability and
         // resource guards. No child request can contain a scanned Qolip code.
-        let (materials, qolips, validated_progress) = tokio::join!(
+        let (materials, qolips, validated_progress, material_assignments, input_progress) = tokio::join!(
             async {
                 if !query.include_sections || !needs_materials {
                     return not_required();
@@ -157,6 +163,35 @@ async fn bootstrap(
                 .await
             },
             validate_progress(state, headers, apparatus, order_id, &query.qr_payload),
+            async {
+                if !include_prepared_sections || needs_materials {
+                    return not_required();
+                }
+                section(
+                    raw_material_assignments(
+                        State(state.clone()),
+                        Query(raw_materials::RawMaterialAssignmentsQuery::for_bootstrap(
+                            order_id, apparatus,
+                        )),
+                        Method::GET,
+                        headers.clone(),
+                        Bytes::new(),
+                    ).await,
+                ).await
+            },
+            async {
+                if !include_prepared_sections || !needs_input_progress {
+                    return not_required();
+                }
+                section(
+                    production_map_wip_batches(
+                        State(state.clone()),
+                        Query(wip::WipBatchesQuery::for_scan_bootstrap(order_id)),
+                        Method::GET,
+                        headers.clone(),
+                    ).await,
+                ).await
+            },
         );
         if validated_progress.is_err() {
             // Domain errors may contain the order title. Check the captured
@@ -230,6 +265,21 @@ async fn bootstrap(
         if query.include_context {
             payload["queue_context"] =
                 queue_context(state, &snapshot, revision, &scope, apparatus, order_id);
+        }
+        if include_prepared_sections {
+            let scoped_section = |mut section: serde_json::Value| {
+                section["apparatus"] = serde_json::json!(apparatus);
+                section["order_id"] = serde_json::json!(order_id);
+                section["stage_node_id"] = serde_json::json!(control.stage_node_id);
+                section
+            };
+            payload["sections"]["material_assignments"] = scoped_section(material_assignments);
+            let mut input_progress = scoped_section(input_progress);
+            // This is the complete response to the bounded reader, not a
+            // statement that the order has no WIP outside this 500-row window.
+            input_progress["limit"] = serde_json::json!(500);
+            input_progress["status_filter"] = serde_json::json!("waiting");
+            payload["sections"]["input_progress"] = input_progress;
         }
         if let Some(validated_progress) = validated_progress {
             payload["validated_progress"] = validated_progress;

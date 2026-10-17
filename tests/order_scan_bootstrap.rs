@@ -105,6 +105,9 @@ struct CountedMapStore {
     materials_gate: ReadGate,
     snapshot_gate: ReadGate,
     progress_gate: ReadGate,
+    wip_reads: AtomicUsize,
+    fail_wip: AtomicBool,
+    wip_gate: ReadGate,
 }
 #[async_trait::async_trait]
 impl ProductionMapStorePort for CountedMapStore {
@@ -199,6 +202,14 @@ impl ProductionMapStorePort for CountedMapStore {
     }
     async fn progress_batches_for_order(&self, id: &str) -> MapResult<Vec<OrderProgressBatch>> {
         self.inner.progress_batches_for_order(id).await
+    }
+    async fn wip_progress_batches(&self, query: WipProgressBatchQuery) -> MapResult<Vec<OrderProgressBatch>> {
+        self.wip_reads.fetch_add(1, Ordering::SeqCst);
+        self.wip_gate.read().await;
+        if self.fail_wip.load(Ordering::SeqCst) {
+            return Err(ProductionMapError::StoreFailed);
+        }
+        self.inner.wip_progress_batches(query).await
     }
     async fn put_order_progress_batch(&self, row: OrderProgressBatch) -> MapResult<()> {
         self.writes.fetch_add(1, Ordering::SeqCst);
@@ -1834,5 +1845,203 @@ async fn prepare_context_retries_when_occupancy_changes_during_sections() {
         1,
         "the retried busy control no longer needs the Qolip section"
     );
+    f.assert_no_writes();
+}
+
+const ASSIGNMENTS: &str = "/v1/mobile/admin/raw-material-assignments";
+const WIP_BATCHES: &str = "/v1/mobile/admin/production-maps/wip-batches";
+
+fn prepare_sections_uri() -> String {
+    format!("{}&include_context=true", query(BOOTSTRAP, CUT, PREPARE_ORDER, ""))
+}
+
+fn prepare_wip_uri() -> String {
+    format!("{WIP_BATCHES}?order_id={PREPARE_ORDER}&status=waiting&limit=500")
+}
+
+#[tokio::test]
+async fn prepare_extra_sections_match_existing_readers_with_scope_and_no_writes() {
+    let f = prepare_fixture().await;
+    // No producer/consumer filter: the existing order-scoped reader retains
+    // candidates for alternative routes; mobile applies its current map route.
+    let mut alternative = prepare_batch();
+    alternative.batch_id = "prepare-other-route".into();
+    alternative.qr_payload = "OTHERROUTE".into();
+    alternative.next_apparatus = PRINT.into();
+    f.maps.inner.put_order_progress_batch(alternative).await.unwrap();
+    let assignments = f.request("GET", &f.worker,
+        &query(ASSIGNMENTS, CUT, PREPARE_ORDER, ""), Value::Null).await;
+    let wip = f.request("GET", &f.worker, &prepare_wip_uri(), Value::Null).await;
+    assert_eq!(assignments.status, StatusCode::OK, "{}", assignments.body);
+    assert_eq!(wip.status, StatusCode::OK, "{}", wip.body);
+    assert_eq!(wip.body["batches"].as_array().unwrap().len(), 2);
+    let before = f.state.production_maps.snapshot_revision();
+    let result = f.request("GET", &f.worker, &prepare_sections_uri(), Value::Null).await;
+    assert_eq!(result.status, StatusCode::OK, "{}", result.body);
+    assert_eq!(result.body["sections"]["materials"]["status"], "not_required");
+    for name in ["material_assignments", "input_progress"] {
+        let section = &result.body["sections"][name];
+        assert_eq!(section["status"], "ready", "{name}: {section}");
+        assert_eq!(section["apparatus"], CUT);
+        assert_eq!(section["order_id"], PREPARE_ORDER);
+        assert_eq!(section["stage_node_id"], result.body["control_state"]["control"]["stage_node_id"]);
+    }
+    assert_eq!(result.body["sections"]["material_assignments"]["data"], assignments.body);
+    assert_eq!(result.body["sections"]["input_progress"]["data"], wip.body);
+    assert_eq!(result.body["sections"]["input_progress"]["limit"], 500);
+    assert_eq!(result.body["sections"]["input_progress"]["status_filter"], "waiting");
+    assert_eq!(f.state.production_maps.snapshot_revision(), before);
+    f.assert_no_writes();
+}
+
+#[tokio::test]
+async fn prepare_extra_sections_are_opt_in_and_skip_unneeded_modes() {
+    let f = prepare_fixture().await;
+    f.warm().await;
+    for uri in [prepare_uri(""), query(BOOTSTRAP, CUT, PREPARE_ORDER, "")] {
+        let material_reads = f.maps.material_reads.load(Ordering::SeqCst);
+        let result = f.request("GET", &f.worker, &uri, Value::Null).await;
+        assert_eq!(result.status, StatusCode::OK, "{}", result.body);
+        assert!(result.body["sections"].get("material_assignments").is_none());
+        assert!(result.body["sections"].get("input_progress").is_none());
+        assert_eq!(f.maps.material_reads.load(Ordering::SeqCst), material_reads);
+        assert_eq!(f.maps.wip_reads.load(Ordering::SeqCst), 0);
+    }
+    let print = Fixture::new(PRINT).await;
+    let result = print.request("GET", &print.worker,
+        &format!("{}&include_context=true", query(BOOTSTRAP, PRINT, ORDER, "")), Value::Null).await;
+    assert_eq!(result.status, StatusCode::OK, "{}", result.body);
+    assert_eq!(result.body["sections"]["materials"]["status"], "ready");
+    assert_eq!(result.body["sections"]["material_assignments"]["status"], "not_required");
+    assert_eq!(result.body["sections"]["input_progress"]["status"], "not_required");
+    assert_eq!(print.maps.wip_reads.load(Ordering::SeqCst), 0);
+    print.assert_no_writes();
+    f.assert_no_writes();
+}
+
+#[tokio::test]
+async fn prepare_extra_sections_preserve_reader_capability_and_store_errors() {
+    for denied_section in ["material_assignments", "input_progress"] {
+        let f = prepare_fixture().await;
+        let capability = if denied_section == "material_assignments" {
+            Capability::ApparatusQueueRead
+        } else { Capability::RawMaterialAssign };
+        define_role(&f.state, "extra-reader", &[capability]).await;
+        assign(&f.state, "worker", "extra-reader", &[PRINT, CUT]).await;
+        let (path, uri) = if denied_section == "material_assignments" {
+            (ASSIGNMENTS, query(ASSIGNMENTS, CUT, PREPARE_ORDER, ""))
+        } else { (WIP_BATCHES, prepare_wip_uri()) };
+        let expected = f.request("GET", &f.worker, &uri, Value::Null).await;
+        assert_eq!(expected.status, StatusCode::FORBIDDEN, "{path}: {}", expected.body);
+        let result = f.request("GET", &f.worker, &prepare_sections_uri(), Value::Null).await;
+        assert_eq!(result.status, StatusCode::OK, "{}", result.body);
+        let section = &result.body["sections"][denied_section];
+        assert_eq!(section["status"], "error");
+        assert_eq!(section["status_code"], 403);
+        assert_eq!(section["error"], expected.body);
+        f.assert_no_writes();
+    }
+    let f = prepare_fixture().await;
+    f.warm().await;
+    f.maps.fail_materials.store(true, Ordering::SeqCst);
+    f.maps.fail_wip.store(true, Ordering::SeqCst);
+    let expected_assignments = f.request("GET", &f.worker,
+        &query(ASSIGNMENTS, CUT, PREPARE_ORDER, ""), Value::Null).await;
+    let expected_wip = f.request("GET", &f.worker, &prepare_wip_uri(), Value::Null).await;
+    let result = f.request("GET", &f.worker, &prepare_sections_uri(), Value::Null).await;
+    assert_eq!(result.status, StatusCode::OK, "{}", result.body);
+    for (name, expected) in [("material_assignments", expected_assignments), ("input_progress", expected_wip)] {
+        assert_eq!(result.body["sections"][name]["status"], "error");
+        assert_eq!(result.body["sections"][name]["status_code"], expected.status.as_u16());
+        assert_eq!(result.body["sections"][name]["error"], expected.body);
+    }
+    f.assert_no_writes();
+}
+
+#[tokio::test]
+async fn prepare_extra_sections_run_in_parallel_and_reauthenticate_after_reads() {
+    let f = prepare_fixture().await;
+    f.warm().await;
+    f.maps.materials_gate.arm(1);
+    f.maps.wip_gate.arm(1);
+    let router = f.router.clone();
+    let token = f.worker.clone();
+    let task = tokio::spawn(async move {
+        request(&router, "GET", &token, &prepare_sections_uri(), Value::Null).await
+    });
+    tokio::join!(f.maps.materials_gate.wait_entered(), f.maps.wip_gate.wait_entered());
+    f.state.sessions.delete(&f.worker).await.unwrap();
+    f.maps.materials_gate.resume();
+    f.maps.wip_gate.resume();
+    let result = task.await.unwrap();
+    assert_eq!(result.status, StatusCode::UNAUTHORIZED, "{}", result.body);
+    assert!(result.body.get("sections").is_none());
+    f.assert_no_writes();
+}
+
+#[tokio::test]
+async fn prepare_extra_sections_retry_after_wip_changes_during_read() {
+    let f = prepare_fixture().await;
+    f.warm().await;
+    f.maps.wip_gate.arm(1);
+    let router = f.router.clone();
+    let token = f.worker.clone();
+    let task = tokio::spawn(async move {
+        request(&router, "GET", &token, &prepare_sections_uri(), Value::Null).await
+    });
+    f.maps.wip_gate.wait_entered().await;
+    let mut batch = prepare_batch();
+    batch.produced_qty = 123.0;
+    f.maps.inner.put_order_progress_batch(batch).await.unwrap();
+    f.state.production_maps.notify_live();
+    f.maps.wip_gate.resume();
+    let result = task.await.unwrap();
+    assert_eq!(result.status, StatusCode::OK, "{}", result.body);
+    assert_eq!(result.body["control_state"]["rev"], f.state.production_maps.snapshot_revision());
+    assert_eq!(result.body["sections"]["input_progress"]["data"]["batches"][0]["produced_qty"], 123.0);
+    assert_eq!(f.maps.wip_reads.load(Ordering::SeqCst), 2);
+    f.assert_no_writes();
+}
+
+#[tokio::test]
+async fn prepare_extra_wip_section_keeps_the_existing_500_row_bound() {
+    let f = prepare_fixture().await;
+    for index in 0..501 {
+        let mut batch = prepare_batch();
+        batch.batch_id = format!("extra-wip-{index:04}");
+        batch.qr_payload = format!("EXTRAWIP{index:04}");
+        f.maps.inner.put_order_progress_batch(batch).await.unwrap();
+    }
+    let expected = f.request("GET", &f.worker, &prepare_wip_uri(), Value::Null).await;
+    assert_eq!(expected.status, StatusCode::OK, "{}", expected.body);
+    assert_eq!(expected.body["batches"].as_array().unwrap().len(), 500);
+    let result = f.request("GET", &f.worker, &prepare_sections_uri(), Value::Null).await;
+    assert_eq!(result.status, StatusCode::OK, "{}", result.body);
+    assert_eq!(result.body["sections"]["input_progress"]["data"], expected.body);
+    assert_eq!(result.body["sections"]["input_progress"]["limit"], 500);
+    f.assert_no_writes();
+}
+
+#[tokio::test]
+async fn prepare_extra_assignments_preserve_nonempty_display_payload_for_active_work() {
+    let f = prepare_fixture().await;
+    f.maps.inner.put_raw_material_assignment(RawMaterialAssignment {
+        order_id: PREPARE_ORDER.into(), apparatus_id: ApparatusId::new(CUT).unwrap(),
+        apparatus: "Rezka".into(), barcode: "prepare-roll".into(), item_code: "P-1".into(),
+        item_name: "Assigned film".into(), item_group: "Rulon".into(),
+        assigned_by_role: "admin".into(), assigned_by_ref: "admin".into(),
+        assigned_by_display_name: "Admin".into(), assigned_at: "2026-01-01".into(),
+    }).await.unwrap();
+    f.maps.inner.put_apparatus_queue_states(CUT,
+        BTreeMap::from([(PREPARE_ORDER.into(), "in_progress".into())])).await.unwrap();
+    let expected = f.request("GET", &f.worker,
+        &query(ASSIGNMENTS, CUT, PREPARE_ORDER, ""), Value::Null).await;
+    assert_eq!(expected.status, StatusCode::OK, "{}", expected.body);
+    assert_eq!(expected.body.as_array().unwrap().len(), 1);
+    let result = f.request("GET", &f.worker, &prepare_sections_uri(), Value::Null).await;
+    assert_eq!(result.status, StatusCode::OK, "{}", result.body);
+    assert_eq!(result.body["sections"]["materials"]["status"], "not_required");
+    assert_eq!(result.body["sections"]["material_assignments"]["status"], "ready");
+    assert_eq!(result.body["sections"]["material_assignments"]["data"], expected.body);
     f.assert_no_writes();
 }
