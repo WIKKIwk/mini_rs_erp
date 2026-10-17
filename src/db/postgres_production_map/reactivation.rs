@@ -243,7 +243,7 @@ async fn prepare(
         deny!("unsupported_history");
     }
     // Lock packages before their rolls, matching receipt/movement lock order.
-    let paddons = sqlx::query_as::<_,(String,bool)>("SELECT p.id,(p.locked_at IS NOT NULL OR p.receipt_json IS NOT NULL OR p.status<>'open') FROM mini_paddons p WHERE EXISTS(SELECT 1 FROM mini_paddon_items i WHERE i.paddon_id=p.id AND i.progress_batch_id=ANY($1) AND i.removed_at IS NULL) ORDER BY p.id FOR UPDATE")
+    let paddons = sqlx::query_as::<_,(String,bool)>("SELECT p.id,(p.locked_at IS NOT NULL OR p.receipt_json IS NOT NULL) FROM mini_paddons p WHERE EXISTS(SELECT 1 FROM mini_paddon_items i WHERE i.paddon_id=p.id AND i.progress_batch_id=ANY($1) AND i.removed_at IS NULL) ORDER BY p.id FOR UPDATE")
         .bind(&output_ids).fetch_all(&mut **tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
     if paddons.iter().any(|(_, locked)| *locked) {
         deny!("source_not_free");
@@ -267,7 +267,7 @@ async fn prepare(
         {
             deny!("source_not_free");
         }
-        let external: bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM mini_paddon_receipt_lines WHERE progress_batch_id=$1) OR EXISTS(SELECT 1 FROM mini_layer_remainder_operations WHERE source_kind='progress_batch' AND source_id=$1) OR EXISTS(SELECT 1 FROM mini_paddon_items i JOIN mini_paddons p ON p.id=i.paddon_id WHERE i.progress_batch_id=$1 AND i.removed_at IS NULL AND (NOT(p.id=ANY($2)) OR p.locked_at IS NOT NULL OR p.receipt_json IS NOT NULL OR p.status<>'open'))")
+        let external: bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM mini_paddon_receipt_lines WHERE progress_batch_id=$1) OR EXISTS(SELECT 1 FROM mini_layer_remainder_operations WHERE source_kind='progress_batch' AND source_id=$1) OR EXISTS(SELECT 1 FROM mini_paddon_items i JOIN mini_paddons p ON p.id=i.paddon_id WHERE i.progress_batch_id=$1 AND i.removed_at IS NULL AND (NOT(p.id=ANY($2)) OR p.locked_at IS NOT NULL OR p.receipt_json IS NOT NULL))")
             .bind(id).bind(paddons.iter().map(|(id,_)| id.clone()).collect::<Vec<_>>()).fetch_one(&mut **tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
         if external {
             deny!("source_not_free");
