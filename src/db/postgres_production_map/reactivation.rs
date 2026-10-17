@@ -373,6 +373,23 @@ async fn prepare(
             .any(|material| field(row, "barcode").eq_ignore_ascii_case(&material.barcode))
     });
     for stock in &raw {
+        let source_material = recorded_resources
+            .raw_materials
+            .iter()
+            .find(|material| field(stock, "barcode").eq_ignore_ascii_case(&material.barcode))
+            .ok_or(ProductionMapError::RawMaterialStockUnavailable)?;
+        if source_material.item_code != field(stock, "item_code")
+            || source_material
+                .stock_id
+                .as_deref()
+                .is_some_and(|id| id != field(stock, "id"))
+            || source_material
+                .uom
+                .as_deref()
+                .is_some_and(|uom| uom != field(stock, "uom"))
+        {
+            deny!("resource_unavailable");
+        }
         if !matches!(field(stock, "status"), "consumed" | "in_use")
             || field(stock, "reserved_order_id") != selector.order_id
         {
