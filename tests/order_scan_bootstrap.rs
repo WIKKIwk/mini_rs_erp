@@ -104,6 +104,7 @@ struct CountedMapStore {
     fail_materials: AtomicBool,
     materials_gate: ReadGate,
     snapshot_gate: ReadGate,
+    progress_gate: ReadGate,
 }
 #[async_trait::async_trait]
 impl ProductionMapStorePort for CountedMapStore {
@@ -191,6 +192,21 @@ impl ProductionMapStorePort for CountedMapStore {
     async fn put_order_control_state(&self, row: OrderControlRecord) -> MapResult<()> {
         self.writes.fetch_add(1, Ordering::SeqCst);
         self.inner.put_order_control_state(row).await
+    }
+    async fn progress_batch_by_qr(&self, qr: &str) -> MapResult<Option<OrderProgressBatch>> {
+        self.progress_gate.read().await;
+        self.inner.progress_batch_by_qr(qr).await
+    }
+    async fn progress_batches_for_order(&self, id: &str) -> MapResult<Vec<OrderProgressBatch>> {
+        self.inner.progress_batches_for_order(id).await
+    }
+    async fn put_order_progress_batch(&self, row: OrderProgressBatch) -> MapResult<()> {
+        self.writes.fetch_add(1, Ordering::SeqCst);
+        self.inner.put_order_progress_batch(row).await
+    }
+    async fn put_order_run_session(&self, row: OrderRunSession) -> MapResult<()> {
+        self.writes.fetch_add(1, Ordering::SeqCst);
+        self.inner.put_order_run_session(row).await
     }
 }
 
@@ -1449,4 +1465,374 @@ async fn queue_action_control_fixture() -> Fixture {
     f.maps.inner.put_apparatus_sequence(CUT, vec![CONTROL_ACK_ORDER.into()])
         .await.unwrap();
     f
+}
+
+
+const PREPARE_ORDER: &str = "zakaz-scan-bootstrap-prepare";
+const PREPARE_QR: &str = "400118PREPARE0001";
+const LOOKUP: &str = "/v1/mobile/admin/production-maps/progress-qr/lookup";
+
+fn prepare_uri(qr: &str) -> String {
+    format!(
+        "{}&include_sections=false&include_context=true&qr_payload={}",
+        query(BOOTSTRAP, CUT, PREPARE_ORDER, ""),
+        urlencoding::encode(qr)
+    )
+}
+
+async fn prepare_fixture() -> Fixture {
+    let f = Fixture::new(CUT).await;
+    f.maps.inner.delete_map(ORDER).await.unwrap();
+    let mut seeded = serde_json::to_value(map(CUT)).unwrap();
+    seeded["id"] = json!(PREPARE_ORDER);
+    seeded["nodes"] = json!([
+        {"id":"start","kind":"start","title":"Start"},
+        {"id":"print","kind":"apparatus","title":"Bosma","apparatus_id":PRINT},
+        {"id":"cut","kind":"apparatus","title":"Rezka","apparatus_id":CUT,"rezka_kadr_count":1},
+        {"id":"end","kind":"end","title":"End"}
+    ]);
+    seeded["edges"] = json!([
+        {"from":"start","to":"print"}, {"from":"print","to":"cut"},
+        {"from":"cut","to":"end"}
+    ]);
+    f.maps
+        .inner
+        .put_map(serde_json::from_value(seeded).unwrap())
+        .await
+        .unwrap();
+    f.maps
+        .inner
+        .put_order_progress_batch(prepare_batch())
+        .await
+        .unwrap();
+    f
+}
+
+fn prepare_batch() -> OrderProgressBatch {
+    serde_json::from_value(json!({
+        "batch_id":"prepare-wip", "session_id":"print-session",
+        "started_at_unix":1,"completed_at_unix":2,
+        "apparatus":PRINT,"order_id":PREPARE_ORDER,"action":"detach_roll",
+        "status":"roll_detached","produced_qty":464,"uom":"m","qr_payload":PREPARE_QR,
+        "label_item_code":"P-1","label_item_name":"Print order WIP",
+        "executor_name":"Printer","worker_role":"aparatchi","worker_ref":"print-worker",
+        "worker_display_name":"Printer","wip_status":"waiting","next_apparatus":CUT,
+        "payload_json":{"production_stage_node_id":"print","next_stage_node_id":"cut"}
+    }))
+    .unwrap()
+}
+
+#[tokio::test]
+async fn prepare_context_is_opt_in_and_projects_only_target_and_active_maps_and_controls() {
+    let f = prepare_fixture().await;
+    let legacy = f
+        .request(
+            "GET",
+            &f.worker,
+            &format!(
+                "{}&include_sections=false",
+                query(BOOTSTRAP, CUT, PREPARE_ORDER, "")
+            ),
+            Value::Null,
+        )
+        .await;
+    assert_eq!(legacy.status, StatusCode::OK, "{}", legacy.body);
+    assert!(legacy.body.get("queue_context").is_none());
+    assert!(legacy.body.get("validated_progress").is_none());
+    for id in ["prepare-current", "prepare-other"] {
+        let mut seeded = map(CUT);
+        seeded.id = id.into();
+        f.maps.inner.put_map(seeded).await.unwrap();
+    }
+    f.maps
+        .inner
+        .put_apparatus_sequence(
+            CUT,
+            vec![
+                "prepare-current".into(),
+                PREPARE_ORDER.into(),
+                "prepare-other".into(),
+            ],
+        )
+        .await
+        .unwrap();
+    f.maps
+        .inner
+        .put_apparatus_queue_states(
+            CUT,
+            BTreeMap::from([
+                ("prepare-current".into(), "in_progress".into()),
+                (PREPARE_ORDER.into(), "pending".into()),
+                ("prepare-other".into(), "pending".into()),
+            ]),
+        )
+        .await
+        .unwrap();
+    f.state.production_maps.notify_live();
+    let result = f
+        .request("GET", &f.worker, &prepare_uri(""), Value::Null)
+        .await;
+    assert_eq!(result.status, StatusCode::OK, "{}", result.body);
+    let context = &result.body["queue_context"];
+    let control = &result.body["control_state"];
+    for cursor in ["rev", "epoch", "scope"] {
+        assert_eq!(context[cursor], control[cursor]);
+    }
+    let mut ids = context["maps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|saved| saved["map"]["id"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    ids.sort_unstable();
+    assert_eq!(ids, vec!["prepare-current", PREPARE_ORDER]);
+    let contracts = context["queue_action_controls"][CUT].as_object().unwrap();
+    assert_eq!(contracts.len(), 2);
+    assert!(contracts.contains_key(PREPARE_ORDER));
+    assert!(contracts.contains_key("prepare-current"));
+    assert_eq!(contracts[PREPARE_ORDER], control["control"]);
+    assert_eq!(context["stage_states"][PREPARE_ORDER], control["stage_states"]);
+    assert_eq!(
+        context["sequences"][CUT],
+        json!(["prepare-current", PREPARE_ORDER, "prepare-other"])
+    );
+    assert_eq!(context["queue_states"][CUT]["prepare-other"], "pending");
+    assert_eq!(
+        context["queue_states"][CUT]["prepare-current"],
+        "in_progress"
+    );
+    assert!(
+        context["visible_order_ids"][CUT]
+            .as_array()
+            .unwrap()
+            .contains(&json!("prepare-other"))
+    );
+    assert_eq!(context["queue_policies"].as_array().unwrap().len(), 1);
+    assert!(result.body.get("validated_progress").is_none());
+    f.assert_no_writes();
+}
+
+#[tokio::test]
+async fn prepare_progress_matches_scoped_active_lookup_without_starting_or_consuming() {
+    let f = prepare_fixture().await;
+    let before = f
+        .maps
+        .inner
+        .progress_batch_by_qr(PREPARE_QR)
+        .await
+        .unwrap()
+        .unwrap();
+    let expected = f.request("POST", &f.worker, LOOKUP,
+        json!({"apparatus":CUT,"order_id":PREPARE_ORDER,"qr_payload":PREPARE_QR,"require_active_order":true})).await;
+    assert_eq!(expected.status, StatusCode::OK, "{}", expected.body);
+    let revision = f.state.production_maps.snapshot_revision();
+    let prepared = f
+        .request("GET", &f.worker, &prepare_uri(PREPARE_QR), Value::Null)
+        .await;
+    assert_eq!(prepared.status, StatusCode::OK, "{}", prepared.body);
+    assert_eq!(prepared.body["validated_progress"], expected.body);
+    assert_eq!(
+        prepared.body["validated_progress"]["active_order_validated"],
+        true
+    );
+    assert_eq!(prepared.body["control_state"]["rev"], revision);
+    assert_eq!(f.state.production_maps.snapshot_revision(), revision);
+    assert_eq!(
+        json!(
+            f.maps
+                .inner
+                .progress_batch_by_qr(PREPARE_QR)
+                .await
+                .unwrap()
+                .unwrap()
+        ),
+        json!(before)
+    );
+    assert!(
+        f.maps
+            .inner
+            .apparatus_queue_states()
+            .await
+            .unwrap()
+            .get(CUT)
+            .is_none_or(|states| states.get(PREPARE_ORDER).is_none_or(|state| state != "in_progress"))
+    );
+    f.assert_no_writes();
+}
+
+#[tokio::test]
+async fn prepare_qr_domain_denials_match_existing_lookup_and_return_no_partial_context() {
+    for denial in [
+        "wrong-order",
+        "wrong-route",
+        "used",
+        "frozen",
+        "freeze-requested",
+        "read-only",
+        "unassigned",
+    ] {
+        let f = prepare_fixture().await;
+        let mut batch = prepare_batch();
+        match denial {
+            "wrong-order" => batch.order_id = "another-order".into(),
+            "wrong-route" => {
+                batch.apparatus = CUT.into();
+                batch.next_apparatus = PRINT.into();
+                batch.payload_json =
+                    json!({"production_stage_node_id":"cut","next_stage_node_id":"print"});
+            }
+            "used" => {
+                batch.wip_status = OrderProgressBatchWipStatus::InUse;
+                batch.used_by_session_id = "occupied".into();
+            }
+            "frozen" | "freeze-requested" => {
+                let mut control = OrderControlRecord::active(PREPARE_ORDER);
+                control.state = if denial == "frozen" {
+                    OrderControlState::Frozen
+                } else {
+                    OrderControlState::FreezeRequested
+                };
+                f.maps.inner.put_order_control_state(control).await.unwrap();
+            }
+            "read-only" => {}
+            "unassigned" => assign(&f.state, "worker", "aparatchi", &[PRINT]).await,
+            _ => unreachable!(),
+        }
+        f.maps.inner.put_order_progress_batch(batch).await.unwrap();
+        let token = if denial == "read-only" {
+            &f.reader
+        } else {
+            &f.worker
+        };
+        let expected = f.request("POST", token, LOOKUP,
+            json!({"apparatus":CUT,"order_id":PREPARE_ORDER,"qr_payload":PREPARE_QR,"require_active_order":true})).await;
+        assert!(!expected.status.is_success(), "{denial}: {}", expected.body);
+        let prepared = f
+            .request("GET", token, &prepare_uri(PREPARE_QR), Value::Null)
+            .await;
+        assert_eq!(
+            prepared.status, expected.status,
+            "{denial}: {}",
+            prepared.body
+        );
+        assert_eq!(prepared.body, expected.body, "{denial}");
+        assert!(prepared.body.get("queue_context").is_none());
+        assert!(prepared.body.get("validated_progress").is_none());
+        f.assert_no_writes();
+    }
+}
+
+#[tokio::test]
+async fn prepare_rechecks_assignment_after_awaited_qr_validation() {
+    let f = prepare_fixture().await;
+    f.warm().await;
+    f.maps.progress_gate.arm(1);
+    let router = f.router.clone();
+    let token = f.worker.clone();
+    let task = tokio::spawn(async move {
+        request(
+            &router,
+            "GET",
+            &token,
+            &prepare_uri(PREPARE_QR),
+            Value::Null,
+        )
+        .await
+    });
+    f.maps.progress_gate.wait_entered().await;
+    assign(&f.state, "worker", "aparatchi", &[PRINT]).await;
+    f.maps.progress_gate.resume();
+    let result = task.await.unwrap();
+    assert_eq!(result.status, StatusCode::FORBIDDEN, "{}", result.body);
+    assert!(result.body.get("queue_context").is_none());
+    f.assert_no_writes();
+}
+
+#[tokio::test]
+async fn prepare_discards_validation_when_target_freezes_during_the_read() {
+    let f = prepare_fixture().await;
+    f.warm().await;
+    f.maps.progress_gate.arm(1);
+    let router = f.router.clone();
+    let token = f.worker.clone();
+    let task = tokio::spawn(async move {
+        request(
+            &router,
+            "GET",
+            &token,
+            &prepare_uri(PREPARE_QR),
+            Value::Null,
+        )
+        .await
+    });
+    f.maps.progress_gate.wait_entered().await;
+    let mut control = OrderControlRecord::active(PREPARE_ORDER);
+    control.state = OrderControlState::Frozen;
+    f.maps.inner.put_order_control_state(control).await.unwrap();
+    f.state.production_maps.notify_live();
+    f.maps.progress_gate.resume();
+    let result = task.await.unwrap();
+    assert_eq!(result.status, StatusCode::CONFLICT, "{}", result.body);
+    assert_eq!(result.body["error"], "order_frozen");
+    assert!(result.body.get("queue_context").is_none());
+    f.assert_no_writes();
+}
+
+#[tokio::test]
+async fn prepare_context_retries_when_occupancy_changes_during_sections() {
+    let f = Fixture::new(PRINT).await;
+    let mut other = map(PRINT);
+    other.id = "prepare-current".into();
+    f.maps.inner.put_map(other).await.unwrap();
+    f.warm().await;
+    f.qolips.products_gate.arm(1);
+    let router = f.router.clone();
+    let token = f.worker.clone();
+    let task = tokio::spawn(async move {
+        request(
+            &router,
+            "GET",
+            &token,
+            &format!(
+                "{}&include_context=true",
+                query(BOOTSTRAP, PRINT, ORDER, "")
+            ),
+            Value::Null,
+        )
+        .await
+    });
+    f.qolips.products_gate.wait_entered().await;
+    f.maps
+        .inner
+        .put_apparatus_queue_states(
+            PRINT,
+            BTreeMap::from([("prepare-current".into(), "in_progress".into())]),
+        )
+        .await
+        .unwrap();
+    f.state.production_maps.notify_live();
+    f.qolips.products_gate.resume();
+    let result = task.await.unwrap();
+    assert_eq!(result.status, StatusCode::OK, "{}", result.body);
+    assert_eq!(
+        result.body["queue_context"]["queue_states"][PRINT]["prepare-current"],
+        "in_progress"
+    );
+    assert!(
+        result.body["queue_context"]["maps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|saved| saved["map"]["id"] == "prepare-current")
+    );
+    assert_eq!(
+        result.body["queue_context"]["rev"],
+        f.state.production_maps.snapshot_revision()
+    );
+    assert_eq!(
+        f.qolips.products_reads.load(Ordering::SeqCst),
+        1,
+        "the retried busy control no longer needs the Qolip section"
+    );
+    f.assert_no_writes();
 }
