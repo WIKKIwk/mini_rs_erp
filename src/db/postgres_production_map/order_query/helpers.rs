@@ -421,10 +421,8 @@ pub(super) async fn load_progress_batch<'e, E: sqlx::Executor<'e, Database = sql
 ) -> Result<Option<OrderProgressBatch>, ProductionMapError> {
     let row = sqlx::query_as::<_, ProgressBatchRow>(
         "SELECT batch.batch_id, batch.revision, batch.session_id,
-                COALESCE(EXTRACT(EPOCH FROM session.started_at)::bigint,
-                         EXTRACT(EPOCH FROM batch.created_at)::bigint) AS started_at_unix,
-                COALESCE(EXTRACT(EPOCH FROM session.session_updated_at)::bigint,
-                         EXTRACT(EPOCH FROM batch.updated_at)::bigint) AS completed_at_unix,
+                COALESCE(EXTRACT(EPOCH FROM batch.production_started_at)::bigint, 0) AS started_at_unix,
+                EXTRACT(EPOCH FROM batch.production_completed_at)::bigint AS completed_at_unix,
                 batch.canonical_apparatus_id AS apparatus, batch.order_id, batch.action, batch.status,
                 produced_qty::float8 AS produced_qty, uom, qr_payload,
                 label_item_code, label_item_name, executor_name,
@@ -450,10 +448,6 @@ pub(super) async fn load_progress_batch<'e, E: sqlx::Executor<'e, Database = sql
                 description,
                 payload_json
          FROM mini_progress_batches AS batch
-         LEFT JOIN (
-             SELECT session_id, started_at, updated_at AS session_updated_at
-             FROM mini_order_run_sessions
-         ) AS session ON session.session_id = batch.session_id
          WHERE batch.batch_id = $1",
     )
     .bind(batch_id.trim())
@@ -476,10 +470,8 @@ pub(super) async fn load_progress_batches_for_worker(
     let limit = i64::try_from(limit.min(500)).unwrap_or(500);
     let rows = sqlx::query_as::<_, ProgressBatchRow>(
         "SELECT batch.batch_id, batch.revision, batch.session_id,
-                COALESCE(EXTRACT(EPOCH FROM session.started_at)::bigint,
-                         EXTRACT(EPOCH FROM batch.created_at)::bigint) AS started_at_unix,
-                COALESCE(EXTRACT(EPOCH FROM session.session_updated_at)::bigint,
-                         EXTRACT(EPOCH FROM batch.updated_at)::bigint) AS completed_at_unix,
+                COALESCE(EXTRACT(EPOCH FROM batch.production_started_at)::bigint, 0) AS started_at_unix,
+                EXTRACT(EPOCH FROM batch.production_completed_at)::bigint AS completed_at_unix,
                 batch.canonical_apparatus_id AS apparatus, batch.order_id, batch.action, batch.status,
                 produced_qty::float8 AS produced_qty, uom, qr_payload,
                 label_item_code, label_item_name, executor_name,
@@ -505,10 +497,6 @@ pub(super) async fn load_progress_batches_for_worker(
                 description,
                 payload_json
          FROM mini_progress_batches AS batch
-         LEFT JOIN (
-             SELECT session_id, started_at, updated_at AS session_updated_at
-             FROM mini_order_run_sessions
-         ) AS session ON session.session_id = batch.session_id
          WHERE COALESCE(batch.payload_json->>'origin', '') <> 'layer_remainder'
            AND (batch.worker_ref = ANY($1)
             OR EXISTS (
@@ -560,10 +548,8 @@ pub(super) async fn load_progress_batches_for_orders(
     }
     let rows = sqlx::query_as::<_, ProgressBatchRow>(
         "SELECT batch.batch_id, batch.revision, batch.session_id,
-                COALESCE(EXTRACT(EPOCH FROM session.started_at)::bigint,
-                         EXTRACT(EPOCH FROM batch.created_at)::bigint) AS started_at_unix,
-                COALESCE(EXTRACT(EPOCH FROM session.session_updated_at)::bigint,
-                         EXTRACT(EPOCH FROM batch.updated_at)::bigint) AS completed_at_unix,
+                COALESCE(EXTRACT(EPOCH FROM batch.production_started_at)::bigint, 0) AS started_at_unix,
+                EXTRACT(EPOCH FROM batch.production_completed_at)::bigint AS completed_at_unix,
                 batch.canonical_apparatus_id AS apparatus, batch.order_id, batch.action, batch.status,
                 produced_qty::float8 AS produced_qty, uom, qr_payload,
                 label_item_code, label_item_name, executor_name,
@@ -589,10 +575,6 @@ pub(super) async fn load_progress_batches_for_orders(
                 description,
                 payload_json
          FROM mini_progress_batches AS batch
-         LEFT JOIN (
-             SELECT session_id, started_at, updated_at AS session_updated_at
-             FROM mini_order_run_sessions
-         ) AS session ON session.session_id = batch.session_id
          WHERE batch.order_id = ANY($1)
          ORDER BY batch.order_id ASC, updated_at DESC, created_at DESC, batch_id DESC",
     )
@@ -616,10 +598,8 @@ pub(super) async fn load_progress_batches_for_audit(
 ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
     let rows = sqlx::query_as::<_, ProgressBatchRow>(
         "SELECT batch.batch_id, batch.revision, batch.session_id,
-                COALESCE(EXTRACT(EPOCH FROM session.started_at)::bigint,
-                         EXTRACT(EPOCH FROM batch.created_at)::bigint) AS started_at_unix,
-                COALESCE(EXTRACT(EPOCH FROM session.session_updated_at)::bigint,
-                         EXTRACT(EPOCH FROM batch.updated_at)::bigint) AS completed_at_unix,
+                COALESCE(EXTRACT(EPOCH FROM batch.production_started_at)::bigint, 0) AS started_at_unix,
+                EXTRACT(EPOCH FROM batch.production_completed_at)::bigint AS completed_at_unix,
                 batch.canonical_apparatus_id AS apparatus, batch.order_id, batch.action, batch.status,
                 produced_qty::float8 AS produced_qty, uom, qr_payload,
                 label_item_code, label_item_name, executor_name,
@@ -645,10 +625,6 @@ pub(super) async fn load_progress_batches_for_audit(
                 description,
                 payload_json
          FROM mini_progress_batches AS batch
-         LEFT JOIN (
-             SELECT session_id, started_at, updated_at AS session_updated_at
-             FROM mini_order_run_sessions
-         ) AS session ON session.session_id = batch.session_id
          ORDER BY updated_at DESC, created_at DESC, batch_id DESC",
     )
     .fetch_all(pool)
@@ -663,10 +639,8 @@ pub(super) async fn load_progress_batch_by_qr(
 ) -> Result<Option<OrderProgressBatch>, ProductionMapError> {
     let row = sqlx::query_as::<_, ProgressBatchRow>(
         "SELECT batch.batch_id, batch.revision, batch.session_id,
-                COALESCE(EXTRACT(EPOCH FROM session.started_at)::bigint,
-                         EXTRACT(EPOCH FROM batch.created_at)::bigint) AS started_at_unix,
-                COALESCE(EXTRACT(EPOCH FROM session.session_updated_at)::bigint,
-                         EXTRACT(EPOCH FROM batch.updated_at)::bigint) AS completed_at_unix,
+                COALESCE(EXTRACT(EPOCH FROM batch.production_started_at)::bigint, 0) AS started_at_unix,
+                EXTRACT(EPOCH FROM batch.production_completed_at)::bigint AS completed_at_unix,
                 batch.canonical_apparatus_id AS apparatus, batch.order_id, batch.action, batch.status,
                 produced_qty::float8 AS produced_qty, uom, qr_payload,
                 label_item_code, label_item_name, executor_name,
@@ -692,10 +666,6 @@ pub(super) async fn load_progress_batch_by_qr(
                 description,
                 payload_json
          FROM mini_progress_batches AS batch
-         LEFT JOIN (
-             SELECT session_id, started_at, updated_at AS session_updated_at
-             FROM mini_order_run_sessions
-         ) AS session ON session.session_id = batch.session_id
          WHERE lower(batch.qr_payload) = lower($1)",
     )
     .bind(qr_payload.trim())

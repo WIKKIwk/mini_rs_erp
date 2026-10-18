@@ -41,18 +41,21 @@ pub(in super::super) async fn put_order_progress_event(
 
 pub(in super::super) async fn put_order_progress_batch(
     store: &MemoryProductionMapStore,
-    batch: OrderProgressBatch,
+    mut batch: OrderProgressBatch,
 ) -> Result<(), ProductionMapError> {
     validate_progress_batch_apparatus(&batch)?;
     progress_batch_input_links_from_payload(&batch.payload_json)
         .map_err(|_| ProductionMapError::StoreFailed)?;
     let batch_id = batch.batch_id.trim().to_string();
     let order_id = batch.order_id.trim().to_string();
-    store
-        .order_progress_batches
-        .write()
-        .await
-        .insert(batch_id, batch);
+    {
+        let mut batches = store.order_progress_batches.write().await;
+        if let Some(original) = batches.get(&batch_id) {
+            batch.started_at_unix = original.started_at_unix;
+            batch.completed_at_unix = original.completed_at_unix;
+        }
+        batches.insert(batch_id, batch);
+    }
     if !order_id.is_empty() {
         crate::core::production_map::memory_store::queue::refresh_production_order_lifecycles(
             store,
@@ -65,7 +68,7 @@ pub(in super::super) async fn put_order_progress_batch(
 
 pub(in super::super) async fn receive_finished_goods_batch(
     store: &MemoryProductionMapStore,
-    batch: OrderProgressBatch,
+    mut batch: OrderProgressBatch,
     stock: FinishedGoodsStockEntry,
 ) -> Result<(), ProductionMapError> {
     validate_progress_batch_apparatus(&batch)?;
@@ -73,11 +76,14 @@ pub(in super::super) async fn receive_finished_goods_batch(
         .map_err(|_| ProductionMapError::StoreFailed)?;
     let batch_id = batch.batch_id.trim().to_string();
     let order_id = batch.order_id.trim().to_string();
-    store
-        .order_progress_batches
-        .write()
-        .await
-        .insert(batch_id, batch);
+    {
+        let mut batches = store.order_progress_batches.write().await;
+        if let Some(original) = batches.get(&batch_id) {
+            batch.started_at_unix = original.started_at_unix;
+            batch.completed_at_unix = original.completed_at_unix;
+        }
+        batches.insert(batch_id, batch);
+    }
     store
         .finished_goods_stock
         .write()

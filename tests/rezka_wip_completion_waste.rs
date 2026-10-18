@@ -205,6 +205,221 @@ fn output() -> QueueProgressInput {
     }
 }
 
+async fn seed_past_roll(store: &MemoryProductionMapStore, start: i64) {
+    let mut session = store
+        .active_order_run_session(CUT, ORDER)
+        .await
+        .unwrap()
+        .unwrap();
+    session.started_at_unix = 10;
+    session.payload_json["wip_started_at_unix"] = json!(start);
+    store.put_order_run_session(session).await.unwrap();
+}
+
+async fn timed_action(
+    service: &ProductionMapService,
+    action: queue_state::ApparatusQueueAction,
+    input: QueueProgressInput,
+) -> ApparatusQueueActionResult {
+    service
+        .apply_apparatus_queue_action_with_progress(
+            CUT,
+            ORDER,
+            action,
+            &[CUT.into()],
+            actor(),
+            input,
+        )
+        .await
+        .unwrap_or_else(|error| panic!("{action:?}: {error:?}"))
+}
+
+#[tokio::test]
+async fn wip_times_preserve_partial_roll_through_freeze_and_new_roll_starts_on_resume() {
+    use queue_state::ApparatusQueueAction as Action;
+    let (service, store) = fixture(false, 1, true).await;
+    start(&service, 0).await;
+    seed_past_roll(&store, 100).await;
+    timed_action(
+        &service,
+        Action::Freeze,
+        QueueProgressInput {
+            description: "Timing test freeze".into(),
+            ..Default::default()
+        },
+    )
+    .await;
+    service.unfreeze_order(ORDER, actor()).await.unwrap();
+    timed_action(&service, Action::Resume, QueueProgressInput::default()).await;
+    let first = timed_action(&service, Action::DetachRoll, output())
+        .await
+        .progress_batch
+        .unwrap();
+    assert_eq!(
+        first.started_at_unix, 100,
+        "physical partial roll start survives freeze"
+    );
+    let resumed = timed_action(&service, Action::Resume, QueueProgressInput::default())
+        .await
+        .session
+        .unwrap();
+    let second = timed_action(&service, Action::DetachRoll, output())
+        .await
+        .progress_batch
+        .unwrap();
+    assert_eq!(second.started_at_unix, resumed.updated_at_unix);
+    assert!(second.started_at_unix > first.started_at_unix);
+    let mut corrected = first.clone();
+    corrected.description = "Later measurement correction".into();
+    corrected.started_at_unix = 1;
+    corrected.completed_at_unix = second.completed_at_unix + 86_400;
+    store.put_order_progress_batch(corrected).await.unwrap();
+    let saved = store
+        .progress_batch(&first.batch_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (saved.started_at_unix, saved.completed_at_unix),
+        (first.started_at_unix, first.completed_at_unix)
+    );
+    assert_eq!(saved.description, "Later measurement correction");
+}
+
+#[tokio::test]
+async fn wip_times_advance_only_at_continuous_roll_boundary() {
+    use queue_state::ApparatusQueueAction as Action;
+    let (service, store) = fixture(false, 2, true).await;
+    start(&service, 0).await;
+    seed_past_roll(&store, 100).await;
+    // Replacing an exhausted input does not restart an unfinished output roll.
+    timed_action(
+        &service,
+        Action::Merge,
+        QueueProgressInput {
+            qr_payload: "input-qr-1".into(),
+            ..Default::default()
+        },
+    )
+    .await;
+    let first = timed_action(&service, Action::RollComplete, output())
+        .await
+        .progress_batch
+        .unwrap();
+    assert_eq!(first.started_at_unix, 100);
+    let second = timed_action(&service, Action::RollComplete, output())
+        .await
+        .progress_batch
+        .unwrap();
+    assert_eq!(second.started_at_unix, first.completed_at_unix);
+    let saved = store
+        .progress_batch_by_qr(&first.qr_payload)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (saved.started_at_unix, saved.completed_at_unix),
+        (first.started_at_unix, first.completed_at_unix)
+    );
+}
+
+#[tokio::test]
+async fn wip_times_seed_legacy_resume_clock_before_freeze_discards_checkpoint() {
+    use queue_state::ApparatusQueueAction as Action;
+    let (service, store) = fixture(false, 1, true).await;
+    start(&service, 0).await;
+    let mut session = store
+        .active_order_run_session(CUT, ORDER)
+        .await
+        .unwrap()
+        .unwrap();
+    session.started_at_unix = 10;
+    session.updated_at_unix = 100;
+    session
+        .payload_json
+        .as_object_mut()
+        .unwrap()
+        .remove("wip_started_at_unix");
+    session.payload_json["_resume_pause"] = json!({"legacy_checkpoint":true});
+    store.put_order_run_session(session).await.unwrap();
+    timed_action(
+        &service,
+        Action::Freeze,
+        QueueProgressInput {
+            description: "Freeze a pre-migration resume".into(),
+            ..Default::default()
+        },
+    )
+    .await;
+    service.unfreeze_order(ORDER, actor()).await.unwrap();
+    timed_action(&service, Action::Resume, QueueProgressInput::default()).await;
+    let output = timed_action(&service, Action::DetachRoll, output())
+        .await
+        .progress_batch
+        .unwrap();
+    assert_eq!(output.started_at_unix, 100);
+}
+
+#[tokio::test]
+async fn wip_times_freeze_at_individual_frame_recording_even_when_cycle_closes_later() {
+    use queue_state::ApparatusQueueAction as Action;
+    let (service, store) = fixture(false, 1, true).await;
+    start(&service, 0).await;
+    seed_past_roll(&store, 100).await;
+    let cycle = store
+        .active_order_run_session(CUT, ORDER)
+        .await
+        .unwrap()
+        .unwrap()
+        .session_id;
+    let frame: RezkaFrameProgressInput = serde_json::from_value(json!({
+        "produced_qty":100.0,"gross_qty":10.0,"diameter":45.0,"bobina_kg":1.0
+    }))
+    .unwrap();
+    let record = QueueProgressInput {
+        rezka_record_frame_index: Some(1),
+        rezka_output_cycle: cycle.clone(),
+        rezka_frames: vec![frame.clone()],
+        ..Default::default()
+    };
+    let printed = timed_action(&service, Action::RollComplete, record.clone())
+        .await
+        .progress_batch
+        .unwrap();
+    assert_eq!(printed.started_at_unix, 100);
+    timed_action(&service, Action::RollComplete, record).await;
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    let closed = timed_action(
+        &service,
+        Action::RollComplete,
+        QueueProgressInput {
+            rezka_output_cycle: cycle,
+            rezka_frames: vec![frame],
+            total_waste: Some(2.5),
+            ..Default::default()
+        },
+    )
+    .await
+    .session
+    .unwrap();
+    assert!(closed.updated_at_unix > printed.completed_at_unix);
+    let saved = store
+        .progress_batch(&printed.batch_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (saved.started_at_unix, saved.completed_at_unix),
+        (printed.started_at_unix, printed.completed_at_unix)
+    );
+    assert_eq!(saved.total_waste, Some(2.5));
+    let next = timed_action(&service, Action::RollComplete, output())
+        .await
+        .progress_batch
+        .unwrap();
+    assert_eq!(next.started_at_unix, closed.updated_at_unix);
+}
+
 async fn check_completion_cycle(intermediate: bool) {
     let (service, store) = fixture(intermediate, 2, true).await;
     start(&service, 0).await;

@@ -349,7 +349,8 @@ pub(super) async fn put_order_progress_batch_tx(
             lamination_film_leftover_rolls, rezka_bosma_waste,
             rezka_lamination_waste, rezka_edge_waste, total_waste,
             finished_goods_kg, bobina_kg, finished_goods_meter, diameter, description,
-            payload_json, revision, created_at, updated_at
+            payload_json, revision, production_started_at, production_completed_at,
+            created_at, updated_at
          )
          VALUES ($1, $2,
                  COALESCE((SELECT name FROM mini_apparatus WHERE id = $3), $3), $3,
@@ -372,7 +373,9 @@ pub(super) async fn put_order_progress_batch_tx(
                  ($33::double precision)::numeric(18,6),
                  ($34::double precision)::numeric(18,6),
                  ($35::double precision)::numeric(18,6),
-                 $36, $37, $38, now(), now())
+                 $36, $37, $38,
+                 to_timestamp(NULLIF($39::double precision, 0)),
+                 to_timestamp($40::double precision), now(), now())
          ON CONFLICT (batch_id) DO UPDATE SET
             session_id = excluded.session_id,
             apparatus = excluded.apparatus,
@@ -454,6 +457,10 @@ pub(super) async fn put_order_progress_batch_tx(
     .bind(batch.description.trim())
     .bind(&batch.payload_json)
     .bind(i64::try_from(batch.revision).map_err(|_| ProductionMapError::StoreFailed)?)
+    // Deliberately absent from ON CONFLICT: corrections, intake and subsequent
+    // work must never change the production interval of an existing QR.
+    .bind(batch.started_at_unix as f64)
+    .bind(batch.completed_at_unix as f64)
     .execute(&mut **tx)
     .await
     .map_err(|error| {

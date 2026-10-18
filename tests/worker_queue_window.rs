@@ -24,6 +24,8 @@ use tower::ServiceExt;
 const CUT: &str = "apparatus:default:asset-010";
 const OTHER: &str = "apparatus:default:asset-007";
 const QUEUE: &str = "/v1/mobile/admin/production-maps/sequence";
+// Verification AppState shares the process-wide RPS store.
+static FIXTURE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 struct Fixture {
     _dir: tempfile::TempDir,
@@ -101,13 +103,17 @@ impl Fixture {
     }
 
     async fn get(&self, query: &str) -> (StatusCode, Value) {
+        self.get_as(&self.token, query).await
+    }
+
+    async fn get_as(&self, token: &str, query: &str) -> (StatusCode, Value) {
         let response = self
             .router
             .clone()
             .oneshot(
                 Request::builder()
                     .uri(format!("{QUEUE}?{query}"))
-                    .header(header::AUTHORIZATION, format!("Bearer {}", self.token))
+                    .header(header::AUTHORIZATION, format!("Bearer {token}"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -125,6 +131,39 @@ impl Fixture {
                 serde_json::from_slice(&bytes).unwrap()
             },
         )
+    }
+
+    async fn free_pick(&self) {
+        use mini_rs_erp::core::apparatus_standard::{
+            ApparatusId, ApparatusOperationalPolicies, CanonicalApparatusPatch,
+            CanonicalCommandMetadata, QueueDiscipline,
+        };
+        let id = ApparatusId::new(CUT).unwrap();
+        let config = self
+            .state
+            .apparatus
+            .current_configuration(&id)
+            .await
+            .unwrap()
+            .unwrap();
+        self.state
+            .apparatus
+            .patch(
+                id,
+                config.runtime.source_revision,
+                CanonicalApparatusPatch {
+                    policies: Some(ApparatusOperationalPolicies {
+                        queue: QueueDiscipline::FreePick,
+                        material: config.material.policy.clone(),
+                        tooling: config.material.tooling.clone(),
+                    }),
+                    ..Default::default()
+                },
+                CanonicalCommandMetadata::new("test", "shared-display-free-pick"),
+            )
+            .await
+            .unwrap();
+        self.state.production_maps.notify_live();
     }
 }
 
@@ -161,6 +200,7 @@ async fn ws_json(stream: &mut tokio::net::TcpStream) -> Value {
 
 #[tokio::test]
 async fn window_is_bounded_revision_scoped_searchable_and_refills_over_websocket() {
+    let _guard = FIXTURE_LOCK.lock().await;
     let f = Fixture::new().await;
     let (status, five) = f.get("worker_scope=true&queue_limit=5").await;
     assert_eq!(status, StatusCode::OK, "{five}");
@@ -283,6 +323,7 @@ async fn window_is_bounded_revision_scoped_searchable_and_refills_over_websocket
         1
     );
     server.abort();
+    let _ = server.await;
 
     // Even when the search hides a busy job, the visible job's permissions
     // still match the complete authoritative queue.
@@ -357,6 +398,252 @@ async fn window_is_bounded_revision_scoped_searchable_and_refills_over_websocket
     let (_, ranked) = f.get("worker_scope=true&queue_limit=5").await;
     assert_eq!(ranked["visible_order_ids"][CUT][0], "zakaz-059");
     assert_eq!(ranked["visible_order_ids"][CUT][1], "zakaz-058");
+}
+
+#[tokio::test]
+async fn free_queue_order_is_shared_by_admin_workers_and_live_updates() {
+    let _guard = FIXTURE_LOCK.lock().await;
+    let f = Fixture::new().await;
+    f.free_pick().await;
+    for (id, status, time) in [
+        ("zakaz-059", OrderRunStatus::Active, 100),
+        ("zakaz-058", OrderRunStatus::Paused, 300),
+        ("zakaz-057", OrderRunStatus::Paused, 200),
+        ("zakaz-055", OrderRunStatus::RollDetached, 1000),
+    ] {
+        f.store
+            .put_order_run_session(OrderRunSession {
+                session_id: id.into(),
+                apparatus: CUT.into(),
+                order_id: id.into(),
+                stage_node_id: "work".into(),
+                status,
+                worker_role: "aparatchi".into(),
+                worker_ref: "window-worker".into(),
+                worker_display_name: "First shift".into(),
+                started_at_unix: time,
+                updated_at_unix: time,
+                payload_json: json!({}),
+            })
+            .await
+            .unwrap();
+    }
+    let mut states = BTreeMap::from([
+        ("zakaz-059".into(), "in_progress".into()),
+        ("zakaz-058".into(), "paused".into()),
+        ("zakaz-057".into(), "paused".into()),
+        ("zakaz-056".into(), "frozen".into()),
+        ("zakaz-055".into(), "pending".into()),
+    ]);
+    f.store
+        .put_apparatus_queue_states(CUT, states.clone())
+        .await
+        .unwrap();
+    f.state.production_maps.notify_live();
+    let admin_token = f
+        .state
+        .sessions
+        .create(Principal {
+            role: PrincipalRole::Admin,
+            ref_: "admin".into(),
+            display_name: "Admin".into(),
+            legal_name: String::new(),
+            phone: String::new(),
+            avatar_url: String::new(),
+        })
+        .await
+        .unwrap();
+    let (status, admin) = f.get_as(&admin_token, "").await;
+    assert_eq!(status, StatusCode::OK);
+    let expected = json!([
+        "zakaz-059",
+        "zakaz-058",
+        "zakaz-057",
+        "zakaz-055",
+        "zakaz-000"
+    ]);
+    assert_eq!(
+        json!(&admin["visible_order_ids"][CUT].as_array().unwrap()[..5]),
+        expected
+    );
+    assert_eq!(
+        admin["visible_order_ids"][CUT]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap(),
+        "zakaz-056"
+    );
+    assert_eq!(
+        admin["sequences"][CUT][0], "zakaz-000",
+        "display order never rewrites scheduling"
+    );
+    let (_, worker) = f.get("worker_scope=true&queue_limit=5").await;
+    assert_eq!(worker["visible_order_ids"][CUT], expected);
+    for limit in [10, 20, 50] {
+        let (_, page) = f
+            .get(&format!("worker_scope=true&queue_limit={limit}"))
+            .await;
+        let expected_window = admin["visible_order_ids"][CUT]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|id| id.as_str() != Some("zakaz-056"))
+            .take(limit)
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(page["visible_order_ids"][CUT], json!(expected_window));
+        assert_eq!(
+            page["sequence_versions"][CUT],
+            admin["sequence_versions"][CUT]
+        );
+    }
+    let (_, search) = f
+        .get("worker_scope=true&queue_limit=5&queue_search=zakaz-055")
+        .await;
+    assert_eq!(search["visible_order_ids"][CUT], json!(["zakaz-055"]));
+    let (_, after_reads) = f.get_as(&admin_token, "").await;
+    for field in [
+        "rev",
+        "sequences",
+        "visible_order_ids",
+        "queue_states",
+        "sequence_versions",
+    ] {
+        assert_eq!(
+            after_reads[field], admin[field],
+            "window reads must not change {field}"
+        );
+    }
+
+    f.state
+        .admin
+        .upsert_role_assignment(RoleAssignmentUpsert {
+            principal_role: PrincipalRole::Aparatchi,
+            principal_ref: "replacement-worker".into(),
+            role_id: "aparatchi".into(),
+            assigned_apparatus: vec![CUT.into()],
+            assigned_item_groups: vec![],
+        })
+        .await
+        .unwrap();
+    let replacement_token = f
+        .state
+        .sessions
+        .create(Principal {
+            role: PrincipalRole::Aparatchi,
+            ref_: "replacement-worker".into(),
+            display_name: "Second shift".into(),
+            legal_name: String::new(),
+            phone: String::new(),
+            avatar_url: String::new(),
+        })
+        .await
+        .unwrap();
+    let (_, replacement) = f
+        .get_as(&replacement_token, "worker_scope=true&queue_limit=5")
+        .await;
+    assert_eq!(
+        replacement["visible_order_ids"],
+        worker["visible_order_ids"]
+    );
+    for id in expected.as_array().unwrap() {
+        assert_eq!(
+            replacement["queue_states"][CUT][id.as_str().unwrap()],
+            worker["queue_states"][CUT][id.as_str().unwrap()]
+        );
+    }
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let router = f.router.clone();
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let mut sockets = Vec::new();
+    for (token, snapshot, scope, protocol) in [
+        (&admin_token, &admin, String::new(), "delta"),
+        (&admin_token, &admin, String::new(), "state_delta_v1"),
+        (
+            &f.token,
+            &worker,
+            format!(
+                "&worker_scope=true&queue_limit=5&scope={}",
+                worker["scope"].as_str().unwrap()
+            ),
+            "state_delta_v1",
+        ),
+    ] {
+        let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
+        let uri = format!(
+            "/v1/mobile/admin/production-maps/live?token={token}&protocol={protocol}&epoch={}&rev={}{}",
+            snapshot["epoch"].as_str().unwrap(),
+            snapshot["rev"],
+            scope
+        );
+        socket.write_all(format!("GET {uri} HTTP/1.1\r\nHost: {address}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n").as_bytes()).await.unwrap();
+        let mut response = Vec::new();
+        while !response.ends_with(b"\r\n\r\n") {
+            response.push(socket.read_u8().await.unwrap());
+        }
+        assert!(
+            String::from_utf8(response)
+                .unwrap()
+                .starts_with("HTTP/1.1 101")
+        );
+        let ready = ws_json(&mut socket).await;
+        if protocol == "delta" {
+            assert_eq!(ready["type"], "snapshot");
+            assert_eq!(
+                ready["visible_order_ids"][CUT],
+                admin["visible_order_ids"][CUT]
+            );
+        } else {
+            assert_eq!(ready["type"], "state_ready");
+        }
+        sockets.push((socket, protocol));
+    }
+    states.insert("zakaz-059".into(), "paused".into());
+    states.insert("zakaz-058".into(), "in_progress".into());
+    for (id, status) in [
+        ("zakaz-059", OrderRunStatus::Paused),
+        ("zakaz-058", OrderRunStatus::Active),
+    ] {
+        let mut session = f
+            .store
+            .active_order_run_session(CUT, id)
+            .await
+            .unwrap()
+            .unwrap();
+        session.status = status;
+        f.store.put_order_run_session(session).await.unwrap();
+    }
+    f.store
+        .put_apparatus_queue_states(CUT, states)
+        .await
+        .unwrap();
+    f.state.production_maps.notify_live();
+    for (mut socket, protocol) in sockets {
+        let update = ws_json(&mut socket).await;
+        let visible = if protocol == "delta" {
+            assert_eq!(update["type"], "snapshot", "{update}");
+            &update["visible_order_ids"][CUT]
+        } else {
+            assert_eq!(update["type"], "state_delta", "{update}");
+            &update["patch"]["visible_order_ids"]["upsert"][CUT]
+        }
+        .as_array()
+        .unwrap();
+        assert_eq!(
+            &visible[..4],
+            &[
+                json!("zakaz-058"),
+                json!("zakaz-057"),
+                json!("zakaz-059"),
+                json!("zakaz-055")
+            ]
+        );
+    }
+    server.abort();
+    let _ = server.await;
 }
 
 fn config(path: &Path) -> AppConfig {

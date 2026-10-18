@@ -49,6 +49,8 @@ pub(super) fn start_session_payload(
         "input_progress_qr_payload": input_progress.qr_payload,
         "input_progress_apparatus": input_progress.apparatus,
         "input_wip_source_kind": input_progress.source_kind,
+        "wip_started_at_unix": now,
+        "wip_waiting_for_resume": false,
     });
     if let Some(contained_kadr_count) = input_progress.contained_kadr_count {
         payload["contained_kadr_count"] = serde_json::json!(contained_kadr_count);
@@ -528,7 +530,7 @@ pub(super) fn progress_batch_record(
         batch_id: input.output_identity.batch_id.clone(),
         revision: 1,
         session_id: context.session.session_id.clone(),
-        started_at_unix: context.session.started_at_unix,
+        started_at_unix: progress_batch_started_at(context.session)?,
         completed_at_unix: context.session.updated_at_unix,
         apparatus: context.apparatus.to_string(),
         order_id: context.order_id.to_string(),
@@ -769,12 +771,58 @@ pub(super) fn preserve_qolip_lineage(
         "rezka_output_cycle",
         "rezka_output_revision",
         "rezka_recorded_kadr_counts",
+        "wip_started_at_unix",
+        "wip_waiting_for_resume",
     ] {
         if let Some(value) = current.payload_json.get(field) {
             replacement[field] = value.clone();
         }
     }
     replacement
+}
+
+// Production time belongs to a physical output cycle, not to the lifetime of
+// its reusable work session. Freeze, handoff and input merge keep this clock.
+pub(super) fn ensure_wip_started_at(session: &mut OrderRunSession) {
+    if session.payload_json.get("wip_started_at_unix").is_none() {
+        // Pre-cutover reversible resumes are left untouched by the migration
+        // so their signed checkpoint remains valid until the next work action.
+        let started = if session.payload_json.get("_resume_pause").is_some() {
+            session.updated_at_unix
+        } else {
+            session.started_at_unix
+        };
+        session.payload_json["wip_started_at_unix"] = serde_json::json!(started);
+    }
+}
+
+pub(super) fn resume_wip_clock(session: &mut OrderRunSession, now: i64) {
+    if session
+        .payload_json
+        .get("wip_waiting_for_resume")
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
+    {
+        session.payload_json["wip_started_at_unix"] = serde_json::json!(now);
+        session.payload_json["wip_waiting_for_resume"] = serde_json::json!(false);
+    }
+}
+
+pub(super) fn progress_batch_started_at(
+    session: &OrderRunSession,
+) -> Result<i64, ProductionMapError> {
+    // Frames in one generation start together; recording one frame freezes its
+    // completion without restarting the still-mounted frames. Legacy partial
+    // roll metadata was sometimes initialized at Merge and is not a start event.
+    let started = session
+        .payload_json
+        .get("wip_started_at_unix")
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or(session.started_at_unix);
+    if started < 0 || started > session.updated_at_unix {
+        return Err(ProductionMapError::ProgressInputInvalid);
+    }
+    Ok(started)
 }
 
 pub(super) fn initialize_rezka_active_partial_rolls(
@@ -872,6 +920,15 @@ pub(super) fn apply_output_boundary_to_session_payload(
     current_input_batch_id: &str,
     now: i64,
 ) -> Result<(), ProductionMapError> {
+    if matches!(
+        action,
+        queue_state::ApparatusQueueAction::Pause | queue_state::ApparatusQueueAction::DetachRoll
+    ) {
+        payload["wip_waiting_for_resume"] = serde_json::json!(true);
+    } else if action == queue_state::ApparatusQueueAction::RollComplete {
+        payload["wip_started_at_unix"] = serde_json::json!(now);
+        payload["wip_waiting_for_resume"] = serde_json::json!(false);
+    }
     if action == queue_state::ApparatusQueueAction::Complete {
         let mut links = order_run_input_links_from_payload(payload)
             .map_err(|_| ProductionMapError::ProgressInputInvalid)?;

@@ -1,5 +1,6 @@
 use super::*;
 use crate::core::production_map::{ApparatusQueuePolicy, ProductionMapLiveSnapshot};
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// A read-only window over authoritative queues. Never use this projection to
@@ -56,45 +57,43 @@ impl WorkerQueueWindow {
             .collect::<BTreeMap<_, _>>();
         let mut selected = history.iter().cloned().collect::<BTreeSet<_>>();
         let mut windows = BTreeMap::new();
-        for (apparatus, visible) in &snapshot.visible_order_ids {
+        for (apparatus, visible_order_ids) in &snapshot.visible_order_ids {
             if !apparatus_scope.contains(apparatus) {
                 continue;
             }
-            let visible = visible.iter().map(String::as_str).collect::<BTreeSet<_>>();
-            let mut sequence = snapshot
-                .sequences
-                .get(apparatus)
-                .cloned()
-                .unwrap_or_default();
-            let mut seen = sequence.iter().cloned().collect::<BTreeSet<_>>();
-            sequence.extend(
-                snapshot.visible_order_ids[apparatus]
-                    .iter()
-                    .filter(|id| seen.insert((*id).clone()))
-                    .cloned(),
-            );
+            let free_pick = snapshot.queue_policies.iter().any(|policy| {
+                policy.apparatus_id.as_str() == apparatus
+                    && policy.policy == ApparatusQueuePolicy::FreePick
+            });
+            let sequence: Cow<'_, [String]> = if free_pick {
+                // Read the shared display order directly, without rebuilding
+                // the manual sequence or copying its order IDs.
+                Cow::Borrowed(visible_order_ids.as_slice())
+            } else {
+                let mut sequence = snapshot
+                    .sequences
+                    .get(apparatus)
+                    .cloned()
+                    .unwrap_or_default();
+                let mut seen = sequence.iter().cloned().collect::<BTreeSet<_>>();
+                sequence.extend(
+                    visible_order_ids
+                        .iter()
+                        .filter(|id| seen.insert((*id).clone()))
+                        .cloned(),
+                );
+                Cow::Owned(sequence)
+            };
+            let visible = visible_order_ids
+                .iter()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>();
             let mut ids = sequence
                 .iter()
                 .filter(|id| visible.contains(id.as_str()))
                 .filter(|id| {
                     maps.get(id.as_str()).is_some_and(|saved| {
-                        let frozen =
-                            snapshot
-                                .order_controls
-                                .get(id.as_str())
-                                .is_some_and(|control| {
-                                    control.state
-                                        == crate::core::production_map::OrderControlState::Frozen
-                                })
-                                || snapshot.queue_states.values().any(|states| {
-                                    states.get(id.as_str()).is_some_and(|s| s == "frozen")
-                                });
-                        if frozen
-                            || snapshot
-                                .order_statuses
-                                .get(id.as_str())
-                                .is_some_and(|status| status.order_status == "frozen")
-                        {
+                        if snapshot.worker_queue_order_hidden(id, free_pick) {
                             return false;
                         }
                         if self.search.is_empty() {
@@ -120,35 +119,6 @@ impl WorkerQueueWindow {
                 })
                 .cloned()
                 .collect::<Vec<_>>();
-            if snapshot.queue_policies.iter().any(|policy| {
-                policy.apparatus_id.as_str() == apparatus
-                    && policy.policy == ApparatusQueuePolicy::FreePick
-            }) {
-                let controls = snapshot.queue_action_controls.get(apparatus);
-                // Stable sort preserves the administrator's order for ties.
-                ids.sort_by_key(|id| {
-                    let control = controls.and_then(|controls| controls.get(id));
-                    let state = control
-                        .map(|c| c.state.as_str())
-                        .or_else(|| {
-                            snapshot
-                                .queue_states
-                                .get(apparatus)
-                                .and_then(|s| s.get(id))
-                                .map(String::as_str)
-                        })
-                        .unwrap_or("pending");
-                    let worked = control.map(|c| c.last_worked_at_unix).unwrap_or(0);
-                    let priority = if matches!(state, "in_progress" | "print_preflight") {
-                        0
-                    } else if state == "paused" || worked > 0 {
-                        1
-                    } else {
-                        2
-                    };
-                    (priority, std::cmp::Reverse(worked))
-                });
-            }
             // A strict queue keeps its stored order, but an already running
             // job must remain reachable even if its position is outside N.
             let active = |id: &String| {

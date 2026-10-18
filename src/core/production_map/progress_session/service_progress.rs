@@ -624,7 +624,11 @@ impl ProductionMapService {
                 unreachable!("freeze is handled before progress action dispatch")
             }
             queue_state::ApparatusQueueAction::Resume => {
-                self.build_resumed_progress(context, progress).await
+                let mut records = self.build_resumed_progress(context, progress).await?;
+                if let Some(session) = &mut records.session {
+                    resume_wip_clock(session, now);
+                }
+                Ok(records)
             }
             queue_state::ApparatusQueueAction::Merge => {
                 self.build_merged_progress(context, progress).await
@@ -807,7 +811,7 @@ impl ProductionMapService {
             return Err(ProductionMapError::ProgressInputInvalid);
         }
         let description = progress.description.trim().to_string();
-        let session = if let Some(read_snapshot) = read_snapshot {
+        let mut session = if let Some(read_snapshot) = read_snapshot {
             read_snapshot.active_session.clone()
         } else {
             self.store
@@ -815,6 +819,7 @@ impl ProductionMapService {
                 .await?
         }
         .ok_or(ProductionMapError::QueueActionNotAllowed)?;
+        ensure_wip_started_at(&mut session);
         let session_input_progress = session_progress_links(&session);
         let stage = chain::work_stage_for_station(
             order_map,
@@ -1916,6 +1921,9 @@ impl ProductionMapService {
             return Err(ProductionMapError::ProgressBatchNotResumable);
         }
         session.payload_json = resumed_handoff_session_payload(&session, &links);
+        // Ordinary resume begins a new output cycle, including legacy sessions
+        // and a completed operation reopened for further production.
+        session.payload_json["wip_waiting_for_resume"] = serde_json::json!(true);
         session.payload_json["resumed_without_progress_qr"] = serde_json::json!(true);
         if let Some(payload) = session.payload_json.as_object_mut() {
             payload.remove("lamination_astatka_shift_closed");
@@ -1951,11 +1959,12 @@ impl ProductionMapService {
         now: i64,
     ) -> Result<QueueProgressRecords, ProductionMapError> {
         let description = progress.description.trim().to_string();
-        let session = self
+        let mut session = self
             .store
             .active_order_run_session(apparatus, order_id)
             .await?
             .ok_or(ProductionMapError::QueueActionNotAllowed)?;
+        ensure_wip_started_at(&mut session);
         let input_progress = session_progress_links(&session);
         let metrics = ProgressMetrics::default();
         let mut session_payload = preserve_qolip_lineage(
@@ -2035,11 +2044,12 @@ impl ProductionMapService {
             return Err(ProductionMapError::ProgressInputInvalid);
         }
         let remove_roll = progress.remove_roll_from_apparatus;
-        let session = self
+        let mut session = self
             .store
             .active_order_run_session(apparatus, order_id)
             .await?
             .ok_or(ProductionMapError::ProgressBatchNotAccepted)?;
+        ensure_wip_started_at(&mut session);
         if (!remove_roll && session.status != OrderRunStatus::Active)
             || (remove_roll && session.status != OrderRunStatus::Paused)
         {
@@ -2507,12 +2517,13 @@ impl ProductionMapService {
         {
             return Err(ProductionMapError::ProgressInputInvalid);
         }
-        let current_session = self
+        let mut current_session = self
             .store
             .active_order_run_session(apparatus, order_id)
             .await?
             .filter(|session| session.status == OrderRunStatus::Active)
             .ok_or(ProductionMapError::QueueActionNotAllowed)?;
+        ensure_wip_started_at(&mut current_session);
         let current_links = session_progress_links(&current_session);
         if current_links.batch_id.trim().is_empty() {
             return Err(ProductionMapError::MergeInputNotAccepted);
@@ -2597,7 +2608,11 @@ impl ProductionMapService {
                     &current_links.stage_node_id,
                     current_links.contained_kadr_count,
                 )?;
-                initialize_rezka_active_partial_rolls(&mut payload, &output_kadr_counts, now)?;
+                initialize_rezka_active_partial_rolls(
+                    &mut payload,
+                    &output_kadr_counts,
+                    progress_batch_started_at(&current_session)?,
+                )?;
                 active_rolls = rezka_active_partial_rolls_from_payload(&payload)
                     .map_err(|_| ProductionMapError::MergeInputNotAccepted)?;
             }

@@ -1,5 +1,7 @@
 #[path = "service_projection.rs"]
 mod projection;
+#[path = "service_display_order.rs"]
+mod display_order;
 
 use super::*;
 
@@ -738,6 +740,7 @@ impl ProductionMapService {
                 snapshot.frozen_orders_by_apparatus.retain(|id, _| own(id));
             }
         }
+        snapshot.sort_free_pick_visible_orders();
         Ok(snapshot)
     }
 

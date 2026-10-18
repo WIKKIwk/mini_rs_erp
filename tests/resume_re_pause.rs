@@ -179,8 +179,7 @@ impl Fixture {
             .unwrap()
     }
     async fn batch_rows(&self) -> Value {
-        // Reader timestamps include the mutable parent session timestamp;
-        // compare durable roll rows to prove no output was changed.
+        // Compare every durable field, including the immutable production times.
         sqlx::query_scalar("SELECT COALESCE(jsonb_agg(to_jsonb(b) ORDER BY batch_id),'[]') FROM mini_progress_batches b WHERE order_id=$1")
             .bind(&self.order).fetch_one(&self.pool).await.unwrap()
     }
@@ -196,6 +195,122 @@ impl Fixture {
             .await
             .unwrap();
     }
+}
+
+#[tokio::test]
+#[ignore = "requires RE_PAUSE_TEST_DATABASE_URL pointing at a disposable PostgreSQL database"]
+async fn wip_production_times_survive_session_updates_and_all_history_reads() {
+    let f = Fixture::new().await;
+    let first = f.batches().await.remove(0);
+    assert_eq!(first.started_at_unix, 1);
+    let checkpoint = f
+        .control()
+        .await
+        .expect("timing fields preserve the reversible resume");
+    f.cancel(&checkpoint.resume_id).await.unwrap();
+    let resumed = f.run(Action::Resume).await.unwrap().session.unwrap();
+    let second = f
+        .run(Action::DetachRoll)
+        .await
+        .unwrap()
+        .progress_batch
+        .unwrap();
+    assert_eq!(second.started_at_unix, resumed.updated_at_unix);
+    assert!(second.started_at_unix > first.started_at_unix);
+    let closed = f
+        .service
+        .apply_apparatus_queue_action_with_progress(
+            MACHINE,
+            &f.order,
+            Action::Complete,
+            &[MACHINE.into()],
+            actor(),
+            QueueProgressInput {
+                complete_without_output: true,
+                total_waste: Some(0.0),
+                progress_batch_id: second.batch_id.clone(),
+                return_ink_kg: Some(0.0),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(closed.progress_batch.is_none());
+    let mut later = closed.session.unwrap();
+    later.updated_at_unix += 86_400;
+    f.store.put_order_run_session(later).await.unwrap();
+
+    let mut correction = first.clone();
+    correction.started_at_unix = 2;
+    correction.completed_at_unix += 172_800;
+    correction.description = "Later correction".into();
+    f.store.put_order_progress_batch(correction).await.unwrap();
+    let all = f
+        .store
+        .progress_batches_for_orders(&[f.order.clone()])
+        .await
+        .unwrap();
+    let reads = vec![
+        vec![
+            f.store
+                .progress_batch(&first.batch_id)
+                .await
+                .unwrap()
+                .unwrap(),
+        ],
+        vec![
+            f.store
+                .progress_batch_by_qr(&first.qr_payload)
+                .await
+                .unwrap()
+                .unwrap(),
+        ],
+        f.batches().await,
+        all[&f.order].clone(),
+        f.store
+            .progress_batches_for_worker(&[actor().ref_], "", 100)
+            .await
+            .unwrap(),
+        f.store.progress_batches_for_audit().await.unwrap(),
+        f.store
+            .wip_progress_batches(WipProgressBatchQuery::new(
+                "", "", "", None, true, &f.order, 100,
+            ))
+            .await
+            .unwrap(),
+    ];
+    for batches in reads {
+        let saved = batches
+            .iter()
+            .find(|batch| batch.batch_id == first.batch_id)
+            .unwrap();
+        assert_eq!(
+            (saved.started_at_unix, saved.completed_at_unix),
+            (first.started_at_unix, first.completed_at_unix)
+        );
+        assert_eq!(saved.description, "Later correction");
+    }
+    let stored_second = f
+        .store
+        .progress_batch(&second.batch_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (
+            stored_second.started_at_unix,
+            stored_second.completed_at_unix
+        ),
+        (second.started_at_unix, second.completed_at_unix),
+        "first-print and reprint values agree"
+    );
+    let rejected = sqlx::query("UPDATE mini_progress_batches SET production_completed_at=production_completed_at+interval '1 day' WHERE batch_id=$1")
+        .bind(&first.batch_id).execute(&f.pool).await.unwrap_err();
+    assert_eq!(
+        rejected.as_database_error().unwrap().code().as_deref(),
+        Some("23514")
+    );
+    f.release().await;
 }
 
 #[tokio::test]

@@ -81,10 +81,8 @@ async fn load_wip_progress_batches_inner(
     };
     let sql = format!(
         "SELECT batch.batch_id, batch.revision, batch.session_id,
-                COALESCE(EXTRACT(EPOCH FROM session.started_at)::bigint,
-                         EXTRACT(EPOCH FROM batch.created_at)::bigint) AS started_at_unix,
-                COALESCE(EXTRACT(EPOCH FROM session.session_updated_at)::bigint,
-                         EXTRACT(EPOCH FROM batch.updated_at)::bigint) AS completed_at_unix,
+                COALESCE(EXTRACT(EPOCH FROM batch.production_started_at)::bigint, 0) AS started_at_unix,
+                EXTRACT(EPOCH FROM batch.production_completed_at)::bigint AS completed_at_unix,
                 batch.canonical_apparatus_id AS apparatus, batch.order_id, batch.action, batch.status,
                 produced_qty::float8 AS produced_qty, uom, qr_payload,
                 label_item_code, label_item_name, executor_name,
@@ -110,10 +108,6 @@ async fn load_wip_progress_batches_inner(
                 description,
                 payload_json
          FROM mini_progress_batches AS batch
-         LEFT JOIN (
-             SELECT session_id, started_at, updated_at AS session_updated_at
-             FROM mini_order_run_sessions
-         ) AS session ON session.session_id = batch.session_id
          WHERE ($1 = '' OR COALESCE(batch.canonical_current_apparatus_id, '') = $1)
            AND ($2 = '' OR order_id = $2)
            AND ($7 OR (($3 = '' AND wip_status <> 'processed') OR ($3 <> '' AND wip_status = $3)))

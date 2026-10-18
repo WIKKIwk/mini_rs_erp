@@ -10,10 +10,8 @@ pub(super) async fn load_batches<'e, E: Executor<'e, Database = Postgres>>(
 ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
     let rows = sqlx::query_as::<_, ProgressBatchRow>(
         "SELECT batch.batch_id, batch.revision, batch.session_id,
-                COALESCE(EXTRACT(EPOCH FROM session.started_at)::bigint,
-                         EXTRACT(EPOCH FROM batch.created_at)::bigint) AS started_at_unix,
-                COALESCE(EXTRACT(EPOCH FROM session.session_updated_at)::bigint,
-                         EXTRACT(EPOCH FROM batch.updated_at)::bigint) AS completed_at_unix,
+                COALESCE(EXTRACT(EPOCH FROM batch.production_started_at)::bigint, 0) AS started_at_unix,
+                EXTRACT(EPOCH FROM batch.production_completed_at)::bigint AS completed_at_unix,
                 batch.canonical_apparatus_id AS apparatus, batch.order_id, batch.action, batch.status,
                 produced_qty::float8 AS produced_qty, uom, qr_payload,
                 label_item_code, label_item_name, executor_name,
@@ -39,10 +37,6 @@ pub(super) async fn load_batches<'e, E: Executor<'e, Database = Postgres>>(
                 description,
                 payload_json
          FROM mini_progress_batches AS batch
-         LEFT JOIN (
-             SELECT session_id, started_at, updated_at AS session_updated_at
-             FROM mini_order_run_sessions
-         ) AS session ON session.session_id = batch.session_id
          WHERE batch.batch_id = ANY($1)"
     ).bind(ids).fetch_all(db).await.map_err(|_| ProductionMapError::StoreFailed)?;
     rows.into_iter().map(progress_batch_from_row).collect()
