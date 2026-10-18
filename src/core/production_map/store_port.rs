@@ -466,6 +466,9 @@ pub trait ProductionMapStorePort: Send + Sync {
     ) -> StoreResult<()> {
         Err(ProductionMapError::QueueActionNotAllowed)
     }
+    async fn reclose_reactivated_work(&self, _target: &super::ReactivationRecloseTarget, _actor: &QueueActionActor, _assigned: &[String]) -> StoreResult<()> {
+        Err(ProductionMapError::QueueActionNotAllowed)
+    }
     async fn reactivation_was_applied(&self, _target: &super::ReactivationTarget, _actor: &QueueActionActor) -> StoreResult<bool> {
         Ok(false)
     }

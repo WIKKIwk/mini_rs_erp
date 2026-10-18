@@ -609,6 +609,14 @@ impl ProductionMapService {
                 .map(|hold| hold.hold_id.trim().to_string()),
         };
         if resume_pause_allowed && let Some(previous) = active_session.as_ref() {
+            // Mark the continuation as started before re-pause fingerprints it.
+            // The persistence layer also enforces this latch for other writers.
+            if let Some(session) = &mut prepared.session {
+                if session.status == OrderRunStatus::Active && session.payload_json.get("_reactivation_reclose").is_some() {
+                    session.payload_json["_reactivation_started"] = serde_json::json!(true);
+                    session.payload_json.as_object_mut().map(|p| p.remove("_reactivation_reclose"));
+                }
+            }
             super::super::re_pause::attach_checkpoint(previous, &mut prepared);
         }
         Ok(prepared)

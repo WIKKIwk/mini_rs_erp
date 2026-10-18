@@ -183,6 +183,20 @@ async fn commit_report_tx(
                 .execute(&mut **tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
         }
     }
+    // Legacy report clients may still submit output metrics in an astatka.
+    // Report-only waste/paint is allowed during a reopened pause; actual output
+    // irrevocably removes the no-work reclose permission.
+    let reports_output = match report {
+        StageAstatkaReport::Bosma(r) => r.finished_goods_meter.is_some() || r.finished_goods_kg.is_some() || r.bobina_kg.is_some(),
+        StageAstatkaReport::Laminate(r) => r.finished_goods_meter.is_some() || r.finished_goods_kg.is_some() || r.bobina_kg.is_some(),
+        StageAstatkaReport::Cut(r) => r.finished_goods_meter.is_some() || r.finished_goods_kg.is_some() || r.bobina_kg.is_some(),
+    };
+    if reports_output && let Some(mut session) = expected.clone().filter(|s|
+        crate::core::production_map::reactivation::reclose_control(s).is_some()) {
+        session.payload_json["_reactivation_started"] = serde_json::json!(true);
+        session.payload_json.as_object_mut().map(|p| p.remove("_reactivation_reclose"));
+        super::progress_helpers::put_order_run_session_tx(tx, &session).await?;
+    }
     if let Some(mut session) = expected.filter(|s| s.status == OrderRunStatus::Completed) {
         stamp_report_tx(tx, &mut session, report_id, actor).await?;
         super::progress_helpers::put_order_run_session_tx(tx, &session).await?;

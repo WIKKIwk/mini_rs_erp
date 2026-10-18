@@ -11,6 +11,66 @@ use super::ports::QolipStorePort;
 use super::service::QolipService;
 
 #[tokio::test]
+async fn exact_product_lookup_is_independent_of_catalog_pages() {
+    let store = std::sync::Arc::new(MemoryQolipStore::new());
+    let mut products = (0..115)
+        .map(|n| QolipProduct {
+            code: format!("Zizi-{n:03}"),
+            name: format!("A product {n:03}"),
+            item_group: "Tayyor mahsulot".into(),
+            ..Default::default()
+        })
+        .collect::<Vec<_>>();
+    products.push(QolipProduct {
+        code: "Zizi".into(),
+        name: "Zizi sponge".into(),
+        item_group: "Tayyor mahsulot".into(),
+        ..Default::default()
+    });
+    store.seed_products(products).await;
+    store
+        .put_product_specs(
+            (1..=150)
+                .map(|n| QolipProductSpec {
+                    item_code: "Zizi".into(),
+                    item_name: "Zizi sponge".into(),
+                    item_group: "Tayyor mahsulot".into(),
+                    warehouse: "Molds".into(),
+                    qolip_code: format!("MOLD-{n:03}"),
+                    size: 40,
+                    ..Default::default()
+                })
+                .collect(),
+        )
+        .await
+        .unwrap();
+    let page = store.products("Zizi", 100, false, None).await.unwrap();
+    assert_eq!(page.len(), 100);
+    assert!(page.iter().all(|product| product.code != "Zizi"));
+    let service = QolipService::new(store);
+    let molds = service
+        .required_qolips_for_order(" zIzI ", "")
+        .await
+        .unwrap();
+    assert_eq!(molds.len(), 150);
+    assert!(molds.iter().all(|spec| spec.item_code == "Zizi"));
+    assert_eq!(
+        service
+            .required_qolips_for_order("missing", "Zizi sponge")
+            .await,
+        Err(QolipError::ProductNotFound)
+    );
+    assert_eq!(
+        service
+            .required_qolips_for_order("", "Zizi sponge")
+            .await
+            .unwrap()
+            .len(),
+        150
+    );
+}
+
+#[tokio::test]
 async fn batch_product_spec_save_is_atomic() {
     let store = std::sync::Arc::new(MemoryQolipStore::new());
     store

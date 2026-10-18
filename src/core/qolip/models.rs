@@ -259,6 +259,8 @@ pub enum QolipError {
     MissingBlock,
     #[error("item is required")]
     MissingItem,
+    #[error("product not found")]
+    ProductNotFound,
     #[error("item group is required")]
     MissingItemGroup,
     #[error("qolip code is required")]

@@ -149,6 +149,27 @@ pub async fn production_map_reactivation(
     Ok(reactivation_ack(&state))
 }
 
+pub async fn production_map_reactivation_reclose(
+    State(state): State<AppState>, headers: HeaderMap, body: Bytes,
+) -> Result<Response, AdminError> {
+    let principal = authorize_capability(&state, &headers, Capability::ApparatusQueueManage).await?;
+    if principal.role != PrincipalRole::Aparatchi { return Err(forbidden()); }
+    let target: crate::core::production_map::ReactivationRecloseTarget = parse_json(&body)?;
+    let assigned = state.admin.principal_assigned_apparatus(&principal).await;
+    state.production_maps.reclose_reactivated_work(&target, &assigned, &queue_action_actor(&principal))
+        .await.map_err(production_map_error)?;
+    if let Ok(barcodes) = raw_material_barcodes_for_order_apparatus(&state, &target.order_id, &target.apparatus).await {
+        let mut warehouses = std::collections::BTreeSet::new();
+        for barcode in barcodes {
+            if let Ok(Some(stock)) = state.gscale.raw_material_stock_by_barcode(&barcode).await {
+                warehouses.insert(stock.warehouse);
+            }
+        }
+        for warehouse in warehouses { state.warehouse_events.notify_updated(&warehouse, "raw_material_stock"); }
+    }
+    Ok(reactivation_ack(&state))
+}
+
 fn reactivation_ack(state: &AppState) -> Response {
     json_response(serde_json::json!({"ok":true,"rev":state.production_maps.snapshot_revision(),"epoch":state.production_maps.snapshot_epoch()}))
 }

@@ -24,8 +24,8 @@ pub mod pechat;
 mod prepared_queue_action;
 pub(crate) mod re_pause;
 pub use re_pause::ResumePauseControl;
-mod reactivation;
-pub use reactivation::{ReactivationSelector, ReactivationTarget, ReactivationPreview};
+pub(crate) mod reactivation;
+pub use reactivation::{ReactivationSelector, ReactivationTarget, ReactivationPreview, ReactivationRecloseControl, ReactivationRecloseTarget};
 mod print_preflight;
 #[path = "progress_session/mod.rs"]
 mod progress;

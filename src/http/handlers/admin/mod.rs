@@ -47,7 +47,7 @@ pub use production_maps::{
     production_map_progress_batch_correct, production_map_progress_qr_history,
     production_map_progress_qr_lookup, production_map_progress_qr_report,
     production_map_progress_qr_reprint, production_map_qolip_validate, production_map_queue_action,
-    production_map_re_pause, production_map_reactivation, production_map_reactivation_preview,
+    production_map_re_pause, production_map_reactivation, production_map_reactivation_preview, production_map_reactivation_reclose,
     production_map_queue_policies, production_map_replay, production_map_rezka_astatka,
     production_map_run, production_map_save_with_order, production_map_schedule,
     production_map_schedule_cancel, production_map_sequence, production_map_wip_batches,

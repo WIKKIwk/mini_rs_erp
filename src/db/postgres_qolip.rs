@@ -12,6 +12,7 @@ mod cell_qr;
 mod checkouts;
 mod locations;
 mod order_products;
+mod product_by_code;
 mod product_transfer;
 mod shared_sets;
 mod catalog_locations;
@@ -47,6 +48,9 @@ impl PostgresQolipStore {
 
 #[async_trait]
 impl QolipStorePort for PostgresQolipStore {
+    async fn product_by_code(&self, item_code: &str) -> Result<Option<QolipProduct>, QolipError> {
+        product_by_code::load(&self.pool, item_code).await
+    }
     async fn resolve_shared_set(&self, identifier: &str) -> Result<Option<crate::core::qolip::QolipSetSnapshot>, QolipError> {
         shared_sets::resolve(&self.pool, identifier).await
     }

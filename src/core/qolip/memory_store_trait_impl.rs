@@ -1,5 +1,37 @@
 #[async_trait]
 impl QolipStorePort for MemoryQolipStore {
+    async fn product_by_code(&self, item_code: &str) -> Result<Option<QolipProduct>, QolipError> {
+        let item_code = item_code.trim();
+        if item_code.is_empty() {
+            return Ok(None);
+        }
+        if let Some(product) = self
+            .products
+            .read()
+            .await
+            .iter()
+            .find(|product| product.code.trim().eq_ignore_ascii_case(item_code))
+        {
+            return Ok(Some(QolipProduct {
+                code: product.code.clone(),
+                name: product.name.clone(),
+                item_group: product.item_group.clone(),
+                ..Default::default()
+            }));
+        }
+        // The in-memory catalog can also be populated directly through mold writes.
+        Ok(self
+            .product_specs(item_code)
+            .await?
+            .into_iter()
+            .next()
+            .map(|spec| QolipProduct {
+                code: spec.item_code,
+                name: spec.item_name,
+                item_group: spec.item_group,
+                ..Default::default()
+            }))
+    }
     async fn resolve_shared_set(&self, identifier: &str) -> Result<Option<super::QolipSetSnapshot>, QolipError> { self.memory_resolve_set(identifier).await }
     async fn linked_product_specs(&self, item_code: &str) -> Result<Vec<QolipProductSpec>, QolipError> { Ok(self.memory_linked_specs(item_code).await) }
     async fn reuse_shared_set(&self, set_id: &str, item_code: &str, fingerprint: &str, _principal: &Principal, allowed: &[String]) -> Result<super::QolipSetSnapshot, QolipError> { self.memory_reuse_set(set_id, item_code, fingerprint, allowed).await }

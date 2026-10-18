@@ -24,6 +24,10 @@ pub trait QolipStorePort: Send + Sync {
     async fn order_products(&self, _item_codes: &[String]) -> Result<Vec<QolipProduct>, QolipError> {
         Err(QolipError::StoreFailed)
     }
+    /// Resolve a catalog identity by code, independently of mold rows and search limits.
+    async fn product_by_code(&self, _item_code: &str) -> Result<Option<QolipProduct>, QolipError> {
+        Err(QolipError::StoreFailed)
+    }
     async fn assigned_warehouses(&self, principal: &Principal) -> Result<Vec<String>, QolipError>;
     async fn assigned_blocks(&self, principal: &Principal) -> Result<Vec<QolipBlock>, QolipError>;
     async fn all_blocks(&self) -> Result<Vec<QolipBlock>, QolipError>;

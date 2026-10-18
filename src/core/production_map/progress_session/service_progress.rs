@@ -1906,7 +1906,13 @@ impl ProductionMapService {
                     && batch.status.is_resumable()
                     && super::types::apparatus_ids_match(&batch.apparatus, apparatus)
             });
-        if !has_output {
+        let reopened_work = session.worker_role == actor.role
+            && session.worker_ref == actor.ref_
+            && session.payload_json.get("reactivation_token").and_then(serde_json::Value::as_str).is_some_and(|token| token.len() == 64)
+            && session.payload_json.get("_reactivation_of_session_id").and_then(serde_json::Value::as_str).is_some_and(|id| !id.is_empty())
+            && (crate::core::production_map::reactivation::reclose_control(&session).is_some()
+                || session.payload_json.get("_reactivation_started").and_then(serde_json::Value::as_bool) == Some(true));
+        if !has_output && !reopened_work {
             return Err(ProductionMapError::ProgressBatchNotResumable);
         }
         session.payload_json = resumed_handoff_session_payload(&session, &links);

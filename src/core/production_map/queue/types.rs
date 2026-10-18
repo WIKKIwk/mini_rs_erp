@@ -131,6 +131,8 @@ pub struct ApparatusQueueOrderActionControl {
     pub last_worked_at_unix: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub re_pause: Option<crate::core::production_map::ResumePauseControl>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reclose: Option<crate::core::production_map::ReactivationRecloseControl>,
     pub state: queue_state::ApparatusQueueOrderState,
     #[serde(default)]
     pub allowed_actions: Vec<queue_state::ApparatusQueueAction>,

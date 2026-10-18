@@ -243,7 +243,7 @@ impl QolipService {
         let expected_product = self
             .order_product(item_code, item_name)
             .await?
-            .ok_or(QolipError::QolipCodeMismatch)?;
+            .ok_or(QolipError::ProductNotFound)?;
         let mut specs = self.compatible_specs_for_product(&expected_product).await?;
         specs.sort_by_key(|spec| spec.qolip_code.trim().to_lowercase());
         specs.dedup_by(|left, right| {
@@ -405,21 +405,17 @@ impl QolipService {
         item_name: &str,
     ) -> Result<Option<QolipProduct>, QolipError> {
         let item_code = item_code.trim();
-        let item_name = item_name.trim();
-        let query = if item_code.is_empty() {
-            item_name
-        } else {
-            item_code
-        };
-        let products = self.store.products(query, 100, false, None).await?;
         if !item_code.is_empty() {
-            return Ok(products
-                .into_iter()
-                .find(|product| product.code.trim().eq_ignore_ascii_case(item_code)));
+            return self.store.product_by_code(item_code).await;
         }
-        Ok(products.into_iter().find(|product| {
-            !item_name.is_empty() && product.name.trim().eq_ignore_ascii_case(item_name)
-        }))
+        let item_name = item_name.trim();
+        if item_name.is_empty() {
+            return Ok(None);
+        }
+        let products = self.store.products(item_name, 100, false, None).await?;
+        Ok(products
+            .into_iter()
+            .find(|product| product.name.trim().eq_ignore_ascii_case(item_name)))
     }
 
     pub async fn locations(&self, block: &str) -> Result<Vec<QolipLocation>, QolipError> {

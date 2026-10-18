@@ -101,6 +101,7 @@ mod qolip_cell_qr;
 mod qolip_products_cache;
 mod qolip_checkout;
 mod qolip_alternative_sets;
+mod qolip_exact_product_lookup;
 mod qolip_return_move;
 mod qolipchi_workers;
 mod queue_history;

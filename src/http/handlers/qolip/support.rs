@@ -298,6 +298,10 @@ pub(super) fn qolip_error(error: QolipError) -> (StatusCode, Json<QolipErrorResp
         ),
         QolipError::MissingBlock => bad_request("block_required"),
         QolipError::MissingItem => bad_request("item_required"),
+        QolipError::ProductNotFound => (
+            StatusCode::NOT_FOUND,
+            Json(QolipErrorResponse::new("product_not_found")),
+        ),
         QolipError::MissingItemGroup => bad_request("item_group_required"),
         QolipError::MissingQolipCode => bad_request("qolip_code_required"),
         QolipError::QolipCodeNotFound => bad_request("qolip_code_not_found"),
@@ -404,10 +408,21 @@ pub(super) fn qolip_block_delete_error(
 pub struct QolipErrorResponse {
     ok: bool,
     error: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<&'static str>,
 }
 
 impl QolipErrorResponse {
     fn new(error: &'static str) -> Self {
-        Self { ok: false, error }
+        let message = match error {
+            "product_not_found" => Some("Mahsulot topilmadi. Mahsulot kodini tekshiring."),
+            "qolip_store_failed" => Some("Qoliplarni yuklashda server xatosi. Qayta urinib ko‘ring."),
+            _ => None,
+        };
+        Self {
+            ok: false,
+            error,
+            message,
+        }
     }
 }

@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sqlx::{Postgres, Transaction};
 use std::collections::BTreeSet;
+pub(super) mod reclose;
 
 struct Prepared {
     target: ReactivationTarget,
@@ -97,6 +98,7 @@ async fn prepare(
             .filter(|s| {
                 s.apparatus == selector.apparatus
                     && s.status == OrderRunStatus::Completed
+                    && s.payload_json.get("_reactivation_reclosed_without_work").and_then(Value::as_bool) != Some(true)
                     && s.worker_role == actor.role
                     && s.worker_ref == actor.ref_
             })
@@ -146,6 +148,7 @@ async fn prepare(
             .get("_reactivation_of_session_id")
             .and_then(Value::as_str)
             == Some(session.session_id.as_str())
+            && s.payload_json.get("_reactivation_reclosed_without_work").and_then(Value::as_bool) != Some(true)
     }) {
         deny!("stale_target");
     }
@@ -435,8 +438,8 @@ async fn prepare(
             deny!("resource_unavailable");
         }
         if field(stock, "status") == "consumed" {
-            let event: Option<(String,f64,bool)> = sqlx::query_as("SELECT e.event_id,e.qty_delta::float8,(e.payload_json->>'stock_id'=$4 AND extract(epoch FROM e.occurred_at)>=$5 AND extract(epoch FROM e.occurred_at)<$6) FROM mini_raw_material_events e WHERE lower(e.barcode)=lower($1) AND e.order_id=$2 AND e.canonical_apparatus_id=$3 AND e.event_type='consumption_posted' AND NOT EXISTS(SELECT 1 FROM mini_raw_material_events r WHERE r.event_type='consumption_reversed' AND r.payload_json->>'reversed_event_id'=e.event_id) ORDER BY e.id DESC LIMIT 1")
-                .bind(field(stock,"barcode")).bind(&selector.order_id).bind(&selector.apparatus).bind(field(stock,"id")).bind(session.started_at_unix as f64).bind((session.updated_at_unix+1) as f64).fetch_optional(&mut **tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
+            let event: Option<(String,f64,bool)> = sqlx::query_as("SELECT e.event_id,e.qty_delta::float8,(e.payload_json->>'stock_id'=$4 AND ((extract(epoch FROM e.occurred_at)>=$5 AND extract(epoch FROM e.occurred_at)<$6) OR e.payload_json->>'reactivation_reclose_source_session_id'=$7)) FROM mini_raw_material_events e WHERE lower(e.barcode)=lower($1) AND e.order_id=$2 AND e.canonical_apparatus_id=$3 AND e.event_type='consumption_posted' AND NOT EXISTS(SELECT 1 FROM mini_raw_material_events r WHERE r.event_type='consumption_reversed' AND r.payload_json->>'reversed_event_id'=e.event_id) ORDER BY e.id DESC LIMIT 1")
+                .bind(field(stock,"barcode")).bind(&selector.order_id).bind(&selector.apparatus).bind(field(stock,"id")).bind(session.started_at_unix as f64).bind((session.updated_at_unix+1) as f64).bind(&session.session_id).fetch_optional(&mut **tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
             if event.is_none_or(|(_, qty, eligible)| {
                 !eligible
                     || stock
@@ -491,7 +494,8 @@ async fn prepare(
     if !matches!(queue_state.as_str(), "completed" | "pending") {
         deny!("apparatus_busy");
     }
-    let token=format!("{:x}",Sha256::digest(serde_json::to_vec(&json!({"apparatus_config":apparatus_config,"map":map_json,"session":session,"outputs":outputs,"input":input,"opening_input":opening_input,"raw":raw,"actor_role":actor.role,"actor_ref":actor.ref_,"queue":queue_state})).map_err(|_| ProductionMapError::StoreFailed)?));
+    let continuations = sessions.iter().filter(|s| field(&s.payload_json, "_reactivation_of_session_id") == session.session_id).map(|s| &s.session_id).collect::<BTreeSet<_>>();
+    let token=format!("{:x}",Sha256::digest(serde_json::to_vec(&json!({"apparatus_config":apparatus_config,"map":map_json,"session":session,"outputs":outputs,"input":input,"opening_input":opening_input,"raw":raw,"actor_role":actor.role,"actor_ref":actor.ref_,"queue":queue_state,"continuations":continuations})).map_err(|_| ProductionMapError::StoreFailed)?));
     let target = ReactivationTarget {
         apparatus: selector.apparatus.clone(),
         order_id: selector.order_id.clone(),
@@ -679,7 +683,7 @@ pub(super) async fn execute(
         apparatus: source.apparatus.clone(),
         order_id: source.order_id.clone(),
         stage_node_id: source.stage_node_id.clone(),
-        status: OrderRunStatus::Active,
+        status: OrderRunStatus::Paused,
         worker_role: actor.role.clone(),
         worker_ref: actor.ref_.clone(),
         worker_display_name: actor.display_name.clone(),
@@ -722,6 +726,14 @@ pub(super) async fn execute(
         resources.qolip_codes.clear();
     }
     resources.write_to_session(&mut session);
+    let assignments: Vec<Value> = sqlx::query_scalar("SELECT to_jsonb(a)-'updated_at' FROM mini_raw_material_assignments a WHERE order_id=$1 AND canonical_apparatus_id=$2 ORDER BY barcode FOR UPDATE")
+        .bind(&target.order_id).bind(&target.apparatus).fetch_all(&mut *tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
+    let map: Value = sqlx::query_scalar("SELECT map_json FROM mini_production_maps WHERE id=$1")
+        .bind(&target.order_id).fetch_one(&mut *tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
+    session.payload_json["_reactivation_reclose"] = json!({
+        "input":prepared.input, "opening_input":prepared.opening_input, "raw":prepared.raw,
+        "assignments":assignments, "map":map, "payload":session.payload_json.clone(),
+    });
     // Tool composition and physical checkout validation are the same as Start.
     sqlx::query(
         "SELECT pg_advisory_xact_lock_shared(hashtextextended('qolip:product-composition',0))",
@@ -788,7 +800,7 @@ pub(super) async fn execute(
             &prepared.queue_state,
         )
         .ok_or(ProductionMapError::QueueActionNotAllowed)?,
-        to_state: crate::core::production_map::queue_state::ApparatusQueueOrderState::InProgress,
+        to_state: crate::core::production_map::queue_state::ApparatusQueueOrderState::Paused,
         policy: prepared.policy,
         actor: actor.clone(),
         assigned_apparatus: assigned.to_vec(),
@@ -809,10 +821,15 @@ pub(super) async fn execute(
         &mut tx,
         &target.order_id,
         &ApparatusId::new(target.apparatus.clone()).map_err(|_| ProductionMapError::StoreFailed)?,
-        crate::core::production_map::ApparatusScheduleStatus::Active,
+        crate::core::production_map::ApparatusScheduleStatus::Paused,
         actor,
     )
     .await?;
+    // Ordinary scheduling deliberately cannot reopen completed reservations.
+    // Only this validated correction may put one back into paused work.
+    sqlx::query("UPDATE mini_apparatus_schedule_reservations SET status='paused',actor_json=$3 WHERE order_id=$1 AND canonical_apparatus_id=$2 AND status='completed'")
+        .bind(&target.order_id).bind(&target.apparatus).bind(json!(actor))
+        .execute(&mut *tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
     lifecycle::refresh_production_order_lifecycle_tx(
         &mut tx,
         &target.order_id,
@@ -862,12 +879,25 @@ pub(super) async fn release_reservations_tx(
     let Some(previous) = previous else {
         return Ok(());
     };
+    // This latch survives Resume -> re-pause and stale payload rewrites. Starting
+    // work is irreversible for the no-work close, even if no quantity was saved.
+    if previous.get("_reactivation_started").and_then(Value::as_bool) == Some(true)
+        || (previous.get("_reactivation_reclose").is_some()
+            && session.status != OrderRunStatus::Paused
+            && session.payload_json.get("_reactivation_reclosed_without_work").and_then(Value::as_bool) != Some(true))
+    {
+        session.payload_json["_reactivation_started"] = json!(true);
+        session.payload_json.as_object_mut().map(|p| p.remove("_reactivation_reclose"));
+    }
     let Some(ids) = previous
         .get("_reactivation_reserved_outputs")
         .and_then(Value::as_array)
     else {
         return Ok(());
     };
+    if crate::core::production_map::reactivation::reclose_control(session).is_some() {
+        return Ok(());
+    }
     let changed_input = field(&previous, "input_progress_batch_id")
         != field(&session.payload_json, "input_progress_batch_id");
     let changed_cycle =

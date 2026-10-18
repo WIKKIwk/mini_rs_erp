@@ -10,6 +10,8 @@ use std::sync::Arc;
 const PRESS: &str = "apparatus:default:bosma_7";
 const LAM: &str = "apparatus:default:asset-007";
 const CUT: &str = "apparatus:default:asset-010";
+#[path = "work_reactivation/reclose.rs"]
+mod reclose;
 
 fn actor() -> QueueActionActor {
     QueueActionActor {
@@ -270,6 +272,22 @@ impl Fixture {
         sqlx::query("UPDATE mini_queue_states SET state='paused' WHERE order_id=$1 AND state IN ('in_progress','print_preflight')").bind(&self.order).execute(&self.pool).await.unwrap();
         sqlx::query("UPDATE mini_order_run_sessions SET status='paused' WHERE order_id=$1 AND status='active'").bind(&self.order).execute(&self.pool).await.unwrap();
     }
+    async fn resume(&self) {
+        self.service.apply_apparatus_queue_action_with_progress(self.apparatus, &self.order,
+            Action::Resume, &[self.apparatus.into()], actor(), QueueProgressInput::default()).await.unwrap();
+    }
+    async fn reclose_target(&self) -> ReactivationRecloseTarget {
+        let session = self.store.active_order_run_session(self.apparatus, &self.order).await.unwrap().unwrap();
+        ReactivationRecloseTarget { apparatus: self.apparatus.into(), order_id: self.order.clone(),
+            session_id: session.session_id, stage_node_id: session.stage_node_id,
+            token: session.payload_json["reactivation_token"].as_str().unwrap().into() }
+    }
+    async fn reclose(&self, target: &ReactivationRecloseTarget) -> Result<(), ProductionMapError> {
+        let pool = sqlx::PgPool::connect_with(self.pool.connect_options().as_ref().clone().username("mini_rs_erp")).await.unwrap();
+        let service = ProductionMapService::new(Arc::new(PostgresProductionMapStore::new(pool.clone())),
+            Arc::new(CanonicalServiceApparatusResolver::new(postgres::canonical_apparatus_service(pool))));
+        service.reclose_reactivated_work(target, &[self.apparatus.into()], &actor()).await
+    }
 }
 
 #[tokio::test]
@@ -316,6 +334,7 @@ async fn reactivation_preserves_history_reserves_wip_and_retries_once() {
             .unwrap()
             .unwrap();
         assert_ne!(active.session_id, f.source_session);
+        assert_eq!(active.status, OrderRunStatus::Paused);
         assert_eq!(active.stage_node_id, target.stage_node_id);
         assert_eq!(
             f.service
@@ -372,6 +391,7 @@ async fn reactivation_preserves_history_reserves_wip_and_retries_once() {
                 .status,
             CompletedQueueOrderStatus::InProgress
         );
+        f.resume().await;
         f.service
             .apply_apparatus_queue_action_with_progress(
                 apparatus,
@@ -500,8 +520,10 @@ async fn reactivation_compensates_material_consumption_without_duplicate_stock()
         .execute(&f.pool).await.unwrap();
     sqlx::query("INSERT INTO mini_raw_material_stock(id,warehouse,item_code,item_name,barcode,qty,uom,status,reserved_order_id,source_receipt_id,payload_json) VALUES($1,'Reactivation warehouse','FILM','Film',$2,11,'kg','consumed',$3,$1,'{}')")
         .bind(&stock_id).bind(&barcode).bind(&f.order).execute(&f.pool).await.unwrap();
-    sqlx::query("INSERT INTO mini_raw_material_assignments(barcode,order_id,apparatus,canonical_apparatus_id,item_code,item_group,payload_json) VALUES($1,$2,$3,$3,'FILM','film','{}')")
-        .bind(&barcode).bind(&f.order).bind(LAM).execute(&f.pool).await.unwrap();
+    sqlx::query("INSERT INTO mini_raw_material_assignments(barcode,order_id,apparatus,canonical_apparatus_id,item_code,item_group,payload_json) VALUES($1,$2,$3,$3,'FILM','film',$4)")
+        .bind(&barcode).bind(&f.order).bind(LAM)
+        .bind(json!({"barcode":barcode,"order_id":f.order,"apparatus_id":LAM,"apparatus":LAM,"item_code":"FILM","item_name":"Film","item_group":"film","assigned_by_role":"aparatchi","assigned_by_ref":actor().ref_,"assigned_by_display_name":"Worker","assigned_at":"2026-10-18"}))
+        .execute(&f.pool).await.unwrap();
     sqlx::query("UPDATE mini_order_run_sessions SET started_at=now()-interval '1 second',updated_at=now(),payload_json=jsonb_set(payload_json,'{start_resources}',$2) WHERE session_id=$1")
         .bind(&f.source_session).bind(json!({"session_id":f.source_session,"raw_materials":[{"barcode":barcode,"stock_id":stock_id,"source_qty":11.0,"uom":"kg","item_code":"FILM","item_name":"Film"}],"raw_materials_available":true,"qolip_codes":[],"qolip_available":false}))
         .execute(&f.pool).await.unwrap();
@@ -549,6 +571,15 @@ async fn reactivation_compensates_material_consumption_without_duplicate_stock()
     assert_eq!(state, ("in_use".into(), 11.0));
     let ledger:(i64,f64)=sqlx::query_as("SELECT count(*)::bigint,sum(qty_delta)::float8 FROM mini_raw_material_events WHERE barcode=$1 AND event_type IN ('consumption_posted','consumption_reversed')").bind(&barcode).fetch_one(&f.pool).await.unwrap();
     assert_eq!(ledger, (2, 0.0));
+    let close = f.reclose_target().await;
+    f.reclose(&close).await.unwrap();
+    f.reclose(&close).await.unwrap();
+    let ledger:(i64,f64)=sqlx::query_as("SELECT count(*)::bigint,sum(qty_delta)::float8 FROM mini_raw_material_events WHERE barcode=$1 AND event_type IN ('consumption_posted','consumption_reversed')").bind(&barcode).fetch_one(&f.pool).await.unwrap();
+    assert_eq!(ledger, (3, -11.0));
+    let next = f.preview().await;
+    assert!(next.available, "{next:?}");
+    f.execute(&next.target.unwrap()).await.unwrap();
+    f.resume().await;
     // The next ordinary settlement uses the compensation-aware stable key.
     let mut tx = f.pool.begin().await.unwrap();
     sqlx::query("UPDATE mini_raw_material_stock SET status='consumed' WHERE id=$1")
@@ -559,7 +590,7 @@ async fn reactivation_compensates_material_consumption_without_duplicate_stock()
     insert_raw_material_event_tx(&mut tx, draft).await.unwrap();
     tx.commit().await.unwrap();
     let ledger:(i64,f64)=sqlx::query_as("SELECT count(*)::bigint,sum(qty_delta)::float8 FROM mini_raw_material_events WHERE barcode=$1 AND event_type IN ('consumption_posted','consumption_reversed')").bind(&barcode).fetch_one(&f.pool).await.unwrap();
-    assert_eq!(ledger, (3, -11.0));
+    assert_eq!(ledger, (5, -11.0));
     f.release().await;
 }
 
@@ -569,6 +600,7 @@ async fn continued_completion_records_only_additional_output_and_can_reopen_agai
     let f = Fixture::new(LAM, false).await;
     let target = f.preview().await.target.unwrap();
     f.execute(&target).await.unwrap();
+    f.resume().await;
     let result = f
         .service
         .apply_apparatus_queue_action_with_progress(
@@ -716,6 +748,10 @@ async fn opening_wip_reactivation_validates_intake_status_and_exact_route() {
         .unwrap();
     assert_eq!(restored.batch.wip_status, OpeningWipBatchStatus::InUse);
     assert_ne!(restored.batch.used_by_session_id, f.source_session);
+    f.reclose(&f.reclose_target().await).await.unwrap();
+    let closed = f.service.opening_wip_batch(&batch.batch_id, "").await.unwrap();
+    assert_eq!(closed.batch.wip_status, OpeningWipBatchStatus::Processed);
+    assert_eq!(closed.batch.processed_by_session_id, f.source_session);
     f.release().await;
 }
 
@@ -724,6 +760,7 @@ async fn opening_wip_reactivation_validates_intake_status_and_exact_route() {
 async fn cutting_continuation_records_frames_and_releases_previous_output_once() {
     let f = Fixture::new(CUT, false).await;
     f.execute(&f.preview().await.target.unwrap()).await.unwrap();
+    f.resume().await;
     let session = f
         .store
         .active_order_run_session(CUT, &f.order)
@@ -839,6 +876,21 @@ async fn http_reactivation_retry_after_another_completion_acknowledges_original_
         .header("content-type", "application/json")
         .body(Body::from(serde_json::to_vec(body).unwrap())).unwrap();
     assert_eq!(router.clone().oneshot(post(&target)).await.unwrap().status(), StatusCode::OK);
+    let reclose = f.reclose_target().await;
+    let reclose_post = |payload: serde_json::Value| Request::builder().method("POST")
+        .uri("/v1/mobile/admin/production-maps/reactivation/reclose")
+        .header("authorization", format!("Bearer {token}"))
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&payload).unwrap())).unwrap();
+    let mut invalid = json!(reclose);
+    invalid["total_waste"] = json!(0);
+    assert_eq!(router.clone().oneshot(reclose_post(invalid)).await.unwrap().status(), StatusCode::BAD_REQUEST);
+    assert_eq!(router.clone().oneshot(reclose_post(json!(reclose))).await.unwrap().status(), StatusCode::OK);
+    let reopened = f.preview().await.target.unwrap();
+    assert_eq!(router.clone().oneshot(post(&reopened)).await.unwrap().status(), StatusCode::OK);
+    // An old reclose receipt cannot close this newer continuation.
+    assert_eq!(router.clone().oneshot(reclose_post(json!(reclose))).await.unwrap().status(), StatusCode::OK);
+    f.resume().await;
     f.service.apply_apparatus_queue_action_with_progress(PRESS, &f.order, Action::Complete,
         &[PRESS.into()], actor(), QueueProgressInput {
             produced_qty: Some(25.0), uom: "m".into(), finished_goods_meter: Some(25.0),

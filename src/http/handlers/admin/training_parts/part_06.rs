@@ -166,6 +166,7 @@ fn training_queue_action_controls(
                 order_id.clone(),
                 ApparatusQueueOrderActionControl {
                     re_pause: None,
+                    reclose: None,
                     stage_work: None,
                     work_activity: None,
                     last_worked_at_unix: 0,

@@ -214,6 +214,7 @@ pub(super) fn qolip_queue_error(error: crate::core::qolip::QolipError) -> AdminE
         crate::core::qolip::QolipError::MissingQolipCode => bad_request("qolip_scan_required"),
         crate::core::qolip::QolipError::QolipCodeNotFound => bad_request("qolip_code_not_found"),
         crate::core::qolip::QolipError::QolipCodeMismatch => bad_request("qolip_code_mismatch"),
+        crate::core::qolip::QolipError::ProductNotFound => bad_request("product_not_found"),
         crate::core::qolip::QolipError::CheckoutRequired => bad_request("qolip_checkout_required"),
         crate::core::qolip::QolipError::CheckoutAssignedToAnotherWorker => {
             bad_request("qolip_checkout_assigned_to_another_worker")
