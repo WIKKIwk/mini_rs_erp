@@ -131,13 +131,20 @@ impl Fixture {
         fixture
     }
     async fn run(&self, action: Action) -> Result<ApparatusQueueActionResult, ProductionMapError> {
+        self.run_as(action, actor()).await
+    }
+    async fn run_as(
+        &self,
+        action: Action,
+        worker: QueueActionActor,
+    ) -> Result<ApparatusQueueActionResult, ProductionMapError> {
         self.service
             .apply_apparatus_queue_action_with_progress(
                 MACHINE,
                 &self.order,
                 action,
                 &[MACHINE.into()],
-                actor(),
+                worker,
                 if action == Action::DetachRoll {
                     QueueProgressInput {
                         produced_qty: Some(12.0),
@@ -374,6 +381,184 @@ async fn re_pause_preserves_outputs_retries_and_repeated_resumes() {
         .await
         .unwrap();
     assert_eq!(f.batch_rows().await, before);
+    f.release().await;
+}
+
+#[tokio::test]
+#[ignore = "requires RE_PAUSE_TEST_DATABASE_URL pointing at a disposable PostgreSQL database"]
+async fn re_pause_belongs_to_the_worker_who_resumed_another_workers_session() {
+    let f = Fixture::new().await;
+    f.cancel(&f.control().await.unwrap().resume_id)
+        .await
+        .unwrap();
+    let paused = f.current().await;
+    let before = f.batch_rows().await;
+    let resumer = QueueActionActor {
+        ref_: "another-worker".into(),
+        display_name: "Another worker".into(),
+        ..actor()
+    };
+    f.run_as(Action::Resume, resumer.clone()).await.unwrap();
+    let control = f
+        .control()
+        .await
+        .expect("resuming another worker's paused work must expose re-pause");
+    assert_eq!(control.worker_ref, resumer.ref_);
+    assert_eq!(f.current().await.worker_ref, resumer.ref_);
+    assert_eq!(
+        f.cancel(&control.resume_id).await,
+        Err(ProductionMapError::QueueActionNotAllowed),
+        "the previous worker cannot pause the new worker's session"
+    );
+    f.service
+        .re_pause_resumed_work(
+            MACHINE,
+            &f.order,
+            &control.resume_id,
+            &[MACHINE.into()],
+            resumer.clone(),
+        )
+        .await
+        .unwrap();
+    let restored = f.current().await;
+    assert_eq!(restored.session_id, paused.session_id);
+    assert_eq!(restored.status, paused.status);
+    assert_eq!(restored.payload_json, paused.payload_json);
+    assert_eq!(restored.worker_ref, resumer.ref_);
+    assert_eq!(f.batch_rows().await, before, "old outputs keep their owner");
+    assert!(f.control().await.is_none());
+    let audited: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM mini_order_progress_events WHERE order_id=$1 \
+         AND worker_ref=$2 AND produced_qty=0 \
+         AND (action='resume' OR payload_json->>'event'='re_pause')",
+    )
+    .bind(&f.order)
+    .bind(&resumer.ref_)
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    assert_eq!(audited, 2, "both actions record the authenticated resumer");
+    // The original worker can start another cycle and receives a fresh token.
+    f.run(Action::Resume).await.unwrap();
+    let next = f.control().await.unwrap();
+    assert_eq!(next.worker_ref, actor().ref_);
+    assert_ne!(next.resume_id, control.resume_id);
+    f.cancel(&next.resume_id).await.unwrap();
+    assert_eq!(f.batch_rows().await, before);
+    f.release().await;
+}
+
+#[tokio::test]
+#[ignore = "requires RE_PAUSE_TEST_DATABASE_URL pointing at a disposable PostgreSQL database"]
+async fn re_pause_after_another_workers_rezka_resume_preserves_input_and_revision() {
+    const REZKA: &str = "apparatus:default:asset-010";
+    let f = Fixture::new().await;
+    f.cancel(&f.control().await.unwrap().resume_id)
+        .await
+        .unwrap();
+    f.service
+        .upsert_map(serde_json::from_value(json!({
+            "id":f.order,"title":f.order,"product_code":"REP","roll_count":7,"width_mm":650,
+            "nodes":[{"id":"start","kind":"start","title":"Start"},
+                {"id":"print","kind":"apparatus","title":"Print","apparatus_id":MACHINE},
+                {"id":"cut","kind":"apparatus","title":"Rezka","apparatus_id":REZKA,"rezka_kadr_count":1},
+                {"id":"end","kind":"end","title":"End"}],
+            "edges":[{"from":"start","to":"print"},{"from":"print","to":"cut"},{"from":"cut","to":"end"}]
+        })).unwrap())
+        .await
+        .unwrap();
+    let session_id = format!("cut-{}", f.order);
+    let mut input = f.batches().await.remove(0);
+    input.wip_status = OrderProgressBatchWipStatus::InUse;
+    input.used_by_apparatus = REZKA.into();
+    input.used_by_session_id = session_id.clone();
+    f.store
+        .put_order_progress_batch(input.clone())
+        .await
+        .unwrap();
+    let payload = json!({
+        "input_progress_batch_id":input.batch_id,
+        "input_progress_qr_payload":input.qr_payload,
+        "stage_work_protocol":1,"last_action":"detach_roll",
+        "rezka_recorded_output_closed":true,"rezka_output_revision":7,
+        "rezka_output_report":[]
+    });
+    f.store
+        .put_order_run_session(OrderRunSession {
+            session_id: session_id.clone(),
+            apparatus: REZKA.into(),
+            order_id: f.order.clone(),
+            stage_node_id: "cut".into(),
+            status: OrderRunStatus::RollDetached,
+            worker_role: actor().role,
+            worker_ref: actor().ref_,
+            worker_display_name: actor().display_name,
+            started_at_unix: 1,
+            updated_at_unix: 1,
+            payload_json: payload.clone(),
+        })
+        .await
+        .unwrap();
+    f.store
+        .put_apparatus_sequence(REZKA, vec![f.order.clone()])
+        .await
+        .unwrap();
+    f.store
+        .put_apparatus_queue_states(REZKA, [(f.order.clone(), "paused".into())].into())
+        .await
+        .unwrap();
+    let before = f.batch_rows().await;
+    let resumer = QueueActionActor {
+        ref_: "another-rezka-worker".into(),
+        display_name: "Another Rezka worker".into(),
+        ..actor()
+    };
+    f.service
+        .apply_apparatus_queue_action_with_progress(
+            REZKA,
+            &f.order,
+            Action::Resume,
+            &[REZKA.into()],
+            resumer.clone(),
+            Default::default(),
+        )
+        .await
+        .unwrap();
+    let controls = f.service.queue_action_controls().await.unwrap();
+    let control = controls[REZKA][&f.order]
+        .re_pause
+        .as_ref()
+        .expect("Rezka exposes re-pause to the worker who pressed Continue");
+    assert_eq!(control.worker_ref, resumer.ref_);
+    f.service
+        .re_pause_resumed_work(
+            REZKA,
+            &f.order,
+            &control.resume_id,
+            &[REZKA.into()],
+            resumer.clone(),
+        )
+        .await
+        .unwrap();
+    let restored = f
+        .store
+        .active_order_run_session(REZKA, &f.order)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(restored.session_id, session_id);
+    assert_eq!(restored.worker_ref, resumer.ref_);
+    assert_eq!(restored.status, OrderRunStatus::RollDetached);
+    let mut expected_payload = payload;
+    expected_payload["rezka_output_revision"] = json!(9);
+    assert_eq!(restored.payload_json, expected_payload);
+    assert_eq!(
+        f.batch_rows().await,
+        before,
+        "the consumed input stays unchanged"
+    );
+    let states = f.service.apparatus_queue_states().await.unwrap();
+    assert_eq!(states[REZKA][&f.order], "paused");
     f.release().await;
 }
 

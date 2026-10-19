@@ -1,8 +1,8 @@
 # Return an unused Resume to pause
 
 Worker queue controls can contain an optional `re_pause` object with `resume_id`,
-`worker_role`, and `worker_ref`. The owning worker can long press the order and
-select **Qayta pauza qilish**. Existing `allowed_actions` values are unchanged so
+`worker_role`, and `worker_ref`. The worker who resumed the session can long press
+the order and select **Qayta pauza qilish**. Existing `allowed_actions` values are unchanged so
 older mobile clients continue accepting the queue contract.
 
 `POST /v1/mobile/admin/production-maps/re-pause` accepts only:
@@ -11,9 +11,13 @@ older mobile clients continue accepting the queue contract.
 {"apparatus":"apparatus:default:bosma_7","order_id":"zakaz-example","resume_id":"queue-event-id"}
 ```
 
-This is available only for a new, ordinary Resume by the existing session owner.
-Resumes involving WIP claims, resource reacquisition, shift handoff, unfreezing,
-requeueing, early closure, or training retain their existing stop workflows.
+This is available for a new, ordinary Resume, including when another worker
+owned the paused session. Only the worker who performed that Resume can pause
+it again. The session remains assigned to that worker, and both actions retain
+their authenticated actors in the audit history; previous output ownership is
+unchanged.
+Resumes involving WIP claims, resource reacquisition, explicit shift handoff,
+unfreezing, requeueing, early closure, or training retain their existing stop workflows.
 Already running sessions from before this feature have no checkpoint.
 
 The checkpoint records the previous pause status and payload plus an exact

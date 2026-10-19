@@ -16,8 +16,9 @@ Keychain launcher loads `access-code-encryption-key` from its configured Keychai
 service into `MINI_ERP_ACCESS_CODE_KEY`. Elsewhere, supply that variable as a
 base64-encoded 32-byte secret, or use the automatically created private
 `data/access-code.key` file (`MINI_ERP_ACCESS_CODE_KEY_FILE` overrides the path).
-Keep the same key across restarts and protect a recovery copy outside the database
-backup. Restore the original key together with a database restore. Never commit
+Keep the same key across restarts. The [full recovery archive](full-recovery-backups.md)
+includes this key; a database-only `.dump` does not. Restore the original key
+together with a database restore. Never commit
 the key or generate a replacement during a normal deployment.
 
 Previously migrated hash-only codes cannot be reconstructed from their hashes.

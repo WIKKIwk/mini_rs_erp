@@ -235,6 +235,33 @@ impl BackupDoctor {
             None,
         );
         if let Some(artifact) = scan.artifacts.get(id) {
+            let expected = scan
+                .report
+                .snapshots
+                .iter()
+                .find(|snapshot| snapshot.id == id)
+                .map(|snapshot| snapshot.checksum_sha256.as_str())
+                .ok_or(BackupDoctorError::NotReady)?;
+            let actual = sha256_file(&artifact.path).map_err(|_| BackupDoctorError::Storage)?;
+            if actual != expected {
+                if let Some(mut snapshot) = scan
+                    .report
+                    .snapshots
+                    .iter()
+                    .find(|snapshot| snapshot.id == id)
+                    .cloned()
+                {
+                    snapshot.status = "failed".to_string();
+                    snapshot.verified = false;
+                    snapshot.recovery_ready = false;
+                    snapshot.error = "backup SHA-256 tekshiruvidan o‘tmadi".to_string();
+                    if let Some(directory) = artifact.path.parent() {
+                        write_manifest(directory, &snapshot)
+                            .map_err(|_| BackupDoctorError::Storage)?;
+                    }
+                }
+                return Err(BackupDoctorError::NotReady);
+            }
             return Ok(artifact.clone());
         }
         if scan
@@ -338,6 +365,11 @@ impl BackupDoctor {
         if let Some(admin_url) = &self.inner.config.admin_database_url {
             command.env("MINI_ERP_ADMIN_DATABASE_URL", admin_url);
         }
+        if !cfg!(test)
+            && let Ok(executable) = std::env::current_exe()
+        {
+            command.env("MINI_ERP_BACKUP_EXECUTABLE", executable);
+        }
         let output = match timeout(self.inner.config.max_runtime, command.output()).await {
             Ok(Ok(output)) => output,
             Ok(Err(error)) => {
@@ -388,6 +420,7 @@ impl BackupDoctor {
             .to_string();
         job.checksum_sha256 = checksum;
         job.verified = true;
+        job.recovery_ready = is_recovery_artifact(&artifact_path);
         job.error.clear();
         self.publish_job(&job);
         self.clear_active(&job.id);

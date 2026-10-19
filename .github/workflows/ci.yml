@@ -43,6 +43,13 @@ jobs:
       - name: Test production projection and queue behavior
         run: cargo test --locked --lib core::production_map
 
+      - name: Test complete recovery backups
+        run: |
+          cargo build --locked --bin mini_rs_backup_state --bin mini_rs_migrate
+          cargo test --locked --lib core::backup_doctor
+          cargo test --locked --bin mini_rs_backup_state
+          python3 -m unittest discover -s tools/db -p 'test_*.py' -v
+
       - name: Check isolated research benchmark
         run: cargo check --locked --features projection-research --example admin_projection_research
 

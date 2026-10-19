@@ -32,8 +32,10 @@ fn fingerprint(session: &OrderRunSession) -> String {
     )
 }
 
-/// Only ordinary work continuation is reversible. Input claims, shift handoffs,
-/// unfreezes and resource reacquisition retain their existing stop workflows.
+/// Ordinary work continuation is reversible by the worker who resumed it,
+/// including when a different worker owned the paused session. Input claims,
+/// explicit shift handoffs, unfreezes and resource reacquisition retain their
+/// existing stop workflows.
 pub(crate) fn attach_checkpoint(
     previous: &OrderRunSession,
     prepared: &mut PreparedApparatusQueueAction,
@@ -48,7 +50,7 @@ pub(crate) fn attach_checkpoint(
         || previous.worker_role != "aparatchi"
         || previous.worker_ref.trim().is_empty()
         || previous.worker_role != prepared.event.actor.role
-        || previous.worker_ref != prepared.event.actor.ref_
+        || prepared.event.actor.ref_.trim().is_empty()
         || prepared.progress_batch.is_some()
         || !prepared.progress_batches.is_empty()
         || !prepared.progress_batch_updates.is_empty()
@@ -76,7 +78,11 @@ pub(crate) fn attach_checkpoint(
     let Some(session) = &mut prepared.session else {
         return;
     };
-    if session.session_id != previous.session_id || session.status != OrderRunStatus::Active {
+    if session.session_id != previous.session_id
+        || session.status != OrderRunStatus::Active
+        || session.worker_role != prepared.event.actor.role
+        || session.worker_ref != prepared.event.actor.ref_
+    {
         return;
     }
     let mut previous_payload = previous.payload_json.clone();

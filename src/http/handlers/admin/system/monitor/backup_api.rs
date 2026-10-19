@@ -33,7 +33,11 @@ pub async fn system_backup_download(
     headers: HeaderMap,
 ) -> Result<Response, AdminError> {
     authorize_capability(&state, &headers, Capability::AdminAccess).await?;
-    let artifact = state.backup_doctor.artifact(&id).map_err(backup_error)?;
+    let doctor = state.backup_doctor.clone();
+    let artifact = tokio::task::spawn_blocking(move || doctor.artifact(&id))
+        .await
+        .map_err(|_| server_error("backup_verification_failed"))?
+        .map_err(backup_error)?;
     let mut file = tokio::fs::File::open(&artifact.path)
         .await
         .map_err(|_| server_error("backup_download_open_failed"))?;
@@ -105,7 +109,11 @@ pub async fn system_backup_import(
         .prepare_import(requested_by, filename)
         .map_err(backup_error)?;
     let upload_id = upload.job.id.clone();
-    let mut file = match tokio::fs::File::create(&upload.path).await {
+    let mut options = tokio::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = match options.open(&upload.path).await {
         Ok(file) => file,
         Err(_) => {
             state

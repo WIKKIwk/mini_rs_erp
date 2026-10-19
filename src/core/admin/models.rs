@@ -86,6 +86,9 @@ pub struct AdminServerMonitorBackupSnapshot {
     pub artifact_name: String,
     pub checksum_sha256: String,
     pub verified: bool,
+    /// Complete recovery package, including state/configuration outside PostgreSQL.
+    #[serde(default)]
+    pub recovery_ready: bool,
     pub error: String,
 }
 

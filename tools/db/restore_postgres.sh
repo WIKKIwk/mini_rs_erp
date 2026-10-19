@@ -66,12 +66,6 @@ PSQL="$(find_pg_tool psql)"
 	    RAISE EXCEPTION 'restore requires the maintenance/database-owner credential';
 	END IF; END \$\$;" >/dev/null
 
-SECURITY_MIGRATION="$REPO_ROOT/migrations/postgres/0104_runtime_security_boundaries.sql"
-if [ ! -f "$SECURITY_MIGRATION" ]; then
-	echo "runtime security migration must be packaged with the restore tool" >&2
-	exit 2
-fi
-
 LOCK_TIMEOUT_MS="${MINI_ERP_RESTORE_LOCK_TIMEOUT_MS:-30000}"
 if ! [[ "$LOCK_TIMEOUT_MS" =~ ^[1-9][0-9]*$ ]]; then
 	echo "MINI_ERP_RESTORE_LOCK_TIMEOUT_MS must be a positive integer" >&2
@@ -84,40 +78,48 @@ export PGOPTIONS="${PGOPTIONS:-} -c lock_timeout=${LOCK_TIMEOUT_MS}"
 # Validate the custom-format dump before touching the target database.
 validate_qolip_dump "$PG_RESTORE" "$MINI_ERP_RESTORE_DUMP"
 
-# pg_restore has no CASCADE option for its generated DROP statements. Generate
-# the SQL stream and execute it through psql so the public schema can be
-# replaced with CASCADE inside one transaction. If any object or migration
-# step fails, PostgreSQL rolls the complete restore back.
+# Decode the ENTIRE archive before DROP SCHEMA. A failing pg_restore on the
+# producer side of a pipe could otherwise let psql commit a truncated stream.
+RESTORE_WORK="$(mktemp -d "${TMPDIR:-/tmp}/mini-erp-restore.XXXXXXXX")"
+trap 'rm -rf "$RESTORE_WORK"' EXIT
 RESTORE_ARGS=(
 	--clean
 	--if-exists
-	--no-owner
-	--no-privileges
 	--exit-on-error
-	--file=-
+	"--file=$RESTORE_WORK/archive.sql"
 )
+"$PG_RESTORE" "${RESTORE_ARGS[@]}" "$MINI_ERP_RESTORE_DUMP"
 
 {
 	printf '%s\n' \
 		'DROP SCHEMA IF EXISTS public CASCADE;' \
 		'CREATE SCHEMA public;' \
 		'GRANT USAGE ON SCHEMA public TO PUBLIC;'
-	"$PG_RESTORE" \
-		"${RESTORE_ARGS[@]}" \
-		"$MINI_ERP_RESTORE_DUMP"
-	# --no-owner/--no-privileges discards the security boundary even when the
-	# restored migration history says 0104 already ran. Restore it atomically,
-	# before runtime connections can observe owner/ACL drift.
+	cat "$RESTORE_WORK/archive.sql"
+	# Preserve the archive's owners, column grants and SECURITY DEFINER bodies.
+	# Replaying 0104 here would undo later migrations (including auth ACLs and
+	# the template-safe order reset function). Database ownership is not part
+	# of an ordinary pg_dump, so reestablish only that database-level boundary.
 	printf '%s\n' \
 		"SELECT EXISTS (SELECT 1 FROM public.mini_schema_migrations WHERE version='0104_runtime_security_boundaries') AS restore_hardened \\gset" \
 		'\if :restore_hardened'
-	sed -n '1,$p' "$SECURITY_MIGRATION"
+	cat <<'SQL'
+DO $$
+BEGIN
+    EXECUTE format('ALTER DATABASE %I OWNER TO mini_rs_erp_owner', current_database());
+    EXECUTE format('REVOKE CREATE ON DATABASE %I FROM mini_rs_erp, PUBLIC', current_database());
+    EXECUTE format('GRANT CONNECT, TEMPORARY ON DATABASE %I TO mini_rs_erp', current_database());
+END;
+$$;
+SQL
 	printf '\n%s\n' '\endif'
-} | "$PSQL" \
+} > "$RESTORE_WORK/restore.sql"
+"$PSQL" \
 	--no-password \
 	--set=ON_ERROR_STOP=1 \
 	--single-transaction \
-	--dbname="$RESTORE_DATABASE_URL"
+	--dbname="$RESTORE_DATABASE_URL" \
+	--file="$RESTORE_WORK/restore.sql"
 
 if [ "$KEYCHAIN_MIGRATE_AFTER_RESTORE" = "1" ]; then
 	python3 "$SCRIPT_DIR/macos_keychain.py" migrate

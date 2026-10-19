@@ -92,7 +92,8 @@ The expected response is `{"ok":true}`.
 Build and run the release executable:
 
 ```bash
-cargo build --release --locked --bin mini_rs_erp
+cargo build --release --locked \
+  --bin mini_rs_erp --bin mini_rs_migrate --bin mini_rs_backup_state
 ./target/release/mini_rs_erp
 ```
 
@@ -100,6 +101,9 @@ Deploy the API behind HTTPS. Preserve the database, local state, uploaded files,
 and encryption keys across deployments and include them in recovery procedures.
 Encryption key requirements are documented in [account code storage](docs/admin-access-codes.md).
 Keychain-managed Mac installations use the [Mac runtime procedure](docs/macos-postgres-access.md).
+Backups include the database, local state, configuration, keys and source in one
+archive. See [full backend recovery](docs/full-recovery-backups.md) for helper
+builds, verification and offline restoration.
 
 ## Verification
 

@@ -180,8 +180,9 @@ mod settings;
 mod tests;
 
 use self::catalog::{
-    available_disk_mb, collect_manifest_paths, preferred_artifact_in, scan_backup_root,
-    sha256_file, terminal_status, truncate_error, write_manifest,
+    available_disk_mb, collect_manifest_paths, database_artifact_in, is_recovery_artifact,
+    preferred_artifact_in, scan_backup_root, sha256_file, terminal_status, truncate_error,
+    write_manifest,
 };
 use self::retention::apply_retention;
 pub use self::settings::first_existing_backup_directory;

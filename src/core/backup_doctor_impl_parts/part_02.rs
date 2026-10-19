@@ -1,5 +1,4 @@
 impl BackupDoctor {
-
     async fn run_import(&self, mut job: AdminServerMonitorBackupSnapshot, staged_path: PathBuf) {
         job.status = "running".to_string();
         job.started_at_unix = OffsetDateTime::now_utc().unix_timestamp();
@@ -147,6 +146,11 @@ impl BackupDoctor {
         if let Some(admin_url) = &self.inner.config.admin_database_url {
             command.env("MINI_ERP_ADMIN_DATABASE_URL", admin_url);
         }
+        if !cfg!(test)
+            && let Ok(executable) = std::env::current_exe()
+        {
+            command.env("MINI_ERP_BACKUP_EXECUTABLE", executable);
+        }
         let output = match timeout(self.inner.config.max_runtime, command.output()).await {
             Ok(Ok(output)) => output,
             Ok(Err(error)) => {
@@ -201,16 +205,27 @@ impl BackupDoctor {
             .to_string();
         job.checksum_sha256 = checksum;
         job.verified = true;
+        job.recovery_ready = is_recovery_artifact(&artifact_path);
         job.error.clear();
         self.persist_standalone_job(&job)?;
-        let artifact_name = job.artifact_name.clone();
+        // Full packages are downloaded, but an online rollback restores only
+        // PostgreSQL. The live process still owns its LMDB and in-memory state.
+        let rollback_path = database_artifact_in(&job_dir)
+            .ok_or_else(|| "safety backup database dump topilmadi".to_string())?;
+        let rollback_size = fs::metadata(&rollback_path)
+            .map_err(|error| error.to_string())?
+            .len();
 
         Ok(PreRestoreBackup {
             job,
             artifact: BackupArtifact {
-                path: artifact_path,
-                filename: artifact_name,
-                size_bytes: metadata.len(),
+                filename: rollback_path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string(),
+                path: rollback_path,
+                size_bytes: rollback_size,
             },
         })
     }
@@ -354,6 +369,7 @@ impl BackupDoctor {
         let report = self.report(now);
         let already_ready = report.snapshots.iter().any(|snapshot| {
             snapshot.status == "ready"
+                && snapshot.recovery_ready
                 && snapshot.completed_at_unix > 0
                 && OffsetDateTime::from_unix_timestamp(snapshot.completed_at_unix)
                     .ok()

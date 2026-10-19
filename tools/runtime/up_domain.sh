@@ -217,7 +217,7 @@ ensure_backend() {
 	fi
 
 	if [ "$BUILD_RELEASE" = "1" ]; then
-		local build_args=(--release --locked --bin mini_rs_erp)
+		local build_args=(--release --locked --bin mini_rs_erp --bin mini_rs_backup_state)
 		if [ "$(uname -s)" = "Darwin" ]; then
 			build_args+=(--bin mini_rs_migrate)
 		fi

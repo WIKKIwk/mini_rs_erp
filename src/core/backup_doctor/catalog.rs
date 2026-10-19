@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -92,6 +92,12 @@ pub(super) fn scan_backup_root(
             if snapshot.size_bytes == 0 {
                 snapshot.size_bytes = artifact_file.size_bytes;
             }
+            if snapshot.size_bytes != artifact_file.size_bytes {
+                snapshot.status = "failed".to_string();
+                snapshot.verified = false;
+                snapshot.recovery_ready = false;
+                snapshot.error = "backup artifact hajmi o‘zgargan".to_string();
+            }
             if snapshot.status == "ready" && snapshot.verified {
                 artifacts.insert(
                     snapshot.id.clone(),
@@ -130,10 +136,16 @@ pub(super) fn scan_backup_root(
         .count();
     report.latest_snapshot = snapshots
         .iter()
-        .find(|snapshot| snapshot.status == "ready" && snapshot.verified)
+        .find(|snapshot| snapshot.status == "ready" && snapshot.verified && snapshot.recovery_ready)
+        .or_else(|| {
+            snapshots
+                .iter()
+                .find(|snapshot| snapshot.status == "ready" && snapshot.verified)
+        })
         .cloned();
     report.healthy = report.latest_snapshot.as_ref().is_some_and(|snapshot| {
         snapshot.verified
+            && snapshot.recovery_ready
             && snapshot.completed_at_unix > 0
             && now
                 .unix_timestamp()
@@ -224,6 +236,16 @@ fn legacy_snapshot(directory: &Path, files: &[BackupDataFile]) -> AdminServerMon
         .unwrap_or_default()
         .to_string();
     let checksum = read_checksum(directory, &artifact_name).unwrap_or_default();
+    let recovery_ready = fs::read(directory.join(format!("{artifact_name}.json")))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .is_some_and(|summary| {
+            artifact.is_some_and(|file| is_recovery_artifact(&file.path))
+                && summary["format"] == "accord-full-recovery"
+                && summary["recovery_ready"] == true
+                && summary["sha256"].as_str() == Some(checksum.as_str())
+                && !checksum.is_empty()
+        });
     AdminServerMonitorBackupSnapshot {
         id: legacy_snapshot_id(directory),
         status: "ready".to_string(),
@@ -236,6 +258,7 @@ fn legacy_snapshot(directory: &Path, files: &[BackupDataFile]) -> AdminServerMon
         artifact_name,
         checksum_sha256: checksum.clone(),
         verified: !checksum.is_empty(),
+        recovery_ready,
         error: String::new(),
     }
 }
@@ -250,12 +273,10 @@ fn select_artifact<'a>(
     files: &'a [BackupDataFile],
     preferred_name: &str,
 ) -> Option<&'a BackupDataFile> {
-    if !preferred_name.trim().is_empty()
-        && let Some(file) = files.iter().find(|file| {
+    if !preferred_name.trim().is_empty() {
+        return files.iter().find(|file| {
             file.path.file_name().and_then(|value| value.to_str()) == Some(preferred_name)
-        })
-    {
-        return Some(file);
+        });
     }
     files
         .iter()
@@ -269,12 +290,14 @@ fn extension_rank(path: &Path) -> u8 {
         .and_then(|value| value.to_str())
         .unwrap_or_default()
         .to_ascii_lowercase();
-    if name.ends_with(".dump") {
+    if is_recovery_artifact(path) {
         0
-    } else if name.ends_with(".sql.gz") {
+    } else if name.ends_with(".dump") {
         1
-    } else {
+    } else if name.ends_with(".sql.gz") {
         2
+    } else {
+        3
     }
 }
 
@@ -296,6 +319,20 @@ pub(super) fn preferred_artifact_in(directory: &Path) -> Option<PathBuf> {
         .collect::<Vec<_>>();
     candidates.sort_by_key(|path| extension_rank(path));
     candidates.into_iter().next()
+}
+
+pub(super) fn database_artifact_in(directory: &Path) -> Option<PathBuf> {
+    fs::read_dir(directory)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| path.is_file() && path.extension().is_some_and(|ext| ext == "dump"))
+}
+
+pub(super) fn is_recovery_artifact(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.ends_with(".accord-backup.tar.gz"))
 }
 
 fn backup_file_snapshot(
@@ -323,7 +360,10 @@ fn is_backup_data_file(path: &Path) -> bool {
         .and_then(|value| value.to_str())
         .unwrap_or_default()
         .to_ascii_lowercase();
-    name.ends_with(".dump") || name.ends_with(".sql") || name.ends_with(".sql.gz")
+    is_recovery_artifact(path)
+        || name.ends_with(".dump")
+        || name.ends_with(".sql")
+        || name.ends_with(".sql.gz")
 }
 
 pub(super) fn write_manifest(
@@ -331,10 +371,24 @@ pub(super) fn write_manifest(
     snapshot: &AdminServerMonitorBackupSnapshot,
 ) -> Result<(), std::io::Error> {
     fs::create_dir_all(directory)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(directory, fs::Permissions::from_mode(0o700))?;
+    }
     let path = directory.join(MANIFEST_NAME);
     let temporary = directory.join(format!("{MANIFEST_NAME}.tmp"));
     let body = serde_json::to_vec_pretty(snapshot).map_err(std::io::Error::other)?;
-    fs::write(&temporary, body)?;
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&temporary)?;
+    file.write_all(&body)?;
+    file.sync_all()?;
     fs::rename(temporary, path)
 }
 
