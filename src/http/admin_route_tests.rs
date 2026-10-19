@@ -62,6 +62,7 @@ use crate::core::workers::{MemoryWorkerStore, WorkerService, WorkerUpsert};
 use crate::store::calculate_order_store::CalculateOrderStore;
 
 mod admin_edge_cases;
+mod app_update_settings;
 mod calculate_materials;
 mod preparation;
 mod apparatus_aasx;

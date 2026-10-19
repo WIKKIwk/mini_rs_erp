@@ -3,9 +3,17 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tokio::io::AsyncWriteExt;
 
 pub const ANDROID_MANIFEST_FILE: &str = "android.json";
 pub const ANDROID_APK_ROUTE_PREFIX: &str = "/v1/mobile/app-update/android/apk/";
+const UPDATE_SETTINGS_FILE: &str = "update-settings.json";
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MobileUpdateSettings {
+    pub mandatory_updates_enabled: bool,
+}
 
 #[derive(Debug, Clone)]
 pub struct MobileReleaseStore {
@@ -26,6 +34,76 @@ impl MobileReleaseStore {
         Self {
             directory: Arc::new(directory.into()),
         }
+    }
+
+    async fn saved_update_settings(
+        &self,
+    ) -> Result<Option<MobileUpdateSettings>, MobileReleaseError> {
+        match tokio::fs::read(self.directory.join(UPDATE_SETTINGS_FILE)).await {
+            Ok(bytes) => serde_json::from_slice(&bytes)
+                .map(Some)
+                .map_err(MobileReleaseError::InvalidSettings),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(MobileReleaseError::ReadSettings(error)),
+        }
+    }
+
+    pub async fn update_settings(&self) -> Result<MobileUpdateSettings, MobileReleaseError> {
+        if let Some(settings) = self.saved_update_settings().await? {
+            return Ok(settings);
+        }
+        // Preserve published release requirements until an admin sets the switch.
+        match self.android_release().await {
+            Ok(release) => Ok(MobileUpdateSettings {
+                mandatory_updates_enabled: release.manifest.mandatory
+                    || release.manifest.minimum_supported_version_code > 0,
+            }),
+            Err(MobileReleaseError::NotPublished) => Ok(MobileUpdateSettings::default()),
+            Err(error) => Err(error),
+        }
+    }
+
+    pub async fn save_update_settings(
+        &self,
+        settings: MobileUpdateSettings,
+    ) -> Result<MobileUpdateSettings, MobileReleaseError> {
+        tokio::fs::create_dir_all(self.directory.as_ref())
+            .await
+            .map_err(MobileReleaseError::WriteSettings)?;
+        let temporary = self.directory.join(format!(
+            ".update-settings-{:032x}.tmp",
+            rand::random::<u128>()
+        ));
+        let bytes = serde_json::to_vec(&settings).map_err(MobileReleaseError::InvalidSettings)?;
+        let saved = async {
+            let mut file = tokio::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temporary)
+                .await?;
+            file.write_all(&bytes).await?;
+            file.sync_all().await?;
+            tokio::fs::rename(&temporary, self.directory.join(UPDATE_SETTINGS_FILE)).await
+        }
+        .await;
+        if let Err(error) = saved {
+            let _ = tokio::fs::remove_file(&temporary).await;
+            return Err(MobileReleaseError::WriteSettings(error));
+        }
+        Ok(settings)
+    }
+
+    pub async fn android_release_info(&self) -> Result<AndroidReleaseInfo, MobileReleaseError> {
+        let mut info = self.android_release().await?.public_info();
+        if let Some(settings) = self.saved_update_settings().await? {
+            info.mandatory = settings.mandatory_updates_enabled;
+            // The admin switch is authoritative, including releases published
+            // with a legacy minimum-version requirement.
+            if !settings.mandatory_updates_enabled {
+                info.minimum_supported_version_code = 0;
+            }
+        }
+        Ok(info)
     }
 
     pub async fn android_release(&self) -> Result<AndroidRelease, MobileReleaseError> {
@@ -170,6 +248,12 @@ pub struct AndroidReleaseInfo {
 
 #[derive(Debug, Error)]
 pub enum MobileReleaseError {
+    #[error("failed to read mobile update settings: {0}")]
+    ReadSettings(std::io::Error),
+    #[error("mobile update settings are invalid: {0}")]
+    InvalidSettings(serde_json::Error),
+    #[error("failed to save mobile update settings: {0}")]
+    WriteSettings(std::io::Error),
     #[error("no Android release is published")]
     NotPublished,
     #[error("failed to read Android release manifest: {0}")]

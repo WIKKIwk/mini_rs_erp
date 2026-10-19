@@ -10,9 +10,9 @@ use crate::app::AppState;
 use crate::core::mobile_release::MobileReleaseError;
 
 pub async fn android_metadata(State(state): State<AppState>) -> Response<Body> {
-    match state.mobile_releases.android_release().await {
+    match state.mobile_releases.android_release_info().await {
         Ok(release) => {
-            let mut response = Json(release.public_info()).into_response();
+            let mut response = Json(release).into_response();
             response.headers_mut().insert(
                 header::CACHE_CONTROL,
                 HeaderValue::from_static("no-store, max-age=0"),
