@@ -88,6 +88,7 @@ mod production_map_basic;
 mod production_map_canonical_snapshot;
 mod progress_qr_order_control;
 mod production_map_save_order;
+mod multi_product_orders;
 mod order_edit;
 mod order_alerts;
 mod order_alerts_chat;

@@ -10,6 +10,8 @@ pub use image_reference::OrderImageLookup;
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 pub struct CalculateOrderTemplate {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub products: Vec<crate::core::order_layout::OrderProduct>,
     /// Explicit independent variants opt out of legacy business-key merging.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub variant_id: String,
@@ -237,22 +239,34 @@ pub fn validate_template(template: &CalculateOrderTemplate) -> Result<(), Calcul
             "mahsulot kerak".to_string(),
         ));
     }
-    if template.frame_product_size_mm <= 0.0 {
+    if !template.products.is_empty() {
+        crate::core::order_layout::validate_products(&template.products)
+            .map_err(CalculateOrderError::InvalidInput)?;
+        if template.customer_ref.trim().is_empty() {
+            return Err(CalculateOrderError::InvalidInput("Ko‘p mahsulotli buyurtma uchun mijozni tanlang".into()));
+        }
+    }
+    if template.products.is_empty() && template.frame_product_size_mm <= 0.0 {
         return Err(CalculateOrderError::InvalidInput(
             "kadrdagi mahsulot o'lchami noto'g'ri".to_string(),
         ));
     }
-    if template.frame_count <= 0.0 {
+    if template.products.is_empty() && template.frame_count <= 0.0 {
         return Err(CalculateOrderError::InvalidInput(
             "kadr soni noto'g'ri".to_string(),
         ));
     }
-    if template.edge_allowance_mm < 0.0 {
+    if !template.edge_allowance_mm.is_finite() || template.edge_allowance_mm < 0.0 {
         return Err(CalculateOrderError::InvalidInput(
             "qo'shimcha razmer noto'g'ri".to_string(),
         ));
     }
-    if derive_width_mm(
+    if !template.products.is_empty()
+        && !(crate::core::order_layout::useful_width(&template.products) + template.edge_allowance_mm).is_finite()
+    {
+        return Err(CalculateOrderError::InvalidInput("razmer noto'g'ri".to_string()));
+    }
+    if template.products.is_empty() && derive_width_mm(
         Some(template.frame_product_size_mm),
         Some(template.frame_count),
         Some(template.edge_allowance_mm),
@@ -416,6 +430,15 @@ pub fn hydrate_template_dimensions(mut template: CalculateOrderTemplate) -> Calc
     template = hydrate_template_layers(template);
     if !template.edge_allowance_mm.is_finite() || template.edge_allowance_mm < 0.0 {
         template.edge_allowance_mm = DEFAULT_EDGE_ALLOWANCE_MM;
+    }
+    if !template.products.is_empty() {
+        template.frame_product_size_mm = 0.0;
+        template.frame_count = crate::core::order_layout::frame_count(&template.products) as f64;
+        template.width_mm = crate::core::order_layout::useful_width(&template.products) + template.edge_allowance_mm;
+        template.item_code = template.products[0].item_code.trim().to_string();
+        template.product = crate::core::order_layout::title(&template.products);
+        template.name = template.product.clone();
+        return template;
     }
     let frame_size_valid =
         template.frame_product_size_mm.is_finite() && template.frame_product_size_mm > 0.0;

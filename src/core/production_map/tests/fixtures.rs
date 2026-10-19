@@ -4,6 +4,7 @@ use crate::core::production_map::*;
 
 pub(super) fn sample_map() -> ProductionMapDefinition {
     ProductionMapDefinition {
+        products: Vec::new(),
         print_val_size_mm: None,
         id: "hotlunch-test".to_string(),
         product_code: "HOTLUNCH".to_string(),
@@ -127,6 +128,7 @@ pub(super) fn sample_map() -> ProductionMapDefinition {
 
 pub(super) fn apparatus_stage_map(id: &str, apparatus: &str) -> ProductionMapDefinition {
     ProductionMapDefinition {
+        products: Vec::new(),
         print_val_size_mm: None,
         id: id.to_string(),
         product_code: format!("{id}-product"),
@@ -322,6 +324,7 @@ pub(super) fn canonical_two_stage_map(
 
 pub(super) fn condition_map() -> ProductionMapDefinition {
     ProductionMapDefinition {
+        products: Vec::new(),
         print_val_size_mm: None,
         id: "branch-test".to_string(),
         product_code: "HOTLUNCH".to_string(),

@@ -302,10 +302,16 @@ impl AdminReadPort for FakeAdminReadPort {
             name: item.name,
             uom: item.uom,
             item_group: item.item_group,
-            is_finished_goods: false,
+            is_finished_goods: item_code.starts_with("MULTI-"),
             created_at_unix: 1_720_000_000,
             updated_at_unix: 1_720_000_100,
-            customers: Vec::new(),
+            customers: if item_code.starts_with("MULTI-") {
+                vec![CustomerDirectoryEntry {
+                    ref_: if item_code == "MULTI-FOREIGN" { "CUST-002" } else { "CUST-001" }.into(),
+                    name: "Mixed order customer".into(),
+                    phone: String::new(),
+                }]
+            } else { Vec::new() },
         })
     }
 

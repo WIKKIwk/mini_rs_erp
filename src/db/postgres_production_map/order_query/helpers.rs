@@ -23,7 +23,9 @@ pub(super) async fn load_completed_queue_orders_for_actor(
     if actor_ref.is_empty() || limit == 0 {
         return Ok(Vec::new());
     }
-    let limit = i64::try_from(limit.min(500)).unwrap_or(500);
+    // The explicit "all" worker window uses MAX; SQL LIMIT NULL is unbounded.
+    // Keep the existing cap for ordinary bounded history callers.
+    let limit = (limit != usize::MAX).then(|| i64::try_from(limit.min(500)).unwrap_or(500));
     let rows = sqlx::query_as::<_, (String, String, String, i64)>(
         "WITH latest_actor_history AS (
             SELECT DISTINCT ON (order_id, canonical_apparatus_id)

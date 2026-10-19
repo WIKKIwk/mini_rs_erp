@@ -248,6 +248,25 @@ async fn window_is_bounded_revision_scoped_searchable_and_refills_over_websocket
     assert_eq!(status, StatusCode::OK);
     assert_eq!(five["rev"], ten["rev"]);
     assert_ne!(five["scope"], ten["scope"]);
+    let (status, all) = f
+        .get(&format!("worker_scope=true&queue_limit=0&{cursor}"))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(all["visible_order_ids"][CUT].as_array().unwrap().len(), 60);
+    assert_eq!(all["maps"].as_array().unwrap().len(), 60);
+    assert_eq!(all["sequences"][CUT], legacy["sequences"][CUT]);
+    assert_eq!(
+        all["queue_action_controls"][CUT],
+        legacy["queue_action_controls"][CUT]
+    );
+    assert!(all["visible_order_ids"].get(OTHER).is_none());
+    assert_ne!(all["scope"], five["scope"]);
+    assert_ne!(all["scope"], legacy["scope"]);
+    let (_, all_search) = f
+        .get("worker_scope=true&queue_limit=0&queue_search=zakaz-059")
+        .await;
+    assert_eq!(all_search["visible_order_ids"][CUT], json!(["zakaz-059"]));
+    assert_ne!(all_search["scope"], all["scope"]);
     let (status, search) = f
         .get(&format!(
             "worker_scope=true&queue_limit=5&queue_search=zakaz-059&{cursor}"
@@ -257,9 +276,10 @@ async fn window_is_bounded_revision_scoped_searchable_and_refills_over_websocket
     assert_eq!(search["visible_order_ids"][CUT], json!(["zakaz-059"]));
     assert_ne!(five["scope"], search["scope"]);
     for query in [
-        "worker_scope=true&queue_limit=0",
+        "worker_scope=true&queue_limit=1",
         "worker_scope=true&queue_limit=10000",
         "queue_limit=5",
+        "queue_limit=0",
         "worker_scope=true&queue_search=test",
     ] {
         assert_eq!(f.get(query).await.0, StatusCode::BAD_REQUEST, "{query}");
@@ -291,6 +311,29 @@ async fn window_is_bounded_revision_scoped_searchable_and_refills_over_websocket
     let ready = ws_json(&mut socket).await;
     assert_eq!(ready["type"], "state_ready");
     assert_eq!(ready["resync"], false);
+    let mut all_socket = tokio::net::TcpStream::connect(address).await.unwrap();
+    let all_uri = format!(
+        "/v1/mobile/admin/production-maps/live?token={}&protocol=state_delta_v1&worker_scope=true&queue_limit=0&epoch={}&rev={}&scope={}",
+        f.token,
+        all["epoch"].as_str().unwrap(),
+        all["rev"],
+        all["scope"].as_str().unwrap()
+    );
+    all_socket.write_all(format!("GET {all_uri} HTTP/1.1\r\nHost: {address}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n").as_bytes()).await.unwrap();
+    let mut response = Vec::new();
+    while !response.ends_with(b"\r\n\r\n") {
+        response.push(all_socket.read_u8().await.unwrap());
+        assert!(response.len() < 8192);
+    }
+    assert!(
+        String::from_utf8(response)
+            .unwrap()
+            .starts_with("HTTP/1.1 101")
+    );
+    let ready = ws_json(&mut all_socket).await;
+    assert_eq!(ready["type"], "state_ready");
+    assert_eq!(ready["resync"], false);
+    assert_eq!(ready["scope"], all["scope"]);
     f.store
         .put_apparatus_queue_states(
             CUT,
@@ -322,6 +365,15 @@ async fn window_is_bounded_revision_scoped_searchable_and_refills_over_websocket
         delta["patch"]["maps"]["upsert"].as_object().unwrap().len(),
         1
     );
+    let all_delta = ws_json(&mut all_socket).await;
+    assert_eq!(all_delta["type"], "state_delta", "{all_delta}");
+    assert_eq!(all_delta["scope"], all["scope"]);
+    let all_ids = all_delta["patch"]["visible_order_ids"]["upsert"][CUT]
+        .as_array()
+        .unwrap();
+    assert_eq!(all_ids.len(), 59);
+    assert_eq!(all_ids.last(), Some(&json!("zakaz-059")));
+    assert!(!all_ids.contains(&json!("zakaz-000")));
     server.abort();
     let _ = server.await;
 
@@ -398,6 +450,59 @@ async fn window_is_bounded_revision_scoped_searchable_and_refills_over_websocket
     let (_, ranked) = f.get("worker_scope=true&queue_limit=5").await;
     assert_eq!(ranked["visible_order_ids"][CUT][0], "zakaz-059");
     assert_eq!(ranked["visible_order_ids"][CUT][1], "zakaz-058");
+}
+
+#[tokio::test]
+async fn all_window_keeps_the_workers_complete_history() {
+    let _guard = FIXTURE_LOCK.lock().await;
+    let f = Fixture::new().await;
+    for index in 0..61 {
+        let (order_id, actor_ref) = if index < 60 {
+            (format!("zakaz-{index:03}"), "window-worker")
+        } else {
+            ("zakaz-unrelated".into(), "other-worker")
+        };
+        f.store
+            .append_apparatus_queue_action_event(ApparatusQueueActionEvent {
+                event_id: format!("history-{index}"),
+                apparatus: CUT.into(),
+                order_id,
+                stage_node_id: "work".into(),
+                action: queue_state::ApparatusQueueAction::Complete,
+                from_state: queue_state::ApparatusQueueOrderState::InProgress,
+                to_state: queue_state::ApparatusQueueOrderState::Completed,
+                policy: ApparatusQueuePolicy::StrictSequence,
+                actor: QueueActionActor {
+                    role: "aparatchi".into(),
+                    ref_: actor_ref.into(),
+                    display_name: "Worker".into(),
+                },
+                assigned_apparatus: vec![CUT.into()],
+                payload_json: json!({}),
+            })
+            .await
+            .unwrap();
+    }
+    f.state.production_maps.notify_live();
+    let (status, bounded) = f.get("worker_scope=true&queue_limit=50").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(bounded["completed_orders"].as_array().unwrap().len(), 50);
+    let (status, all) = f.get("worker_scope=true&queue_limit=0").await;
+    assert_eq!(status, StatusCode::OK);
+    let history = all["completed_orders"].as_array().unwrap();
+    assert_eq!(history.len(), 60);
+    assert!(
+        history
+            .iter()
+            .all(|item| item["order_id"] != "zakaz-unrelated")
+    );
+    assert!(
+        all["maps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item["map"]["id"] != "zakaz-unrelated")
+    );
 }
 
 #[tokio::test]
@@ -480,7 +585,7 @@ async fn free_queue_order_is_shared_by_admin_workers_and_live_updates() {
     );
     let (_, worker) = f.get("worker_scope=true&queue_limit=5").await;
     assert_eq!(worker["visible_order_ids"][CUT], expected);
-    for limit in [10, 20, 50] {
+    for limit in [0, 10, 20, 50] {
         let (_, page) = f
             .get(&format!("worker_scope=true&queue_limit={limit}"))
             .await;
@@ -489,7 +594,7 @@ async fn free_queue_order_is_shared_by_admin_workers_and_live_updates() {
             .unwrap()
             .iter()
             .filter(|id| id.as_str() != Some("zakaz-056"))
-            .take(limit)
+            .take(if limit == 0 { usize::MAX } else { limit })
             .cloned()
             .collect::<Vec<_>>();
         assert_eq!(page["visible_order_ids"][CUT], json!(expected_window));

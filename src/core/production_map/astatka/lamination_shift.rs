@@ -65,6 +65,7 @@ pub struct LaminatsiyaAstatkaCommitResult {
 pub struct LaminatsiyaAstatkaSnapshot {
     pub session: Option<OrderRunSession>,
     pub sources: Vec<LayerRemainderSource>,
+    pub allow_empty_sources: bool,
     pub remainders: Vec<LayerRemainderRecord>,
     pub request_result: Option<LaminatsiyaAstatkaCommitResult>,
 }
@@ -93,6 +94,7 @@ impl ProductionMapService {
             return Ok(LaminatsiyaAstatkaSnapshot {
                 session: Some(result.session.clone()),
                 sources: Vec::new(),
+                allow_empty_sources: false,
                 remainders: result.remainders.clone(),
                 request_result: Some(result),
             });
@@ -105,9 +107,25 @@ impl ProductionMapService {
                 .is_some_and(|session| source.session_id == session.session_id)
         });
         let remainders = self.layer_remainder_history(apparatus, order_id).await?;
+        let canonical = self.resolve_canonical_apparatus_text(apparatus).await?;
+        let allow_empty_sources = !super::materials::live_material_rule(&canonical)
+            .is_some_and(|rule| rule.requires_material)
+            && session.as_ref().is_some_and(|session| {
+                session
+                    .payload_json
+                    .get("lamination_astatka_shift_closed")
+                    .and_then(serde_json::Value::as_bool)
+                    != Some(true)
+                    && session
+                        .payload_json
+                        .get("input_wip_source_kind")
+                        .and_then(serde_json::Value::as_str)
+                        != Some("opening_wip")
+            });
         Ok(LaminatsiyaAstatkaSnapshot {
             session,
             sources,
+            allow_empty_sources,
             remainders,
             request_result: None,
         })
@@ -236,7 +254,9 @@ impl ProductionMapService {
             .into_iter()
             .filter(|s| s.session_id == session.session_id)
             .collect::<Vec<_>>();
-        if sources.is_empty()
+        if (sources.is_empty()
+            && super::materials::live_material_rule(&canonical)
+                .is_some_and(|rule| rule.requires_material))
             || sources.len() != input.layer_remainders.len()
             || input.layer_remainders.iter().any(|layer| {
                 !sources.iter().any(|source| {
@@ -268,8 +288,9 @@ impl ProductionMapService {
                     .count() as f64
             };
             if session.status == OrderRunStatus::Completed
-                || input.lamination_print_leftover_rolls != count("progress_batch")
-                || input.lamination_film_leftover_rolls != count("raw_material")
+                || (!sources.is_empty()
+                    && (input.lamination_print_leftover_rolls != count("progress_batch")
+                        || input.lamination_film_leftover_rolls != count("raw_material")))
             {
                 return Err(ProductionMapError::ProgressInputInvalid);
             }

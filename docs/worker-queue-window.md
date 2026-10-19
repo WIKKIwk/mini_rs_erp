@@ -1,9 +1,12 @@
 # Worker queue windows
 
-Workers can opt into a bounded queue with `queue_limit=5|10|20|50` on both
+Workers can opt into a bounded queue with `queue_limit=5|10|20|50`, or select
+all eligible orders with `queue_limit=0`, on both
 `GET /v1/mobile/admin/production-maps/sequence?worker_scope=true` and the
 `state_delta_v1` WebSocket protocol at `/v1/mobile/admin/production-maps/live`.
 An omitted limit preserves the legacy response. Other limits are rejected.
+The explicit all option retains worker permissions, queue ordering, search and
+scope checks. It also removes the completed-work count limit for that actor.
 
 The bound applies independently to each visible apparatus. Strict queues retain
 their authoritative order and reserve room for an already active job. Free-pick

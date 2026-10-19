@@ -76,6 +76,14 @@ pub trait MiniOrderSink: Send + Sync {
         Err(ProductionMapError::StoreFailed)
     }
 
+    /// Reads the opened order's calculation even after production has started.
+    async fn order_calculation(
+        &self,
+        _order_id: &str,
+    ) -> Result<CalculateOrderTemplate, super::order_edit::OrderEditError> {
+        Err(super::order_edit::OrderEditError::Store)
+    }
+
     async fn order_edit_source(
         &self,
         _order_id: &str,
@@ -197,6 +205,7 @@ mod tests {
 
     fn test_map(id: &str, order_number: &str) -> ProductionMapDefinition {
         ProductionMapDefinition {
+            products: Vec::new(),
             print_val_size_mm: None,
             id: id.to_string(),
             product_code: "ITEM-1".to_string(),

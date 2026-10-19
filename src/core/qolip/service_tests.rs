@@ -11,6 +11,31 @@ use super::ports::QolipStorePort;
 use super::service::QolipService;
 
 #[tokio::test]
+async fn multi_product_requires_a_complete_shared_mold_set() {
+    let store = std::sync::Arc::new(MemoryQolipStore::new());
+    let products = crate::core::order_layout::tests::products()[..2].to_vec();
+    store.seed_products(products.iter().map(|p| QolipProduct {
+        code: p.item_code.clone(), name: p.product.clone(),
+        item_group: "Tayyor mahsulot".into(), ..Default::default()
+    }).collect()).await;
+    store.put_product_specs(["BLACK", "CYAN"].into_iter().map(|color| QolipProductSpec {
+        item_code: products[0].item_code.clone(), item_name: products[0].product.clone(),
+        item_group: "Tayyor mahsulot".into(), warehouse: "Molds".into(),
+        qolip_set_id: "mixed-set".into(), qolip_code: format!("MIX-{color}"),
+        color: color.into(), size: 650, ..Default::default()
+    }).collect()).await.unwrap();
+    let service = QolipService::new(store.clone());
+    assert_eq!(service.required_qolips_for_layout(&products, "", "").await,
+        Err(QolipError::QolipCodeMismatch));
+    let set = store.resolve_shared_set("MIX-BLACK").await.unwrap().unwrap();
+    store.reuse_shared_set(&set.set_id, &products[1].item_code, &set.fingerprint,
+        &principal(), &["Molds".into()]).await.unwrap();
+    let required = service.required_qolips_for_layout(&products, "", "").await.unwrap();
+    assert_eq!(required.len(), 2);
+    assert!(required.iter().all(|spec| spec.qolip_code.starts_with("MIX-")));
+}
+
+#[tokio::test]
 async fn exact_product_lookup_is_independent_of_catalog_pages() {
     let store = std::sync::Arc::new(MemoryQolipStore::new());
     let mut products = (0..115)

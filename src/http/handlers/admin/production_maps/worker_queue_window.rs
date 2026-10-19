@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 /// validate a mutation: hidden orders still participate in all production rules.
 #[derive(Clone, Default)]
 pub(crate) struct WorkerQueueWindow {
+    /// None preserves the legacy view; Some(0) explicitly selects all orders.
     pub limit: Option<usize>,
     search: String,
 }
@@ -14,7 +15,7 @@ pub(crate) struct WorkerQueueWindow {
 impl WorkerQueueWindow {
     pub fn new(limit: Option<usize>, search: &str, worker_scope: bool) -> Result<Self, AdminError> {
         let search = search.trim().to_lowercase();
-        if limit.is_some_and(|n| ![5, 10, 20, 50].contains(&n))
+        if limit.is_some_and(|n| ![0, 5, 10, 20, 50].contains(&n))
             || search.chars().count() > 120
             || (limit.is_none() && !search.is_empty())
             || (!worker_scope && (limit.is_some() || !search.is_empty()))
@@ -25,7 +26,11 @@ impl WorkerQueueWindow {
     }
 
     pub fn history_limit(&self) -> usize {
-        self.limit.unwrap_or(200)
+        match self.limit {
+            Some(0) => usize::MAX,
+            Some(limit) => limit,
+            None => 200,
+        }
     }
 
     pub fn search_active(&self) -> bool {
@@ -49,7 +54,10 @@ impl WorkerQueueWindow {
         history: &[String],
         customers: &BTreeMap<String, String>,
     ) -> ProductionMapLiveSnapshot {
-        let limit = self.limit.expect("window projection requires a limit");
+        let limit = match self.limit.expect("window projection requires a limit") {
+            0 => usize::MAX,
+            limit => limit,
+        };
         let maps = snapshot
             .maps
             .iter()

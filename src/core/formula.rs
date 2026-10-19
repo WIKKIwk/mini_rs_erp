@@ -16,6 +16,8 @@ pub const DEFAULT_ADHESIVE_GSM_PER_BOND: f64 = 2.5;
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct CalculateRequest {
     #[serde(default)]
+    pub products: Vec<crate::core::order_layout::OrderProduct>,
+    #[serde(default)]
     pub order_number: Option<String>,
     #[serde(default)]
     pub date: Option<String>,
@@ -107,6 +109,8 @@ impl CalculateRequest {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CalculateResponse {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub products: Vec<crate::core::order_layout::OrderProduct>,
     pub ok: bool,
     pub order_number: Option<String>,
     pub date: Option<String>,

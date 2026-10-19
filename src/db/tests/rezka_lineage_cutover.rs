@@ -739,6 +739,7 @@ fn cutover_live_map() -> ProductionMapDefinition {
     }
 
     ProductionMapDefinition {
+        products: Vec::new(),
         print_val_size_mm: None,
         id: ORDER.to_string(),
         product_code: "CUTOVER".to_string(),

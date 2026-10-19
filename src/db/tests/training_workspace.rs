@@ -346,6 +346,7 @@ fn training_map(
     });
 
     ProductionMapDefinition {
+        products: Vec::new(),
         print_val_size_mm: None,
         id: id.to_string(),
         product_code: format!("{id}-product"),

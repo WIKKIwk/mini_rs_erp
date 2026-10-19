@@ -10,6 +10,7 @@ fn production_routes() -> Router<AppState> {
         )
         .route("/v1/mobile/admin/pending-orders", any(admin::pending_orders))
         .route("/v1/mobile/admin/production-maps/order-edit", any(admin::production_map_order_edit))
+        .route("/v1/mobile/admin/production-maps/order-summary", get(admin::production_map_order_summary))
         .route("/v1/mobile/admin/pending-orders/image", any(admin::pending_order_image))
         .route(
             "/v1/mobile/admin/production-maps",

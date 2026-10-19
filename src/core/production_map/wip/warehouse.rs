@@ -184,17 +184,18 @@ impl ProductionMapService {
             .order
             .as_ref()
             .ok_or(ProductionMapError::MapNotFound)?;
+        let (product_code, product_name) = super::layout::finished_product(map, &snapshot.batch)?;
         let (qty, uom) = finished_goods_qty_uom(&snapshot.batch)?;
         let now = unix_seconds();
-        let item_name = if map.title.trim().is_empty() {
+        let item_name = if product_name.trim().is_empty() {
             &snapshot.batch.label_item_name
         } else {
-            &map.title
+            &product_name
         };
         let stock = finished_goods_stock_entry(
             &snapshot.batch,
             warehouse.trim(),
-            &map.product_code,
+            &product_code,
             item_name,
             &actor,
             qty,

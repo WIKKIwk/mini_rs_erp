@@ -970,6 +970,9 @@ impl ProductionMapService {
         if input_progress.stage_node_id.trim().is_empty() {
             input_progress.stage_node_id = stage.node_id.clone();
         }
+        if input_progress.layout_lanes.is_empty() {
+            input_progress.layout_lanes = session_input_progress.layout_lanes.clone();
+        }
         if input_progress.contained_kadr_count.is_none() {
             input_progress.contained_kadr_count = session_input_progress.contained_kadr_count;
         }
@@ -983,7 +986,10 @@ impl ProductionMapService {
             if !rezka_merge_state_is_consistent(&input_lineage, &active_rolls) {
                 return Err(ProductionMapError::ProgressInputInvalid);
             }
-            if active_rolls.is_empty() {
+            if active_rolls.is_empty() && !order_map.products.is_empty() {
+                let counts = super::layout::cut_counts(order_map, &stage.node_id, &input_progress.layout_lanes)?;
+                rezka_output_identities_from_kadr_counts(apparatus, order_id, action, order_map, &stage.node_id, &counts)?
+            } else if active_rolls.is_empty() {
                 rezka_output_identities(
                     apparatus,
                     order_id,
@@ -1018,6 +1024,11 @@ impl ProductionMapService {
                 &input_progress,
             )]
         };
+        if !order_map.products.is_empty() && apparatus::is_rezka_apparatus(canonical) {
+            let counts = output_identities.iter().map(|output| output.contained_kadr_count.unwrap_or(0) as i64).collect::<Vec<_>>();
+            let layout = super::layout::output_layout(order_map, &session, &counts);
+            session.payload_json["rezka_layout_outputs"] = layout;
+        }
         let report = if apparatus::is_rezka_apparatus(canonical) {
             Some(RezkaOutputReport::prepare(
                 &session, &mut progress, &mut output_identities,
@@ -1026,6 +1037,15 @@ impl ProductionMapService {
             None
         };
         let recording = progress.rezka_record_frame_index.is_some();
+        if !order_map.products.is_empty()
+            && apparatus::is_rezka_apparatus(canonical)
+            && !progress.complete_without_output
+            && !recording
+            && output_identities.len() > 1
+            && progress.rezka_frames.is_empty()
+        {
+            return Err(ProductionMapError::RezkaFrameCountMismatch);
+        }
         let frame_values = if progress.complete_without_output {
             Vec::new()
         } else if let Some(index) = progress.rezka_record_frame_index {
@@ -1261,6 +1281,7 @@ impl ProductionMapService {
                 context,
                 quantity: quantity.clone(),
                 output_identity: ProgressOutputIdentity {
+                    lane_offset: output_identity.lane_offset,
                     batch_id: output_identity.batch_id.clone(),
                     qr_payload: output_identity.qr_payload.clone(),
                     frame_index: output_identity.frame_index,
@@ -2600,14 +2621,15 @@ impl ProductionMapService {
         } else {
             Vec::new()
         };
+        if !order_map.products.is_empty() &&
+            (current_links.layout_lanes.is_empty() || current_links.layout_lanes != next_links.layout_lanes) {
+            return Err(ProductionMapError::MergeInputNotAccepted);
+        }
         let merged_contained_kadr_count = if is_rezka {
             if active_rolls.is_empty() {
-                let output_kadr_counts = rezka_output_kadr_counts(
-                    order_map,
-                    apparatus,
-                    &current_links.stage_node_id,
-                    current_links.contained_kadr_count,
-                )?;
+                let output_kadr_counts = if order_map.products.is_empty() {
+                    rezka_output_kadr_counts(order_map, apparatus, &current_links.stage_node_id, current_links.contained_kadr_count)?
+                } else { super::layout::cut_counts(order_map, &current_links.stage_node_id, &current_links.layout_lanes)? };
                 initialize_rezka_active_partial_rolls(
                     &mut payload,
                     &output_kadr_counts,
@@ -2623,12 +2645,9 @@ impl ProductionMapService {
                         .map_err(|_| ProductionMapError::InvalidRezkaFrameGroups)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            let next_output_kadr_counts = rezka_output_kadr_counts(
-                order_map,
-                apparatus,
-                &current_links.stage_node_id,
-                next_links.contained_kadr_count,
-            )?;
+            let next_output_kadr_counts = if order_map.products.is_empty() {
+                rezka_output_kadr_counts(order_map, apparatus, &current_links.stage_node_id, next_links.contained_kadr_count)?
+            } else { super::layout::cut_counts(order_map, &current_links.stage_node_id, &next_links.layout_lanes)? };
             if active_output_kadr_counts != next_output_kadr_counts {
                 return Err(ProductionMapError::MergeInputFrameCountMismatch {
                     active_kadr_count: active_output_kadr_counts.iter().sum(),

@@ -237,6 +237,16 @@ impl MiniOrderSink for PostgresMiniOrderSink {
         Ok(synced)
     }
 
+    async fn order_calculation(
+        &self,
+        order_id: &str,
+    ) -> Result<CalculateOrderTemplate, crate::core::order_edit::OrderEditError> {
+        let mut tx = self.pool.begin().await?;
+        let source = order_edit::load_source(&mut tx, order_id).await?;
+        tx.commit().await?;
+        Ok(source.template)
+    }
+
     async fn order_edit_source(
         &self,
         order_id: &str,
@@ -388,14 +398,22 @@ async fn save_order_tx_inner(
         .execute(&mut **tx).await.map_err(|_| MiniOrderError::StoreFailed)?;
     }
 
-    let product_id = format!("{order_id}:product");
-    sqlx::query("DELETE FROM mini_order_products WHERE order_id = $1 AND id <> $2")
+    let products: Vec<(String, String, String)> = if template.products.is_empty() {
+        vec![(format!("{order_id}:product"), template.item_code.clone(), product_name.to_string())]
+    } else {
+        template.products.iter().map(|p| (
+            format!("{order_id}:product:{}", p.id), p.item_code.clone(), p.product.clone()
+        )).collect()
+    };
+    let product_ids = products.iter().map(|p| p.0.clone()).collect::<Vec<_>>();
+    sqlx::query("DELETE FROM mini_order_products WHERE order_id = $1 AND NOT (id = ANY($2))")
         .bind(&order_id)
-        .bind(&product_id)
+        .bind(&product_ids)
         .execute(&mut **tx)
         .await
         .map_err(|_| MiniOrderError::StoreFailed)?;
 
+    for (product_id, item_code, product_name) in products {
     sqlx::query(
         "INSERT INTO mini_order_products
                 (id, order_id, item_code, product_name, material_display, color,
@@ -441,21 +459,23 @@ async fn save_order_tx_inner(
     )
     .bind(product_id)
     .bind(&order_id)
-    .bind(template.item_code.trim())
+    .bind(item_code.trim())
     .bind(product_name)
     .bind(template.material_display.trim())
     .bind(template.color.trim())
-    .bind(first_layer.material)
-    .bind(first_layer.micron)
-    .bind(second_layer.material)
-    .bind(second_layer.micron)
-    .bind(third_layer.material)
-    .bind(third_layer.micron)
-    .bind(layers_json)
+    .bind(&first_layer.material)
+    .bind(&first_layer.micron)
+    .bind(&second_layer.material)
+    .bind(&second_layer.micron)
+    .bind(&third_layer.material)
+    .bind(&third_layer.micron)
+    .bind(&layers_json)
     .bind(template.note.trim())
     .execute(&mut **tx)
     .await
     .map_err(|_| MiniOrderError::StoreFailed)?;
+
+    }
 
     sqlx::query(
         "UPDATE mini_production_maps

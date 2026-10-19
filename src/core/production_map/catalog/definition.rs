@@ -7,6 +7,8 @@ use crate::core::quantity::deserialize_optional_integer_count;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProductionMapDefinition {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub products: Vec<crate::core::order_layout::OrderProduct>,
     pub id: String,
     pub product_code: String,
     pub title: String,
@@ -44,6 +46,19 @@ pub struct ProductionMapDefinition {
 }
 
 impl ProductionMapDefinition {
+    pub fn layout_lanes(&self) -> Vec<crate::core::order_layout::OrderLane> {
+        crate::core::order_layout::lanes(&self.products, &self.id, &self.order_number)
+    }
+
+    pub fn layout_widths(&self) -> Vec<f64> {
+        self.layout_lanes().iter().map(|lane| lane.width_mm).collect()
+    }
+
+    pub fn useful_width_mm(&self) -> Option<f64> {
+        if self.products.is_empty() { self.width_mm }
+        else { Some(crate::core::order_layout::useful_width(&self.products)) }
+    }
+
     pub fn print_compatibility_width_mm(&self) -> Option<f64> {
         self.print_val_size_mm.or(self.width_mm)
     }

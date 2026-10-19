@@ -22,6 +22,7 @@ pub(super) fn order_sheet_row(
         return None;
     }
     let calculation = calculate(CalculateRequest {
+        products: template.products.clone(),
         order_number: Some(map.order_number.trim().to_string()),
         product: Some(template.product.trim().to_string()),
         kg: Some(template.kg),

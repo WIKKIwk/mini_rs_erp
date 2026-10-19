@@ -11,6 +11,7 @@ use crate::core::production_map::{
 #[test]
 fn order_sheet_row_matches_legacy_excel_columns() {
     let map = ProductionMapDefinition {
+        products: Vec::new(),
         print_val_size_mm: None,
         id: "zakaz-7775".to_string(),
         product_code: "ITEM-1".to_string(),
@@ -84,6 +85,7 @@ fn order_sheet_row_matches_legacy_excel_columns() {
 #[test]
 fn order_sheet_row_marks_flexo_orders_with_f() {
     let map = ProductionMapDefinition {
+        products: Vec::new(),
         print_val_size_mm: None,
         id: "zakaz-1123".to_string(),
         product_code: "ITEM-F".to_string(),
@@ -156,6 +158,7 @@ fn test_map(
     apparatus_id: &str,
 ) -> ProductionMapDefinition {
     ProductionMapDefinition {
+        products: Vec::new(),
         print_val_size_mm: None,
         id: id.to_string(),
         product_code: "ITEM-1".to_string(),
@@ -213,4 +216,15 @@ fn test_template(source_map_id: &str, order_number: &str) -> CalculateOrderTempl
         kg: 500.0,
         ..CalculateOrderTemplate::default()
     }
+}
+
+#[test]
+fn multi_product_order_sheet_uses_combined_width() {
+    let map = test_map("zakaz-7776", "7776", "Bosma 7", "apparatus:default:bosma_7");
+    let mut template = test_template(&map.id, &map.order_number);
+    template.products = crate::core::order_layout::tests::products();
+    template = crate::core::calculate_orders::hydrate_template_dimensions(template);
+    let row = order_sheet_row(&map, &template).expect("mixed order sheet row");
+    assert_eq!(row[9], serde_json::json!(575.0));
+    assert!(row[13].as_f64().unwrap() > 0.0);
 }

@@ -113,12 +113,13 @@ impl ProductionMapService {
             if map.product_code.trim().is_empty() {
                 return Err(ProductionMapError::ProgressInputInvalid);
             }
+            let (product_code, product_name) = super::layout::finished_product(&map, original)?;
             let (qty, uom) = finished_goods_qty_uom(original)?;
             let mut stock = finished_goods_stock_entry(
                 original,
                 &receipt.warehouse,
-                &map.product_code,
-                &map.title,
+                &product_code,
+                &product_name,
                 &actor,
                 qty,
                 uom,

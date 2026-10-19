@@ -65,7 +65,10 @@ impl ProductionMapService {
             snapshot_session_lineage(Some(&session), true, order_id, apparatus)
                 .ok_or(ProductionMapError::RezkaOutputCycleConflict)?;
         let mut legacy_input_witness = serde_json::Value::Null;
-        let kadr_counts = if partial_rolls.is_empty() {
+        let kadr_counts = if partial_rolls.is_empty() && !map.products.is_empty() {
+            super::super::layout::cut_counts(&map, &stage.node_id, &super::super::layout::payload_lanes(&session.payload_json))?
+                .into_iter().map(|n| n as i64).collect()
+        } else if partial_rolls.is_empty() {
             let input = session_progress_links(&session);
             let mut input_count = input.contained_kadr_count;
             if input_count.is_none() && (!input.batch_id.is_empty() || !input.qr_payload.is_empty())
@@ -160,7 +163,8 @@ impl ProductionMapService {
         let witness = serde_json::to_value((&map, &control, &session, legacy_input_witness))
             .map_err(|_| ProductionMapError::StoreFailed)?;
         Ok(CurrentRezkaOutputReport {
-            report: serde_json::json!({"cycle_id": cycle, "frames": frames}),
+            report: serde_json::json!({"cycle_id": cycle, "frames": frames,
+                "layout_outputs": super::super::layout::output_layout(&map, &session, &kadr_counts)}),
             kadr_counts,
             witness,
         })

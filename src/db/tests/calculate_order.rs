@@ -182,6 +182,7 @@ async fn postgres_calculate_order_store_round_trips_and_dedupes_quick_templates(
 
 fn test_template(code: &str, width_mm: f64, kg: f64) -> CalculateOrderTemplate {
     CalculateOrderTemplate {
+        products: Vec::new(),
         variant_id: String::new(),
         production_options: None,
         print_val_size_mm: None,

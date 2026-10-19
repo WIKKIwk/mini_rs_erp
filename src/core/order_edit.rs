@@ -8,6 +8,115 @@ pub struct OrderEditSource {
     pub map: ProductionMapDefinition,
     pub template: CalculateOrderTemplate,
     pub revision: i64,
+    #[serde(default)]
+    pub restrictions: OrderEditRestrictions,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OrderEditRestrictions {
+    pub locked_layer_indices: Vec<usize>,
+    pub dimensions_locked: bool,
+    pub layer_structure_locked: bool,
+    pub unresolved_materials: bool,
+}
+
+impl OrderEditRestrictions {
+    /// Inventory assignments have no layer ID. Lock every matching layer of a
+    /// material family; an unknown family must never unlock a possible match.
+    pub(crate) fn for_materials(
+        template: &CalculateOrderTemplate,
+        assignments: &[Vec<String>],
+    ) -> Self {
+        if assignments.is_empty() {
+            return Self::default();
+        }
+        let layers = template.effective_layers();
+        let mut locked = std::collections::BTreeSet::new();
+        let mut unresolved_materials = false;
+        for identities in assignments {
+            let matches: Vec<_> = layers.iter().enumerate().filter_map(|(index, layer)| {
+                identities.iter().any(|identity| {
+                    material_identity_matches(identity, &layer.material_id)
+                        || material_identity_matches(identity, &layer.material)
+                }).then_some(index)
+            }).collect();
+            if matches.is_empty() {
+                unresolved_materials = true;
+                locked.extend(0..layers.len());
+            } else {
+                locked.extend(matches);
+            }
+        }
+        Self {
+            locked_layer_indices: locked.into_iter().collect(),
+            dimensions_locked: true,
+            layer_structure_locked: true,
+            unresolved_materials,
+        }
+    }
+}
+
+fn material_identity_matches(identity: &str, material: &str) -> bool {
+    let normalize = |value: &str| value.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
+    let identity = normalize(identity);
+    let material = normalize(material);
+    if material.is_empty() {
+        return false;
+    }
+    if identity == material {
+        return true;
+    }
+    // Legacy roll names can be "CPP 1000/35". Only a complete, numeric
+    // width/micron suffix is accepted, never a substring (PE != PET).
+    let Some(suffix) = identity.strip_prefix(&format!("{material} ")) else {
+        return false;
+    };
+    let Some((width, micron)) = suffix.split_once('/') else {
+        return false;
+    };
+    let positive = |value: &str| {
+        let value = value.trim().replace(',', ".");
+        !value.is_empty()
+            && value.chars().all(|c| c.is_ascii_digit() || c == '.')
+            && value.parse::<f64>().is_ok_and(|n| n.is_finite() && n > 0.0)
+    };
+    positive(width) && positive(micron)
+}
+
+/// Called with the server's current policy, including again under DB locks.
+/// The policy echoed by a client is never used to authorize a change.
+pub(crate) fn validate_material_edit(
+    source: &OrderEditSource,
+    template: &CalculateOrderTemplate,
+) -> Result<(), OrderEditError> {
+    let original = &source.template;
+    let restrictions = &source.restrictions;
+    let before = original.effective_layers();
+    let after = template.effective_layers();
+    if restrictions.layer_structure_locked && before.len() != after.len() {
+        return Err(OrderEditError::Locked(
+            "Xomashyo ulangan buyurtmada qatlam qo‘shish yoki olib tashlash mumkin emas. Ulanmagan qatlamning material turi va mikronini o‘zgartirish mumkin",
+        ));
+    }
+    for &index in &restrictions.locked_layer_indices {
+        if before.get(index).is_none() || before.get(index) != after.get(index) {
+            return Err(OrderEditError::Invalid(format!(
+                "{}-qatlamga xomashyo ulangan yoki bog‘lanishini aniq ajratib bo‘lmadi. Bu qatlamning material turi, mikroni va o‘rnini o‘zgartirib bo‘lmaydi. Buyurtmani qayta ochib joriy cheklovlarni tekshiring",
+                index + 1,
+            )));
+        }
+    }
+    if restrictions.dimensions_locked
+        && (original.frame_product_size_mm != template.frame_product_size_mm
+            || original.frame_count != template.frame_count
+            || original.edge_allowance_mm != template.edge_allowance_mm
+            || original.products != template.products)
+    {
+        return Err(OrderEditError::Locked(
+            "Xomashyo ulangan buyurtmada kadr eni, kadr soni, chet qo‘shimchasi va mahsulotlar joylashuvini o‘zgartirib bo‘lmaydi: bu qiymatlar ulangan rulonlarning eniga bog‘liq",
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -183,7 +292,9 @@ pub(crate) fn validate_route(
             }
             let width = template
                 .print_val_size_mm
-                .unwrap_or(template.frame_product_size_mm * template.frame_count);
+                .unwrap_or(if template.products.is_empty() {
+                    template.frame_product_size_mm * template.frame_count
+                } else { crate::core::order_layout::useful_width(&template.products) });
             if !pechat::apparatus_profile_can_handle_order(
                 canonical,
                 template.roll_count,
@@ -227,7 +338,8 @@ pub(crate) fn calculation_map_changed(
     before: &ProductionMapDefinition,
     after: &ProductionMapDefinition,
 ) -> bool {
-    before.product_code != after.product_code
+    before.products != after.products
+        || before.product_code != after.product_code
         || before.title != after.title
         || before.customer_name != after.customer_name
         || before.roll_count != after.roll_count
@@ -239,3 +351,6 @@ pub(crate) fn calculation_map_changed(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod material_tests;

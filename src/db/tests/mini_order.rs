@@ -190,6 +190,7 @@ async fn postgres_mini_order_sink_saves_order_and_product_rows() {
 
 fn test_map() -> ProductionMapDefinition {
     ProductionMapDefinition {
+        products: Vec::new(),
         print_val_size_mm: None,
         id: "zakaz-9001".to_string(),
         product_code: "ITEM-9001".to_string(),
@@ -240,6 +241,7 @@ fn test_node(id: &str, kind: ProductionMapNodeKind, title: &str, y: f64) -> Prod
 
 fn test_template() -> CalculateOrderTemplate {
     CalculateOrderTemplate {
+        products: Vec::new(),
         variant_id: String::new(),
         production_options: None,
         print_val_size_mm: None,

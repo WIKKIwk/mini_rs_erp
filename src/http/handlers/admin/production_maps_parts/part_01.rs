@@ -332,6 +332,9 @@ pub async fn production_map_auto_open(
         return Err(method_not_allowed());
     }
     let ProductionMapAutoOpenRequest { mut template } = parse_json(&body)?;
+    if !template.products.is_empty() {
+        template = crate::core::calculate_orders::hydrate_template_dimensions(template);
+    }
     // Automatic opening always creates a new order from the current Calculate
     // fields; never mutate or clone the reusable template identity supplied by
     // the client.
@@ -380,6 +383,18 @@ async fn save_production_map_with_order(
     principal: &Principal,
     mut input: ProductionMapSaveWithOrderRequest,
 ) -> Result<Response, AdminError> {
+    if let Some(template) = input.template.take() {
+        let template = if template.products.is_empty() { template } else {
+            crate::core::calculate_orders::hydrate_template_dimensions(template)
+        };
+        validate_multi_product_customer(state, &template).await?;
+        input.map.products = template.products.clone();
+        if !template.products.is_empty() {
+            input.map.product_code = template.item_code.clone();
+            input.map.title = template.product.clone();
+        }
+        input.template = Some(template);
+    }
     if !input.pending_order_id.is_empty() {
         return complete_pending_order(state, principal, input).await;
     }

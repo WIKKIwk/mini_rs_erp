@@ -9,6 +9,8 @@ use super::normalize::normalize_branch;
 use crate::core::apparatus_standard::ApparatusId;
 
 pub(super) fn validate_map(map: &ProductionMapDefinition) -> Result<(), ProductionMapError> {
+    crate::core::order_layout::validate_products(&map.products)
+        .map_err(|_| ProductionMapError::ProgressInputInvalid)?;
     if map
         .print_val_size_mm
         .is_some_and(|size| !size.is_finite() || size <= 0.0)

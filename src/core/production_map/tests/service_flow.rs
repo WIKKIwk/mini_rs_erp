@@ -21,6 +21,9 @@ use async_trait::async_trait;
 
 use super::fixtures::{apparatus_stage_map, canonical_apparatus_stage_map, sample_map};
 
+#[path = "multi_product_flow.rs"]
+mod multi_product_flow;
+
 #[path = "service_flow_map_extension.rs"]
 mod map_extension;
 #[path = "topology_alternatives.rs"]

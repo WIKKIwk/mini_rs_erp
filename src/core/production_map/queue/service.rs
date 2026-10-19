@@ -1323,6 +1323,12 @@ impl ProductionMapService {
                         .iter()
                         .map(|roll| i64::from(roll.contained_kadr_count))
                         .collect()
+                } else if is_rezka && !order_map.products.is_empty() {
+                    let lanes = active_session.map(|s| super::super::layout::payload_lanes(&s.payload_json)).unwrap_or_default();
+                    match super::super::layout::cut_counts(order_map, &stage_node_id, &lanes) {
+                        Ok(counts) => counts.into_iter().map(|n| n as i64).collect(),
+                        Err(_) => continue,
+                    }
                 } else if is_rezka {
                     match snapshot_rezka_output_kadr_counts(
                         order_map,
@@ -1375,11 +1381,12 @@ impl ProductionMapService {
                         stage_node_id,
                         previous_stage_ready,
                         rezka_total_waste_only,
-                        rezka_output_kadr_counts,
+                        rezka_output_kadr_counts: rezka_output_kadr_counts.clone(),
                         rezka_output_report: if is_rezka {
                             active_session
                                 .map(|session| {
                                     serde_json::json!({
+                                        "layout_outputs": super::super::layout::output_layout(order_map, session, &rezka_output_kadr_counts),
                                         "cycle_id": session.payload_json.get("rezka_output_cycle")
                                             .and_then(serde_json::Value::as_str)
                                             .unwrap_or(&session.session_id),

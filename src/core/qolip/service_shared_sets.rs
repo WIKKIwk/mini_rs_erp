@@ -1,4 +1,36 @@
 impl QolipService {
+    /// A common production run may use only complete plate sets shared by all
+    /// its products, including any required product-local extensions.
+    pub async fn required_qolips_for_layout(
+        &self,
+        products: &[crate::core::order_layout::OrderProduct],
+        item_code: &str,
+        item_name: &str,
+    ) -> Result<Vec<QolipProductSpec>, QolipError> {
+        if products.is_empty() { return self.required_qolips_for_order(item_code, item_name).await; }
+        let mut all = Vec::new();
+        let mut checked = std::collections::BTreeSet::new();
+        for product in products {
+            if checked.insert(product.item_code.trim()) {
+                all.push(self.required_qolips_for_order(&product.item_code, &product.product).await?);
+            }
+        }
+        let first = all.first().ok_or(QolipError::ProductNotFound)?;
+        let codes = |specs: Vec<&QolipProductSpec>| specs.into_iter()
+            .map(|s| s.qolip_code.trim().to_lowercase()).collect::<std::collections::BTreeSet<_>>();
+        let mut accepted = std::collections::BTreeSet::new();
+        for candidate in first {
+            let selected = selected_product_specs(first, &candidate.qolip_code);
+            let expected = codes(selected);
+            if all.iter().skip(1).all(|specs| {
+                specs.iter().any(|s| s.qolip_code.eq_ignore_ascii_case(&candidate.qolip_code)) &&
+                codes(selected_product_specs(specs, &candidate.qolip_code)) == expected
+            }) { accepted.extend(expected); }
+        }
+        if accepted.is_empty() { return Err(QolipError::QolipCodeMismatch); }
+        Ok(first.iter().filter(|s| accepted.contains(&s.qolip_code.trim().to_lowercase())).cloned().collect())
+    }
+
     async fn compatible_specs_for_product(
         &self,
         product: &QolipProduct,

@@ -5,6 +5,49 @@ use crate::core::production_map::{
 };
 use std::sync::Arc;
 
+#[test]
+fn multi_product_automatic_route_uses_actual_consecutive_widths() {
+    let mut order = template(PrintMethod::Flexo, 2, 0.0, 6.0);
+    order.products = crate::core::order_layout::tests::products();
+    order.edge_allowance_mm = 15.0;
+    let map = generate(&order, &catalog(250), &[]).unwrap();
+    assert_eq!(map.width_mm, Some(575.0));
+    assert_eq!(map.products, order.products);
+    let cut = map.nodes.iter().find(|n| n.id.starts_with("pre_lamination_cut")).unwrap();
+    let widths = crate::core::order_layout::group_widths(&map.layout_widths(), &cut.rezka_frame_groups).unwrap();
+    assert!(widths.iter().all(|width| *width <= 250.0));
+    assert_eq!(widths.iter().sum::<f64>(), 560.0);
+    let cut_ids = [cut.canonical_apparatus_id().unwrap()].into_iter().collect();
+    let lam = map.nodes.iter().find(|n| n.id.starts_with("laminate")).unwrap();
+    assert_eq!(stage_input_widths(&map, &lam.id, &cut_ids), widths);
+}
+
+#[test]
+fn multi_product_route_can_trim_edges_before_lamination_without_splitting_lanes() {
+    let mut order = template(PrintMethod::Flexo, 2, 0.0, 6.0);
+    order.products = crate::core::order_layout::tests::products();
+    order.products[2].frame_product_size_mm = 100.0;
+    order.edge_allowance_mm = 15.0;
+    let map = generate(&order, &catalog(600), &[]).unwrap();
+    let cut = map.nodes.iter().find(|n| n.id.starts_with("pre_lamination_cut")).unwrap();
+    assert_eq!(cut.rezka_frame_groups, vec![6]);
+    let cut_ids = [cut.canonical_apparatus_id().unwrap()].into_iter().collect();
+    let lam = map.nodes.iter().find(|n| n.id.starts_with("laminate")).unwrap();
+    assert_eq!(stage_input_widths(&map, &lam.id, &cut_ids), vec![600.0]);
+}
+
+#[test]
+fn multi_product_print_val_changes_print_selection_only() {
+    let mut order = template(PrintMethod::Metal, 1, 0.0, 6.0);
+    order.products = crate::core::order_layout::tests::products();
+    order.edge_allowance_mm = 15.0;
+    order.print_val_size_mm = Some(850.0);
+    let map = generate(&order, &catalog(1000), &[]).unwrap();
+    assert_eq!(map.width_mm, Some(575.0));
+    assert_eq!(map.layout_widths(), vec![115.0,115.0,80.0,80.0,85.0,85.0]);
+    assert_eq!(map.print_val_size_mm, Some(850.0));
+}
+
 fn template(method: PrintMethod, layers: usize, width: f64, frames: f64) -> CalculateOrderTemplate {
     CalculateOrderTemplate {
         name: "Auto order".into(),

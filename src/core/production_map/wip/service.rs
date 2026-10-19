@@ -227,14 +227,15 @@ impl ProductionMapService {
         {
             return Err(ProductionMapError::ProgressBatchNotAccepted);
         }
-        let item_code = order_map.product_code.trim();
+        let (product_code, product_name) = super::layout::finished_product(&order_map, &batch)?;
+        let item_code = product_code.trim();
         if item_code.is_empty() {
             return Err(ProductionMapError::ProgressInputInvalid);
         }
-        let item_name = if order_map.title.trim().is_empty() {
+        let item_name = if product_name.trim().is_empty() {
             batch.label_item_name.trim()
         } else {
-            order_map.title.trim()
+            product_name.trim()
         };
         let now = unix_seconds();
         let (qty, uom) = finished_goods_qty_uom(&batch)?;

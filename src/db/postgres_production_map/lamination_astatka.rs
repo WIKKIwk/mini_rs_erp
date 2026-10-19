@@ -6,6 +6,10 @@ use crate::core::quantity::{erp_quantity_to_units, positive_erp_quantity};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
+#[cfg(test)]
+#[path = "lamination_optional_materials_tests.rs"]
+mod optional_materials_tests;
+
 fn db_error(error: sqlx::Error) -> ProductionMapError {
     tracing::error!(%error, "atomic lamination astatka storage failed");
     ProductionMapError::StoreFailed
@@ -158,8 +162,27 @@ impl PostgresProductionMapStore {
             .iter()
             .map(|s| (s.source_kind.as_str(), s.source_id.as_str()))
             .collect();
-        if submitted.len() != remainders.len() || submitted != available || submitted.is_empty() {
+        if submitted.len() != remainders.len() || submitted != available {
             return Err(ProductionMapError::ProgressInputInvalid);
+        }
+        if available.is_empty() {
+            // Optional material tracking permits a count/waste report with no
+            // stock returns. Recheck the admin policy inside this transaction.
+            let policy: Value = sqlx::query_scalar(
+                "SELECT policies_json->'material' FROM mini_apparatus WHERE id=$1 FOR SHARE",
+            )
+            .bind(&apparatus)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(db_error)?;
+            let policy: crate::core::apparatus_standard::MaterialExecutionPolicy =
+                serde_json::from_value(policy).map_err(|_| ProductionMapError::StoreFailed)?;
+            if !matches!(
+                policy,
+                crate::core::apparatus_standard::MaterialExecutionPolicy::NotRequired { .. }
+            ) {
+                return Err(ProductionMapError::ProgressInputInvalid);
+            }
         }
         for input in &remainders {
             let source = sources

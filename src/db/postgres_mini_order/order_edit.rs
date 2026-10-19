@@ -3,7 +3,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::core::calculate_orders::CalculateOrderTemplate;
-use crate::core::order_edit::{OrderEditError as Error, OrderEditSource, check_queue_position};
+use crate::core::order_edit::{
+    OrderEditError as Error, OrderEditRestrictions, OrderEditSource, check_queue_position,
+    validate_material_edit,
+};
 use crate::core::production_map::{
     ProductionMapDefinition, ProductionMapService, QueueActionActor,
     queue_state::ApparatusQueueOrderState,
@@ -87,10 +90,25 @@ pub(super) async fn load_source(
     template.order_number = map.order_number.clone();
     template.code = map.code.clone();
     template.kg = map.order_kg.unwrap_or(template.kg);
+    let assignments = sqlx::query_as::<_, (String, String, String, String)>(
+        "SELECT a.item_code, COALESCE(a.payload_json->>'item_name', ''),
+                COALESCE(s.item_code, ''), COALESCE(s.item_name, '')
+         FROM mini_raw_material_assignments a
+         LEFT JOIN mini_raw_material_stock s ON lower(s.barcode) = lower(a.barcode)
+         WHERE a.order_id = $1",
+    )
+    .bind(id)
+    .fetch_all(&mut **tx)
+    .await?
+    .into_iter()
+    .map(|(code, name, stock_code, stock_name)| vec![code, name, stock_code, stock_name])
+    .collect::<Vec<_>>();
+    let restrictions = OrderEditRestrictions::for_materials(&template, &assignments);
     Ok(OrderEditSource {
         map,
         template,
         revision,
+        restrictions,
     })
 }
 
@@ -162,8 +180,8 @@ fn legacy_calculation(
     }
 }
 
-// Historical rows intentionally count, even after detach/cancel/reset. A
-// pending status alone cannot prove that production has never started.
+// All of these tables remain locked during save. Only pure material
+// attachment/detachment is exempted from the history gate below.
 const ACTIVITY_TABLES: &[&str] = &[
     "mini_queue_action_events",
     "mini_order_run_sessions",
@@ -200,7 +218,7 @@ fn activity_reason(table: &str) -> &'static str {
             "Buyurtmada ishlab chiqarish natijasi yoki WIP partiyasi qayd etilgan. Ishlab chiqarish tarixini tekshiring. Harakat boshlangan buyurtmani tahrirlash taqiqlangan"
         }
         "mini_raw_material_assignments" | "mini_raw_material_events" => {
-            "Buyurtmaga xomashyo biriktirilgan yoki xomashyo harakati qayd etilgan. Xomashyo tarixini tekshiring. Xomashyo keyin ajratilgan bo‘lsa ham tahrirlash taqiqlangan"
+            "Buyurtmada xomashyo ishlatish yoki ombor harakati qayd etilgan. Oddiy ulash/ajratishdan tashqari xomashyo tarixi mavjud buyurtmani tahrirlash taqiqlangan"
         }
         "mini_opening_wip_intakes" | "mini_opening_wip_batches" => {
             "Buyurtmada boshlang‘ich yarim tayyor mahsulot (opening WIP) ochilgan. Opening WIP tarixini tekshiring. Keyin bekor qilingan bo‘lsa ham tahrirlash taqiqlangan"
@@ -262,7 +280,20 @@ pub(super) async fn check_eligible(
         ));
     }
     for table in ACTIVITY_TABLES {
-        let query = format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE order_id = $1)");
+        if *table == "mini_raw_material_assignments" {
+            continue;
+        }
+        let query = if *table == "mini_raw_material_events" {
+            // NULL/legacy/unrecognized events fail closed. Usage and reversed
+            // consumption still block edits, even when their net quantity is 0.
+            "SELECT EXISTS(SELECT 1 FROM mini_raw_material_events WHERE order_id = $1
+             AND (event_type IN ('order_reserved', 'order_unreserved')
+                  AND source_type = 'order_assignment' AND qty_delta = 0
+                  AND stock_status_before = 'available'
+                  AND stock_status_after = 'available') IS NOT TRUE)".to_string()
+        } else {
+            format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE order_id = $1)")
+        };
         if sqlx::query_scalar::<_, bool>(&query)
             .bind(id)
             .fetch_one(&mut **tx)
@@ -271,9 +302,14 @@ pub(super) async fn check_eligible(
             return Err(Error::Locked(activity_reason(table)));
         }
     }
-    let (work_started, material_reserved) = sqlx::query_as::<_, (bool, bool)>(
+    let (work_started, material_unavailable) = sqlx::query_as::<_, (bool, bool)>(
         "SELECT EXISTS(SELECT 1 FROM mini_queue_states WHERE order_id = $1 AND state <> 'pending'),
-         EXISTS(SELECT 1 FROM mini_raw_material_stock WHERE reserved_order_id = $1)",
+         EXISTS(SELECT 1 FROM mini_raw_material_stock WHERE reserved_order_id = $1)
+         OR EXISTS(
+             SELECT 1 FROM mini_raw_material_assignments a
+             LEFT JOIN mini_raw_material_stock s ON lower(s.barcode) = lower(a.barcode)
+             WHERE a.order_id = $1 AND (s.id IS NULL OR s.status <> 'available'
+                 OR s.reserved_order_id <> '' OR NOT (s.qty > 0 AND s.qty < 'Infinity'::float8)))",
     )
     .bind(id)
     .fetch_one(&mut **tx)
@@ -283,9 +319,9 @@ pub(super) async fn check_eligible(
             "Buyurtma apparatda kutish holatida emas: ish boshlangan yoki holati o‘zgartirilgan. Apparatdagi buyurtma holatini tekshiring. Bunday buyurtmani tahrirlash taqiqlangan",
         ));
     }
-    if material_reserved {
+    if material_unavailable {
         return Err(Error::Locked(
-            "Buyurtma uchun omborda xomashyo band qilingan. Xomashyo bandlovini tekshiring. Xomashyo bog‘langan buyurtmani tahrirlash taqiqlangan",
+            "Ulangan xomashyo ishlatishga olingan, tugagan yoki ombordagi yozuvi mavjud emas. Xomashyo holatini tekshiring. Faqat ishlatish boshlanmagan xomashyo bilan buyurtmani tahrirlash mumkin",
         ));
     }
     check_queues(tx, id).await
@@ -393,6 +429,10 @@ pub(super) async fn save(
         return Err(Error::Conflict);
     }
     check_eligible(&mut tx, &map.id).await?;
+    validate_material_edit(&current, template)?;
+    if current.restrictions.dimensions_locked && current.map.width_mm != map.width_mm {
+        return Err(Error::Locked("Xomashyo ulangan buyurtmaning umumiy enini o‘zgartirib bo‘lmaydi"));
+    }
     // updated_at is also the implicit queue ordering key. Editing must not
     // move the order (or other orders) when no explicit sequence was saved.
     let queue_position = sqlx::query_scalar::<_, String>(
@@ -403,7 +443,7 @@ pub(super) async fn save(
     .await?;
     super::super::postgres_production_map::save_edited_map_tx(&mut tx, map).await?;
     let payload = serde_json::to_value(template).map_err(|_| Error::Store)?;
-    let audit = serde_json::json!({ "actor": actor, "before": current.template, "after": template, "revision": current.revision + 1 });
+    let audit = serde_json::json!({ "actor": actor, "before": current.template, "after": template, "revision": current.revision + 1, "restrictions": current.restrictions });
     sqlx::query("UPDATE mini_orders SET calculation_json = $2, calculation_revision = calculation_revision + 1,
         calculation_edit_log = calculation_edit_log || jsonb_build_array($3::jsonb || jsonb_build_object('at', now())) WHERE id = $1")
         .bind(&map.id).bind(payload).bind(audit).execute(&mut *tx).await?;
@@ -415,12 +455,11 @@ pub(super) async fn save(
         .bind(queue_position)
         .execute(&mut *tx)
         .await?;
+    // An editable layer may now use an already assigned material family.
+    // Return restrictions calculated for the newly saved layer list as well.
+    let saved = load_source(&mut tx, &map.id).await?;
     tx.commit().await?;
-    Ok(OrderEditSource {
-        map: map.clone(),
-        template: template.clone(),
-        revision: current.revision + 1,
-    })
+    Ok(saved)
 }
 
 #[cfg(test)]

@@ -320,6 +320,9 @@ impl ProductionMapService {
         if started_apparatus.is_empty() {
             return Ok(());
         }
+        if previous.products != next.products {
+            return Err(ProductionMapError::StartedProductionMapStageLocked);
+        }
 
         let mut locked_node_ids = previous
             .nodes

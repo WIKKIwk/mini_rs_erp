@@ -35,7 +35,7 @@ pub use production_maps::{
     production_map_move, production_map_move_batch, production_map_opening_wip,
     production_map_opening_wip_lookup, production_map_opening_wip_print,
     production_map_opening_wip_qr_report, production_map_order_alert, production_map_order_control,
-    production_map_order_edit, production_map_order_image_view,
+    production_map_order_edit, production_map_order_summary, production_map_order_image_view,
     production_map_order_scan_bootstrap, production_map_rezka_output_report, production_map_paddon_create,
     production_map_paddon_delete, production_map_paddon_detail, production_map_paddon_item_add,
     production_map_paddon_item_remove, production_map_paddon_items_add,

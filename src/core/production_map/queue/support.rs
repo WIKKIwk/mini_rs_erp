@@ -437,6 +437,9 @@ fn finished_goods_stock_payload(
 ) -> serde_json::Value {
     serde_json::json!({
         "source": "production_finished_goods_receipt",
+        "product_id": batch.payload_json.get("product_id"),
+        "product_order_number": batch.payload_json.get("product_order_number"),
+        "layout_lanes": batch.payload_json.get("layout_lanes"),
         "progress_batch_id": batch.batch_id.trim(),
         "qr_payload": batch.qr_payload.trim(),
         "warehouse": warehouse,

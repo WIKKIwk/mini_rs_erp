@@ -406,6 +406,7 @@ pub async fn production_map_progress_qr_reprint(
         .display_name
         .clone();
     let item_name = match state.production_maps.raw_map(&batch.order_id).await {
+        Ok(Some(order_map)) if !order_map.products.is_empty() => batch.label_item_name.clone(),
         Ok(Some(order_map)) => crate::core::production_map::progress_label_item_name(
             &order_map,
             &batch.apparatus,

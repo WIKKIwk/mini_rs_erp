@@ -52,6 +52,9 @@ pub(super) fn start_session_payload(
         "wip_started_at_unix": now,
         "wip_waiting_for_resume": false,
     });
+    if !input_progress.layout_lanes.is_empty() {
+        payload["layout_lanes"] = serde_json::json!(input_progress.layout_lanes);
+    }
     if let Some(contained_kadr_count) = input_progress.contained_kadr_count {
         payload["contained_kadr_count"] = serde_json::json!(contained_kadr_count);
     }
@@ -148,6 +151,7 @@ pub(super) fn zero_quantity_event(
 
 #[derive(Clone, Default)]
 pub(super) struct SessionProgressLinks {
+    pub(super) layout_lanes: Vec<crate::core::order_layout::OrderLane>,
     pub(super) batch_id: String,
     pub(super) qr_payload: String,
     pub(super) apparatus: String,
@@ -158,6 +162,7 @@ pub(super) struct SessionProgressLinks {
 
 pub(super) fn session_progress_links(session: &OrderRunSession) -> SessionProgressLinks {
     SessionProgressLinks {
+        layout_lanes: super::layout::payload_lanes(&session.payload_json),
         batch_id: json_string_field(&session.payload_json, "input_progress_batch_id"),
         qr_payload: json_string_field(&session.payload_json, "input_progress_qr_payload"),
         apparatus: json_string_field(&session.payload_json, "input_progress_apparatus"),
@@ -181,6 +186,7 @@ pub(crate) fn lamination_input_was_released(session: &OrderRunSession) -> bool {
 
 pub(super) fn progress_links_from_batch(batch: &OrderProgressBatch) -> SessionProgressLinks {
     SessionProgressLinks {
+        layout_lanes: super::layout::payload_lanes(&batch.payload_json),
         batch_id: batch.batch_id.clone(),
         qr_payload: batch.qr_payload.clone(),
         apparatus: batch.apparatus.clone(),
@@ -206,6 +212,7 @@ pub(super) fn progress_links_from_opening_wip(
             record.intake.source_apparatus.clone()
         },
         source_kind: "opening_wip".to_string(),
+        layout_lanes: Vec::new(),
         stage_node_id: target_stage_node_id.trim().to_string(),
         contained_kadr_count: None,
     }
@@ -232,6 +239,7 @@ pub(super) fn progress_quantity(
 
 #[derive(Clone)]
 pub(super) struct ProgressOutputIdentity {
+    pub(super) lane_offset: Option<usize>,
     pub(super) batch_id: String,
     pub(super) qr_payload: String,
     pub(super) frame_index: Option<usize>,
@@ -276,6 +284,7 @@ pub(super) fn progress_output_identity(
     };
     let qr_payload = non_empty_or(output_qr_input, &progress_qr_payload(&batch_id));
     ProgressOutputIdentity {
+        lane_offset: None,
         batch_id,
         qr_payload,
         frame_index: None,
@@ -321,6 +330,7 @@ pub(super) fn rezka_output_identities_from_kadr_counts(
         return Err(ProductionMapError::InvalidRezkaFrameGroups);
     }
     let output_count = output_kadr_counts.len();
+    let mut lane_offset = 0;
     let is_final = chain::is_final_work_stage_node(order_map, stage_node_id);
     let base_id = progress_batch_id(apparatus, order_id, action);
     Ok(output_kadr_counts
@@ -329,7 +339,10 @@ pub(super) fn rezka_output_identities_from_kadr_counts(
         .enumerate()
         .map(|(index, contained_kadr_count)| {
             let batch_id = format!("{base_id}:frame:{}", index + 1);
+            let offset = lane_offset;
+            lane_offset += contained_kadr_count;
             ProgressOutputIdentity {
+                lane_offset: Some(offset),
                 qr_payload: progress_qr_payload(&batch_id),
                 batch_id,
                 frame_index: Some(index + 1),
@@ -608,6 +621,11 @@ pub(super) fn progress_batch_record(
         input.output_identity,
     )?;
     write_progress_batch_input_links(&mut batch.payload_json, &source_input_links);
+    super::layout::apply_output_layout(
+        &mut batch, input.order_map, &input.input_progress.layout_lanes,
+        !input.input_progress.batch_id.is_empty(), input.output_identity.lane_offset,
+        input.output_identity.contained_kadr_count,
+    )?;
     batch.refresh_status_detail();
     Ok(batch)
 }
@@ -739,6 +757,9 @@ pub(super) fn progress_session_payload(
         "input_wip_source_kind": input_progress.source_kind,
     });
     metrics.write_payload_fields(&mut payload, description);
+    if !input_progress.layout_lanes.is_empty() {
+        payload["layout_lanes"] = serde_json::json!(input_progress.layout_lanes);
+    }
     if let Some(contained_kadr_count) = input_progress.contained_kadr_count {
         payload["contained_kadr_count"] = serde_json::json!(contained_kadr_count);
     }

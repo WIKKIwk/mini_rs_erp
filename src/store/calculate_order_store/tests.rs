@@ -3,6 +3,29 @@ use rusqlite::{Connection, params};
 use super::*;
 
 #[tokio::test]
+async fn multi_product_sqlite_templates_keep_width_and_distinct_layouts() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = CalculateOrderStore::new(dir.path().join("orders.sqlite"));
+    let mut template = hydrate_template_dimensions(CalculateOrderTemplate {
+        products: crate::core::order_layout::tests::products(),
+        customer_ref: "CUST-001".into(),
+        edge_allowance_mm: 15.0,
+        layers: vec![crate::core::formula::LayerInput::new("pet", "12")],
+        ..Default::default()
+    });
+    let saved = store.upsert("admin:multi", template.clone()).await.unwrap();
+    assert_eq!(saved.width_mm, 575.0);
+    template.products[2].frame_product_size_mm = 90.0;
+    template = hydrate_template_dimensions(template);
+    let second = store.upsert("admin:multi", template).await.unwrap();
+    assert_eq!(second.width_mm, 595.0);
+    let loaded = store.list("admin:multi").await.unwrap();
+    assert_eq!(loaded.len(), 2);
+    assert!(loaded.contains(&saved));
+    assert!(loaded.contains(&second));
+}
+
+#[tokio::test]
 async fn calculate_order_sqlite_store_round_trips_and_upserts_templates() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("orders.sqlite");
@@ -12,6 +35,7 @@ async fn calculate_order_sqlite_store_round_trips_and_upserts_templates() {
         .upsert(
             "admin:admin",
             CalculateOrderTemplate {
+                products: Vec::new(),
                 variant_id: String::new(),
                 production_options: None,
                 print_val_size_mm: None,
@@ -169,6 +193,7 @@ async fn calculate_order_sqlite_store_dedupes_same_quick_template_across_order_c
     let store = CalculateOrderStore::new(dir.path().join("orders.sqlite"));
 
     let base = CalculateOrderTemplate {
+        products: Vec::new(),
         variant_id: String::new(),
         production_options: None,
         print_val_size_mm: None,
@@ -307,6 +332,7 @@ async fn calculate_order_sqlite_store_dedupes_legacy_same_code_rows() {
     .expect("legacy schema");
 
     let old = CalculateOrderTemplate {
+        products: Vec::new(),
         variant_id: String::new(),
         production_options: None,
         print_val_size_mm: None,
@@ -450,6 +476,7 @@ async fn calculate_order_sqlite_store_hydrates_legacy_width_only_payload() {
 
 fn test_template(code: &str) -> CalculateOrderTemplate {
     CalculateOrderTemplate {
+        products: Vec::new(),
         variant_id: String::new(),
         production_options: None,
         print_val_size_mm: None,

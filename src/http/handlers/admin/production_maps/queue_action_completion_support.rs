@@ -143,7 +143,7 @@ async fn prepare_qolips_for_bosma_start(
     }
     let required_qolips = state
         .qolip
-        .required_qolips_for_order(&map.product_code, &map.title)
+        .required_qolips_for_layout(&map.products, &map.product_code, &map.title)
         .await
         .map_err(qolip_queue_error)?;
     let mut preparations = Vec::with_capacity(qolip_codes.len());

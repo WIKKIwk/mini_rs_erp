@@ -166,7 +166,7 @@ fn order_edit_activity_reasons_identify_every_guarded_history() {
     ] {
         assert!(activity_reason(table).contains(reason), "{table}");
     }
-    assert!(activity_reason("mini_raw_material_events").contains("keyin ajratilgan"));
+    assert!(activity_reason("mini_raw_material_events").contains("Oddiy ulash/ajratishdan tashqari"));
     assert!(activity_reason("mini_opening_wip_intakes").contains("bekor qilingan"));
 }
 use crate::core::mini_orders::MiniOrderSink;
@@ -497,6 +497,11 @@ async fn order_edit_postgres_atomic_save_history_and_races() {
         (true, count),
         "quick clones do not modify reusable templates"
     );
+    let mut material_order = make_order("3001", false);
+    material_order.template.layers.push(crate::core::formula::LayerInput::new("PE", "40"));
+    sink.create_order_atomic(&material_order).await.unwrap();
+    maps.put_apparatus_sequence("apparatus:test:cut", vec!["zakaz-1001".into(), "zakaz-3001".into()]).await.unwrap();
+    verify_material_edit_restrictions(&pool, &runtime_pool, &sink).await;
     runtime_pool.close().await;
     pool.close().await;
     sqlx::query(&format!("DROP DATABASE {db}"))
@@ -504,6 +509,72 @@ async fn order_edit_postgres_atomic_save_history_and_races() {
         .await
         .unwrap();
     admin.close().await;
+}
+
+async fn verify_material_edit_restrictions(
+    pool: &PgPool,
+    runtime_pool: &PgPool,
+    sink: &PostgresMiniOrderSink,
+) {
+    let maps = PostgresProductionMapStore::new(runtime_pool.clone());
+    let opened = sink.order_edit_source("zakaz-3001").await.unwrap();
+    assert_eq!(opened.restrictions, OrderEditRestrictions::default());
+    for (barcode, material) in [("EDIT-PET", "PET"), ("EDIT-PE", "PE")] {
+        sqlx::query("INSERT INTO mini_raw_material_stock(id,warehouse,item_code,item_name,barcode,qty) VALUES($1,'raw',$2,$2,$1,100)")
+            .bind(barcode).bind(material).execute(pool).await.unwrap();
+    }
+    let assignment = |barcode: &str, material: &str| {
+        serde_json::from_value::<crate::core::production_map::RawMaterialAssignment>(serde_json::json!({
+            "order_id":"zakaz-3001", "apparatus_id":"apparatus:test:cut", "apparatus":"Cut",
+            "barcode":barcode, "item_code":material, "item_name":material, "item_group":"Rulon",
+            "assigned_by_role":"admin", "assigned_by_ref":"admin", "assigned_by_display_name":"Admin",
+            "assigned_at":"2026-10-19T00:00:00Z"
+        })).unwrap()
+    };
+    // Use the real assignment writer and its append-only reservation event.
+    maps.put_raw_material_assignment(assignment("EDIT-PET", "PET")).await.unwrap();
+    let current = sink.order_edit_source("zakaz-3001").await.unwrap();
+    assert_eq!(current.restrictions.locked_layer_indices, vec![0]);
+    let mut forbidden = opened.template.clone();
+    forbidden.layers[0].micron = "35".into();
+    assert!(matches!(sink.save_order_edit(&opened, &opened.map, &forbidden, &QueueActionActor::default()).await,
+        Err(Error::Invalid(_))), "new attachment must be checked under save locks");
+    let mut changed = current.template.clone();
+    changed.layers[1].micron = "45".into();
+    changed.kg = 600.0;
+    let mut map = current.map.clone();
+    map.order_kg = Some(600.0);
+    let saved = sink.save_order_edit(&current, &map, &changed, &QueueActionActor::default()).await.unwrap();
+    assert_eq!(saved.revision, 1);
+    assert_eq!(saved.template.effective_layers()[1].micron, "45");
+    assert_eq!(saved.restrictions.locked_layer_indices, vec![0]);
+    let stock: (f64, String, String) = sqlx::query_as("SELECT qty::float8,status,reserved_order_id FROM mini_raw_material_stock WHERE barcode='EDIT-PET'")
+        .fetch_one(pool).await.unwrap();
+    assert_eq!(stock, (100.0, "available".into(), "".into()));
+    maps.put_raw_material_assignment(assignment("EDIT-PE", "PE")).await.unwrap();
+    changed.layers[1].micron = "50".into();
+    assert!(matches!(sink.save_order_edit(&saved, &map, &changed, &QueueActionActor::default()).await,
+        Err(Error::Invalid(_))));
+    let both = sink.order_edit_source("zakaz-3001").await.unwrap();
+    assert_eq!(both.revision, 1, "a rejected save must not mutate the order");
+    assert_eq!(both.restrictions.locked_layer_indices, vec![0, 1]);
+    for status in ["in_use", "consumed", "deleted", "reserved"] {
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::query("UPDATE mini_raw_material_stock SET status=$1 WHERE barcode='EDIT-PET'")
+            .bind(status).execute(&mut *tx).await.unwrap();
+        assert!(matches!(check_eligible(&mut tx, "zakaz-3001").await, Err(Error::Locked(_))), "{status}");
+        tx.rollback().await.unwrap();
+    }
+    // Detaching unused rolls frees their fields; reservation history alone
+    // remains permissible. Null/usage history is covered by the denied cases.
+    for barcode in ["EDIT-PET", "EDIT-PE"] {
+        maps.delete_raw_material_assignment("zakaz-3001", barcode).await.unwrap();
+        sqlx::query("INSERT INTO mini_raw_material_events(event_id,idempotency_key,event_type,warehouse,barcode,item_code,order_id,actor_role,actor_ref,source_type,source_id,stock_status_before,stock_status_after) VALUES ($1,$1,'order_unreserved','raw',$2,$3,'zakaz-3001','admin','admin','order_assignment','zakaz-3001','available','available')")
+            .bind(format!("unreserve-{barcode}")).bind(barcode).bind(barcode.trim_start_matches("EDIT-"))
+            .execute(runtime_pool).await.unwrap();
+    }
+    let detached = sink.order_edit_source("zakaz-3001").await.unwrap();
+    assert_eq!(detached.restrictions, OrderEditRestrictions::default());
 }
 
 async fn verify_runtime_history_locks(pool: &PgPool) {

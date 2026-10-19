@@ -19,18 +19,18 @@ pub fn calculate_with_material_catalog(
 ) -> Result<CalculateResponse, String> {
     hydrate_layers_from_material_display(&mut request);
     let kg = require_number(request.kg, "KG")?;
-    let frame_product_size_mm =
-        require_number(request.frame_product_size_mm, "Kadrdagi mahsulot o'lchami")?;
-    let frame_count = require_number(request.frame_count, "Kadr soni")?;
+    let (frame_product_size_mm, frame_count) = if request.products.is_empty() {
+        (require_number(request.frame_product_size_mm, "Kadrdagi mahsulot o'lchami")?,
+         require_number(request.frame_count, "Kadr soni")?)
+    } else {
+        crate::core::order_layout::validate_products(&request.products)?;
+        (0.0, crate::core::order_layout::frame_count(&request.products) as f64)
+    };
     let edge_allowance_mm = request
         .edge_allowance_mm
         .unwrap_or(DEFAULT_EDGE_ALLOWANCE_MM);
-    let width_mm = derive_width_mm(
-        Some(frame_product_size_mm),
-        Some(frame_count),
-        Some(edge_allowance_mm),
-    )?;
-    if kg <= 0.0 {
+    let width_mm = width_mm_from_request(&request)?;
+    if !kg.is_finite() || kg <= 0.0 {
         return Err("KG noto'g'ri".to_string());
     }
     let waste_percent = request.waste_percent.unwrap_or(5.0);
@@ -42,6 +42,7 @@ pub fn calculate_with_material_catalog(
 
     let rubber_size_mm = rubber_size(width_mm);
     Ok(CalculateResponse {
+        products: request.products.clone(),
         ok: true,
         order_number: clean_option(request.order_number),
         date: clean_option(request.date),
@@ -55,7 +56,10 @@ pub fn calculate_with_material_catalog(
         frame_count,
         edge_allowance_mm,
         width_mm,
-        min_mold_size_mm: min_mold_size_mm(frame_product_size_mm, frame_count, rubber_size_mm),
+        min_mold_size_mm: if request.products.is_empty() {
+            min_mold_size_mm(frame_product_size_mm, frame_count, rubber_size_mm)
+        } else { (width_mm - edge_allowance_mm + MIN_MOLD_EXTRA_MM)
+            .max(f64::from(rubber_size_mm) + MIN_MOLD_EXTRA_MM) },
         rubber_size_mm,
         waste_percent,
         roll_count: request.roll_count,
@@ -202,6 +206,15 @@ pub fn derive_width_mm(
 }
 
 fn width_mm_from_request(request: &CalculateRequest) -> Result<f64, String> {
+    if !request.products.is_empty() {
+        crate::core::order_layout::validate_products(&request.products)?;
+        let edge = request.edge_allowance_mm.unwrap_or(DEFAULT_EDGE_ALLOWANCE_MM);
+        if !edge.is_finite() || edge < 0.0 {
+            return Err("Qo‘shimcha razmer noto‘g‘ri".into());
+        }
+        let width = crate::core::order_layout::useful_width(&request.products) + edge;
+        return if width.is_finite() { Ok(width) } else { Err("Razmer noto‘g‘ri".into()) };
+    }
     derive_width_mm(
         request.frame_product_size_mm,
         request.frame_count,

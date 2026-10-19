@@ -33,12 +33,17 @@ pub(super) fn stamp_template(
     } else {
         DEFAULT_EDGE_ALLOWANCE_MM
     };
-    template.width_mm = derive_width_mm(
-        Some(template.frame_product_size_mm),
-        Some(template.frame_count),
-        Some(template.edge_allowance_mm),
-    )
-    .unwrap_or_default();
+    template.width_mm = if template.products.is_empty() {
+        derive_width_mm(
+            Some(template.frame_product_size_mm),
+            Some(template.frame_count),
+            Some(template.edge_allowance_mm),
+        )
+        .unwrap_or_default()
+    } else {
+        crate::core::order_layout::useful_width(&template.products)
+            + template.edge_allowance_mm
+    };
     template.first_layer_material = template.first_layer_material.trim().to_string();
     template.first_layer_micron = template.first_layer_micron.trim().to_string();
     template.second_layer_material = template.second_layer_material.trim().to_string();
@@ -133,6 +138,11 @@ fn quick_template_key(template: &CalculateOrderTemplate) -> String {
     for layer in template.effective_layers() {
         parts.push(normalize_key(&layer.material));
         parts.push(normalize_key(&layer.micron));
+    }
+    for product in &template.products {
+        parts.push(normalize_key(&product.item_code));
+        parts.push(number_key(product.frame_product_size_mm));
+        parts.push(product.frame_count.to_string());
     }
     parts.push(normalize_key(&template.note));
     if let Some(options) = &template.production_options {

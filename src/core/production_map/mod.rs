@@ -6,6 +6,7 @@ mod capacity;
 pub mod chain;
 mod compiler;
 mod errors;
+mod layout;
 #[path = "compiler/formula.rs"]
 mod formula;
 #[path = "compiler/formula_parser.rs"]

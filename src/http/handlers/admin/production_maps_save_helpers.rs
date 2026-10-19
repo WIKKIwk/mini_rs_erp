@@ -117,6 +117,7 @@ pub(super) fn apply_order_rezka_kadr_count(
     template: &CalculateOrderTemplate,
     cut_apparatus_ids: &std::collections::BTreeSet<ApparatusId>,
 ) -> Result<(), AdminError> {
+    map.products = template.products.clone();
     let frame_count = template.frame_count.round();
     if !template.frame_count.is_finite()
         || frame_count <= 0.0
@@ -202,6 +203,7 @@ pub(super) fn apply_authoritative_calculation(
 ) -> Result<(), AdminError> {
     let response = calculate_with_material_catalog(
         CalculateRequest {
+            products: template.products.clone(),
             order_number: if template.order_number.trim().is_empty() {
                 None
             } else {
@@ -252,11 +254,35 @@ pub(super) fn apply_authoritative_calculation(
         .map(|result| result.rounded_length)
         .ok_or_else(|| bad_request("calculate result is empty"))?;
     map.width_mm = Some(response.width_mm);
+    map.products = template.products.clone();
     map.print_val_size_mm = template.print_val_size_mm;
     map.order_kg = Some(response.kg);
     // The legacy map field carries the production target, including waste.
     map.base_length = Some(planned_length);
     map.roll_count = response.roll_count;
+    Ok(())
+}
+
+pub(super) async fn validate_multi_product_customer(
+    state: &AppState,
+    template: &CalculateOrderTemplate,
+) -> Result<(), AdminError> {
+    if template.products.is_empty() { return Ok(()); }
+    crate::core::order_layout::validate_products(&template.products).map_err(|e| bad_request(&e))?;
+    if template.customer_ref.trim().is_empty() {
+        return Err(bad_request("Ko‘p mahsulotli buyurtma uchun mijozni tanlang"));
+    }
+    state.admin.customer_detail(&template.customer_ref).await
+        .map_err(|_| bad_request("Mijoz topilmadi"))?;
+    let mut checked = std::collections::BTreeSet::new();
+    for product in &template.products {
+        if !checked.insert(product.item_code.trim()) { continue; }
+        let detail = state.admin.item_detail(&product.item_code).await
+            .map_err(|_| bad_request("Tanlangan mahsulot topilmadi"))?;
+        if !detail.is_finished_goods || !detail.customers.iter().any(|c| c.ref_.trim() == template.customer_ref.trim()) {
+            return Err(bad_request(&format!("{} tanlangan mijozga tegishli tayyor mahsulot emas", product.product)));
+        }
+    }
     Ok(())
 }
 

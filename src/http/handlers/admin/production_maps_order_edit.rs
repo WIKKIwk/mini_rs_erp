@@ -10,6 +10,25 @@ struct OpenedOrderEditRequest {
     template: CalculateOrderTemplate,
 }
 
+pub async fn production_map_order_summary(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<OpenedOrderEditQuery>,
+) -> Result<Response, AdminError> {
+    authorize_any_capability(
+        &state,
+        &headers,
+        &[Capability::AdminAccess, Capability::ProductionMapManage],
+    )
+    .await?;
+    let template = state
+        .production_orders
+        .order_calculation(query.id.trim())
+        .await
+        .map_err(opened_order_edit_error)?;
+    Ok(json_response(serde_json::json!({ "template": template })))
+}
+
 fn opened_order_edit_error(error: crate::core::order_edit::OrderEditError) -> AdminError {
     use crate::core::order_edit::OrderEditError;
     match error {
@@ -63,7 +82,8 @@ pub async fn production_map_order_edit(
         (None, None) => true,
         _ => false,
     };
-    if !same_quantity(baseline.width_mm, current.map.width_mm)
+    if baseline.products != current.map.products
+        || !same_quantity(baseline.width_mm, current.map.width_mm)
         || !same_quantity(baseline.base_length, current.map.base_length)
         || baseline.roll_count != current.map.roll_count
         || baseline.print_val_size_mm != current.map.print_val_size_mm
@@ -84,13 +104,18 @@ pub async fn production_map_order_edit(
             crate::core::order_edit::OrderEditError::Conflict,
         ));
     }
-    let mut template = crate::core::calculate_orders::hydrate_template_layers(input.template);
+    let mut template = if input.template.products.is_empty() {
+        crate::core::calculate_orders::hydrate_template_layers(input.template)
+    } else { crate::core::calculate_orders::hydrate_template_dimensions(input.template) };
+    validate_multi_product_customer(&state, &template).await?;
     // Identity belongs to the existing order, not to the submitted form.
     template.id = current.template.id.clone();
     template.code = current.map.code.clone();
     template.order_number = current.map.order_number.clone();
     template.source_map_id = current.map.id.clone();
     validate_template(&template).map_err(calculate_order_error)?;
+    crate::core::order_edit::validate_material_edit(&current, &template)
+        .map_err(opened_order_edit_error)?;
     let mut map = current.map.clone();
     apply_authoritative_calculation(&mut map, &template, &materials)?;
     template.width_mm = map.width_mm.unwrap_or(template.width_mm);

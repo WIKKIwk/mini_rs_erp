@@ -39,7 +39,8 @@ pub fn generate(
     if !matches!(form.as_str(), "rulon" | "paket") {
         return Err("Rulon yoki Paket tanlang".into());
     }
-    let frames = template.frame_count;
+    let frames = if template.products.is_empty() { template.frame_count }
+        else { crate::core::order_layout::frame_count(&template.products) as f64 };
     if !frames.is_finite() || frames <= 0.0 || frames.fract() != 0.0 || frames > 1024.0 {
         return Err("Avtomatik map uchun kadr soni 1–1024 oralig‘ida bo‘lsin".into());
     }
@@ -49,6 +50,7 @@ pub fn generate(
         .ok_or("Val soni kerak")?;
     let calculation = calculate_with_material_catalog(
         CalculateRequest {
+            products: template.products.clone(),
             kg: Some(template.kg),
             frame_product_size_mm: Some(template.frame_product_size_mm),
             frame_count: Some(frames),
@@ -78,7 +80,9 @@ pub fn generate(
     let print_width = template.print_val_size_mm.unwrap_or(width);
     let profile_width = template
         .print_val_size_mm
-        .unwrap_or(template.frame_product_size_mm * frames);
+        .unwrap_or(if template.products.is_empty() {
+            template.frame_product_size_mm * frames
+        } else { crate::core::order_layout::useful_width(&template.products) });
     let printers = candidates(Operation::Print, Capability::Print)
         .into_iter()
         .filter(|a| {
@@ -112,15 +116,26 @@ pub fn generate(
     let mut widths = vec![width];
     if template.effective_layers().len() > 1 {
         let laminators = candidates(Operation::Laminate, Capability::Laminate);
-        let groups = best_frame_groups(width, frames as i64, &laminators)
+        let lane_widths = crate::core::order_layout::lanes(&template.products, "", "")
+            .iter().map(|lane| lane.width_mm).collect::<Vec<_>>();
+        let groups = if lane_widths.is_empty() {
+            best_frame_groups(width, frames as i64, &laminators)
+        } else { best_layout_groups(width, &lane_widths, &laminators) }
             .ok_or("Kadrni bo‘lmasdan laminatsiyaga joylab bo‘lmaydi: mos apparat topilmadi")?;
-        if groups.len() > 1 {
+        let needs_edge_trim = !lane_widths.is_empty()
+            && !laminators.iter().any(|a| lamination_fits(a, width));
+        if groups.len() > 1 || needs_edge_trim {
             let cutters = candidates(Operation::Cut, Capability::Cut)
                 .into_iter()
                 .filter(|a| width_fits(a, width))
                 .collect();
             graph.stage("pre_lamination_cut", cutters, Some(frames as i64), &groups)?;
-            widths = groups.iter().map(|n| width * *n as f64 / frames).collect();
+            widths = if lane_widths.is_empty() {
+                groups.iter().map(|n| width * *n as f64 / frames).collect()
+            } else {
+                crate::core::order_layout::group_widths(&lane_widths, &groups)
+                    .ok_or("Kadr joylashuvi noto‘g‘ri")?
+            };
         }
         let compatible = laminators
             .into_iter()
@@ -215,6 +230,15 @@ pub(crate) fn stage_input_widths(
             .is_some_and(|id| cut_ids.contains(&id))
             && let Some(frames) = node.rezka_kadr_count.filter(|n| *n > 0)
         {
+            if !map.products.is_empty() {
+                if let Some(groups) = crate::core::order_layout::group_widths(&map.layout_widths(), &node.rezka_frame_groups) {
+                    widths.extend(groups);
+                } else {
+                    // An invalid cutting plan must not admit an apparatus.
+                    widths.push(f64::INFINITY);
+                }
+                continue;
+            }
             if node.rezka_frame_groups.is_empty() {
                 widths.push(width / frames as f64);
             } else {
@@ -275,6 +299,36 @@ fn best_frame_groups(width: f64, frames: i64, laminators: &[&Apparatus]) -> Opti
     best
 }
 
+/// Find consecutive whole-lane strips using their actual widths. The first
+/// physical cut removes the common edge allowance; it is not spread over SKUs.
+fn best_layout_groups(width: f64, lanes: &[f64], laminators: &[&Apparatus]) -> Option<Vec<i64>> {
+    if laminators.iter().any(|a| lamination_fits(a, width)) {
+        return Some(vec![lanes.len() as i64]);
+    }
+    let mut best: Option<Vec<i64>> = None;
+    for apparatus in laminators {
+        let mut plans: Vec<Option<Vec<i64>>> = vec![None; lanes.len() + 1];
+        plans[0] = Some(Vec::new());
+        for end in 1..=lanes.len() {
+            let mut width = 0.0;
+            for start in (0..end).rev() {
+                width += lanes[start];
+                if !lamination_fits(apparatus, width) { continue; }
+                if let Some(mut plan) = plans[start].clone() {
+                    plan.push((end - start) as i64);
+                    if plans[end].as_ref().is_none_or(|old| plan.len() < old.len()) {
+                        plans[end] = Some(plan);
+                    }
+                }
+            }
+        }
+        if let Some(plan) = plans.pop().flatten() {
+            if best.as_ref().is_none_or(|old| plan.len() < old.len()) { best = Some(plan); }
+        }
+    }
+    best
+}
+
 struct Graph {
     map: ProductionMapDefinition,
     previous: Vec<String>,
@@ -286,6 +340,7 @@ impl Graph {
             "id": format!("zakaz-{}", t.order_number), "code": t.order_number,
             "order_number": t.order_number, "product_code": t.item_code,
             "title": t.product, "customer_name": t.customer, "image_id": t.image_id,
+            "products": t.products,
             "nodes": [{"id":"start","kind":"start","title":"Start","x":420,"y":32}]
         }))
         .expect("static production map shape");

@@ -66,7 +66,7 @@ pub async fn production_map_qolip_validate(
         };
         let required_qolips = state
             .qolip
-            .required_qolips_for_order(&training_map.map.product_code, &training_map.map.title)
+            .required_qolips_for_layout(&training_map.map.products, &training_map.map.product_code, &training_map.map.title)
             .await
             .map_err(qolip_queue_error)?;
         let required_qolip_codes = required_qolips
@@ -130,7 +130,7 @@ pub async fn production_map_qolip_validate(
     };
     let required_qolips = state
         .qolip
-        .required_qolips_for_order(&map.product_code, &map.title)
+        .required_qolips_for_layout(&map.products, &map.product_code, &map.title)
         .await
         .map_err(qolip_queue_error)?;
     let required_qolip_codes = required_qolips
