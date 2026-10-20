@@ -33,7 +33,11 @@ def main():
         ), "Failed correctness result"
         assert result["server"]["query_log"] is False
         assert diagnostics[mode]["server"]["query_log"] is True
+        assert result["server"]["mini_order_sync_interval_seconds"] == 30
+        assert diagnostics[mode]["server"]["mini_order_sync_interval_seconds"] == 0
+        assert result["server"]["binary_sha256"] == diagnostics[mode]["server"]["binary_sha256"]
     before, after = results["before"], results["after"]
+    assert crossprocess["candidate_binary_sha256"] == after["server"]["binary_sha256"]
     assert before["dataset_dump_sha256"] == after["dataset_dump_sha256"]
     assert before["fixture_roles"] == after["fixture_roles"]
     assert before["host"] == after["host"]
@@ -71,6 +75,22 @@ def main():
         "and two clone-only worker apparatus assignments allow three real worker "
         "principals to share one list; eight other apparatus scopes remain separate.",
         "",
+        "## Findings addressed during measurement",
+        "",
+        "An intermediate candidate exposed a PostgreSQL notification regression: "
+        "statement triggers fired for periodic reconciliation statements that "
+        "changed zero rows, invalidating stream caches unnecessarily. The final "
+        "migration uses row changes, suppresses unchanged row updates, and handles "
+        "TRUNCATE separately. An exact committed event ID also deduplicates the "
+        "local and PostgreSQL publication of the same preflight transaction. "
+        "The final primary run keeps periodic reconciliation enabled so this "
+        "background interaction remains part of the measurement.",
+        "",
+        "Shared prepared projections preserve principal-specific controls. "
+        "Administrator windows apply sparse row/property updates and metadata "
+        "checkpoints; notifications carry only notification data. Recent cursors "
+        "recover through bounded history with authoritative HTTP fallback.",
+        "",
         "## Status/control update fanout",
         "",
         "Five hold/release cycles = ten actual mutation events per scenario. "
@@ -92,23 +112,56 @@ def main():
             a["all_clients_latency_ms"]["p95"], b["total_frame_bytes"],
             a["total_frame_bytes"],
         ))
+    before_single = before["fanout"][0]["all_clients_latency_ms"]
+    after_single = after["fanout"][0]["all_clients_latency_ms"]
+    lines += [
+        "",
+        "Single-client median latency: %.1f → %.1f ms; mean: %.1f → %.1f ms. "
+        "With ten samples, the reported nearest-rank p95 is the maximum sample. "
+        "The full samples are retained in the JSON; neither average nor tail "
+        "latency is inferred from CPU savings." % (
+            before_single["p50"], after_single["p50"],
+            before_single["mean"], after_single["mean"],
+        ),
+    ]
     lines += [
         "", "## Administrator loaded windows", "",
         "Ten status changes per window. Bytes combine WebSocket frames and "
         "required gzip HTTP reload response bodies; HTTP headers are excluded.",
         "",
         "| Window | Before reload GETs | After reload GETs | Before bytes | "
-        "After bytes | Before p95 ms | After p95 ms |",
-        "|---|---:|---:|---:|---:|---:|---:|",
+        "After bytes | Before CPU ms | After CPU ms | Before p95 ms | After p95 ms |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for b, a in zip(before["admin_pages"], after["admin_pages"]):
         if b["name"].endswith("_exact_each_event"):
             continue
         assert b["name"] == a["name"]
-        lines.append("| %s | %s | %s | %s | %s | %.1f | %.1f |" % (
+        lines.append("| %s | %s | %s | %s | %s | %.1f | %.1f | %.1f | %.1f |" % (
             b["name"], b["reload_gets"], a["reload_gets"],
             b["total_body_and_frame_bytes"], a["total_body_and_frame_bytes"],
+            phases["before"][b["name"]]["server_cpu_ms"],
+            phases["after"][a["name"]]["server_cpu_ms"],
             b["latency_ms"]["p95"], a["latency_ms"]["p95"],
+        ))
+    lines += [
+        "", "## Actual order move and inverse", "",
+        "Three worker principals and a 40-row administrator window receive each "
+        "version-checked mutation. These single-event phases include required "
+        "page reloads and exclude subsequent exact HTTP oracle checks.",
+        "",
+        "| Action | Before CPU ms | After CPU ms | Before all-view ms | "
+        "After all-view ms | Before reload GETs | After reload GETs |",
+        "|---|---:|---:|---:|---:|---:|---:|",
+    ]
+    for index, (b, a) in enumerate(zip(before["reorder"]["records"], after["reorder"]["records"])):
+        phase = "reorder_" + str(index)
+        lines.append("| %s | %.1f | %.1f | %.1f | %.1f | %s | %s |" % (
+            "Move" if index == 0 else "Inverse",
+            phases["before"][phase]["server_cpu_ms"],
+            phases["after"][phase]["server_cpu_ms"],
+            b["all_views_latency_ms"], a["all_views_latency_ms"],
+            b["reload_gets"], a["reload_gets"],
         ))
     lines += ["", "## Other measured behavior", "", "| Scenario | Before | After |",
               "|---|---:|---:|"]
@@ -117,6 +170,9 @@ def main():
         ("Notification bootstrap full order maps", lambda r: r["notifications"]["map_count_sent"]),
         ("Reconnect snapshot GETs", lambda r: r["recovery"][0]["snapshot_gets"]),
         ("Reconnect replayed events", lambda r: r["recovery"][0]["replayed_events"]),
+        ("Recoverable stream errors / required snapshot GETs", lambda r:
+            "%s / %s" % (len(r["stream_error_recovery"]), sum(
+                e["snapshot_gets"] for e in r["stream_error_recovery"]))),
         ("Other-apparatus data events (two changes)", lambda r: sum(
             e["type"] != "no_event" for e in r["disjoint"]["events"])),
         ("Other-apparatus WS frame bytes (two changes)", lambda r: sum(
@@ -164,6 +220,11 @@ def main():
         "order statuses, stage states, maps, pagination metadata and cursors. "
         "A real version-checked reorder and its inverse restored the original "
         "sequence with no lost rows. Reconnect state matched fresh HTTP.",
+        "The baseline initially aborted twice on a `store_failed` stream error "
+        "during an active-hold check. The published complete pair permits the "
+        "same explicit authorized HTTP/reconnect recovery in both versions and "
+        "records each error and its extra GETs. Successful deltas are still "
+        "compared exactly; mismatches never trigger a hidden oracle repair.",
         "",
         "- Before: %s recorded exact checks." % len(before["correctness"]),
         "- After: %s recorded exact checks." % len(after["correctness"]),
@@ -184,7 +245,9 @@ def main():
         "paired run with 32 sockets maximum, not a capacity forecast. p95 uses ten "
         "samples per mutation scenario. Other role/capability combinations and broader "
         "deployment stress need their own tests beyond the admin/aparatchi scopes here. "
-        "No WAN, TLS, battery, physical mobile rendering or reconnect storm is measured.",
+        "CPU is the application server process only; database and load-client CPU "
+        "are excluded. No WAN, TLS, battery, physical mobile rendering or reconnect "
+        "storm is measured.",
         "",
         "Replay is bounded: state history retains at most 64 entries / 256 KiB "
         "for 90 seconds; page history retains at most 8 windows / 512 KiB for "

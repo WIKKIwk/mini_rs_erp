@@ -336,6 +336,7 @@ class Runner:
                 "mach_timebase": [TIMEBASE.numer, TIMEBASE.denom],
             },
             "phases": [], "fanout": [], "recovery": [], "admin_pages": [],
+            "stream_error_recovery": [],
             "correctness": [], "limitations": [
                 "Local host loopback and local PostgreSQL; no WAN or phone battery measurement.",
                 "Database transaction/block counters are not exact SQL query counts.",
@@ -468,9 +469,11 @@ class Runner:
         })
         metric, ready = socket_.event()
         assert ready["type"] == "state_ready", "Expected state stream bootstrap"
+        bootstrap_reload = None
         if ready.get("resync"):
-            _, snapshot = self.snapshot(token)
-        return {"socket": socket_, "token": token, "view": snapshot, "ready": ready}
+            bootstrap_reload, snapshot = self.snapshot(token)
+        return {"socket": socket_, "token": token, "view": snapshot, "ready": ready,
+                "bootstrap_reload": bootstrap_reload}
 
     def mutate(self, action, hold):
         client = HTTP(self.port, self.actor["token"])
@@ -509,6 +512,38 @@ class Runner:
             metric, event = client["socket"].event(timeout)
         except socket.timeout:
             return {"type": "no_event", "frame_bytes": 0, "latency_ms": None}
+        if "type" not in event:
+            code = event.get("error", "unknown")
+            safe_code = code if isinstance(code, str) and code.isidentifier() else "withheld"
+            # Real clients recover an unavailable stream through authorized HTTP.
+            # Keep the error and its cost visible; do not replace a mismatching
+            # successfully delivered delta with an oracle snapshot.
+            assert safe_code == "store_failed", (
+                "Unrecoverable stream error without a data event type: " + safe_code
+            )
+            attempts = client.get("error_recoveries", 0) + 1
+            assert attempts <= 3, "Repeated stream errors failed to converge"
+            client["socket"].close()
+            snapshot_metric, snapshot = self.snapshot(client["token"])
+            replacement = self.connect_state(client["token"], snapshot)
+            client.update(replacement, error_recoveries=attempts)
+            extra = replacement["bootstrap_reload"]
+            recovery = {
+                "error": safe_code, "snapshot_gets": 1 + int(extra is not None),
+                "snapshot_body_bytes": snapshot_metric["body_bytes"] +
+                    (extra["body_bytes"] if extra else 0),
+                "elapsed_ms": (time.perf_counter() - start) * 1000,
+            }
+            self.result["stream_error_recovery"].append(recovery)
+            # Receivers run concurrently. The owning phase/finally persists the
+            # completed records, avoiding competing atomic-file replacements.
+            return dict(
+                metric, type="state_error_recovered", latency_ms=recovery["elapsed_ms"],
+                frame_bytes=metric["frame_bytes"] + replacement["socket"].received,
+                patch_empty=False, resync_gets=recovery["snapshot_gets"],
+                recovery_snapshot_bytes=recovery["snapshot_body_bytes"],
+                reconnect_frame_bytes=replacement["socket"].received,
+            )
         kind = event["type"]
         if kind == "state_delta":
             client["view"] = apply_state(client["view"], event)

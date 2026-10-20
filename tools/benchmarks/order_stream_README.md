@@ -102,6 +102,12 @@ for follow-up diagnosis; remove them explicitly once they are no longer needed.
   the current mobile worker screen does not perform.
 - Reconnect with a recent old cursor checks ordered replay or a safe HTTP
   fallback, then exact REST equality.
+- A `store_failed` stream error explicitly closes that stream, fetches an
+  authorized HTTP snapshot and reconnects. Both versions use this same bounded
+  recovery, recording the error and its additional GET/body/frame costs.
+  Successful stream deltas that disagree with HTTP fail the check; they are
+  never silently replaced from the oracle. Unknown errors and more than three
+  recoveries on one client fail the run.
 - Administrator windows retain 40 sequence rows and 60 order rows. The baseline
   invalidation protocol reloads the loaded prefix; the candidate sparse patches
   and metadata checkpoints are applied directly. Both are checked against exact
