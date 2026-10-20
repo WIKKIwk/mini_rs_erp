@@ -17,12 +17,25 @@ def pct(before, after):
     return (after / before - 1) * 100
 
 
+def matching_rows(left, right):
+    assert [row['name'] for row in left] == [row['name'] for row in right], (
+        'Missing, extra or differently ordered comparison rows'
+    )
+    return zip(left, right)
+
+
 def validate(result, expected_interval):
     assert result['protocols'] == 'modern' and result['include_control'] is True
     assert result['server']['mini_order_sync_interval_seconds'] == expected_interval
     for row in result['correctness']:
         assert row.get('exact_rest_view_match', row.get('exact_rest_page_match'))
     for group in result['fanout']:
+        assert len(group['records']) == 2 * group['cycles']
+        assert [row['action'] for row in group['records']] == ['hold', 'failed'] * group['cycles']
+        assert group['control_returned'] == sum(
+            row['post']['control_returned'] for row in group['records']
+        )
+        assert group['control_returned'] + group['control_null'] == len(group['records'])
         for record in group['records']:
             assert all(event['exact_target_transition'] for event in record['events'])
 
@@ -39,8 +52,14 @@ def main():
     sql = {m: load(root, m + '-sql-counts.json') for m in primary}
     cross = load(root, 'crossprocess-results.json')
     cleanup = load(root, 'cleanup.json')
+    verification = load(root, 'verification.json')
+    intermediate_path = root / 'intermediate-460f1d54-after-results.json'
+    intermediate = load(root, intermediate_path.name) if intermediate_path.exists() else None
     before, after = primary['before'], primary['after']
+    assert cleanup['benchmark_servers_stopped']
     for group, interval in ((primary, 30), (repeat, 30), (sql, 0)):
+        for rows in ('phases', 'fanout', 'admin_pages'):
+            list(matching_rows(group['before'][rows], group['after'][rows]))
         for mode, result in group.items():
             validate(result, interval)
             assert result['dataset_dump_sha256'] == before['dataset_dump_sha256']
@@ -49,11 +68,17 @@ def main():
             assert result['harness_sha256'] == before['harness_sha256']
             assert result['server']['binary_sha256'] == primary[mode]['server']['binary_sha256']
             assert result['server']['query_log'] is (group is sql)
+            assert result['command_config'] == group['before']['command_config']
+        for b, a in matching_rows(group['before']['fanout'], group['after']['fanout']):
+            assert b['total_frame_bytes'] == a['total_frame_bytes'], (
+                'Worker payload byte count differs; investigate before publishing parity'
+            )
     for result in [*primary.values(), *repeat.values()]:
         assert all(len(row['records']) >= 40 for row in result['fanout'])
     assert cross['candidate_binary_sha256'] == after['server']['binary_sha256']
     assert cross['restored_original_order'] and cross['independent_os_processes'] == 2
     assert all(result['reorder']['restored_original_order'] for result in primary.values())
+    assert len(before['reorder']['records']) == len(after['reorder']['records']) == 2
     lines = [
         '# Snapshot cache reuse: measured comparison', '',
         'Date: ' + args.date + '. This compares the **previous optimized release** '
@@ -78,6 +103,23 @@ def main():
         'baseline → candidate for the full primary run, then candidate → baseline '
         'for the independent status repeat. Each status condition has 20 '
         'hold/release cycles (40 events). Results are reported separately.', '',
+    ]
+    if intermediate:
+        mixed = lambda result: next(
+            row for row in result['fanout'] if row['name'] == 'shared_apparatus_workers_32'
+        )
+        lines += ['## Regression found before the final candidate', '',
+            'The first cache-only candidate `460f1d54` reduced CPU but returned '
+            'null controls in **%s/40** mixed-worker actions, versus **%s/40** '
+            'on the baseline. These results are retained as an intermediate '
+            'failure, not the final comparison. The existing 250 ms optional '
+            'control deadline was too short for joining an in-flight shared '
+            'snapshot. The final candidate allows a bounded 1-second shared '
+            'cache wait while preserving authorization and revision checks. '
+            'Final and reverse-repeat null counts and POST latency are shown '
+            'below; the deadline tradeoff is not hidden.' % (
+                mixed(intermediate)['control_null'], mixed(before)['control_null']), '']
+    lines += [
         '## End-to-end status latency', '',
         'Latency starts before receiver submission and POST, ending when every '
         'client applies the exact generated hold or its matching release. It '
@@ -90,7 +132,7 @@ def main():
         '|---|---:|---:|---:|---:|---:|---:|---:|',
     ]
     for label, group in [('Primary', primary), ('Reverse repeat', repeat)]:
-        for b, a in zip(group['before']['fanout'], group['after']['fanout']):
+        for b, a in matching_rows(group['before']['fanout'], group['after']['fanout']):
             assert b['name'] == a['name']
             x, y = b['all_clients_latency_ms'], a['all_clients_latency_ms']
             lines.append('| %s / %s / %s | %.2f | %.2f | %.2f | %.2f | %+.1f%% | %.2f | %.2f |' % (
@@ -100,13 +142,15 @@ def main():
         'CPU is process CPU over the complete phase; memory is sampled RSS peak. '
         'Control latency below is the complete HTTP response arrival time, '
         'including the optional control when present; it is not an isolated '
-        'server control-build timer.', '',
+        'server control-build timer. The harness records null controls but does '
+        "not simulate Flutter's follow-up scoped bootstrap/section GETs after "
+        'a null control; those costs are excluded from these POST/stream phases.', '',
         '| Run / sockets / principals | CPU ms before → after | CPU change | '
         'Peak RSS MiB before → after | POST p95 ms before → after | '
         'Control null before → after | Stream recovery GETs before → after |',
         '|---|---:|---:|---:|---:|---:|---:|']
     for label, group in [('Primary', primary), ('Reverse repeat', repeat)]:
-        for b, a in zip(group['before']['fanout'], group['after']['fanout']):
+        for b, a in matching_rows(group['before']['fanout'], group['after']['fanout']):
             x, y = phase(group['before'], b['name']), phase(group['after'], a['name'])
             gets = lambda row: sum(e.get('resync_gets', 0) for r in row['records'] for e in r['events'])
             lines.append('| %s / %s / %s | %.1f → %.1f | %+.1f%% | %.1f → %.1f | %.2f → %.2f | %s → %s | %s → %s |' % (
@@ -127,13 +171,13 @@ def main():
         'are used only here. Counts include SQLx query events during each phase; '
         'their timing is not mixed with primary latency.', '',
         '| Phase | Before statements | After statements | Change |', '|---|---:|---:|---:|']
-    for b, a in zip(sql['before']['phases'], sql['after']['phases']):
+    for b, a in matching_rows(sql['before']['phases'], sql['after']['phases']):
         assert b['name'] == a['name']
         x, y = b['sqlx_statement_events'], a['sqlx_statement_events']
         lines.append('| %s | %s | %s | %+.1f%% |' % (b['name'], x, y, pct(x, y)))
     lines += ['', '## Retained behavior checks', '',
         '| Scenario | Before | After |', '|---|---:|---:|']
-    for b, a in zip(before['admin_pages'], after['admin_pages']):
+    for b, a in matching_rows(before['admin_pages'], after['admin_pages']):
         if b['name'].endswith('_exact_each_event'): continue
         lines.append('| %s: reload GETs / p95 ms | %s / %.2f | %s / %.2f |' % (
             b['name'], b['reload_gets'], b['latency_ms']['p95'], a['reload_gets'], a['latency_ms']['p95']))
@@ -163,16 +207,24 @@ def main():
         'move/inverse match fresh HTTP, including pagination. A separate candidate '
         'two-OS-process check verifies PostgreSQL invalidation and exact authorized '
         'content across hold, release, move and inverse; it is not a distributed '
-        'capacity test.', '', '## Limits and cleanup', '',
+        'capacity test.', '', '## Focused verification', '',
+        verification['backend'], '', verification['mobile'], '',
+        'These are focused checks, not a full-suite pass claim.', '',
+        'Commands and retained logs:', '',
+        *['- `' + item + '`' for item in verification['commands_and_logs']], '',
+        '## Limits and cleanup', '',
         'Loopback, one local PostgreSQL dataset and at most 32 sockets. No WAN, '
         'mobile rendering, battery, TLS or high-scale capacity claim. Both raw '
         'runs and outliers are retained. SQL logging, diagnostic tracing and '
         'period0 results are not substituted for default-configuration timing.', '',
         'Private artifacts: `' + str(root) + '`. Cleanup evidence is included in '
-        'the JSON. Benchmark servers are stopped; PostgreSQL is restored to its '
-        'original stopped state when no independent clients are connected.', '']
+        'the JSON. Benchmark servers stopped: **%s**. PostgreSQL cleanup state: '
+        '**%s**. Independent PostgreSQL sessions before cleanup: **%s**.' % (
+            cleanup['benchmark_servers_stopped'], cleanup['postgres_state'],
+            cleanup['independent_postgres_sessions_before_stop']), '']
     combined = {'primary': primary, 'reverse_repeat': repeat, 'sql_diagnostic': sql,
-                'crossprocess': cross, 'cleanup': cleanup}
+                'crossprocess': cross, 'cleanup': cleanup, 'verification': verification,
+                'intermediate_cache_only_candidate': intermediate}
     out.mkdir(parents=True, exist_ok=True)
     stem = out / ('order_stream_cache_' + args.date)
     stem.with_suffix('.json').write_text(json.dumps(combined, indent=2) + '\n')
