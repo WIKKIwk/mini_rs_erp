@@ -17,6 +17,8 @@ pub struct QolipManagedSet {
 pub struct QolipMoldDraft {
     pub qolip_code: String,
     #[serde(default)]
+    pub existing_only: bool,
+    #[serde(default)]
     pub size: i32,
     #[serde(default)]
     pub color: String,

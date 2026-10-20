@@ -46,6 +46,10 @@ impl MemoryQolipStore {
                 }
             };
             set.snapshot = snapshot;
+            let targets = memory_set_targets(&links, &id, &set.item_code);
+            set.snapshot
+                .products
+                .retain(|product| targets.contains(&product.code.to_lowercase()));
             registry.insert(id, set.clone());
             if memory_management_owner(&set.warehouse, allowed).is_ok() {
                 result.push(set);
@@ -147,6 +151,10 @@ impl MemoryQolipStore {
             &registry,
         )?
         .ok_or(QolipError::SetChanged)?;
+        let targets = memory_set_targets(&links, &input.set_id, &set.item_code);
+        set.snapshot
+            .products
+            .retain(|product| targets.contains(&product.code.to_lowercase()));
         registry.insert(input.set_id.clone(), set.clone());
         Ok(set)
     }
@@ -186,8 +194,14 @@ impl MemoryQolipStore {
                 let spec = if let Some(spec) =
                     specs.values().find(|s| s.qolip_code.to_lowercase() == code)
                 {
+                    if !draft.existing_only {
+                        return Err(QolipError::QolipCodeConflict);
+                    }
                     spec.clone()
                 } else {
+                    if draft.existing_only {
+                        return Err(QolipError::QolipCodeNotFound);
+                    }
                     let id = format!("qolip-local:{:032x}", rand::random::<u128>());
                     draft.spec(
                         (&item.code, &item.name, &item.item_group),
@@ -197,6 +211,11 @@ impl MemoryQolipStore {
                     )?
                 };
                 memory_management_owner(&spec.warehouse, allowed)?;
+                if spec.item_code.eq_ignore_ascii_case(&item.code)
+                    && !spec.item_group.eq_ignore_ascii_case(&item.item_group)
+                {
+                    return Err(QolipError::ProductTransferConflict);
+                }
                 specs.insert(code.clone(), spec);
                 next.insert((item.code.to_lowercase(), code), true);
             }

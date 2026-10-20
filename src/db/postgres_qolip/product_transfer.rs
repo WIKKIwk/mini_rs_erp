@@ -150,7 +150,14 @@ pub(super) async fn reject_product_in_use(tx: &mut Transaction<'_, Postgres>, it
     let busy = sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS (SELECT 1 FROM mini_order_run_sessions session
          JOIN mini_production_maps map ON map.id = session.order_id
-         WHERE lower(btrim(map.product_code)) = lower(btrim($1))
+         WHERE (lower(btrim(map.product_code)) = lower(btrim($1))
+             OR EXISTS (
+                 SELECT 1 FROM jsonb_array_elements(
+                     CASE WHEN jsonb_typeof(map.map_json->'products') = 'array'
+                          THEN map.map_json->'products' ELSE '[]'::jsonb END
+                 ) AS product(value)
+                 WHERE lower(btrim(product.value->>'item_code')) = lower(btrim($1))
+             ))
            AND session.status IN ('active','paused','frozen','roll_detached')
            AND session.payload_json->>'qolip_lock_owner' = 'true')"
     ).bind(item_code).fetch_one(&mut **tx).await.map_err(|_| QolipError::StoreFailed)?;

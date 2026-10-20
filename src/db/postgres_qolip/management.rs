@@ -66,12 +66,6 @@ async fn read_sets(
         "SELECT link.set_id, item.code, item.name
          FROM mini_qolip_set_products link JOIN mini_items item ON item.code = link.item_code
          WHERE link.set_id = ANY($1)
-         UNION
-         SELECT spec.qolip_set_id, item.code, item.name
-         FROM mini_qolip_effective_product_molds effective
-         JOIN mini_qolip_product_specs spec ON spec.qolip_code = effective.qolip_code
-         JOIN mini_items item ON item.code = effective.item_code
-         WHERE spec.qolip_set_id = ANY($1)
          ORDER BY 1, 2",
     )
     .bind(&ids)
@@ -275,8 +269,14 @@ pub(super) async fn edit_products(
                 "SELECT EXISTS (SELECT 1 FROM mini_qolip_product_specs WHERE lower(qolip_code) = $1)"
             ).bind(&code).fetch_one(&mut *tx).await.map_err(|_| QolipError::StoreFailed)?;
             let spec = if existing {
+                if !draft.existing_only {
+                    return Err(QolipError::QolipCodeConflict);
+                }
                 load_spec(&mut tx, &code).await?
             } else {
+                if draft.existing_only {
+                    return Err(QolipError::QolipCodeNotFound);
+                }
                 owner(&change.warehouse, allowed)?;
                 let set_id = format!("qolip-local:{:032x}", rand::random::<u128>());
                 let spec = draft.spec(
@@ -300,6 +300,11 @@ pub(super) async fn edit_products(
                 super::catalog::save_product_spec_tx(&mut tx, spec).await?
             };
             owner(&spec.warehouse, allowed)?;
+            if spec.item_code.eq_ignore_ascii_case(&item.0)
+                && !spec.item_group.eq_ignore_ascii_case(&item.2)
+            {
+                return Err(QolipError::ProductTransferConflict);
+            }
             write_override(&mut tx, &item.0, &spec.qolip_code, "include", principal).await?;
         }
         for code in &change.remove {
