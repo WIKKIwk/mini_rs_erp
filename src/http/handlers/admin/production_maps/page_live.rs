@@ -15,6 +15,16 @@ const HISTORY_BYTES: usize = 512 * 1024;
 const HISTORY_TTL: Duration = Duration::from_secs(90);
 const MAX_DELTA_BYTES: usize = 256 * 1024;
 const MAX_WINDOW_BYTES: usize = 8 * 1024 * 1024;
+const READ_TIMEOUT: Duration = Duration::from_secs(15);
+
+async fn read_before_deadline<T>(
+    deadline: tokio::time::Instant,
+    read: impl std::future::Future<Output = Result<T, AdminError>>,
+) -> Result<T, AdminError> {
+    tokio::time::timeout_at(deadline, read)
+        .await
+        .map_err(|_| conflict("order_page_changed"))?
+}
 
 #[derive(Clone, Debug, Deserialize)]
 pub(super) struct WindowRequest {
@@ -125,6 +135,7 @@ pub(crate) struct PageLiveHub {
 impl PageLiveHub {
     async fn notifications(&self, state: &AppState) -> Result<Arc<str>, AdminError> {
         let mut cached = self.notifications.lock().await;
+        let deadline = tokio::time::Instant::now() + READ_TIMEOUT;
         for _ in 0..3 {
             let revision = state.production_maps.snapshot_revision();
             if let Some((observed, _, frame)) = cached.as_ref() {
@@ -132,11 +143,14 @@ impl PageLiveHub {
                     return Ok(frame.clone());
                 }
             }
-            let requests = state
-                .production_maps
-                .completion_requests(200)
-                .await
-                .map_err(production_map_error)?;
+            let requests = read_before_deadline(deadline, async {
+                state
+                    .production_maps
+                    .completion_requests(200)
+                    .await
+                    .map_err(production_map_error)
+            })
+            .await?;
             if revision != state.production_maps.snapshot_revision() {
                 continue;
             }
@@ -193,7 +207,15 @@ impl Feed {
                 return Ok(current.clone());
             }
         }
-        let next = Arc::new(read_window(state, principal, request).await?);
+        // Domain projections can retry internally while writes continue. The
+        // outer revision retry bound alone cannot bound that nested wait.
+        let next = Arc::new(
+            read_before_deadline(
+                tokio::time::Instant::now() + READ_TIMEOUT,
+                read_window(state, principal, request),
+            )
+            .await?,
+        );
         if let Some(previous) = self.current.replace(next.clone()) {
             self.history.push_back(previous);
         }
@@ -416,6 +438,7 @@ async fn update(
         let current = match feed.current(state, principal, &sub.request).await {
             Ok(current) => current,
             Err(error) => {
+                drop(feed);
                 let _ = send(socket, &json!(error.1.0).to_string()).await;
                 return false;
             }
@@ -677,5 +700,23 @@ mod tests {
         assert!(feed.version("expired").is_none());
         assert!(feed.version("unknown").is_none());
         assert!(feed.version("").is_none());
+    }
+
+    #[tokio::test]
+    async fn stalled_shared_projection_releases_its_lock_for_safe_retry() {
+        let lock = Mutex::new(());
+        let guard = lock.lock().await;
+        let error = read_before_deadline(
+            tokio::time::Instant::now() + Duration::from_millis(5),
+            async move {
+                let _guard = guard;
+                std::future::pending::<Result<(), AdminError>>().await
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.0, StatusCode::CONFLICT);
+        assert_eq!(json!(error.1.0)["error"], "order_page_changed");
+        assert!(lock.try_lock().is_ok());
     }
 }
