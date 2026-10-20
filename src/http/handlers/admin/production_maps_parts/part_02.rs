@@ -63,41 +63,32 @@ pub async fn production_map_sequence(
             // Canonical initial snapshot: same authority as the live stream
             // (`ProductionMapLiveSnapshot` + monotonic revision + maps).
             // Additive only: old mobiles ignore `rev`/`maps`.
-            let (snapshot, revision, scope, completed, requests, decisions) = if query.worker_scope {
-                loop {
-                    let history_revision = state.production_maps.snapshot_revision();
-                    let actor = queue_action_actor(&principal);
-                    let (completed, requests, decisions) = tokio::try_join!(
-                        state.production_maps.completed_queue_orders_for_actor(&actor.ref_, window.history_limit()),
-                        async {
-                            if matches!(principal.role, PrincipalRole::Admin) {
-                                state.production_maps.completion_requests(200).await
-                            } else { Ok(Vec::new()) }
-                        },
-                        state.production_maps.completion_request_decisions_for_actor(&actor.ref_, 200),
-                    ).map_err(production_map_error)?;
-                    let (snapshot, revision, scope) = worker_snapshot::read_for_principal(
-                        &state, &principal,
-                        completed.iter().map(|order| order.order_id.clone())
-                            .chain(decisions.iter().take(window.history_limit()).map(|decision| decision.order_id.clone())),
+            let (snapshot, revision, scope, completed, requests, decisions, customers) =
+                if query.worker_scope || apparatus.is_empty() {
+                    // HTTP bootstrap and state_delta_v1 use exactly the same
+                    // actor-scoped extras and revision-consistent read. This
+                    // also lets non-worker consumers switch from snapshots to
+                    // deltas without losing their initial notification state.
+                    let view = live_delta::read_view(
+                        &state,
+                        &principal,
+                        matches!(principal.role, PrincipalRole::Admin),
+                        query.worker_scope,
+                        None,
                         &window,
                     ).await?;
-                    if revision != history_revision { continue; }
-                    break (snapshot, revision, scope, completed, requests, decisions);
-                }
-            } else {
-                let (snapshot, revision) = if apparatus.is_empty() {
-                    state.production_maps.live_snapshot_shared_with_revision().await
+                    (view.snapshot, view.revision, view.scope, view.completed,
+                        view.requests, view.decisions, Some(view.customers))
                 } else {
-                    state.production_maps.worker_snapshot_shared_with_revision(
-                        &[apparatus.to_string()], &[order_id.to_string()],
-                    ).await
-                }.map_err(production_map_error)?;
-                let snapshot = super::training::merge_worker_training_snapshot_shared(
-                    &state, &principal, snapshot,
-                ).await.map_err(super::training::training_workspace_error)?;
-                (snapshot, revision, String::new(), Vec::new(), Vec::new(), Vec::new())
-            };
+                    let (snapshot, revision) = state.production_maps
+                        .worker_snapshot_shared_with_revision(
+                            &[apparatus.to_string()], &[order_id.to_string()],
+                        ).await.map_err(production_map_error)?;
+                    let snapshot = super::training::merge_worker_training_snapshot_shared(
+                        &state, &principal, snapshot,
+                    ).await.map_err(super::training::training_workspace_error)?;
+                    (snapshot, revision, String::new(), Vec::new(), Vec::new(), Vec::new(), None)
+                };
             if !apparatus.is_empty() {
                 // Same queue rules and authorization as the full GET. A cold
                 // scoped read computes the relevant orders; its response omits
@@ -123,7 +114,10 @@ pub async fn production_map_sequence(
                     "order_customers": {},
                 })));
             }
-            let order_customers = production_map_order_customers(&state, &snapshot.maps).await;
+            let order_customers = match customers {
+                Some(customers) => customers,
+                None => production_map_order_customers(&state, &snapshot.maps).await,
+            };
             let mut payload = serde_json::json!({
                 "ok": true,
                 "rev": revision,
@@ -144,11 +138,9 @@ pub async fn production_map_sequence(
                 "frozen_orders_by_apparatus": &snapshot.frozen_orders_by_apparatus,
                 "order_customers": order_customers,
             });
-            if query.worker_scope {
-                payload["completed_orders"] = serde_json::json!(completed);
-                payload["completion_requests"] = serde_json::json!(requests);
-                payload["completion_request_decisions"] = serde_json::json!(decisions);
-            }
+            payload["completed_orders"] = serde_json::json!(completed);
+            payload["completion_requests"] = serde_json::json!(requests);
+            payload["completion_request_decisions"] = serde_json::json!(decisions);
             Ok(json_response(payload))
         }
         Method::POST => {

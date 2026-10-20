@@ -8,33 +8,62 @@ use std::sync::Arc;
 mod window;
 pub(super) use window::WorkerQueueWindow;
 
-fn cursor_matches(epoch: &str, revision: u64, scope: &str,
-    client_epoch: &str, client_revision: Option<u64>, client_scope: &str) -> bool {
-    !client_epoch.is_empty() && !client_scope.is_empty()
-        && epoch == client_epoch && Some(revision) == client_revision && scope == client_scope
+fn cursor_matches(
+    epoch: &str,
+    revision: u64,
+    scope: &str,
+    client_epoch: &str,
+    client_revision: Option<u64>,
+    client_scope: &str,
+) -> bool {
+    !client_epoch.is_empty()
+        && !client_scope.is_empty()
+        && epoch == client_epoch
+        && Some(revision) == client_revision
+        && scope == client_scope
 }
 
 /// A confirmed unchanged cursor needs no snapshot build/history queries/JSON.
 /// Subscribe first so a commit during the cursor check wakes the bounded wait.
 pub(super) async fn snapshot_unchanged(
-    state: &AppState, principal: &Principal, epoch: &str, revision: Option<u64>,
-    scope: &str, wait_ms: u64, window: &WorkerQueueWindow,
+    state: &AppState,
+    principal: &Principal,
+    epoch: &str,
+    revision: Option<u64>,
+    scope: &str,
+    wait_ms: u64,
+    window: &WorkerQueueWindow,
 ) -> Result<bool, AdminError> {
     let mut events = state.production_maps.subscribe_live();
     let (_, assignment_scope) = scope_token(state, principal).await?;
     let current_scope = window.scope(&assignment_scope);
-    if !cursor_matches(state.production_maps.snapshot_epoch(),
-        state.production_maps.snapshot_revision(), &current_scope, epoch, revision, scope) {
+    if !cursor_matches(
+        state.production_maps.snapshot_epoch(),
+        state.production_maps.snapshot_revision(),
+        &current_scope,
+        epoch,
+        revision,
+        scope,
+    ) {
         return Ok(false);
     }
     if wait_ms > 0 {
-        let _ = tokio::time::timeout(std::time::Duration::from_millis(wait_ms.min(6000)),
-            events.recv()).await;
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_millis(wait_ms.min(6000)),
+            events.recv(),
+        )
+        .await;
     }
     let (_, assignment_scope) = scope_token(state, principal).await?;
     let current_scope = window.scope(&assignment_scope);
-    Ok(cursor_matches(state.production_maps.snapshot_epoch(),
-        state.production_maps.snapshot_revision(), &current_scope, epoch, revision, scope))
+    Ok(cursor_matches(
+        state.production_maps.snapshot_epoch(),
+        state.production_maps.snapshot_revision(),
+        &current_scope,
+        epoch,
+        revision,
+        scope,
+    ))
 }
 
 pub(super) async fn scope_token(
@@ -147,13 +176,22 @@ pub(super) async fn read_for_principal(
     loop {
         let (assigned, scope) = scope_token(state, principal).await?;
         let (snapshot, revision) = if state.worker_show_all_apparatus_tabs {
-            state.production_maps.live_snapshot_shared_with_revision().await
+            state
+                .production_maps
+                .live_snapshot_shared_with_revision()
+                .await
         } else {
-            state.production_maps.worker_snapshot_shared_with_revision(&assigned, &history).await
-        }.map_err(production_map_error)?;
+            state
+                .production_maps
+                .worker_snapshot_shared_with_revision(&assigned, &history)
+                .await
+        }
+        .map_err(production_map_error)?;
         let snapshot = super::super::training::merge_worker_training_snapshot_shared(
             state, principal, snapshot,
-        ).await.map_err(super::super::training::training_workspace_error)?;
+        )
+        .await
+        .map_err(super::super::training::training_workspace_error)?;
         let (_, latest_scope) = scope_token(state, principal).await?;
         if latest_scope != scope || state.production_maps.snapshot_revision() != revision {
             continue;
@@ -162,15 +200,45 @@ pub(super) async fn read_for_principal(
         let snapshot = if window.limit.is_some() {
             let customers = if window.search_active() {
                 production_map_order_customers(state, &snapshot.maps).await
-            } else { BTreeMap::new() };
+            } else {
+                BTreeMap::new()
+            };
             let (_, latest_assignment_scope) = scope_token(state, principal).await?;
-            if window.scope(&latest_assignment_scope) != scope || state.production_maps.snapshot_revision() != revision { continue; }
+            if window.scope(&latest_assignment_scope) != scope
+                || state.production_maps.snapshot_revision() != revision
+            {
+                continue;
+            }
             let apparatus_scope = if state.worker_show_all_apparatus_tabs {
                 snapshot.visible_order_ids.keys().cloned().collect()
-            } else { assigned };
-            Arc::new(window.project(&snapshot, &apparatus_scope, &history, &customers))
-        } else if state.worker_show_all_apparatus_tabs { snapshot }
-        else { Arc::new(project(&snapshot, &assigned, history.iter().cloned())) };
+            } else {
+                assigned
+            };
+            let mut history_key = history.clone();
+            history_key.sort();
+            history_key.dedup();
+            let key = serde_json::to_string(&(
+                &apparatus_scope,
+                &history_key,
+                window.scope("shared-projection"),
+                &customers,
+            ))
+            .expect("projection key serialization");
+            state.production_state_live.project(&snapshot, key, || {
+                window.project(&snapshot, &apparatus_scope, &history, &customers)
+            })
+        } else if state.worker_show_all_apparatus_tabs {
+            snapshot
+        } else {
+            let mut history_key = history.clone();
+            history_key.sort();
+            history_key.dedup();
+            let key = serde_json::to_string(&(&assigned, &history_key, "unbounded"))
+                .expect("projection key serialization");
+            state.production_state_live.project(&snapshot, key, || {
+                project(&snapshot, &assigned, history.iter().cloned())
+            })
+        };
         return Ok((snapshot, revision, scope));
     }
 }
@@ -181,10 +249,19 @@ mod tests {
 
     #[test]
     fn conditional_read_requires_exact_epoch_revision_and_assignment_scope() {
-        assert!(cursor_matches("epoch", 8, "scope", "epoch", Some(8), "scope"));
+        assert!(cursor_matches(
+            "epoch",
+            8,
+            "scope",
+            "epoch",
+            Some(8),
+            "scope"
+        ));
         for (epoch, revision, scope) in [
-            ("old", Some(8), "scope"), ("epoch", Some(7), "scope"),
-            ("epoch", None, "scope"), ("epoch", Some(8), "other"),
+            ("old", Some(8), "scope"),
+            ("epoch", Some(7), "scope"),
+            ("epoch", None, "scope"),
+            ("epoch", Some(8), "other"),
             ("", Some(8), ""),
         ] {
             assert!(!cursor_matches("epoch", 8, "scope", epoch, revision, scope));
