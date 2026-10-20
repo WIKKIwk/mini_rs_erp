@@ -5,6 +5,7 @@ use axum::extract::ws::{Message, WebSocket};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
@@ -100,6 +101,13 @@ struct Window {
     // A broadcast prepares one wire frame per baseline/client window ID.
     // Cache capacity is bounded even when clients choose arbitrary IDs.
     prepared: Mutex<BTreeMap<(String, String), Arc<str>>>,
+    prepared_bytes: AtomicUsize,
+}
+
+impl Window {
+    fn retained_bytes(&self) -> usize {
+        self.bytes + self.prepared_bytes.load(Ordering::Relaxed)
+    }
 }
 
 #[derive(Default)]
@@ -117,7 +125,7 @@ pub(crate) struct PageLiveHub {
 impl PageLiveHub {
     async fn notifications(&self, state: &AppState) -> Result<Arc<str>, AdminError> {
         let mut cached = self.notifications.lock().await;
-        loop {
+        for _ in 0..3 {
             let revision = state.production_maps.snapshot_revision();
             if let Some((observed, _, frame)) = cached.as_ref() {
                 if *observed == revision {
@@ -147,6 +155,7 @@ impl PageLiveHub {
             *cached = Some((revision, data, frame.clone()));
             return Ok(frame);
         }
+        Err(conflict("order_page_changed"))
     }
 
     async fn subscribe(&self, key: String) -> Arc<Mutex<Feed>> {
@@ -189,7 +198,12 @@ impl Feed {
             self.history.push_back(previous);
         }
         while self.history.len() > MAX_HISTORY
-            || self.history.iter().map(|item| item.bytes).sum::<usize>() > HISTORY_BYTES
+            || self
+                .history
+                .iter()
+                .map(|item| item.retained_bytes())
+                .sum::<usize>()
+                > HISTORY_BYTES
             || self
                 .history
                 .front()
@@ -258,6 +272,7 @@ async fn read_window(
                     bytes,
                     created: Instant::now(),
                     prepared: Mutex::new(BTreeMap::new()),
+                    prepared_bytes: AtomicUsize::new(0),
                 });
             }
             cursor = next.unwrap();
@@ -367,6 +382,9 @@ async fn prepared(before: &Window, after: &Window, id: &str) -> Arc<str> {
         && cached.values().map(|value| value.len()).sum::<usize>() + frame.len() <= MAX_DELTA_BYTES
     {
         cached.insert(key, frame.clone());
+        after
+            .prepared_bytes
+            .fetch_add(frame.len(), Ordering::Relaxed);
     }
     frame
 }
@@ -561,6 +579,7 @@ mod tests {
             bytes: 1,
             created: Instant::now(),
             prepared: Mutex::new(BTreeMap::new()),
+            prepared_bytes: AtomicUsize::new(0),
         }
     }
 
@@ -615,5 +634,48 @@ mod tests {
             requests(r#"[{"id":"1","view":"sequence","apparatus":"apparatus:a","length":40}]"#)
                 .is_ok()
         );
+    }
+
+    #[tokio::test]
+    async fn oversized_patches_require_resync_and_cached_variants_are_bounded() {
+        let a = window(json!({"maps":[]}), "old");
+        let b = window(
+            json!({"maps":[{"program":"x".repeat(MAX_DELTA_BYTES)}]}),
+            "new",
+        );
+        let frame = prepared(&a, &b, "1").await;
+        let message: Value = serde_json::from_str(&frame).unwrap();
+        assert_eq!(message["type"], "page_window_resync");
+        assert!(frame.len() < 1024);
+        for id in 0..100 {
+            prepared(&a, &b, &id.to_string()).await;
+        }
+        let variants = b.prepared.lock().await;
+        assert!(variants.len() <= 8);
+        assert!(variants.values().map(|value| value.len()).sum::<usize>() <= MAX_DELTA_BYTES);
+        assert_eq!(
+            b.retained_bytes(),
+            b.bytes + variants.values().map(|value| value.len()).sum::<usize>()
+        );
+    }
+
+    #[tokio::test]
+    async fn active_subscription_registry_and_expired_recovery_are_bounded() {
+        let hub = PageLiveHub::default();
+        let mut active = Vec::new();
+        for index in 0..MAX_FEEDS + 16 {
+            active.push(hub.subscribe(index.to_string()).await);
+        }
+        assert_eq!(hub.feeds.lock().await.len(), MAX_FEEDS);
+        assert!(Arc::ptr_eq(&active[0], &hub.subscribe("0".into()).await));
+        let mut expired = window(json!({}), "expired");
+        expired.created = Instant::now() - HISTORY_TTL * 2;
+        let feed = Feed {
+            current: Some(Arc::new(expired)),
+            history: VecDeque::new(),
+        };
+        assert!(feed.version("expired").is_none());
+        assert!(feed.version("unknown").is_none());
+        assert!(feed.version("").is_none());
     }
 }
