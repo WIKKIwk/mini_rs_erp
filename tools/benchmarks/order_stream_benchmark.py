@@ -483,7 +483,26 @@ class Runner:
         finally:
             client.close()
 
-    def receive(self, client, start, timeout=10):
+    def receive(self, client, start, timeout=10, require_change=False):
+        if require_change:
+            deadline = time.monotonic() + timeout
+            frames, payloads, empties = 0, 0, 0
+            while True:
+                result = self.receive(
+                    client, start, max(.001, deadline - time.monotonic())
+                )
+                frames += result.get("frame_bytes", 0)
+                payloads += result.get("payload_bytes", 0)
+                empty = result.get("patch_empty") and result["type"] in (
+                    "state_delta", "state_checkpoint"
+                )
+                empties += int(bool(empty))
+                if not empty or time.monotonic() >= deadline:
+                    if empty:
+                        result["type"] = "no_event"
+                        result["latency_ms"] = None
+                    return dict(result, frame_bytes=frames, payload_bytes=payloads,
+                                preceding_empty_events=empties)
         try:
             metric, event = client["socket"].event(timeout)
         except socket.timeout:
@@ -541,7 +560,7 @@ class Runner:
                         for action in ("hold", "failed"):
                             started = time.perf_counter()
                             pending = [
-                                pool.submit(self.receive, client, started) for client in clients
+                                pool.submit(self.receive, client, started, 10, True) for client in clients
                             ]
                             response, _ = self.mutate(action, hold)
                             events = [future.result(timeout=20) for future in pending]
@@ -659,16 +678,23 @@ class Runner:
 
     def held_permissions(self):
         clients = [self.connect_state(profile["token"]) for profile in self.shared_profiles]
+        other_clients = [self.connect_state(profile["token"]) for profile in self.disjoint_profiles]
         hold = "bench-permissions-" + str(time.time_ns())
         try:
             for action in ("hold", "failed"):
                 started = time.perf_counter()
                 self.mutate(action, hold)
                 for client in clients:
-                    assert self.receive(client, started)["type"] != "no_event"
+                    assert self.receive(client, started, require_change=True)["type"] != "no_event"
                 self.assert_views(clients, "distinct_worker_controls_" + action)
+                if other_clients:
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=len(other_clients)) as pool:
+                        list(pool.map(lambda client: self.receive(client, started, 2), other_clients))
+                # In particular, verify the active hold, not just the reverted
+                # end state: incorrect relevance filtering must fail this check.
+                self.assert_views(other_clients, "other_apparatus_controls_" + action)
         finally:
-            for client in clients:
+            for client in clients + other_clients:
                 client["socket"].close()
 
     def load_pages(self, view="sequence", apparatus=None, length=40):
@@ -844,7 +870,7 @@ class Runner:
                     finally:
                         http.close()
                     assert response.get("ops"), "Fixture move did not alter order"
-                    events = [self.receive(client, started) for client in clients]
+                    events = [self.receive(client, started, require_change=True) for client in clients]
                     assert all(event["type"] != "no_event" for event in events)
                     wire, event = socket_.event()
                     metrics = []

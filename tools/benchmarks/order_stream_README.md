@@ -57,7 +57,7 @@ python3 tools/db/macos_keychain.py --admin db -- "$BENCH_PYTHON" \
 
 Repeat `start` and the benchmark with `--mode after`, the candidate binary and its
 commit. If new migrations require the maintenance role, pass
-`--migration-binary /absolute/path/to/mini_rs_erp_migrate` to `start`. Both modes
+`--migration-binary /absolute/path/to/mini_rs_migrate` to `start`. Both modes
 restore the same saved dump and auxiliary data. Each `start` discards that mode's
 previous clone; result files persist until a subsequent benchmark uses the same
 output suffix.
