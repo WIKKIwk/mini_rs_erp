@@ -22,6 +22,20 @@ pub struct SequenceMove {
 }
 
 impl SequenceMove {
+    /// Receipt retries identify the same commit. A new commit after receipt
+    /// expiry/deletion has a different persisted apparatus revision.
+    pub(crate) fn committed_event_id(&self, actor: &QueueActionActor, revision: i64) -> String {
+        let identity = serde_json::json!([
+            "sequence_commit_v1",
+            self.apparatus,
+            actor.role,
+            actor.ref_,
+            self.idempotency_key,
+            revision,
+        ]);
+        format!("{:x}", Sha256::digest(identity.to_string().as_bytes()))
+    }
+
     pub fn validate(&self) -> Result<(), ProductionMapError> {
         if !queue_state::is_canonical_apparatus_id(&self.apparatus)
             || self.order_id.trim().is_empty()
@@ -258,13 +272,15 @@ impl ProductionMapService {
             .await?;
         if let (Some(rev), Some(op)) = (result.revision, &result.event) {
             let base_rev = (rev - 1).max(0);
-            self.notify_live_delta(ProductionMapLiveDelta {
-                epoch: self.snapshot_epoch().to_string(),
-                apparatus: canonical.runtime.apparatus_id.to_string(),
-                base_revision: base_rev,
-                revision: rev,
-                ops: vec![op.clone()],
-                version: result.version.clone(),
+            self.notify_committed_event_once(&command.committed_event_id(&actor, rev), || {
+                self.notify_live_delta(ProductionMapLiveDelta {
+                    epoch: self.snapshot_epoch().to_string(),
+                    apparatus: canonical.runtime.apparatus_id.to_string(),
+                    base_revision: base_rev,
+                    revision: rev,
+                    ops: vec![op.clone()],
+                    version: result.version.clone(),
+                });
             });
         }
         Ok(result)
@@ -274,6 +290,30 @@ impl ProductionMapService {
 #[cfg(test)]
 mod canonical_delta_tests {
     use super::*;
+
+    #[test]
+    fn committed_identity_is_stable_for_receipts_and_distinct_for_new_commits() {
+        let command = SequenceMove {
+            apparatus: "apparatus:default:bosma_8".into(),
+            order_id: "a".into(),
+            before_order_id: None,
+            after_order_id: None,
+            expected_version: "a".repeat(64),
+            idempotency_key: "retry".into(),
+        };
+        let actor = QueueActionActor {
+            role: "admin".into(),
+            ref_: "one".into(),
+            display_name: "Name".into(),
+        };
+        let first = command.committed_event_id(&actor, 4);
+        assert_eq!(first.len(), 64);
+        assert_eq!(first, command.committed_event_id(&actor, 4));
+        assert_ne!(first, command.committed_event_id(&actor, 5));
+        let mut other = actor;
+        other.ref_ = "two".into();
+        assert_ne!(first, command.committed_event_id(&other, 4));
+    }
 
     fn apply_client_delta(initial: &[String], op: &serde_json::Value) -> Vec<String> {
         let mut result = initial.to_vec();

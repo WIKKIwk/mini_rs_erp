@@ -145,6 +145,13 @@ async fn commit_once(
     let result = state.apply(command)?;
     let mut result = result;
     if let Some(op) = result.event.clone() {
+        // Only this transaction's sequence/outbox triggers defer their hint.
+        // The actual revision is assigned by the write below, so publish the
+        // complete event explicitly in this same transaction before COMMIT.
+        sqlx::query("SELECT set_config('mini.production_live', 'sequence_commit_deferred', true)")
+            .execute(&mut *tx)
+            .await
+            .map_err(db_error)?;
         let (new_rev,): (i64,) = sqlx::query_as(
             "INSERT INTO mini_queue_sequences (apparatus,canonical_apparatus_id,order_ids,revision,updated_at)
             VALUES (COALESCE((SELECT name FROM mini_apparatus WHERE id=$1),$1),$1,$2,1,now())
@@ -199,8 +206,77 @@ async fn commit_once(
     .execute(&mut *tx)
     .await
     .map_err(db_error)?;
+    if let Some(payload) = committed_notification(command, actor, &result) {
+        sqlx::query("SELECT pg_notify('mini_production_live', $1)")
+            .bind(payload)
+            .execute(&mut *tx)
+            .await
+            .map_err(db_error)?;
+    }
     tx.commit().await.map_err(db_error)?;
     Ok(result)
+}
+
+fn committed_notification(
+    command: &SequenceMove,
+    actor: &QueueActionActor,
+    result: &SequenceMoveResult,
+) -> Option<String> {
+    let (Some(revision), Some(op)) = (result.revision, &result.event) else {
+        return None;
+    };
+    let payload = serde_json::json!({
+        "kind": "sequence",
+        "event_id": command.committed_event_id(actor, revision),
+        "apparatus": command.apparatus,
+        "base_revision": (revision - 1).max(0),
+        "revision": revision,
+        "ops": [op],
+        "version": result.version,
+    })
+    .to_string();
+    // PostgreSQL NOTIFY has an 8 KiB payload limit. Oversized operations retain
+    // the authoritative refresh path; they never abort an otherwise valid move.
+    Some(if payload.len() <= 7_000 {
+        payload
+    } else {
+        "state".to_string()
+    })
+}
+
+#[cfg(test)]
+mod notification_tests {
+    use super::*;
+
+    #[test]
+    fn oversized_events_fall_back_and_receipt_only_moves_remain_silent() {
+        let command = SequenceMove {
+            apparatus: "apparatus:default:bosma_8".into(),
+            order_id: "a".into(),
+            before_order_id: None,
+            after_order_id: None,
+            expected_version: "a".repeat(64),
+            idempotency_key: "retry".into(),
+        };
+        let actor = QueueActionActor {
+            role: "admin".into(),
+            ref_: "one".into(),
+            display_name: "Name".into(),
+        };
+        let mut result = SequenceMoveResult {
+            order_ids: vec![],
+            version: "b".repeat(64),
+            adjusted: false,
+            revision: Some(1),
+            event: None,
+        };
+        assert_eq!(committed_notification(&command, &actor, &result), None);
+        result.event = Some(serde_json::json!({"type":"move", "id":"a".repeat(8_000)}));
+        assert_eq!(
+            committed_notification(&command, &actor, &result).as_deref(),
+            Some("state")
+        );
+    }
 }
 
 async fn load_maps_tx(

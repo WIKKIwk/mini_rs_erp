@@ -126,6 +126,124 @@ fn actor() -> QueueActionActor {
 
 #[tokio::test]
 #[ignore = "requires isolated local PostgreSQL; never uses the application DB"]
+async fn postgres_reorder_publishes_one_committed_delta_and_silent_receipt_retries() {
+    use crate::core::apparatus_standard::CanonicalApparatusService;
+    use std::time::Duration;
+
+    let (pool, canonical, command) = fixture().await;
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/postgres/0156_production_live_invalidation.sql"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
+    let first = ProductionMapService::new_for_test(Arc::new(MemoryProductionMapStore::new()));
+    let second = ProductionMapService::new_for_test(Arc::new(MemoryProductionMapStore::new()));
+    let mut first_events = first.subscribe_live();
+    let mut second_events = second.subscribe_live();
+    let tasks = [
+        super::realtime::start_listener(
+            pool.clone(),
+            first.clone(),
+            CanonicalApparatusService::memory(),
+        )
+        .unwrap(),
+        super::realtime::start_listener(
+            pool.clone(),
+            second.clone(),
+            CanonicalApparatusService::memory(),
+        )
+        .unwrap(),
+    ];
+    for events in [&mut first_events, &mut second_events] {
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(5), events.recv())
+                .await
+                .unwrap()
+                .unwrap(),
+            ProductionMapLiveEvent::Invalidate
+        );
+    }
+    let result = commit(&pool, &canonical, &command, &actor()).await.unwrap();
+    let revision = result.revision.unwrap();
+    let event_id = command.committed_event_id(&actor(), revision);
+    let delta = |service: &ProductionMapService| ProductionMapLiveDelta {
+        epoch: service.snapshot_epoch().to_string(),
+        apparatus: APP.to_string(),
+        base_revision: revision - 1,
+        revision,
+        ops: vec![result.event.clone().unwrap()],
+        version: result.version.clone(),
+    };
+    // Whether this publisher or LISTEN wins, both emit the exact same delta.
+    first.notify_committed_event_once(&event_id, || first.notify_live_delta(delta(&first)));
+    for (service, events) in [(&first, &mut first_events), (&second, &mut second_events)] {
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(5), events.recv())
+                .await
+                .unwrap()
+                .unwrap(),
+            ProductionMapLiveEvent::Delta(Arc::new(delta(service)))
+        );
+    }
+    // Cancellation after commit is represented by the second process receiving
+    // its delta without a local publication. A later retry cannot double it.
+    assert!(
+        !second.notify_committed_event_once(&event_id, || {
+            second.notify_live_delta(delta(&second))
+        })
+    );
+    assert_eq!(
+        commit(&pool, &canonical, &command, &actor()).await.unwrap(),
+        result
+    );
+    let mut noop = command.clone();
+    noop.idempotency_key = "noop-receipt".into();
+    noop.expected_version = result.version.clone();
+    assert!(
+        commit(&pool, &canonical, &noop, &actor())
+            .await
+            .unwrap()
+            .event
+            .is_none()
+    );
+    // A receipt failure occurs after sequence/outbox writes, but neither the
+    // state nor the deferred notification may escape the failed transaction.
+    sqlx::query("ALTER TABLE mini_queue_reorder_commands ADD CONSTRAINT reject_move CHECK (idempotency_key <> 'rollback')")
+        .execute(&pool).await.unwrap();
+    let mut rollback = noop;
+    rollback.idempotency_key = "rollback".into();
+    rollback.before_order_id = None;
+    assert_eq!(
+        commit(&pool, &canonical, &rollback, &actor()).await,
+        Err(ProductionMapError::StoreFailed)
+    );
+    for events in [&mut first_events, &mut second_events] {
+        assert!(
+            tokio::time::timeout(Duration::from_millis(150), events.recv())
+                .await
+                .is_err()
+        );
+    }
+    assert_eq!(
+        sqlx::query_scalar::<_, serde_json::Value>(
+            "SELECT order_ids FROM mini_queue_sequences WHERE canonical_apparatus_id=$1"
+        )
+        .bind(APP)
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        serde_json::json!(["c", "a", "b"])
+    );
+    for task in tasks {
+        task.abort();
+        let _ = task.await;
+    }
+    pool.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires isolated local PostgreSQL; never uses the application DB"]
 async fn postgres_reorder_parallel_retry_and_atomic_rollback() {
     let (pool, canonical, command) = fixture().await;
     let user = actor();

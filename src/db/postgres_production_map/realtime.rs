@@ -2,7 +2,7 @@
 //! PostgreSQL notifications are hints, not a durable event log: LISTEN startup
 //! and every reconnect invalidate all cached views to cover an offline gap.
 use crate::core::apparatus_standard::CanonicalApparatusService;
-use crate::core::production_map::ProductionMapService;
+use crate::core::production_map::{ProductionMapLiveDelta, ProductionMapService};
 use serde::Deserialize;
 use sqlx::PgPool;
 use sqlx::postgres::PgListener;
@@ -46,11 +46,56 @@ struct PreflightChange {
     event_id: Option<String>,
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct SequenceChange {
+    kind: String,
+    event_id: String,
+    apparatus: String,
+    base_revision: i64,
+    revision: i64,
+    ops: Vec<serde_json::Value>,
+    version: String,
+}
+
+impl SequenceChange {
+    fn valid(&self) -> bool {
+        self.kind == "sequence"
+            && self.event_id.len() == 64
+            && self.event_id.bytes().all(|b| b.is_ascii_hexdigit())
+            && crate::core::production_map::queue_state::is_canonical_apparatus_id(&self.apparatus)
+            && self.revision > 0
+            && self.base_revision == self.revision - 1
+            && self.version.len() == 64
+            && self.version.bytes().all(|b| b.is_ascii_hexdigit())
+            && self.ops.len() == 1
+            && self.ops[0].get("type").and_then(|v| v.as_str()) == Some("move")
+            && self.ops[0]
+                .get("id")
+                .and_then(|v| v.as_str())
+                .is_some_and(|id| !id.is_empty())
+    }
+
+    fn publish(&self, service: &ProductionMapService) {
+        service.notify_committed_event_once(&self.event_id, || {
+            service.notify_live_delta(ProductionMapLiveDelta {
+                epoch: service.snapshot_epoch().to_string(),
+                apparatus: self.apparatus.clone(),
+                base_revision: self.base_revision,
+                revision: self.revision,
+                ops: self.ops.clone(),
+                version: self.version.clone(),
+            });
+        });
+    }
+}
+
 #[derive(Default)]
 struct Pending {
     generic: bool,
     apparatus: bool,
     preflight: Vec<PreflightChange>,
+    sequence: Vec<SequenceChange>,
 }
 
 impl Pending {
@@ -59,6 +104,14 @@ impl Pending {
             self.apparatus = true;
             self.generic = true;
             return;
+        }
+        if let Ok(change) = serde_json::from_str::<SequenceChange>(payload) {
+            if change.valid() {
+                if !self.sequence.contains(&change) {
+                    self.sequence.push(change);
+                }
+                return;
+            }
         }
         match serde_json::from_str::<PreflightChange>(payload) {
             Ok(change)
@@ -82,6 +135,11 @@ impl Pending {
     async fn publish(self, service: &ProductionMapService, apparatus: &CanonicalApparatusService) {
         if self.apparatus {
             apparatus.invalidate_runtime_caches().await;
+        }
+        // Preserve each apparatus delta in commit order. Claiming the same
+        // committed ID locally or through LISTEN produces the identical event.
+        for change in self.sequence {
+            change.publish(service);
         }
         let changes = self
             .preflight
@@ -194,6 +252,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sequence_local_and_remote_arrival_order_preserves_one_identical_delta() {
+        use crate::core::production_map::{MemoryProductionMapStore, ProductionMapLiveEvent};
+        let apparatus = CanonicalApparatusService::memory();
+        for local_first in [true, false] {
+            let service = ProductionMapService::new_for_test(std::sync::Arc::new(
+                MemoryProductionMapStore::new(),
+            ));
+            let mut events = service.subscribe_live();
+            let payload = serde_json::json!({
+                "kind":"sequence", "event_id":"a".repeat(64),
+                "apparatus":"apparatus:default:bosma_8",
+                "base_revision":3, "revision":4,
+                "version":"b".repeat(64),
+                "ops":[{"type":"move","id":"a","before_id":"b","after_id":null,
+                        "base_version":"c".repeat(64),"version":"b".repeat(64)}],
+            })
+            .to_string();
+            let change: SequenceChange = serde_json::from_str(&payload).unwrap();
+            if local_first {
+                change.publish(&service);
+            }
+            let mut pending = Pending::default();
+            pending.add(&payload);
+            pending.add(&payload);
+            assert_eq!(pending.sequence.len(), 1);
+            pending.publish(&service, &apparatus).await;
+            if !local_first {
+                change.publish(&service);
+            }
+            let ProductionMapLiveEvent::Delta(delta) = events.try_recv().unwrap() else {
+                panic!("listener-first must retain the legacy Delta");
+            };
+            assert_eq!(delta.epoch, service.snapshot_epoch());
+            assert_eq!(delta.revision, 4);
+            assert_eq!(delta.ops, change.ops);
+            assert_eq!(service.snapshot_revision(), 1);
+            assert!(events.try_recv().is_err());
+
+            let mut pending = Pending::default();
+            pending.add(&payload); // acknowledged typed event does not hide an external write
+            pending.add("state");
+            pending.publish(&service, &apparatus).await;
+            assert_eq!(
+                events.try_recv().unwrap(),
+                ProductionMapLiveEvent::Invalidate
+            );
+            assert_eq!(service.snapshot_revision(), 2);
+        }
+    }
+
+    #[tokio::test]
     #[ignore = "requires PRODUCTION_LIVE_TEST_DATABASE_URL on an isolated bench_order_stream_ clone"]
     async fn postgres_commit_rollback_two_readers_and_reconnect() {
         use crate::core::production_map::{MemoryProductionMapStore, ProductionMapLiveEvent};
@@ -230,7 +339,11 @@ mod tests {
             .await
             .unwrap();
         sqlx::raw_sql(
-            "CREATE TABLE mini_queue_states (id integer); CREATE TABLE mini_orders (id integer PRIMARY KEY);",
+            "CREATE TABLE mini_queue_states (id integer);
+             CREATE TABLE mini_orders (id integer PRIMARY KEY);
+             CREATE TABLE mini_queue_sequences (id integer);
+             CREATE TABLE mini_queue_events (id integer);
+             CREATE TABLE mini_queue_reorder_commands (id integer);",
         )
         .execute(&writer)
         .await
@@ -326,7 +439,8 @@ mod tests {
              INSERT INTO mini_orders VALUES (1) ON CONFLICT DO NOTHING;
              INSERT INTO mini_orders VALUES (1)
                 ON CONFLICT (id) DO UPDATE SET id = EXCLUDED.id;
-             UPDATE mini_orders SET id = id;",
+             UPDATE mini_orders SET id = id;
+             INSERT INTO mini_queue_reorder_commands VALUES (1);",
         )
         .execute(&writer)
         .await
@@ -338,6 +452,31 @@ mod tests {
                     .is_err(),
                 "no-op backfills must not invalidate a live read"
             );
+        }
+        // Ordinary external sequence writes remain authoritative. The narrow
+        // transaction marker must never suppress unrelated projection inputs.
+        for sql in [
+            "INSERT INTO mini_queue_sequences VALUES (1)",
+            "BEGIN; SELECT set_config('mini.production_live','sequence_commit_deferred',true);
+             INSERT INTO mini_queue_sequences VALUES (2);
+             INSERT INTO mini_queue_events VALUES (2);
+             INSERT INTO mini_orders VALUES (3); COMMIT",
+        ] {
+            sqlx::raw_sql(sql).execute(&writer).await.unwrap();
+            for events in [&mut first_events, &mut second_events] {
+                assert_eq!(
+                    tokio::time::timeout(Duration::from_secs(5), events.recv())
+                        .await
+                        .unwrap()
+                        .unwrap(),
+                    ProductionMapLiveEvent::Invalidate
+                );
+                assert!(
+                    tokio::time::timeout(Duration::from_millis(100), events.recv())
+                        .await
+                        .is_err()
+                );
+            }
         }
         let mut tx = writer.begin().await.unwrap();
         const EVENT_ID: &str = "1234567890abcdef1234567890abcdef";
