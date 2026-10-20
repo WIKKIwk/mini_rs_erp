@@ -17,6 +17,7 @@ use crate::http::handlers::auth::profile_avatar_proxy_url;
 #[derive(Default, Deserialize)]
 pub struct DirectoryQuery {
     q: Option<String>,
+    role: Option<PrincipalRole>,
     limit: Option<usize>,
     offset: Option<usize>,
 }
@@ -46,6 +47,7 @@ pub async fn directory(
         &state,
         query.q.as_deref().unwrap_or_default(),
         Some(&viewer),
+        query.role,
     )
     .await?;
     for item in &mut items {
@@ -194,36 +196,49 @@ async fn load_directory_entries(
     state: &AppState,
     query: &str,
     exclude: Option<&Principal>,
+    role: Option<PrincipalRole>,
 ) -> Result<Vec<ChatDirectoryEntry>, ChatHttpError> {
     let mut items = Vec::new();
-    let admin_page = state
-        .admin
-        .user_list_page(query, 500, 0, None)
-        .await
-        .map_err(|_| {
-            http_error(
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                "chat_directory_failed",
-            )
-        })?;
-    items.extend(
-        admin_page
-            .items
-            .into_iter()
-            .filter(|item| {
-                !item.blocked
-                    && item.status != "removed"
-                    && can_participate_in_chat(&item.principal_role)
-            })
-            .map(|item| ChatDirectoryEntry {
-                role: item.principal_role,
-                ref_: item.entity_ref,
-                display_name: item.name,
-                avatar_url: item.avatar_url,
-            }),
-    );
+    let catalog_role = match role {
+        Some(PrincipalRole::Supplier) => Some("supplier"),
+        Some(PrincipalRole::Werka) => Some("werka"),
+        Some(PrincipalRole::Customer) => Some("customer"),
+        Some(PrincipalRole::MaterialTaminotchi) => Some("material_taminotchi"),
+        _ => None,
+    };
+    if role.is_none() || catalog_role.is_some() {
+        let admin_page = state
+            .admin
+            .user_list_page(query, 500, 0, catalog_role)
+            .await
+            .map_err(|_| {
+                http_error(
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    "chat_directory_failed",
+                )
+            })?;
+        items.extend(
+            admin_page
+                .items
+                .into_iter()
+                .filter(|item| {
+                    !item.blocked
+                        && item.status != "removed"
+                        && role.is_none_or(|role| item.principal_role == role)
+                        && can_participate_in_chat(&item.principal_role)
+                })
+                .map(|item| ChatDirectoryEntry {
+                    role: item.principal_role,
+                    ref_: item.entity_ref,
+                    display_name: item.name,
+                    avatar_url: item.avatar_url,
+                }),
+        );
+    }
 
-    if let Ok(workers) = state.workers.workers(query, 500).await {
+    if role.is_none_or(|role| role == PrincipalRole::Aparatchi)
+        && let Ok(workers) = state.workers.workers(query, 500).await
+    {
         for worker in workers {
             let (display_name, avatar_url, ref_) = match state.admin.worker_detail(worker).await {
                 Ok(detail) => (detail.name, detail.avatar_url, detail.id),
@@ -238,15 +253,23 @@ async fn load_directory_entries(
         }
     }
 
-    for role in [PrincipalRole::Qolipchi, PrincipalRole::Boyoqchi, PrincipalRole::TayyorlovMasteri, PrincipalRole::HomashyoRezkachi] {
-        if let Ok(users) = state.system_users.users(&role, query, 500).await {
+    for system_role in [
+        PrincipalRole::Qolipchi,
+        PrincipalRole::Boyoqchi,
+        PrincipalRole::TayyorlovMasteri,
+        PrincipalRole::HomashyoRezkachi,
+    ] {
+        if role.is_some_and(|role| role != system_role) {
+            continue;
+        }
+        if let Ok(users) = state.system_users.users(&system_role, query, 500).await {
             for user in users {
                 let detail = match state.admin.system_user_detail(user).await {
                     Ok(detail) if !detail.blocked => detail,
                     _ => continue,
                 };
                 items.push(ChatDirectoryEntry {
-                    role,
+                    role: system_role,
                     ref_: detail.id,
                     display_name: detail.name,
                     avatar_url: detail.avatar_url,
@@ -257,9 +280,10 @@ async fn load_directory_entries(
 
     let needle = query.trim().to_lowercase();
     let admin_ref = "admin";
-    if needle.is_empty()
-        || state.config.admin_name.to_lowercase().contains(&needle)
-        || admin_ref.contains(&needle)
+    if role.is_none_or(|role| role == PrincipalRole::Admin)
+        && (needle.is_empty()
+            || state.config.admin_name.to_lowercase().contains(&needle)
+            || admin_ref.contains(&needle))
     {
         let admin_avatar = state
             .admin
@@ -301,6 +325,231 @@ mod tests {
     use crate::core::admin::service::AdminService;
     use crate::core::system_users::{MemorySystemUserStore, SystemUserService, SystemUserUpsert};
     use crate::core::workers::{MemoryWorkerStore, WorkerService, WorkerUpsert};
+
+    struct DirectoryCatalog;
+
+    fn catalog_page(
+        kind: &str,
+        count: usize,
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Vec<crate::core::admin::models::AdminDirectoryEntry> {
+        (0..count)
+            .map(|index| crate::core::admin::models::AdminDirectoryEntry {
+                ref_: format!("{kind}_{index:04}"),
+                name: format!("Contact {kind} {index:04}"),
+                phone: String::new(),
+            })
+            .filter(|entry| entry.name.to_lowercase().contains(&query.to_lowercase()))
+            .skip(offset)
+            .take(limit)
+            .collect()
+    }
+
+    #[async_trait]
+    impl crate::core::admin::ports::AdminReadPort for DirectoryCatalog {
+        async fn suppliers_page(
+            &self,
+            query: &str,
+            limit: usize,
+            offset: usize,
+        ) -> Result<Vec<crate::core::admin::models::AdminDirectoryEntry>, AdminPortError> {
+            Ok(catalog_page("supplier", 501, query, limit, offset))
+        }
+
+        async fn customers_page(
+            &self,
+            query: &str,
+            limit: usize,
+            offset: usize,
+        ) -> Result<Vec<crate::core::admin::models::AdminDirectoryEntry>, AdminPortError> {
+            Ok(catalog_page("customer", 2, query, limit, offset))
+        }
+
+        async fn material_taminotchilar_page(
+            &self,
+            query: &str,
+            limit: usize,
+            offset: usize,
+        ) -> Result<Vec<crate::core::admin::models::AdminDirectoryEntry>, AdminPortError> {
+            Ok(catalog_page("material_taminotchi", 2, query, limit, offset))
+        }
+
+        async fn supplier_by_ref(
+            &self,
+            _: &str,
+        ) -> Result<crate::core::admin::models::AdminDirectoryEntry, AdminPortError> {
+            Err(AdminPortError::NotFound)
+        }
+
+        async fn customer_by_ref(
+            &self,
+            _: &str,
+        ) -> Result<crate::core::admin::models::AdminDirectoryEntry, AdminPortError> {
+            Err(AdminPortError::NotFound)
+        }
+
+        async fn items_page(
+            &self,
+            _: &str,
+            _: usize,
+            _: usize,
+        ) -> Result<Vec<crate::core::werka::models::SupplierItem>, AdminPortError> {
+            Ok(Vec::new())
+        }
+
+        async fn items_by_codes(
+            &self,
+            _: &[String],
+        ) -> Result<Vec<crate::core::werka::models::SupplierItem>, AdminPortError> {
+            Ok(Vec::new())
+        }
+
+        async fn item_groups(&self, _: &str, _: usize) -> Result<Vec<String>, AdminPortError> {
+            Ok(Vec::new())
+        }
+
+        async fn assigned_supplier_items(
+            &self,
+            _: &str,
+            _: usize,
+        ) -> Result<Vec<crate::core::werka::models::SupplierItem>, AdminPortError> {
+            Ok(Vec::new())
+        }
+
+        async fn customer_items(
+            &self,
+            _: &str,
+            _: &str,
+            _: usize,
+        ) -> Result<Vec<crate::core::werka::models::SupplierItem>, AdminPortError> {
+            Ok(Vec::new())
+        }
+    }
+
+    #[tokio::test]
+    async fn directory_filters_every_role_before_source_and_response_pagination() {
+        use axum::body::{Body, to_bytes};
+        use axum::http::{Request, StatusCode, header};
+        use tower::ServiceExt;
+
+        let mut state = test_state();
+        state.sessions = crate::core::session::manager::SessionManager::memory(Some(3600));
+        state.admin = state.admin.with_read_port(Arc::new(DirectoryCatalog));
+        for index in 0..2 {
+            state
+                .workers
+                .upsert_worker(WorkerUpsert {
+                    id: format!("worker_{index}"),
+                    name: format!("Contact worker {index}"),
+                    phone: String::new(),
+                    level: "Master".into(),
+                })
+                .await
+                .expect("worker");
+            for (system_index, role) in [
+                PrincipalRole::Qolipchi,
+                PrincipalRole::Boyoqchi,
+                PrincipalRole::TayyorlovMasteri,
+                PrincipalRole::HomashyoRezkachi,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                state
+                    .system_users
+                    .upsert_user(SystemUserUpsert {
+                        id: format!("{role:?}_{index}"),
+                        role,
+                        name: format!("Contact {role:?} {index}"),
+                        phone: format!("+99890{system_index:02}{index:05}"),
+                    })
+                    .await
+                    .expect("system user");
+            }
+        }
+        let token = state
+            .sessions
+            .create(Principal {
+                role: PrincipalRole::Supplier,
+                ref_: "supplier_0000".into(),
+                display_name: "Viewer".into(),
+                legal_name: String::new(),
+                phone: String::new(),
+                avatar_url: String::new(),
+            })
+            .await
+            .expect("viewer session");
+        let router = crate::http::router::build_router(state);
+        for role in [
+            PrincipalRole::Supplier,
+            PrincipalRole::Werka,
+            PrincipalRole::Customer,
+            PrincipalRole::Aparatchi,
+            PrincipalRole::Qolipchi,
+            PrincipalRole::Boyoqchi,
+            PrincipalRole::MaterialTaminotchi,
+            PrincipalRole::Admin,
+            PrincipalRole::TayyorlovMasteri,
+            PrincipalRole::HomashyoRezkachi,
+        ] {
+            let role_value = serde_json::to_value(role).expect("role");
+            let role_code = role_value.as_str().expect("role code");
+            for offset in [0, 1] {
+                let response = router
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .uri(format!(
+                                "/v1/mobile/chat/directory?role={role_code}&limit=1&offset={offset}"
+                            ))
+                            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                            .body(Body::empty())
+                            .expect("request"),
+                    )
+                    .await
+                    .expect("response");
+                assert_eq!(response.status(), StatusCode::OK, "{role_code}");
+                let body = to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .expect("body");
+                let page: serde_json::Value = serde_json::from_slice(&body).expect("page");
+                let items = page["items"].as_array().expect("items");
+                let singleton = matches!(role, PrincipalRole::Admin | PrincipalRole::Werka);
+                assert_eq!(
+                    items.len(),
+                    usize::from(!singleton || offset == 0),
+                    "{role_code}"
+                );
+                assert_eq!(
+                    page["has_more"],
+                    !singleton && (offset == 0 || role == PrincipalRole::Supplier)
+                );
+                for item in items {
+                    assert_eq!(item["role"], role_value);
+                    assert_ne!(item["ref"], "supplier_0000", "viewer must stay excluded");
+                }
+            }
+        }
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/mobile/chat/directory?role=customer&q=0001")
+                    .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .expect("search request"),
+            )
+            .await
+            .expect("search response");
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("search body");
+        let page: serde_json::Value = serde_json::from_slice(&body).expect("search page");
+        assert_eq!(page["items"].as_array().expect("items").len(), 1);
+        assert_eq!(page["items"][0]["ref"], "customer_0001");
+        assert_eq!(page["has_more"], false);
+    }
 
     #[derive(Default)]
     struct TestAdminStatePort {
