@@ -79,7 +79,9 @@ impl ProductionMapService {
         idempotency_key: &str,
         actor: QueueActionActor,
     ) -> Result<PrintPreflightHold, ProductionMapError> {
-        let _guard = self.apparatus_preflight_guard(apparatus, idempotency_key).await;
+        let _guard = self
+            .apparatus_preflight_guard(apparatus, idempotency_key)
+            .await;
         let apparatus = apparatus.trim();
         let order_id = order_id.trim();
         let hold_id = hold_id.trim();
@@ -107,10 +109,15 @@ impl ProductionMapService {
                     let mut running = existing;
                     running.status = PrintPreflightStatus::Running;
                     running.updated_at_unix = now;
-                    self.store
-                        .update_print_preflight_hold(running.clone())
+                    let event_id = self
+                        .store
+                        .update_print_preflight_hold_with_event(running.clone())
                         .await?;
-                    self.notify_print_preflight(&running.order_id, &running.apparatus);
+                    self.notify_print_preflight_once(
+                        event_id.as_deref(),
+                        &running.order_id,
+                        &running.apparatus,
+                    );
                     return Ok(running);
                 }
                 return Ok(existing);
@@ -134,10 +141,15 @@ impl ProductionMapService {
                     let mut running = existing.clone();
                     running.status = PrintPreflightStatus::Running;
                     running.updated_at_unix = now;
-                    self.store
-                        .update_print_preflight_hold(running.clone())
+                    let event_id = self
+                        .store
+                        .update_print_preflight_hold_with_event(running.clone())
                         .await?;
-                    self.notify_print_preflight(&running.order_id, &running.apparatus);
+                    self.notify_print_preflight_once(
+                        event_id.as_deref(),
+                        &running.order_id,
+                        &running.apparatus,
+                    );
                     return Ok(running);
                 }
                 return Ok(existing.clone());
@@ -145,7 +157,9 @@ impl ProductionMapService {
             return Err(ProductionMapError::PrintPreflightActive);
         }
 
-        let controls = self.queue_action_controls_for_apparatus(&canonical_id).await?;
+        let controls = self
+            .queue_action_controls_for_apparatus(&canonical_id)
+            .await?;
         let control = controls
             .get(&canonical_id)
             .and_then(|items| items.get(order_id))
@@ -178,8 +192,11 @@ impl ProductionMapService {
             // Retained for old API clients. The persisted queue status has no TTL.
             expires_at_unix: 0,
         };
-        self.store.put_print_preflight_hold(hold.clone()).await?;
-        self.notify_print_preflight(&hold.order_id, &hold.apparatus);
+        let event_id = self
+            .store
+            .put_print_preflight_hold_with_event(hold.clone())
+            .await?;
+        self.notify_print_preflight_once(event_id.as_deref(), &hold.order_id, &hold.apparatus);
         Ok(hold)
     }
 
@@ -238,8 +255,11 @@ impl ProductionMapService {
         hold.status = next_status;
         hold.actor = actor;
         hold.updated_at_unix = now;
-        self.store.update_print_preflight_hold(hold.clone()).await?;
-        self.notify_print_preflight(&hold.order_id, &hold.apparatus);
+        let event_id = self
+            .store
+            .update_print_preflight_hold_with_event(hold.clone())
+            .await?;
+        self.notify_print_preflight_once(event_id.as_deref(), &hold.order_id, &hold.apparatus);
         Ok(hold)
     }
 

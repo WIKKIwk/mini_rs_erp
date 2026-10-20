@@ -42,13 +42,15 @@ struct PreflightChange {
     kind: String,
     order_id: String,
     apparatus: String,
+    #[serde(default)]
+    event_id: Option<String>,
 }
 
 #[derive(Default)]
 struct Pending {
     generic: bool,
     apparatus: bool,
-    preflight: Option<PreflightChange>,
+    preflight: Vec<PreflightChange>,
 }
 
 impl Pending {
@@ -64,18 +66,14 @@ impl Pending {
                     && !change.order_id.is_empty()
                     && crate::core::production_map::queue_state::is_canonical_apparatus_id(
                         &change.apparatus,
-                    ) =>
+                    )
+                    && change.event_id.as_ref().is_none_or(|id| {
+                        id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit())
+                    }) =>
             {
-                if self
-                    .preflight
-                    .as_ref()
-                    .is_some_and(|previous| previous != &change)
-                {
-                    // Coalesced changes to different orders cannot be described
-                    // by one scoped event without hiding a dependency.
-                    self.generic = true;
+                if !self.preflight.contains(&change) {
+                    self.preflight.push(change);
                 }
-                self.preflight = Some(change);
             }
             _ => self.generic = true,
         }
@@ -85,13 +83,18 @@ impl Pending {
         if self.apparatus {
             apparatus.invalidate_runtime_caches().await;
         }
-        if !self.generic
-            && let Some(change) = self.preflight
-        {
-            service.notify_print_preflight(&change.order_id, &change.apparatus);
-        } else {
-            service.notify_live();
-        }
+        let changes = self
+            .preflight
+            .iter()
+            .map(|change| {
+                (
+                    change.event_id.as_deref(),
+                    change.order_id.as_str(),
+                    change.apparatus.as_str(),
+                )
+            })
+            .collect::<Vec<_>>();
+        service.notify_print_preflight_batch(&changes, self.generic);
     }
 }
 
@@ -150,13 +153,14 @@ mod tests {
     }
 
     #[test]
-    fn only_identical_preflight_notifications_remain_scoped() {
+    fn typed_notifications_retain_identity_until_publication() {
         let mut pending = Pending::default();
         pending.add(&preflight("a"));
         pending.add(&preflight("a"));
         assert!(!pending.generic);
         pending.add(&preflight("b"));
-        assert!(pending.generic);
+        assert!(!pending.generic);
+        assert_eq!(pending.preflight.len(), 2);
         let mut pending = Pending::default();
         pending.add(&preflight("a"));
         pending.add("state");
@@ -226,7 +230,7 @@ mod tests {
             .await
             .unwrap();
         sqlx::raw_sql(
-            "CREATE TABLE mini_queue_states (id integer); CREATE TABLE mini_orders (id integer);",
+            "CREATE TABLE mini_queue_states (id integer); CREATE TABLE mini_orders (id integer PRIMARY KEY);",
         )
         .execute(&writer)
         .await
@@ -314,9 +318,34 @@ mod tests {
                     .is_err()
             );
         }
+        // Page reads/backfills use conditional writes. Neither an empty
+        // statement nor an unchanged UPSERT may invalidate its own readers.
+        sqlx::raw_sql(
+            "UPDATE mini_orders SET id = id WHERE id = -1;
+             DELETE FROM mini_orders WHERE id = -1;
+             INSERT INTO mini_orders VALUES (1) ON CONFLICT DO NOTHING;
+             INSERT INTO mini_orders VALUES (1)
+                ON CONFLICT (id) DO UPDATE SET id = EXCLUDED.id;
+             UPDATE mini_orders SET id = id;",
+        )
+        .execute(&writer)
+        .await
+        .unwrap();
+        for events in [&mut first_events, &mut second_events] {
+            assert!(
+                tokio::time::timeout(Duration::from_millis(100), events.recv())
+                    .await
+                    .is_err(),
+                "no-op backfills must not invalidate a live read"
+            );
+        }
         let mut tx = writer.begin().await.unwrap();
+        const EVENT_ID: &str = "1234567890abcdef1234567890abcdef";
+        let mut tracked: serde_json::Value =
+            serde_json::from_str(&preflight("colour-order")).unwrap();
+        tracked["event_id"] = serde_json::json!(EVENT_ID);
         sqlx::query("SELECT set_config('mini.production_live', $1, true)")
-            .bind(preflight("colour-order"))
+            .bind(tracked.to_string())
             .execute(&mut *tx)
             .await
             .unwrap();
@@ -327,10 +356,43 @@ mod tests {
         .await
         .unwrap();
         tx.commit().await.unwrap();
+        // The local service and LISTEN share this exact committed ID. If
+        // either wins, the other must leave the global revision unchanged.
+        first.notify_print_preflight_once(
+            Some(EVENT_ID),
+            "colour-order",
+            "apparatus:default:bosma_9",
+        );
         for events in [&mut first_events, &mut second_events] {
             assert!(
                 matches!(tokio::time::timeout(Duration::from_secs(5), events.recv()).await.unwrap().unwrap(),
                 ProductionMapLiveEvent::PrintPreflight {order_id, ..} if order_id == "colour-order")
+            );
+        }
+        assert!(!second.notify_print_preflight_once(
+            Some(EVENT_ID),
+            "colour-order",
+            "apparatus:default:bosma_9",
+        ));
+        for events in [&mut first_events, &mut second_events] {
+            assert!(
+                tokio::time::timeout(Duration::from_millis(100), events.recv())
+                    .await
+                    .is_err(),
+                "local and remote publishers must deliver the committed event once"
+            );
+        }
+        sqlx::query("TRUNCATE mini_orders")
+            .execute(&writer)
+            .await
+            .unwrap();
+        for events in [&mut first_events, &mut second_events] {
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(5), events.recv())
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                ProductionMapLiveEvent::Invalidate
             );
         }
         // A terminated LISTEN session must invalidate even without another

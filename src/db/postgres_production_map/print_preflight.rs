@@ -73,12 +73,19 @@ pub(super) async fn put(
     pool: &PgPool,
     hold: &PrintPreflightHold,
 ) -> Result<(), ProductionMapError> {
+    put_with_event(pool, hold).await.map(|_| ())
+}
+
+pub(super) async fn put_with_event(
+    pool: &PgPool,
+    hold: &PrintPreflightHold,
+) -> Result<String, ProductionMapError> {
     let mut tx = pool
         .begin()
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
     lock_order_and_apparatuses_tx(&mut tx, &hold.order_id, &[hold.apparatus.as_str()]).await?;
-    tag_preflight_notification(&mut tx, hold).await?;
+    let event_id = tag_preflight_notification(&mut tx, hold).await?;
     let current = sqlx::query_scalar::<_, String>(
         "SELECT state FROM mini_queue_states WHERE canonical_apparatus_id = $1 AND order_id = $2 FOR UPDATE",
     ).bind(&hold.apparatus).bind(&hold.order_id).fetch_optional(&mut *tx).await
@@ -130,19 +137,27 @@ pub(super) async fn put(
     persist_queue_status(&mut tx, hold).await?;
     tx.commit()
         .await
-        .map_err(|_| ProductionMapError::StoreFailed)
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    Ok(event_id)
 }
 
 pub(super) async fn update(
     pool: &PgPool,
     hold: &PrintPreflightHold,
 ) -> Result<(), ProductionMapError> {
+    update_with_event(pool, hold).await.map(|_| ())
+}
+
+pub(super) async fn update_with_event(
+    pool: &PgPool,
+    hold: &PrintPreflightHold,
+) -> Result<String, ProductionMapError> {
     let mut tx = pool
         .begin()
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
     lock_order_and_apparatuses_tx(&mut tx, &hold.order_id, &[hold.apparatus.as_str()]).await?;
-    tag_preflight_notification(&mut tx, hold).await?;
+    let event_id = tag_preflight_notification(&mut tx, hold).await?;
     let result = sqlx::query(
         "UPDATE mini_print_preflight_holds
          SET status = $2, actor_role = $3, actor_ref = $4,
@@ -166,7 +181,8 @@ pub(super) async fn update(
     persist_queue_status(&mut tx, hold).await?;
     tx.commit()
         .await
-        .map_err(|_| ProductionMapError::StoreFailed)
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    Ok(event_id)
 }
 
 pub(super) async fn consume_print_preflight_hold_tx(
@@ -295,10 +311,17 @@ async fn persist_queue_status(
 // Only these two dedicated transactions have a colour-only dependency set.
 // Queue actions consuming a hold use the conservative generic notification.
 async fn tag_preflight_notification(
-    tx: &mut Transaction<'_, Postgres>, hold: &PrintPreflightHold,
-) -> Result<(), ProductionMapError> {
-    let payload = serde_json::json!({"kind":"preflight", "order_id":hold.order_id, "apparatus":hold.apparatus}).to_string();
+    tx: &mut Transaction<'_, Postgres>,
+    hold: &PrintPreflightHold,
+) -> Result<String, ProductionMapError> {
+    let event_id = format!("{:032x}", rand::random::<u128>());
+    let payload = serde_json::json!({"kind":"preflight", "order_id":hold.order_id,
+        "apparatus":hold.apparatus, "event_id":event_id})
+    .to_string();
     sqlx::query("SELECT set_config('mini.production_live', $1, true)")
-        .bind(payload).execute(&mut **tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
-    Ok(())
+        .bind(payload)
+        .execute(&mut **tx)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    Ok(event_id)
 }

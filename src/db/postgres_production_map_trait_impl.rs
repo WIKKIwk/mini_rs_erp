@@ -339,6 +339,20 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         PostgresProductionMapStore::update_print_preflight_hold(self, hold).await
     }
 
+    async fn put_print_preflight_hold_with_event(
+        &self,
+        hold: crate::core::production_map::PrintPreflightHold,
+    ) -> Result<Option<String>, ProductionMapError> {
+        print_preflight::put_with_event(&self.pool, &hold).await.map(Some)
+    }
+
+    async fn update_print_preflight_hold_with_event(
+        &self,
+        hold: crate::core::production_map::PrintPreflightHold,
+    ) -> Result<Option<String>, ProductionMapError> {
+        print_preflight::update_with_event(&self.pool, &hold).await.map(Some)
+    }
+
     async fn consume_print_preflight_hold(
         &self,
         hold_id: &str,

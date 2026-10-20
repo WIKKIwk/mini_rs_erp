@@ -440,6 +440,22 @@ pub trait ProductionMapStorePort: Send + Sync {
     ) -> StoreResult<()> {
         Err(ProductionMapError::StoreFailed)
     }
+    /// Return the exact committed notification ID when persistence also
+    /// publishes to another process. Memory/legacy stores need no deduplication.
+    async fn put_print_preflight_hold_with_event(
+        &self,
+        hold: PrintPreflightHold,
+    ) -> StoreResult<Option<String>> {
+        self.put_print_preflight_hold(hold).await?;
+        Ok(None)
+    }
+    async fn update_print_preflight_hold_with_event(
+        &self,
+        hold: PrintPreflightHold,
+    ) -> StoreResult<Option<String>> {
+        self.update_print_preflight_hold(hold).await?;
+        Ok(None)
+    }
     async fn consume_print_preflight_hold(
         &self,
         _hold_id: &str,
