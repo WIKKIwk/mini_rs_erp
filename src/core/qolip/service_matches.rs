@@ -12,6 +12,11 @@ fn qolip_spec_matches_order(spec: &QolipProductSpec, expected: &QolipProduct) ->
 }
 
 fn qolip_location_matches_spec(location: &QolipLocation, spec: &QolipProductSpec) -> bool {
+    if spec.item_code.is_empty() && !spec.qolip_set_id.is_empty() {
+        return location.qolip_code.trim().eq_ignore_ascii_case(spec.qolip_code.trim())
+            && location.warehouse.trim().eq_ignore_ascii_case(spec.warehouse.trim())
+            && location.size == spec.size;
+    }
     location
         .qolip_code
         .trim()

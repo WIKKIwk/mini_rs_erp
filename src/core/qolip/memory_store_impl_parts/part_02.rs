@@ -170,8 +170,10 @@ impl MemoryQolipStore {
                 .trim()
                 .eq_ignore_ascii_case(previous_qolip_code)
         }) {
-            location.item_code = spec.item_code.clone();
-            location.item_name = spec.item_name.clone();
+            if !spec.item_code.is_empty() {
+                location.item_code = spec.item_code.clone();
+                location.item_name = spec.item_name.clone();
+            }
             location.qolip_code = spec.qolip_code.clone();
             location.size = spec.size;
             location.id = qolip_location_id(

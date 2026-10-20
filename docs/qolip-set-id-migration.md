@@ -28,3 +28,20 @@ recovery; it is not used for application lookups.
 Do not rewrite 0153 or its checksum on installations where it is already applied.
 Do not run an old backend against the migrated schema. A rollback requires the
 matching database backup and previous application revision.
+
+## Standalone sets (0155)
+
+`POST /v1/mobile/qolip/sets/create` accepts `warehouse` and a nonempty `members`
+list of `qolip_code`, `size` and `color`. The authenticated caller must have
+access to the receiving warehouse. The server allocates the numeric set ID and
+commits all members and the creation audit event in one transaction. Conflicting
+mold codes reject the complete operation.
+
+Migration 0155 permits a NULL source product in the set registry. These physical
+molds have empty product metadata and no initial product link; no placeholder
+catalog item is created. Choosing the set for a product creates the existing
+explicit association. Product-facing reads and stock labels use that linked
+product while set membership and source identity stay independent.
+
+Apply 0155 with the same maintenance rollout above before enabling standalone
+creation. Existing product-bound sets and links require no data rewrite.

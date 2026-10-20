@@ -98,16 +98,11 @@ pub(crate) async fn save_checkout_tx(
         let Some((item_code, item_name, item_group, qolip_code, size)) = spec else {
             return Err(QolipError::QolipCodeNotFound);
         };
-        if !item_code
-            .trim()
-            .eq_ignore_ascii_case(checkout.item_code.trim())
-            || !item_name
-                .trim()
-                .eq_ignore_ascii_case(checkout.item_name.trim())
-            || !item_group
-                .trim()
-                .eq_ignore_ascii_case(checkout.item_group.trim())
-            || !qolip_code
+        let source_matches = item_code.is_empty()
+            || (item_code.trim().eq_ignore_ascii_case(checkout.item_code.trim())
+                && item_name.trim().eq_ignore_ascii_case(checkout.item_name.trim())
+                && item_group.trim().eq_ignore_ascii_case(checkout.item_group.trim()));
+        if !source_matches || !qolip_code
                 .trim()
                 .eq_ignore_ascii_case(checkout.qolip_code.trim())
             || size != checkout.size

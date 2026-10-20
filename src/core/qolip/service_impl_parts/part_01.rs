@@ -367,12 +367,19 @@ impl QolipService {
                 }
                 let mut checkout =
                     normalize_checkout(location, 1, worker_id, worker_name, principal)?;
-                checkout.item_group = spec.item_group.clone();
+                if !spec.item_code.is_empty() {
+                    checkout.item_group = spec.item_group.clone();
+                }
                 Some(checkout)
             }
             (Some(_), Some(_)) => return Err(QolipError::QolipInUse),
             (None, None) => None,
         };
+        if spec.item_code.is_empty() {
+            spec.item_code = expected_product.code;
+            spec.item_name = expected_product.name;
+            spec.item_group = expected_product.item_group;
+        }
         Ok(QolipOrderStartPreparation { spec, checkout })
     }
 

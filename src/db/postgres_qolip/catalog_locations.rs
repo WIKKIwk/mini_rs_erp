@@ -8,8 +8,8 @@ pub(super) async fn update_product_locations_tx(
     previous: &str,
     spec: &QolipProductSpec,
 ) -> Result<(), QolipError> {
-    let locations = sqlx::query_as::<_, (String, String, String, Option<i32>)>(
-        "SELECT id, block, row_letter, column_number
+    let locations = sqlx::query_as::<_, (String, String, String, Option<i32>, String, String)>(
+        "SELECT id, block, row_letter, column_number, item_code, item_name
          FROM mini_qolip_locations
          WHERE lower(qolip_code) = $1
          FOR UPDATE",
@@ -20,19 +20,23 @@ pub(super) async fn update_product_locations_tx(
     .map_err(|_| QolipError::StoreFailed)?;
     let location_updates = locations
         .into_iter()
-        .map(|(old_id, block, row_letter, column_number)| {
+        .map(|(old_id, block, row_letter, column_number, mut item_code, mut item_name)| {
+            if !spec.item_code.is_empty() {
+                item_code = spec.item_code.clone();
+                item_name = spec.item_name.clone();
+            }
             let new_id = qolip_location_id(
                 &block,
-                &spec.item_code,
+                &item_code,
                 &spec.qolip_code,
                 spec.size,
                 &row_letter,
                 column_number,
             );
-            (old_id, new_id, row_letter, column_number)
+            (old_id, new_id, item_code, item_name)
         })
         .collect::<Vec<_>>();
-    for (old_id, new_id, _row_letter, _column_number) in &location_updates {
+    for (old_id, new_id, item_code, item_name) in &location_updates {
         if old_id != new_id {
             let id_conflict = sqlx::query_scalar::<_, bool>(
                 "SELECT EXISTS (SELECT 1 FROM mini_qolip_locations WHERE id = $1 AND id <> $2)",
@@ -71,8 +75,8 @@ pub(super) async fn update_product_locations_tx(
         )
         .bind(old_id)
         .bind(new_id)
-        .bind(spec.item_code.trim())
-        .bind(spec.item_name.trim())
+        .bind(item_code.trim())
+        .bind(item_name.trim())
         .bind(spec.qolip_code.trim())
         .bind(spec.size)
         .execute(&mut **tx)

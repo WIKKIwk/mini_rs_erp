@@ -44,6 +44,15 @@ impl QolipService {
             .collect::<Vec<_>>();
         specs.extend(self.store.linked_product_specs(&product.code).await?);
         specs.retain(|spec| !spec.qolip_code.trim().is_empty());
+        // Standalone physical molds carry no source product. Product-facing
+        // reads use the confirmed association without rewriting the catalog.
+        for spec in &mut specs {
+            if spec.item_code.is_empty() {
+                spec.item_code = product.code.clone();
+                spec.item_name = product.name.clone();
+                spec.item_group = product.item_group.clone();
+            }
+        }
         specs.sort_by_key(|spec| spec.qolip_code.trim().to_lowercase());
         specs.dedup_by(|a, b| a.qolip_code.eq_ignore_ascii_case(&b.qolip_code));
         Ok(specs)

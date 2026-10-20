@@ -29,10 +29,31 @@ impl QolipService {
                 || !spec.warehouse.trim().eq_ignore_ascii_case(input.warehouse.trim()) {
                 return Err(QolipError::LocationIdentityMismatch);
             }
-            // Catalog projections may show a compatible product. Stock retains the physical identity.
-            input.item_code = spec.item_code;
-            input.item_name = spec.item_name;
-            input.item_group = spec.item_group;
+            if spec.item_code.is_empty() {
+                let product = self.order_product(&input.item_code, "").await?
+                    .ok_or(QolipError::MissingItem)?;
+                if !self.compatible_specs_for_product(&product).await?.iter()
+                    .any(|member| member.set_id() == spec.set_id()
+                        && member.qolip_code.eq_ignore_ascii_case(&spec.qolip_code))
+                {
+                    return Err(QolipError::QolipCodeMismatch);
+                }
+                // A standalone set stays product-free. Its stock label uses a
+                // linked product and keeps that label on subsequent placements.
+                if let Some(location) = self.store.location_by_qolip_code(&spec.qolip_code).await? {
+                    input.item_code = location.item_code;
+                    input.item_name = location.item_name;
+                } else {
+                    input.item_code = product.code;
+                    input.item_name = product.name;
+                    input.item_group = product.item_group;
+                }
+            } else {
+                // Catalog projections may show a compatible product. Stock retains the physical identity.
+                input.item_code = spec.item_code;
+                input.item_name = spec.item_name;
+                input.item_group = spec.item_group;
+            }
             input.size = spec.size;
         }
         let normalized = normalize_location(input, principal)?;
