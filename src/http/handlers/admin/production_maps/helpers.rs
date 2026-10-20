@@ -21,15 +21,22 @@ pub(super) async fn production_map_order_customers(
     state: &AppState,
     maps: &[ProductionMapSaved],
 ) -> BTreeMap<String, String> {
+    production_map_definition_customers(state, &maps.iter().map(|saved| &saved.map).collect::<Vec<_>>()).await
+}
+
+pub(super) async fn production_map_definition_customers(
+    state: &AppState,
+    maps: &[&ProductionMapDefinition],
+) -> BTreeMap<String, String> {
     let mut order_map_count = 0;
     let mut customers = BTreeMap::new();
-    for saved in maps
+    for map in maps
         .iter()
-        .filter(|saved| is_customer_order_map(&saved.map))
+        .filter(|map| is_customer_order_map(map))
     {
         order_map_count += 1;
-        let map_id = saved.map.id.trim();
-        let customer = saved.map.customer_name.trim();
+        let map_id = map.id.trim();
+        let customer = map.customer_name.trim();
         if !map_id.is_empty() && !customer.is_empty() {
             customers.insert(map_id.to_string(), customer.to_string());
         }
@@ -45,15 +52,15 @@ pub(super) async fn production_map_order_customers(
             return customers;
         }
     };
-    for saved in maps
+    for map in maps
         .iter()
-        .filter(|saved| is_customer_order_map(&saved.map))
+        .filter(|map| is_customer_order_map(map))
     {
-        let map_id = saved.map.id.trim();
+        let map_id = map.id.trim();
         if map_id.is_empty() || customers.contains_key(map_id) {
             continue;
         }
-        if let Some(customer) = resolve_production_map_customer(&saved.map, &templates) {
+        if let Some(customer) = resolve_production_map_customer(map, &templates) {
             customers.insert(map_id.to_string(), customer);
         }
     }

@@ -29,6 +29,8 @@ mod astatka;
 mod layer_remainders;
 pub use layer_remainders::{production_map_layer_remainders, production_map_layer_remainder_reprint};
 mod completion;
+mod order_page;
+pub use order_page::{production_map_order_page, production_map_closed_order_detail};
 mod live_delta;
 mod worker_snapshot;
 mod helpers;

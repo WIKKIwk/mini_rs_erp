@@ -10,6 +10,7 @@ const MAX_WORKER_SNAPSHOTS: usize = 64;
 pub(super) struct WorkerSnapshotScope {
     pub apparatus: Vec<String>,
     history: Vec<String>,
+    pub only_orders: bool,
 }
 
 pub(super) struct WorkerSnapshotInputs {
@@ -44,6 +45,7 @@ impl ProductionMapService {
         let scope = WorkerSnapshotScope {
             apparatus: normalized(apparatus),
             history: normalized(history_order_ids),
+            only_orders: false,
         };
         if scope.apparatus.is_empty()
             || scope
@@ -53,6 +55,36 @@ impl ProductionMapService {
         {
             return Err(ProductionMapError::QueueActionNotAllowed);
         }
+        self.scoped_snapshot_shared_with_revision(scope).await
+    }
+
+    /// Build details only for a requested admin page. Competing queues remain
+    /// available to the common control rules, but do not get programs/controls.
+    pub async fn order_snapshot_shared_with_revision(
+        &self,
+        order_ids: &[String],
+    ) -> Result<(std::sync::Arc<ProductionMapLiveSnapshot>, u64), ProductionMapError> {
+        if order_ids.len() > 50 {
+            return Err(ProductionMapError::QueueActionNotAllowed);
+        }
+        if order_ids.is_empty() {
+            return Ok((
+                std::sync::Arc::new(ProductionMapLiveSnapshot::default()),
+                self.snapshot_revision(),
+            ));
+        }
+        self.scoped_snapshot_shared_with_revision(WorkerSnapshotScope {
+            apparatus: Vec::new(),
+            history: normalized(order_ids),
+            only_orders: true,
+        })
+        .await
+    }
+
+    async fn scoped_snapshot_shared_with_revision(
+        &self,
+        scope: WorkerSnapshotScope,
+    ) -> Result<(std::sync::Arc<ProductionMapLiveSnapshot>, u64), ProductionMapError> {
         let entry = {
             let mut entries = self.snapshot_cache.worker_snapshots.lock().await;
             if let Some(entry) = entries.get(&scope) {
@@ -127,12 +159,14 @@ impl ProductionMapService {
         }
         // Legacy frozen records identify their apparatus through the last
         // freeze log. Include those few orders until the common builder resolves it.
-        extra.extend(
-            order_controls
-                .iter()
-                .filter(|(_, control)| control.state == OrderControlState::Frozen)
-                .map(|(id, _)| id.clone()),
-        );
+        if !scope.only_orders {
+            extra.extend(
+                order_controls
+                    .iter()
+                    .filter(|(_, control)| control.state == OrderControlState::Frozen)
+                    .map(|(id, _)| id.clone()),
+            );
+        }
         let candidates = self
             .store
             .maps_for_snapshot_scope(&scope.apparatus, &extra.iter().cloned().collect::<Vec<_>>())

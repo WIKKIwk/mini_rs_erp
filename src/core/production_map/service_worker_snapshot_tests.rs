@@ -6,6 +6,55 @@ const PEER: &str = "apparatus:default:bosma_8";
 const OTHER: &str = "apparatus:default:bosma_9";
 const DOWNSTREAM: &str = "apparatus:default:asset-007";
 
+#[tokio::test]
+async fn admin_order_page_snapshot_preserves_controls_without_building_global_details() {
+    let store = Arc::new(MemoryProductionMapStore::new());
+    let service = ProductionMapService::new_for_test(store.clone());
+    for (id, route) in [
+        ("zakaz-own", vec![OWN, DOWNSTREAM]),
+        ("zakaz-peer", vec![PEER, DOWNSTREAM]),
+        ("zakaz-other", vec![OTHER]),
+    ] {
+        service.upsert_map(map(id, &route)).await.unwrap();
+    }
+    service
+        .set_apparatus_sequence(DOWNSTREAM, vec!["zakaz-peer".into(), "zakaz-own".into()])
+        .await
+        .unwrap();
+    store
+        .put_apparatus_queue_states(
+            DOWNSTREAM,
+            BTreeMap::from([("zakaz-peer".into(), "in_progress".into())]),
+        )
+        .await
+        .unwrap();
+    service.notify_live();
+    let (page, revision) = service
+        .order_snapshot_shared_with_revision(&["zakaz-own".into()])
+        .await
+        .unwrap();
+    assert!(service.snapshot_cache.snapshot.read().await.is_none());
+    assert_eq!(page.maps.len(), 1);
+    assert_eq!(page.maps[0].map.id, "zakaz-own");
+    assert!(!page.stage_states.contains_key("zakaz-peer"));
+    let (full, full_revision) = service.live_snapshot_shared_with_revision().await.unwrap();
+    assert_eq!(revision, full_revision);
+    for apparatus in [OWN, DOWNSTREAM] {
+        assert_eq!(
+            page.queue_action_controls[apparatus]["zakaz-own"],
+            full.queue_action_controls[apparatus]["zakaz-own"]
+        );
+        assert_eq!(
+            page.sequence_versions[apparatus],
+            full.sequence_versions[apparatus]
+        );
+    }
+    assert_eq!(
+        page.stage_states["zakaz-own"],
+        full.stage_states["zakaz-own"]
+    );
+}
+
 fn map(id: &str, route: &[&str]) -> ProductionMapDefinition {
     let mut nodes = vec![serde_json::json!({"id":"start", "kind":"start", "title":"Start"})];
     let mut edges = Vec::new();

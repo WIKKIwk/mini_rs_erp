@@ -1,6 +1,6 @@
 use super::*;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::compiler::{compile_map, normalize_map, run_map_with_variables};
 use super::progress::{
@@ -94,14 +94,49 @@ impl ProductionMapService {
         &self,
         limit: usize,
     ) -> Result<Vec<FullyCompletedProductionOrder>, ProductionMapError> {
-        let maps = self
-            .store
-            .maps_by_lifecycle_statuses(&[
-                ProductionOrderLifecycleStatus::ProductionCompleted,
-                ProductionOrderLifecycleStatus::Closed,
-                ProductionOrderLifecycleStatus::Cancelled,
-            ])
-            .await?;
+        let mut orders = self.closed_orders_read(None, true).await?;
+        orders.truncate(limit.clamp(1, 500));
+        Ok(orders)
+    }
+
+    /// The archive index omits progress batches. Details are read for one ID
+    /// when expanded, instead of loading every closed order's WIP on entry.
+    pub async fn closed_order_summaries(
+        &self,
+    ) -> Result<Vec<FullyCompletedProductionOrder>, ProductionMapError> {
+        self.closed_orders_read(None, false).await
+    }
+
+    pub async fn closed_order_detail(
+        &self,
+        order_id: &str,
+    ) -> Result<Option<FullyCompletedProductionOrder>, ProductionMapError> {
+        let order_id = order_id.trim();
+        if !order_id.starts_with("zakaz-") {
+            return Err(ProductionMapError::MissingId);
+        }
+        Ok(self.closed_orders_read(Some(order_id), true).await?.into_iter().next())
+    }
+
+    async fn closed_orders_read(
+        &self,
+        only_order: Option<&str>,
+        include_progress: bool,
+    ) -> Result<Vec<FullyCompletedProductionOrder>, ProductionMapError> {
+        let terminal = [
+            ProductionOrderLifecycleStatus::ProductionCompleted,
+            ProductionOrderLifecycleStatus::Closed,
+            ProductionOrderLifecycleStatus::Cancelled,
+        ];
+        let maps = if let Some(id) = only_order {
+            let lifecycle = self.store.production_order_lifecycles(&[id.to_string()]).await?;
+            if !lifecycle.get(id).is_some_and(|record| terminal.contains(&record.status)) {
+                return Ok(Vec::new());
+            }
+            self.store.map_by_id(id).await?.into_iter().collect()
+        } else {
+            self.store.maps_by_lifecycle_statuses(&terminal).await?
+        };
         let mut candidates = Vec::new();
         for map in maps {
             let order_id = map.id.trim();
@@ -143,7 +178,13 @@ impl ProductionMapService {
             freeze_requests,
         ) = tokio::join!(
             self.store.queue_action_logs_for_orders(&order_ids),
-            self.store.progress_batches_for_orders(&order_ids),
+            async {
+                if include_progress {
+                    self.store.progress_batches_for_orders(&order_ids).await
+                } else {
+                    Ok(BTreeMap::new())
+                }
+            },
             self.store.order_run_sessions_for_orders(&order_ids),
             self.store.apparatus_transfers_for_audit(),
             self.store.order_freeze_requests_for_audit(),
@@ -264,7 +305,6 @@ impl ProductionMapService {
                 .cmp(&left.completed_at_unix)
                 .then_with(|| left.order_id.cmp(&right.order_id))
         });
-        closed.truncate(limit.clamp(1, 500));
         Ok(closed)
     }
 

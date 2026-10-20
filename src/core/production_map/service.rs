@@ -2,6 +2,8 @@
 mod projection;
 #[path = "service_display_order.rs"]
 mod display_order;
+#[path = "service_admin_pages.rs"]
+mod admin_pages;
 
 use super::*;
 
@@ -64,7 +66,7 @@ struct CachedProductionSnapshot {
     snapshot: std::sync::Arc<ProductionMapLiveSnapshot>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct ProductionMapLiveSnapshot {
     pub sequence_versions: BTreeMap<String, String>,
     pub sequence_revisions: BTreeMap<String, i64>,
@@ -566,7 +568,13 @@ impl ProductionMapService {
             let mut sequence_versions = BTreeMap::new();
             for canonical in &canonical_apparatuses {
                 let id = canonical.runtime.apparatus_id.as_str();
-                if scope.is_some_and(|scope| !scope.apparatus.iter().any(|assigned| assigned == id))
+                if scope.is_some_and(|scope| {
+                    if scope.only_orders {
+                        !output_scope.as_ref().is_some_and(|(_, apparatus)| apparatus.contains(id))
+                    } else {
+                        !scope.apparatus.iter().any(|assigned| assigned == id)
+                    }
+                })
                 {
                     continue;
                 }
@@ -721,7 +729,7 @@ impl ProductionMapService {
             order_controls,
             frozen_orders_by_apparatus,
         };
-        if let Some((ids, _)) = output_scope {
+        if let Some((ids, apparatus_ids)) = output_scope {
             // Keep cross-machine route state for selected orders, and omit
             // unrelated queues before putting the derived snapshot in memory.
             for values in snapshot.queue_states.values_mut() {
@@ -732,7 +740,11 @@ impl ProductionMapService {
                 values.retain(|order| ids.contains(&order.order_id));
             }
             if let Some(scope) = scope {
-                let own = |id: &String| scope.apparatus.contains(id);
+                let own = |id: &String| if scope.only_orders {
+                    apparatus_ids.contains(id)
+                } else {
+                    scope.apparatus.contains(id)
+                };
                 snapshot.sequences.retain(|id, _| own(id));
                 snapshot.visible_order_ids.retain(|id, _| own(id));
                 snapshot.sequence_versions.retain(|id, _| own(id));
