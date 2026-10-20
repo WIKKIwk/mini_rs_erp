@@ -602,6 +602,9 @@ class Runner:
                         pending = [pool.submit(self.receive, client, started, 5) for client in clients]
                         self.mutate(action, hold)
                         records.extend(future.result(timeout=15) for future in pending)
+                        # Observe each mutation for the same five seconds even
+                        # when every baseline socket emits immediately.
+                        time.sleep(max(0, 5 - (time.perf_counter() - started)))
             # Some different-apparatus views legitimately contain this order's
             # downstream/upstream controls. Exact REST equality decides relevance.
             self.assert_views(clients, "other_apparatus_change")
@@ -658,8 +661,10 @@ class Runner:
         finally:
             keeper["socket"].close()
 
-    def idle(self, seconds=8):
+    def idle(self, seconds=30):
         clients = [self.connect_state(self.actor["token"]) for _ in range(max(self.clients))]
+        received = sum(client["socket"].received for client in clients)
+        sent = sum(client["socket"].sent for client in clients)
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=len(clients)) as pool:
                 with Phase(self, "idle_worker_streams"):
@@ -671,8 +676,9 @@ class Runner:
             self.result["idle"] = {
                 "clients": len(clients), "seconds": seconds,
                 "http_gets": 0, "data_events": 0,
-                "websocket_received_bytes": sum(client["socket"].received for client in clients),
-                "note": "Bootstrap excluded from time; byte count includes ready frames.",
+                "websocket_received_bytes": sum(client["socket"].received for client in clients) - received,
+                "websocket_sent_bytes": sum(client["socket"].sent for client in clients) - sent,
+                "note": "Bootstrap excluded; includes ping/pong and a full 25-second heartbeat interval.",
             }
         finally:
             for client in clients:

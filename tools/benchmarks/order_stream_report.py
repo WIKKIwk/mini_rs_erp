@@ -121,8 +121,10 @@ def main():
             e["type"] != "no_event" for e in r["disjoint"]["events"])),
         ("Other-apparatus WS frame bytes (two changes)", lambda r: sum(
             e["frame_bytes"] for e in r["disjoint"]["events"])),
-        ("Idle HTTP GETs / data events (8 s)", lambda r:
+        ("Idle HTTP GETs / data events (30 s)", lambda r:
             "%s / %s" % (r["idle"]["http_gets"], r["idle"]["data_events"])),
+        ("Idle WS received / sent bytes (30 s)", lambda r:
+            "%s / %s" % (r["idle"]["websocket_received_bytes"], r["idle"]["websocket_sent_bytes"])),
     ]
     lines += ["| %s | %s | %s |" % (name, getter(before), getter(after)) for name, getter in metrics]
     for name, phase in (("Idle server CPU, ms", "idle_worker_streams"),
@@ -139,7 +141,9 @@ def main():
         "One hold/release pair per scenario with SQLx query logging enabled. "
         "Counts are observed SQLx statement events, including incidental server "
         "maintenance in that interval. Diagnostic timings are intentionally not "
-        "used above. PostgreSQL transaction/tuple/buffer counters remain available "
+        "used above. Periodic order reconciliation stops after its initial run "
+        "only in this SQL diagnostic; primary timings retain its default 30-second "
+        "interval. PostgreSQL transaction/tuple/buffer counters remain available "
         "in the JSON and are not labeled as SQL counts.",
         "",
         "| Scenario | Before SQLx events | After SQLx events |",

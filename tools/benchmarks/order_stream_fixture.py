@@ -158,6 +158,11 @@ class Fixture:
             MINI_ERP_PG_MAX_CONNECTIONS="16",
             RUST_LOG="warn,sqlx::query=debug" if query_log else "warn",
         )
+        if query_log:
+            # SQL diagnostic isolates this controlled stream workload. The
+            # normal timed runs retain the production-default 30 s reconciler.
+            # Zero performs the initial reconciliation once, then exits its loop.
+            env["MINI_ORDER_SYNC_INTERVAL_SECONDS"] = "0"
         if migration:
             maintenance = self.keys.local_url(
                 self.config["MINI_ERP_MIGRATION_DATABASE_URL"]
@@ -287,6 +292,7 @@ class Fixture:
             "binary_sha256": sha256(executable),
             "binary_bytes": executable.stat().st_size,
             "query_log": query_log, "ready": False,
+            "mini_order_sync_interval_seconds": 0 if query_log else 30,
             "test_credentials_reseeded": credential_count,
         }
         self.metadata["servers"][mode] = server

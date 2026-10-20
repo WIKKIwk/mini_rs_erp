@@ -67,6 +67,19 @@ the benchmark with `--query-counts-only --cycles 1 --output-suffix sql-counts`.
 Query logging changes runtime cost, so those timing numbers are not the primary
 performance results. Each diagnostic phase counts `sqlx::query` statement events
 from the private log without copying SQL or bind data into the report.
+The diagnostic sets `MINI_ORDER_SYNC_INTERVAL_SECONDS=0`: the normal initial
+order reconciliation runs once, then periodic reconciliation stops. This keeps
+unrelated 30-second background SQL out of the small per-mutation statement count.
+Primary timing and idle runs retain the production-default 30-second reconciler.
+
+For the separate two-OS-process check, stop the `before` server and run
+`order_stream_crossprocess.py --run-dir "$BENCH_DIR"` through the same maintenance
+wrapper while the candidate `after` server is ready. It starts a second candidate
+process on port 18091 with independent logins, shared clone PostgreSQL data and an
+explicit copy of the role/config files. Worker and administrator streams on that
+process must match both servers' authorized HTTP content after hold, release,
+reorder and inverse reorder requests made through port 18092. The second process
+is stopped in `finally`. Restore again before collecting primary timing results.
 
 Stop private servers using the fixture's `stop --mode before` / `stop --mode
 after` commands. Database clones and private artifacts are intentionally retained
@@ -83,9 +96,10 @@ for follow-up diagnosis; remove them explicitly once they are no longer needed.
 - Different apparatus scopes receive the same mutation. Missing events are only
   accepted when the resulting authorized REST view is unchanged. This accounts
   for legitimate upstream/downstream dependencies.
-- Eight seconds of idle connected worker streams measures process CPU and data
-  messages. This does not invent a periodic HTTP poll that the current mobile
-  worker screen does not perform.
+- Thirty seconds of idle connected worker streams measures process CPU,
+  ping/pong bytes and data messages across a complete 25-second heartbeat and a
+  normal reconciliation interval. This does not invent a periodic HTTP poll that
+  the current mobile worker screen does not perform.
 - Reconnect with a recent old cursor checks ordered replay or a safe HTTP
   fallback, then exact REST equality.
 - Administrator windows retain 40 sequence rows and 60 order rows. The baseline
@@ -113,5 +127,6 @@ fanout timing phases. Administrator required reload GETs are inside their phases
 
 These results establish behavior and relative local server cost for the captured
 dataset. They do not measure device battery, mobile rendering, WAN loss, TLS,
-multiple servers, or unlimited production capacity. Multiple-process correctness
-must be established by its separate PostgreSQL notification test.
+distributed throughput, or unlimited production capacity. Multiple-process
+correctness is established separately by the real two-process harness and the
+PostgreSQL listener tests; it is not a distributed load benchmark.
