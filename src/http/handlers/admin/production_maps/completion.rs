@@ -33,16 +33,39 @@ pub async fn production_map_live(
     let include_completion_requests = matches!(principal.role, PrincipalRole::Admin);
     let delta_enabled = query.protocol.as_deref() == Some("delta");
     let state_delta_enabled = query.protocol.as_deref() == Some("state_delta_v1");
+    let page_delta_enabled = query.protocol.as_deref() == Some("page_delta_v1");
+    let notifications_enabled = query.protocol.as_deref() == Some("notifications_v1");
+    let page_windows = if page_delta_enabled {
+        require_paged_live_capability(&state, &principal).await?;
+        Some(super::page_live::requests(&query.pages)?)
+    } else {
+        None
+    };
     if query.paged {
-        if !delta_enabled {
+        if !delta_enabled && !page_delta_enabled {
             return Err(bad_request("paged_live_requires_delta"));
         }
         require_paged_live_capability(&state, &principal).await?;
     }
     let window = super::worker_snapshot::WorkerQueueWindow::new(
-        query.queue_limit, &query.queue_search, query.worker_scope && state_delta_enabled)?;
+        query.queue_limit,
+        &query.queue_search,
+        query.worker_scope && state_delta_enabled,
+    )?;
     Ok(ws
         .on_upgrade(move |socket| {
+            if let Some(windows) = page_windows {
+                return Box::pin(super::page_live::socket(state, socket, principal, windows))
+                    as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
+            }
+            if notifications_enabled {
+                return Box::pin(super::page_live::notifications_socket(
+                    state,
+                    socket,
+                    principal,
+                    include_completion_requests,
+                ));
+            }
             if state_delta_enabled {
                 return super::live_delta::production_map_state_live_socket(
                     state,
@@ -92,6 +115,8 @@ pub struct ProductionMapLiveQuery {
     queue_search: String,
     #[serde(default)]
     paged: bool,
+    #[serde(default)]
+    pages: String,
 }
 
 async fn authenticated_principal_for_live(
@@ -108,7 +133,7 @@ async fn authenticated_principal_for_live(
     state.sessions.get(&token).await.map_err(|_| unauthorized())
 }
 
-async fn require_any_live_capability(
+pub(super) async fn require_any_live_capability(
     state: &AppState,
     principal: &Principal,
 ) -> Result<(), AdminError> {
@@ -131,7 +156,7 @@ async fn require_any_live_capability(
     Err(forbidden())
 }
 
-async fn require_paged_live_capability(
+pub(super) async fn require_paged_live_capability(
     state: &AppState,
     principal: &Principal,
 ) -> Result<(), AdminError> {
@@ -295,7 +320,8 @@ async fn send_production_map_live_snapshot(
             "rev": state.production_maps.snapshot_revision(),
         });
         *last_payload_initialized = true;
-        return send_production_map_live_message(socket, Message::Text(payload.to_string().into())).await;
+        return send_production_map_live_message(socket, Message::Text(payload.to_string().into()))
+            .await;
     }
     let service = &state.production_maps;
     let actor_ref = queue_action_actor(principal).ref_;

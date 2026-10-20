@@ -8,21 +8,21 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
-#[derive(Default, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 pub struct OrderPageQuery {
     #[serde(default)]
-    view: String,
+    pub(super) view: String,
     #[serde(default)]
-    apparatus: String,
+    pub(super) apparatus: String,
     #[serde(default)]
-    target: String,
+    pub(super) target: String,
     #[serde(default)]
-    search: String,
+    pub(super) search: String,
     #[serde(default)]
-    cursor: String,
+    pub(super) cursor: String,
     #[serde(default)]
-    if_version: String,
-    limit: Option<usize>,
+    pub(super) if_version: String,
+    pub(super) limit: Option<usize>,
 }
 
 #[derive(serde::Serialize, Deserialize)]
@@ -78,7 +78,7 @@ fn not_modified() -> Response {
 
 pub async fn production_map_order_page(
     State(state): State<AppState>,
-    Query(mut query): Query<OrderPageQuery>,
+    Query(query): Query<OrderPageQuery>,
     headers: HeaderMap,
 ) -> Result<Response, AdminError> {
     let principal = authorize_any_capability(
@@ -87,6 +87,19 @@ pub async fn production_map_order_page(
         &[Capability::AdminAccess, Capability::ProductionMapManage],
     )
     .await?;
+    Ok(match read_page(&state, &principal, query).await? {
+        Some(payload) => json_response(payload),
+        None => not_modified(),
+    })
+}
+
+/// The HTTP bootstrap and live windows use the same domain projection and
+/// validation. A live window is never an authority for a queue mutation.
+pub(super) async fn read_page(
+    state: &AppState,
+    principal: &Principal,
+    mut query: OrderPageQuery,
+) -> Result<Option<serde_json::Value>, AdminError> {
     query.search = query.search.trim().to_lowercase();
     query.apparatus = query.apparatus.trim().to_string();
     query.target = query.target.trim().to_string();
@@ -147,7 +160,7 @@ pub async fn production_map_order_page(
     }
     let initial_version = version(&scope, &epoch, revision, &pending_version);
     if query.cursor.is_empty() && query.if_version == initial_version {
-        return Ok(not_modified());
+        return Ok(None);
     }
     offset(&query.cursor, &initial_version)?;
 
@@ -184,7 +197,7 @@ pub async fn production_map_order_page(
         report.violations = report.violations[start..end].to_vec();
         let mut report = serde_json::to_value(report).unwrap();
         report["total_violations"] = total_violations.into();
-        return Ok(json_response(serde_json::json!({
+        return Ok(Some(serde_json::json!({
             "ok": true, "version": initial_version, "epoch": epoch, "rev": revision,
             "total": total, "offset": start,
             "next_cursor": next_cursor(&initial_version, end, total),
@@ -223,7 +236,7 @@ pub async fn production_map_order_page(
             item["logs"] = serde_json::json!([]);
             item["progress_batches"] = serde_json::json!([]);
         }
-        return Ok(json_response(serde_json::json!({
+        return Ok(Some(serde_json::json!({
             "ok": true, "version": initial_version, "epoch": epoch, "rev": revision,
             "total": orders.len(), "offset": start,
             "next_cursor": next_cursor(&initial_version, end, orders.len()),
@@ -395,7 +408,7 @@ pub async fn production_map_order_page(
             .filter(|(id, _)| selected.contains(id))
             .collect::<BTreeMap<_, _>>()
     );
-    Ok(json_response(payload))
+    Ok(Some(payload))
 }
 
 async fn page_calculation_templates(
