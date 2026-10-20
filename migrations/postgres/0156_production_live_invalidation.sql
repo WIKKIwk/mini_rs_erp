@@ -18,6 +18,14 @@ BEGIN
             RETURN NULL;
         END IF;
     END IF;
+    -- A sequence-move transaction sends its complete delta explicitly after
+    -- INSERT ... RETURNING supplies the committed sequence revision. That
+    -- NOTIFY is in the same transaction, so rollback/cancellation cannot
+    -- publish a partial move. All ordinary/external writes remain generic.
+    IF TG_TABLE_NAME IN ('mini_queue_sequences', 'mini_queue_events')
+       AND current_setting('mini.production_live', true) = 'sequence_commit_deferred' THEN
+        RETURN NULL;
+    END IF;
     IF TG_TABLE_NAME IN (
         'mini_apparatus',
         'mini_apparatus_queue_policies',
@@ -59,6 +67,9 @@ BEGIN
               c.relname ~ '^mini_(production_|queue_|order_|orders$|progress_|print_preflight_|opening_wip_|raw_material_|qolip_|paddon|active_rezka_|apparatus|canonical_apparatus_|training_|worker|customer|item|factory_location|inventory_|finished_goods_|pending_orders$|preparation_|layer_remainder_|bosma_astatka_|laminat|rezka_astatka_|completion_)'
               OR c.relname IN ('mini_quick_order_templates', 'mini_quick_order_images')
           )
+          -- Idempotency receipts do not change any live projection. In
+          -- particular, recording a no-op move must not rebuild every reader.
+          AND c.relname <> 'mini_queue_reorder_commands'
           AND c.relname NOT LIKE '%chat_outbox'
           AND c.relname NOT LIKE '%change_outbox'
     LOOP
