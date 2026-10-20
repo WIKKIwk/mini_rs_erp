@@ -398,6 +398,7 @@ class Runner:
             profiles.append({
                 "token": login["token"], "assigned": login["assigned_apparatus"],
                 "snapshot": snapshot,
+                "credentials": {"phone": value["worker"]["phone"], "code": value["worker"]["code"]},
             })
         if not profiles:
             raise RuntimeError("Fixture has no accessible assigned workers")
@@ -444,6 +445,7 @@ class Runner:
                                 "token": login["token"],
                                 "assigned": login["assigned_apparatus"],
                                 "snapshot": snapshot,
+                                "credentials": {"phone": worker["phone"], "code": worker["code"]},
                             })
                             seeded += 1
                         self.result["fixture_roles"] = {

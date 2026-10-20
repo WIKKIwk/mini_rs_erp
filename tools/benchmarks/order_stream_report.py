@@ -21,6 +21,9 @@ def main():
         mode: json.loads((source / (mode + "-sql-counts.json")).read_text())
         for mode in ("before", "after")
     }
+    crossprocess = json.loads((source / "crossprocess-results.json").read_text())
+    assert crossprocess["independent_os_processes"] == 2
+    assert crossprocess["restored_original_order"]
     for mode, result in results.items():
         assert result["fanout"] and result["reorder"]["restored_original_order"]
         assert result["notifications"]
@@ -161,11 +164,22 @@ def main():
         "- Before: %s recorded exact checks." % len(before["correctness"]),
         "- After: %s recorded exact checks." % len(after["correctness"]),
         "",
+        "## Two independent server processes", "",
+        "A separate correctness run starts two OS processes against one disposable "
+        "PostgreSQL clone. Process B logs in independently as the acting worker, "
+        "another worker and an administrator, then subscribes to worker state and "
+        "a 40-row administrator window. Real hold, release, reorder and inverse "
+        "reorder requests go through process A. All four actions converge to the "
+        "exact authorized HTTP content on both processes; original ordering is "
+        "restored. Static role/config files are copied explicitly for this test.",
+        "",
+        "Two-process tested binary SHA-256: `" + crossprocess["candidate_binary_sha256"] + "`.",
+        "",
         "## Limits and reproduction", "",
         "See [the harness methodology](order_stream_README.md). This is one local "
         "paired run with 32 sockets maximum, not a capacity forecast. p95 uses ten "
-        "samples per mutation scenario. Separate role/capability and multiple-server "
-        "tests are required beyond the admin/aparatchi scopes exercised here. "
+        "samples per mutation scenario. Other role/capability combinations and broader "
+        "deployment stress need their own tests beyond the admin/aparatchi scopes here. "
         "No WAN, TLS, battery, physical mobile rendering or reconnect storm is measured.",
         "",
         "Replay is bounded: state history retains at most 64 entries / 256 KiB "
@@ -194,7 +208,7 @@ def main():
     stem = "order_stream_" + args.date
     (output / (stem + ".md")).write_text("\n".join(lines))
     (output / (stem + ".json")).write_text(json.dumps({
-        "primary": results, "sql_diagnostics": diagnostics,
+        "primary": results, "sql_diagnostics": diagnostics, "crossprocess": crossprocess,
     }, indent=2) + "\n")
     print("Generated " + stem + ".md and sanitized metrics JSON")
 
