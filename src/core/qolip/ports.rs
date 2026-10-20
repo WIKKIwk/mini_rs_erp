@@ -9,6 +9,9 @@ use super::models::{
 
 #[async_trait]
 pub trait QolipStorePort: Send + Sync {
+    async fn next_set_id(&self) -> Result<String, QolipError> {
+        super::set_ids::next_memory_set_id()
+    }
     async fn managed_sets(&self, _allowed: Option<&[String]>) -> Result<Vec<super::QolipManagedSet>, QolipError> { Err(QolipError::StoreFailed) }
     async fn edit_set(&self, _input: &super::QolipSetEdit, _principal: &Principal, _allowed: Option<&[String]>) -> Result<super::QolipManagedSet, QolipError> { Err(QolipError::StoreFailed) }
     async fn edit_product_molds(&self, _input: &super::QolipProductMoldEdits, _principal: &Principal, _allowed: Option<&[String]>) -> Result<(), QolipError> { Err(QolipError::StoreFailed) }

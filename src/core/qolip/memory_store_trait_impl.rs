@@ -1,5 +1,17 @@
 #[async_trait]
 impl QolipStorePort for MemoryQolipStore {
+    async fn next_set_id(&self) -> Result<String, QolipError> {
+        loop {
+            let id = super::set_ids::next_memory_set_id()?;
+            let specs = self.product_specs.read().await;
+            let registry = self.managed_registry.read().await;
+            if !registry.contains_key(&id)
+                && !specs.values().any(|spec| spec.set_id() == id || spec.qolip_code == id)
+            {
+                return Ok(id);
+            }
+        }
+    }
     async fn managed_sets(&self, allowed: Option<&[String]>) -> Result<Vec<super::QolipManagedSet>, QolipError> {
         self.memory_managed_sets(allowed).await
     }

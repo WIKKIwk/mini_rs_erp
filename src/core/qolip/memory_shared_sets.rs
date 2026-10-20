@@ -3,7 +3,6 @@ fn memory_set_targets(
     set_id: &str,
     native: &str,
 ) -> Vec<String> {
-    if set_id.starts_with("qolip-local:") { return Vec::new(); }
     let targets = links
         .iter()
         .filter(|(id, _)| id == set_id)
@@ -21,7 +20,7 @@ fn memory_effective_binding(spec: &QolipProductSpec, item: &str,
     let item = item.trim().to_lowercase();
     let extra = overrides.get(&(item.clone(), spec.qolip_code.trim().to_lowercase()));
     if extra == Some(&false) { return None; }
-    if memory_set_targets(links, &spec.set_id(), &spec.item_code).contains(&item) { return Some(false); }
+    if !spec.is_extension && memory_set_targets(links, &spec.set_id(), &spec.item_code).contains(&item) { return Some(false); }
     (extra == Some(&true)).then_some(true)
 }
 
@@ -35,24 +34,14 @@ fn memory_shared_snapshot(
 ) -> Result<Option<super::QolipSetSnapshot>, QolipError> {
     let mut groups = BTreeMap::<String, Vec<QolipProductSpec>>::new();
     for id in registry.keys() { groups.insert(id.clone(), Vec::new()); }
-    for spec in specs.values().filter(|spec| !spec.set_id().starts_with("qolip-local:")) {
+    for spec in specs.values().filter(|spec| !spec.is_extension) {
         groups.entry(spec.set_id()).or_default().push(spec.clone());
     }
     for (id, members) in &groups {
         if registry.contains_key(id) { continue; }
         let Some(first) = members.first() else { continue; };
-        let mut number = registry.len() + 1;
-        let code = loop {
-            let candidate = format!("K-{number:06}");
-            if !registry.values().any(|set| set.snapshot.display_code == candidate)
-                && !specs.values().any(|spec| spec.qolip_code.eq_ignore_ascii_case(&candidate))
-            {
-                break candidate;
-            }
-            number += 1;
-        };
         registry.insert(id.clone(), super::QolipManagedSet {
-            snapshot: super::QolipSetSnapshot::new(id.clone(), code, members.clone(), Vec::new()),
+            snapshot: super::QolipSetSnapshot::new(id.clone(), members.clone(), Vec::new()),
             warehouse: first.warehouse.clone(),
             item_code: first.item_code.clone(),
             item_name: first.item_name.clone(),
@@ -62,7 +51,6 @@ fn memory_shared_snapshot(
     let matches = |id: &str, members: &[QolipProductSpec], identifiers: &[String]| {
         identifiers.iter().any(|value| {
             id == value
-                || registry.get(id).is_some_and(|set| set.snapshot.display_code.eq_ignore_ascii_case(value))
                 || members
                     .iter()
                     .any(|spec| spec.qolip_code.eq_ignore_ascii_case(value))
@@ -85,7 +73,6 @@ fn memory_shared_snapshot(
     let Some((id, members)) = selected.first() else {
         return Ok(None);
     };
-    let display = registry.get(*id).ok_or(QolipError::SetChanged)?.snapshot.display_code.clone();
     let native = members.first().map(|spec| spec.item_code.as_str())
         .or_else(|| registry.get(*id).map(|set| set.item_code.as_str())).unwrap_or("");
     let mut targets = memory_set_targets(links, id, native);
@@ -101,7 +88,6 @@ fn memory_shared_snapshot(
         .collect();
     Ok(Some(super::QolipSetSnapshot::new(
         (*id).clone(),
-        display,
         (*members).clone(),
         products,
     )))

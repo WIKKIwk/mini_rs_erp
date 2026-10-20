@@ -140,7 +140,7 @@ pub(super) fn normalize_product_spec(
     }
     Ok(QolipProductSpec {
         is_extension: false,
-        qolip_set_id: format!("qolip-set:{:032x}", rand::random::<u128>()),
+        qolip_set_id: String::new(),
         warehouse: trim_owned(warehouse),
         item_code,
         item_name,

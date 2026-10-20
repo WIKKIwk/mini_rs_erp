@@ -23,7 +23,7 @@ impl MemoryQolipStore {
         let mut registry = self.managed_registry.write().await;
         let ids = specs
             .values()
-            .filter(|s| !s.set_id().starts_with("qolip-local:"))
+            .filter(|s| !s.is_extension)
             .map(|s| s.set_id())
             .chain(registry.keys().cloned())
             .collect::<BTreeSet<_>>();
@@ -57,7 +57,7 @@ impl MemoryQolipStore {
                 result.push(set);
             }
         }
-        result.sort_by_key(|set| set.snapshot.display_code.to_lowercase());
+        result.sort_by_key(|set| set.snapshot.set_id.clone());
         Ok(result)
     }
 
@@ -126,7 +126,7 @@ impl MemoryQolipStore {
                 || registry.values().any(|other| {
                     other
                         .snapshot
-                        .display_code
+                        .set_id
                         .eq_ignore_ascii_case(&spec.qolip_code)
                 })
             {
@@ -170,6 +170,7 @@ impl MemoryQolipStore {
         let products = self.products.read().await;
         let mut overrides = self.product_overrides.write().await;
         let checkouts = self.checkouts.read().await;
+        let registry = self.managed_registry.read().await;
         let mut specs = stored.clone();
         let mut next = overrides.clone();
         for change in &input.changes {
@@ -203,13 +204,24 @@ impl MemoryQolipStore {
                     if draft.existing_only {
                         return Err(QolipError::QolipCodeNotFound);
                     }
-                    let id = format!("qolip-local:{:032x}", rand::random::<u128>());
-                    draft.spec(
+                    let id = loop {
+                        let candidate = super::set_ids::next_memory_set_id()?;
+                        if !registry.contains_key(&candidate)
+                            && !specs.values().any(|spec| {
+                                spec.set_id() == candidate || spec.qolip_code == candidate
+                            })
+                        {
+                            break candidate;
+                        }
+                    };
+                    let mut local = draft.spec(
                         (&item.code, &item.name, &item.item_group),
                         &change.warehouse,
                         &id,
                         principal,
-                    )?
+                    )?;
+                    local.is_extension = true;
+                    local
                 };
                 memory_management_owner(&spec.warehouse, allowed)?;
                 if spec.item_code.eq_ignore_ascii_case(&item.code)

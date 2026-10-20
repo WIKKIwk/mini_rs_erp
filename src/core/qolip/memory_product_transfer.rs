@@ -44,7 +44,7 @@ impl MemoryQolipStore {
                 return Err(QolipError::ProductTransferConflict);
             }
             let mut projected = spec.clone();
-            projected.is_extension = !memory_set_targets(&links, &spec.set_id(), &spec.item_code).contains(&target.code.to_lowercase());
+            projected.is_extension = spec.is_extension || !memory_set_targets(&links, &spec.set_id(), &spec.item_code).contains(&target.code.to_lowercase());
             projected.item_code = target.code.clone();
             projected.item_name = target.name.clone();
             projected.item_group = target.item_group.clone();

@@ -52,10 +52,10 @@ async fn fixture() -> (PgPool, PgPool, String) {
             ('Set warehouse A','Set warehouse A','warehouse','qolipchi','set-clerk-a'),
             ('Set warehouse B','Set warehouse B','warehouse','qolipchi','set-clerk-b');
         INSERT INTO mini_qolip_product_specs(item_code,item_name,item_group,qolip_code,size,payload_json) VALUES
-            ('ITEM-SET','Set product','Set products','SET-A1',40,'{"warehouse":"Set warehouse A","qolip_set_id":"set-a"}'),
-            ('ITEM-SET','Set product','Set products','SET-A2',40,'{"warehouse":"Set warehouse A","qolip_set_id":"set-a"}'),
-            ('ITEM-SET','Set product','Set products','SET-B1',40,'{"warehouse":"Set warehouse B","qolip_set_id":"set-b"}'),
-            ('ITEM-SET','Set product','Set products','SET-B2',40,'{"warehouse":"Set warehouse B","qolip_set_id":"set-b"}');
+            ('ITEM-SET','Set product','Set products','SET-A1',40,'{"warehouse":"Set warehouse A","qolip_set_id":"950100900001"}'),
+            ('ITEM-SET','Set product','Set products','SET-A2',40,'{"warehouse":"Set warehouse A","qolip_set_id":"950100900001"}'),
+            ('ITEM-SET','Set product','Set products','SET-B1',40,'{"warehouse":"Set warehouse B","qolip_set_id":"950100900002"}'),
+            ('ITEM-SET','Set product','Set products','SET-B2',40,'{"warehouse":"Set warehouse B","qolip_set_id":"950100900002"}');
         INSERT INTO mini_production_maps(id,product_code,title,map_json) VALUES ('set-order','ITEM-SET','Set product','{}');
         INSERT INTO mini_qolip_product_specs(item_code,item_name,item_group,qolip_code,size,payload_json) VALUES
             ('ITEM-LEGACY','Legacy product','Set products','LEGACY-A1',40,'{"warehouse":"Set warehouse A"}'),
@@ -157,11 +157,11 @@ async fn qolip_alternative_sets_validate_membership_and_serialize_competing_star
         assert!(identities[0].qolip_set_id.is_empty());
     }
     for (id, codes, accepted) in [
-        ("set-a", vec!["SET-A1", "set-a2", "SET-A1"], true),
-        ("set-b", vec!["SET-B1", "SET-B2"], true),
-        ("set-a", vec!["SET-A1"], false),
-        ("set-a", vec!["SET-A1", "SET-B2"], false),
-        ("set-a", vec!["SET-A1", "SET-A2", "SET-B1", "SET-B2"], false),
+        ("950100900001", vec!["SET-A1", "set-a2", "SET-A1"], true),
+        ("950100900002", vec!["SET-B1", "SET-B2"], true),
+        ("950100900001", vec!["SET-A1"], false),
+        ("950100900001", vec!["SET-A1", "SET-B2"], false),
+        ("950100900001", vec!["SET-A1", "SET-A2", "SET-B1", "SET-B2"], false),
         ("missing", vec!["SET-A1", "SET-A2"], false),
     ] {
         let mut tx = pool.begin().await.unwrap();
@@ -173,7 +173,7 @@ async fn qolip_alternative_sets_validate_membership_and_serialize_competing_star
         tx.rollback().await.unwrap();
     }
 
-    let first = session("first", "set-a", &["SET-A1", "SET-A2"]);
+    let first = session("first", "950100900001", &["SET-A1", "SET-A2"]);
     let mut tx = pool.begin().await.unwrap();
     reject_qolip_in_use_tx(&mut tx, &first).await.unwrap();
     validate_qolip_set_tx(&mut tx, &first).await.unwrap();
@@ -184,7 +184,7 @@ async fn qolip_alternative_sets_validate_membership_and_serialize_competing_star
     let mut competing = tokio::spawn(async move {
         let mut tx = contender_pool.begin().await.unwrap();
         let result =
-            reject_qolip_in_use_tx(&mut tx, &session("second", "set-a", &["SET-A1", "SET-A2"]))
+            reject_qolip_in_use_tx(&mut tx, &session("second", "950100900001", &["SET-A1", "SET-A2"]))
                 .await;
         tx.rollback().await.unwrap();
         result
@@ -200,7 +200,7 @@ async fn qolip_alternative_sets_validate_membership_and_serialize_competing_star
         Err(ProductionMapError::QolipAlreadyInUse)
     );
     let mut tx = pool.begin().await.unwrap();
-    let other = session("other-set", "set-b", &["SET-B1", "SET-B2"]);
+    let other = session("other-set", "950100900002", &["SET-B1", "SET-B2"]);
     reject_qolip_in_use_tx(&mut tx, &other).await.unwrap();
     validate_qolip_set_tx(&mut tx, &other).await.unwrap();
     tx.rollback().await.unwrap();
@@ -217,17 +217,17 @@ async fn qolip_alternative_sets_database_rejects_reusing_a_set_across_warehouse_
         .execute(&runtime)
         .await
         .expect("runtime role can edit an owned catalog row");
-    assert_sqlstate(sqlx::query("UPDATE mini_qolip_product_specs SET payload_json = jsonb_set(payload_json, '{qolip_set_id}', '\"set-a\"') WHERE qolip_code = 'SET-B1'")
+    assert_sqlstate(sqlx::query("UPDATE mini_qolip_product_specs SET payload_json = jsonb_set(payload_json, '{qolip_set_id}', '\"950100900001\"') WHERE qolip_code = 'SET-B1'")
         .execute(&runtime).await, "23503");
     assert_sqlstate(sqlx::query("INSERT INTO mini_qolip_product_specs(item_code,item_name,qolip_code,size,payload_json)
-        VALUES ('ITEM-OTHER','Other product','INVALID-PRODUCT',40,'{\"warehouse\":\"Set warehouse A\",\"qolip_set_id\":\"set-a\"}')")
+        VALUES ('ITEM-OTHER','Other product','INVALID-PRODUCT',40,'{\"warehouse\":\"Set warehouse A\",\"qolip_set_id\":\"950100900001\"}')")
         .execute(&runtime).await, "23503");
     assert_sqlstate(sqlx::query("INSERT INTO mini_qolip_product_specs(item_code,item_name,qolip_code,size,payload_json)
-        VALUES ('ITEM-SET','Set product','INVALID-OWNER',40,'{\"warehouse\":\"Set warehouse B\",\"qolip_set_id\":\"set-a\"}')")
+        VALUES ('ITEM-SET','Set product','INVALID-OWNER',40,'{\"warehouse\":\"Set warehouse B\",\"qolip_set_id\":\"950100900001\"}')")
         .execute(&runtime).await, "23503");
     for statement in [
-        "UPDATE mini_qolip_sets SET warehouse_key = 'set warehouse b' WHERE set_id = 'set-a'",
-        "DELETE FROM mini_qolip_sets WHERE set_id = 'set-a'",
+        "UPDATE mini_qolip_sets SET warehouse_key = 'set warehouse b' WHERE set_id = '950100900001'",
+        "DELETE FROM mini_qolip_sets WHERE set_id = '950100900001'",
         "INSERT INTO mini_qolip_sets(set_id,item_code_key,warehouse_key) VALUES ('forged','item-set','set warehouse a')",
     ] {
         assert_sqlstate(sqlx::query(statement).execute(&runtime).await, "42501");
@@ -243,11 +243,15 @@ async fn qolip_alternative_sets_backfill_and_product_corrections_keep_batch_boun
     let legacy: Vec<Option<String>> = sqlx::query_scalar(
         "SELECT qolip_set_id FROM mini_qolip_product_specs WHERE qolip_code LIKE 'LEGACY-%' ORDER BY qolip_code",
     ).fetch_all(&pool).await.unwrap();
+    let migrated_legacy: String = sqlx::query_scalar(
+        "SELECT new_set_id FROM mini_qolip_set_id_migrations
+         WHERE old_set_id = 'legacy:11:item-legacy:set warehouse a'",
+    ).fetch_one(&pool).await.unwrap();
     assert_eq!(
         legacy,
         vec![
-            Some("legacy:11:item-legacy:set warehouse a".into()),
-            Some("legacy:11:item-legacy:set warehouse a".into()),
+            Some(migrated_legacy.clone()),
+            Some(migrated_legacy),
             None,
         ]
     );
@@ -260,7 +264,7 @@ async fn qolip_alternative_sets_backfill_and_product_corrections_keep_batch_boun
     .fetch_one(&runtime)
     .await
     .unwrap();
-    assert_eq!(preserved, "set-a");
+    assert_eq!(preserved, "950100900001");
     sqlx::query("UPDATE mini_qolip_product_specs SET item_code = 'ITEM-OTHER' WHERE qolip_code IN ('SET-A1','SET-A2','SET-B1','SET-B2')")
         .execute(&runtime).await.unwrap();
     let corrected: Vec<String> = sqlx::query_scalar("SELECT qolip_set_id FROM mini_qolip_product_specs WHERE item_code = 'ITEM-OTHER' ORDER BY qolip_code")
@@ -268,11 +272,11 @@ async fn qolip_alternative_sets_backfill_and_product_corrections_keep_batch_boun
     assert_eq!(corrected[0], corrected[1]);
     assert_eq!(corrected[2], corrected[3]);
     assert_ne!(corrected[0], corrected[2]);
-    assert_ne!(corrected[0], "set-a");
-    assert_ne!(corrected[2], "set-b");
+    assert_ne!(corrected[0], "950100900001");
+    assert_ne!(corrected[2], "950100900002");
     // Even with no remaining members, a historic ID keeps its original scope.
     assert_sqlstate(sqlx::query("INSERT INTO mini_qolip_product_specs(item_code,item_name,qolip_code,size,payload_json)
-        VALUES ('ITEM-SET','Set product','INVALID-REUSE',40,'{\"warehouse\":\"Set warehouse B\",\"qolip_set_id\":\"set-a\"}')")
+        VALUES ('ITEM-SET','Set product','INVALID-REUSE',40,'{\"warehouse\":\"Set warehouse B\",\"qolip_set_id\":\"950100900001\"}')")
         .execute(&runtime).await, "23503");
     runtime.close().await;
     cleanup(pool, admin, database).await;
@@ -285,12 +289,12 @@ async fn qolip_alternative_sets_concurrent_first_receipts_cannot_split_set_owner
     let runtime = runtime_pool(&pool).await;
     let mut first = runtime.begin().await.unwrap();
     sqlx::query("INSERT INTO mini_qolip_product_specs(item_code,item_name,qolip_code,size,payload_json)
-        VALUES ('ITEM-SET','Set product','CONCURRENT-A1',40,'{\"warehouse\":\"Set warehouse A\",\"qolip_set_id\":\"concurrent-set\"}')")
+        VALUES ('ITEM-SET','Set product','CONCURRENT-A1',40,'{\"warehouse\":\"Set warehouse A\",\"qolip_set_id\":\"950100999999\"}')")
         .execute(&mut *first).await.unwrap();
     let contender_pool = runtime.clone();
     let mut contender = tokio::spawn(async move {
         sqlx::query("INSERT INTO mini_qolip_product_specs(item_code,item_name,qolip_code,size,payload_json)
-            VALUES ('ITEM-SET','Set product','CONCURRENT-B1',40,'{\"warehouse\":\"Set warehouse B\",\"qolip_set_id\":\"concurrent-set\"}')")
+            VALUES ('ITEM-SET','Set product','CONCURRENT-B1',40,'{\"warehouse\":\"Set warehouse B\",\"qolip_set_id\":\"950100999999\"}')")
             .execute(&contender_pool).await
     });
     assert!(
@@ -301,10 +305,10 @@ async fn qolip_alternative_sets_concurrent_first_receipts_cannot_split_set_owner
     first.commit().await.unwrap();
     assert_sqlstate(contender.await.unwrap(), "23503");
     sqlx::query("INSERT INTO mini_qolip_product_specs(item_code,item_name,qolip_code,size,payload_json)
-        VALUES ('item-set','Set product','CONCURRENT-A2',40,'{\"warehouse\":\"set WAREHOUSE a\",\"qolip_set_id\":\"concurrent-set\"}')")
+        VALUES ('item-set','Set product','CONCURRENT-A2',40,'{\"warehouse\":\"set WAREHOUSE a\",\"qolip_set_id\":\"950100999999\"}')")
         .execute(&runtime).await.unwrap();
     let members: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM mini_qolip_product_specs WHERE qolip_set_id = 'concurrent-set'",
+        "SELECT count(*) FROM mini_qolip_product_specs WHERE qolip_set_id = '950100999999'",
     )
     .fetch_one(&runtime)
     .await

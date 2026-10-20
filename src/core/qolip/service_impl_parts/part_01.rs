@@ -152,6 +152,7 @@ impl QolipService {
                 }
                 // Editing through a compatible product never reassigns the physical mold.
                 normalized.qolip_set_id = existing.set_id();
+                normalized.is_extension = existing.is_extension;
                 normalized.item_code = existing.item_code.clone();
                 normalized.item_name = existing.item_name.clone();
                 normalized.item_group = existing.item_group.clone();
@@ -168,11 +169,13 @@ impl QolipService {
                 Err(QolipError::QolipCodeNotFound)
                     if previous_qolip_code.eq_ignore_ascii_case(&normalized.qolip_code) =>
                 {
+                    normalized.qolip_set_id = self.store.next_set_id().await?;
                     self.store.put_product_spec(normalized).await
                 }
                 Err(error) => Err(error),
             };
         }
+        normalized.qolip_set_id = self.store.next_set_id().await?;
         self.store.put_product_spec(normalized).await
     }
 
@@ -186,7 +189,7 @@ impl QolipService {
         }
         let mut seen_codes = std::collections::BTreeSet::new();
         let mut normalized = Vec::with_capacity(inputs.len());
-        let set_id = format!("qolip-set:{:032x}", rand::random::<u128>());
+        let set_id = self.store.next_set_id().await?;
         for input in inputs {
             if !input.previous_qolip_code.trim().is_empty() {
                 return Err(QolipError::QolipCodeConflict);

@@ -49,6 +49,12 @@ impl PostgresQolipStore {
 
 #[async_trait]
 impl QolipStorePort for PostgresQolipStore {
+    async fn next_set_id(&self) -> Result<String, QolipError> {
+        sqlx::query_scalar("SELECT public.mini_qolip_next_set_id()")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|_| QolipError::StoreFailed)
+    }
     async fn managed_sets(&self, allowed: Option<&[String]>) -> Result<Vec<crate::core::qolip::QolipManagedSet>, QolipError> {
         management::list(&self.pool, allowed).await
     }

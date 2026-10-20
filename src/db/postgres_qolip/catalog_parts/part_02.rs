@@ -512,11 +512,6 @@ pub(super) async fn save_product_specs(
     for spec in specs {
         saved.push(save_product_spec_tx(&mut tx, spec).await?);
     }
-    if let Some(last) = saved.last() {
-        sqlx::query("UPDATE mini_qolip_sets SET display_code = $2 WHERE set_id = $1")
-            .bind(last.set_id()).bind(&last.qolip_code).execute(&mut *tx).await
-            .map_err(|_| QolipError::StoreFailed)?;
-    }
     tx.commit().await.map_err(|_| QolipError::StoreFailed)?;
     Ok(saved)
 }

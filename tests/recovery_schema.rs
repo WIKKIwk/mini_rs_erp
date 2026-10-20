@@ -133,7 +133,7 @@ async fn current_schema_survives_full_recovery() {
         "SELECT has_table_privilege('mini_rs_erp','mini_auth_accounts','DELETE')::text",
         "SELECT has_table_privilege('mini_rs_erp','mini_auth_cutovers','UPDATE')::text",
         "SELECT has_table_privilege('mini_rs_erp','mini_qolip_sets','UPDATE')::text",
-        "SELECT has_column_privilege('mini_rs_erp','mini_qolip_sets','display_code','UPDATE')::text",
+        "SELECT has_function_privilege('mini_rs_erp','mini_qolip_next_set_id()','EXECUTE')::text",
         "SELECT pg_get_functiondef('mini_reset_order_number_sequence()'::regprocedure)",
         "SELECT pg_get_functiondef('mini_qolip_register_set()'::regprocedure)",
     ] {

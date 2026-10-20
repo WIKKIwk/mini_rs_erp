@@ -16,10 +16,9 @@ async fn snapshot_identifiers(
     conn: &mut PgConnection,
     identifiers: &[String],
 ) -> Result<Option<QolipSetSnapshot>, QolipError> {
-    let sets = sqlx::query_as::<_, (String, String)>(
-        "SELECT sets.set_id, sets.set_code FROM mini_qolip_sets sets
-         WHERE (sets.set_id = ANY($1) OR lower(sets.set_code) = ANY($2)
-           OR lower(sets.display_code) = ANY($2)
+    let sets = sqlx::query_scalar::<_, String>(
+        "SELECT sets.set_id FROM mini_qolip_sets sets
+         WHERE (sets.set_id = ANY($1)
            OR EXISTS (SELECT 1 FROM mini_qolip_product_specs spec
                       WHERE spec.qolip_set_id = sets.set_id AND lower(spec.qolip_code) = ANY($2)))
            AND NOT sets.is_product_local
@@ -29,7 +28,7 @@ async fn snapshot_identifiers(
     if sets.len() > 1 {
         return Err(QolipError::SetAmbiguous);
     }
-    let Some((id, display_code)) = sets.into_iter().next() else {
+    let Some(id) = sets.into_iter().next() else {
         return Ok(None);
     };
     let rows = sqlx::query_as::<_, QolipProductSpecRow>(&format!(
@@ -46,7 +45,6 @@ async fn snapshot_identifiers(
         .into_iter().map(|(code, name)| QolipSetProduct { code, name }).collect();
     Ok(Some(QolipSetSnapshot::new(
         id,
-        display_code,
         rows.into_iter().map(row_to_product_spec).collect(),
         products,
     )))

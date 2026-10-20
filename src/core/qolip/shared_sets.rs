@@ -12,7 +12,7 @@ pub struct QolipSetProduct {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QolipSetSnapshot {
     pub set_id: String,
-    /// Stable public set code, independent of internal IDs and member codes.
+    /// Compatibility field for older clients; always the actual set_id.
     pub display_code: String,
     pub fingerprint: String,
     pub members: Vec<QolipProductSpec>,
@@ -22,11 +22,11 @@ pub struct QolipSetSnapshot {
 impl QolipSetSnapshot {
     pub fn new(
         set_id: String,
-        display_code: String,
         mut members: Vec<QolipProductSpec>,
         products: Vec<QolipSetProduct>,
     ) -> Self {
         members.sort_by_key(|spec| spec.qolip_code.trim().to_lowercase());
+        let display_code = set_id.clone();
         let content =
             serde_json::to_vec(&(&set_id, &display_code, &members)).expect("serializable mold set");
         let fingerprint = format!("{:x}", Sha256::digest(content));

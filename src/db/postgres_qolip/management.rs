@@ -35,14 +35,14 @@ async fn read_sets(
             .map(|s| s.trim().to_lowercase())
             .collect::<Vec<_>>()
     });
-    let rows = sqlx::query_as::<_, (String, String, String, String, String, String)>(
-        "SELECT sets.set_id, sets.set_code, sets.warehouse_key,
+    let rows = sqlx::query_as::<_, (String, String, String, String, String)>(
+        "SELECT sets.set_id, sets.warehouse_key,
              COALESCE(item.code, sets.item_code_key), COALESCE(item.name, ''), COALESCE(item.item_group, '')
          FROM mini_qolip_sets sets
          LEFT JOIN mini_items item ON lower(btrim(item.code)) = sets.item_code_key
          WHERE NOT sets.is_product_local AND ($1::text[] IS NULL OR sets.warehouse_key = ANY($1))
            AND ($2::text IS NULL OR sets.set_id = $2)
-         ORDER BY length(sets.set_code), sets.set_code",
+         ORDER BY sets.set_id",
     ).bind(warehouses).bind(id).fetch_all(&mut **tx).await.map_err(|_| QolipError::StoreFailed)?;
     if rows.is_empty() {
         return Ok(Vec::new());
@@ -82,7 +82,7 @@ async fn read_sets(
     Ok(rows
         .into_iter()
         .map(
-            |(id, display, warehouse, item_code, item_name, item_group)| {
+            |(id, warehouse, item_code, item_name, item_group)| {
                 let members = by_set.remove(&id).unwrap_or_default();
                 QolipManagedSet {
                     warehouse: members
@@ -91,7 +91,6 @@ async fn read_sets(
                         .unwrap_or(warehouse),
                     snapshot: QolipSetSnapshot::new(
                         id.clone(),
-                        display,
                         members,
                         links.remove(&id).unwrap_or_default(),
                     ),
@@ -282,7 +281,8 @@ pub(super) async fn edit_products(
                     return Err(QolipError::QolipCodeNotFound);
                 }
                 owner(&change.warehouse, allowed)?;
-                let set_id = format!("qolip-local:{:032x}", rand::random::<u128>());
+                let set_id: String = sqlx::query_scalar("SELECT public.mini_qolip_next_set_id()")
+                    .fetch_one(&mut *tx).await.map_err(|_| QolipError::StoreFailed)?;
                 let spec = draft.spec(
                     (&item.0, &item.1, &item.2),
                     &change.warehouse,
@@ -291,13 +291,12 @@ pub(super) async fn edit_products(
                 )?;
                 sqlx::query(
                     "INSERT INTO mini_qolip_sets
-                    (set_id, item_code_key, warehouse_key, display_code, is_product_local)
-                    VALUES ($1, lower(btrim($2)), lower(btrim($3)), $4, true)",
+                    (set_id, item_code_key, warehouse_key, is_product_local)
+                    VALUES ($1, lower(btrim($2)), lower(btrim($3)), true)",
                 )
                 .bind(&set_id)
                 .bind(&item.0)
                 .bind(&change.warehouse)
-                .bind(&spec.qolip_code)
                 .execute(&mut *tx)
                 .await
                 .map_err(|_| QolipError::StoreFailed)?;

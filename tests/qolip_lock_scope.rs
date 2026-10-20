@@ -419,7 +419,7 @@ async fn postgres_physical_print_claims_still_enforce_mold_locks_and_set_members
 async fn postgres_resume_after_freeze_reacquires_the_complete_physical_set_atomically() {
     use mini_rs_erp::core::qolip::QolipCheckout;
     let f = Fixture::new().await;
-    let set = "freeze-resume-set";
+    let set = "950100888888";
     let active = print_session("print-session", PRINT, ORDER, OrderRunStatus::Active, set);
     f.store.put_order_run_session(active.clone()).await.unwrap();
     for (index, code) in codes().iter().enumerate() {

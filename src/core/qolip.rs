@@ -5,6 +5,7 @@ mod normalize_qr;
 mod ports;
 mod service;
 mod shared_sets;
+mod set_ids;
 mod management;
 #[cfg(test)]
 mod service_tests;
