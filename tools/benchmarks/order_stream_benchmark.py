@@ -70,7 +70,8 @@ class HTTP:
         self.connection.request(method, path, body=body, headers=headers)
         response = self.connection.getresponse()
         raw = response.read()
-        elapsed = (time.perf_counter() - started) * 1000
+        raw_complete = time.perf_counter()
+        elapsed = (raw_complete - started) * 1000
         decoded = gzip.decompress(raw) if response.getheader("Content-Encoding") == "gzip" else raw
         value = json.loads(decoded) if decoded else None
         if response.status not in (200, 204, 304):
@@ -82,6 +83,7 @@ class HTTP:
         return {
             "status": response.status, "latency_ms": elapsed,
             "body_bytes": len(raw), "decoded_bytes": len(decoded),
+            "response_decode_ms": (time.perf_counter() - raw_complete) * 1000,
         }, value
 
     def close(self):
@@ -154,9 +156,13 @@ class WS:
                 continue
             payload = b"".join(self.fragments)
             self.fragments = []
+            raw_complete = time.perf_counter()
+            value = json.loads(payload)
             return {
                 "payload_bytes": len(payload), "frame_bytes": size + overhead,
-            }, json.loads(payload)
+                "raw_complete_monotonic_s": raw_complete,
+                "json_decode_ms": (time.perf_counter() - raw_complete) * 1000,
+            }, value
 
     def close(self):
         try:
@@ -317,16 +323,29 @@ def comparable(snapshot):
 
 
 class Runner:
-    def __init__(self, fixture, mode, clients, cycles, suffix="results"):
+    def __init__(self, fixture, mode, clients, cycles, suffix="results",
+                 protocols="auto", status_cycles=None):
         self.fixture, self.mode = fixture, mode
         self.server = fixture.metadata["servers"][mode]
         assert self.server["ready"]
         self.port, self.clients, self.cycles = self.server["port"], clients, cycles
+        self.status_cycles = cycles if status_cycles is None else status_cycles
         self.sessions = []
         assert re.fullmatch(r"[a-z0-9-]+", suffix)
         self.suffix = suffix
+        self.legacy_protocols = protocols == "legacy" or (
+            protocols == "auto" and mode == "before"
+        )
         self.result = {
             "mode": mode, "server": self.server,
+            "protocols": "legacy" if self.legacy_protocols else "modern",
+            "include_control": True,
+            "harness_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+            "command_config": {
+                "clients": clients, "cycles": cycles,
+                "status_cycles": self.status_cycles, "output_suffix": suffix,
+                "requested_protocols": protocols,
+            },
             "dataset_dump_sha256": fixture.metadata["dump_sha256"],
             "source_counts": fixture.metadata["source_counts"],
             "host": {
@@ -380,7 +399,7 @@ class Runner:
         self.admin = self.login(self.fixture.admin_credentials(self.mode))["token"]
         _, workers = self.get(self.admin, "/v1/mobile/admin/workers")
         profiles, unassigned = [], []
-        for worker in workers:
+        for worker in sorted(workers, key=lambda item: item["id"]):
             _, value = self.get(
                 self.admin, "/v1/mobile/admin/workers/profile-detail?id=" + quote(worker["id"])
             )
@@ -456,6 +475,19 @@ class Runner:
                             "target_queue_orders": len(visible),
                             "clone_only_added_apparatus_assignments": seeded,
                         }
+                        self.result["selection_fingerprints"] = {
+                            "actor": digest(["aparatchi", profile["credentials"]["phone"]]),
+                            "apparatus": digest(apparatus),
+                            "order": digest(order),
+                            "shared_principals": [
+                                digest(["aparatchi", item["credentials"]["phone"]])
+                                for item in self.shared_profiles
+                            ],
+                            "disjoint_principals": [
+                                digest(["aparatchi", item["credentials"]["phone"]])
+                                for item in self.disjoint_profiles
+                            ],
+                        }
                         self.save()
                         return
         raise RuntimeError("Fixture has no visible eligible print-preflight order")
@@ -478,17 +510,69 @@ class Runner:
     def mutate(self, action, hold):
         client = HTTP(self.port, self.actor["token"])
         try:
-            return client.request(
+            metric, body = client.request(
                 "/v1/mobile/admin/production-maps/print-preflight", "POST", {
                     "apparatus": self.apparatus, "order_id": self.order,
                     "hold_id": hold, "idempotency_key": hold,
                     "action": action, "include_control": True,
                 }
             )
+            returned_hold = body.get("hold") or {}
+            assert returned_hold.get("hold_id") == hold, "Mutation hold identity differs"
+            assert returned_hold.get("status") == (
+                "running" if action == "hold" else "failed"
+            ), "Mutation status differs"
+            control = body.get("control_state")
+            metric.update(
+                control_returned=control is not None,
+                control_revision=control.get("rev") if control else None,
+                # Optional control is delivered inside this same HTTP response.
+                # This is response availability, not isolated server build time.
+                control_available_ms=metric["latency_ms"] if control else None,
+            )
+            return metric, body
         finally:
             client.close()
 
-    def receive(self, client, start, timeout=10, require_change=False):
+    def receive(self, client, start, timeout=10, require_change=False, transition=None):
+        if transition:
+            prior_revision = client["view"]["rev"]
+            previous = self.target_control(client["view"]).get("print_preflight") or {}
+            if transition["action"] == "failed":
+                assert previous.get("hold_id") == transition["hold"], (
+                    "Release is missing the exact previous hold"
+                )
+            deadline = time.monotonic() + timeout
+            frames, payloads, empties, count = 0, 0, 0, 0
+            while time.monotonic() < deadline:
+                event = self.receive(
+                    client, start, max(.001, deadline - time.monotonic())
+                )
+                frames += event.get("frame_bytes", 0)
+                payloads += event.get("payload_bytes", 0)
+                empties += int(bool(event.get("patch_empty")))
+                count += 1
+                control = self.target_control(client["view"])
+                active = control.get("print_preflight") or {}
+                if transition["action"] == "hold":
+                    matched = (
+                        active.get("hold_id") == transition["hold"]
+                        and active.get("status") == "running"
+                    )
+                else:
+                    matched = (
+                        active.get("hold_id") != transition["hold"]
+                        and self.target_queue_state(client["view"]) == transition["queue_before"]
+                    )
+                if matched and client["view"]["rev"] > prior_revision:
+                    return dict(
+                        event, frame_bytes=frames, payload_bytes=payloads,
+                        preceding_empty_events=empties,
+                        applied_events=count, exact_target_transition=True,
+                        revision_advance=client["view"]["rev"] - prior_revision,
+                        applied_revision=client["view"]["rev"],
+                    )
+            raise AssertionError("Exact target mutation did not arrive on stream")
         if require_change:
             deadline = time.monotonic() + timeout
             frames, payloads, empties = 0, 0, 0
@@ -512,6 +596,7 @@ class Runner:
             metric, event = client["socket"].event(timeout)
         except socket.timeout:
             return {"type": "no_event", "frame_bytes": 0, "latency_ms": None}
+        raw_complete = metric.pop("raw_complete_monotonic_s", None)
         if "type" not in event:
             code = event.get("error", "unknown")
             safe_code = code if isinstance(code, str) and code.isidentifier() else "withheld"
@@ -545,6 +630,7 @@ class Runner:
                 reconnect_frame_bytes=replacement["socket"].received,
             )
         kind = event["type"]
+        reduce_started = time.perf_counter()
         if kind == "state_delta":
             client["view"] = apply_state(client["view"], event)
         elif kind == "state_resync":
@@ -555,8 +641,18 @@ class Runner:
         else:
             raise AssertionError("Unexpected stream event: " + kind)
         return dict(metric, type=kind, latency_ms=(time.perf_counter() - start) * 1000,
+                    socket_read_complete_ms=(raw_complete - start) * 1000
+                    if raw_complete is not None else None,
+                    reducer_ms=(time.perf_counter() - reduce_started) * 1000,
+                    event_revision=event.get("rev"), base_revision=event.get("base_rev"),
                     patch_empty=not event.get("patch"),
                     resync_gets=int(kind == "state_resync"))
+
+    def target_control(self, view):
+        return view.get("queue_action_controls", {}).get(self.apparatus, {}).get(self.order, {})
+
+    def target_queue_state(self, view):
+        return view.get("queue_states", {}).get(self.apparatus, {}).get(self.order)
 
     def assert_views(self, clients, label):
         expected = {}
@@ -592,15 +688,28 @@ class Runner:
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=count) as pool:
                 with Phase(self, label):
-                    for cycle in range(self.cycles):
+                    for cycle in range(self.status_cycles):
                         hold = "bench-stream-" + str(time.time_ns())
+                        queues_before = [
+                            self.target_queue_state(client["view"]) for client in clients
+                        ]
                         for action in ("hold", "failed"):
                             started = time.perf_counter()
                             pending = [
-                                pool.submit(self.receive, client, started, 10, True) for client in clients
+                                pool.submit(
+                                    self.receive, client, started, 10, True,
+                                    {"action": action, "hold": hold, "queue_before": queue_before},
+                                )
+                                for client, queue_before in zip(clients, queues_before)
                             ]
-                            response, _ = self.mutate(action, hold)
+                            response, body = self.mutate(action, hold)
                             events = [future.result(timeout=20) for future in pending]
+                            acknowledgement = body.get("control_state") or {}
+                            for event in events:
+                                event["applied_minus_control_revision"] = (
+                                    event["applied_revision"] - acknowledgement["rev"]
+                                    if isinstance(acknowledgement.get("rev"), int) else None
+                                )
                             if any(event["type"] == "no_event" for event in events):
                                 raise AssertionError("Relevant color update was not delivered")
                             records.append({
@@ -613,8 +722,11 @@ class Runner:
             self.result["fanout"].append({
                 "name": label, "clients": count,
                 "distinct_principals": len({client["token"] for client in clients}),
-                "cycles": self.cycles, "records": records,
+                "cycles": self.status_cycles, "records": records,
                 "all_clients_latency_ms": stats([record["all_clients_ms"] for record in records]),
+                "post_latency_ms": stats([record["post"]["latency_ms"] for record in records]),
+                "control_returned": sum(record["post"]["control_returned"] for record in records),
+                "control_null": sum(not record["post"]["control_returned"] for record in records),
                 "total_frame_bytes": sum(record["total_frame_bytes"] for record in records),
             })
             self.save()
@@ -791,12 +903,12 @@ class Runner:
         }
         query = (
             {"protocol": "delta", "paged": "true"}
-            if self.mode == "before"
+            if self.legacy_protocols
             else {"protocol": "page_delta_v1", "pages": json.dumps([request])}
         )
         socket_ = WS(self.port, self.admin, query)
         _, ready = socket_.event()
-        assert ready["type"] == ("page_ready" if self.mode == "before" else "page_window_ready")
+        assert ready["type"] == ("page_ready" if self.legacy_protocols else "page_window_ready")
         assert not ready.get("resync")
         label = "admin_" + view + "_" + str(length)
         if verify_each:
@@ -856,7 +968,7 @@ class Runner:
             socket_.close()
 
     def notifications(self):
-        query = {} if self.mode == "before" else {"protocol": "notifications_v1"}
+        query = {} if self.legacy_protocols else {"protocol": "notifications_v1"}
         started = time.perf_counter()
         with Phase(self, "notifications_bootstrap"):
             socket_ = WS(self.port, self.admin, query)
@@ -891,7 +1003,7 @@ class Runner:
             "id": "1", "view": "sequence", "apparatus": self.apparatus,
             "target": "", "search": "", "length": 40, "version": pages[0]["version"],
         }
-        query = ({"protocol": "delta", "paged": "true"} if self.mode == "before" else {
+        query = ({"protocol": "delta", "paged": "true"} if self.legacy_protocols else {
             "protocol": "page_delta_v1", "pages": json.dumps([request]),
         })
         socket_ = WS(self.port, self.admin, query)
@@ -945,13 +1057,22 @@ class Runner:
                 client["socket"].close()
             socket_.close()
 
-    def run(self, query_counts_only=False, latency_repeat=False):
+    def run(self, query_counts_only=False, latency_repeat=False, status_repeat=False):
+        self.result["command_config"].update(
+            query_counts_only=query_counts_only, latency_repeat=latency_repeat,
+            status_repeat=status_repeat,
+        )
         try:
             self.profiles()
-            if latency_repeat:
+            if latency_repeat or status_repeat:
                 assert not self.server["query_log"]
-                assert self.server["mini_order_sync_interval_seconds"] == 0
-                self.result["measurement_variant"] = "controlled_latency_repeat"
+                assert self.server["mini_order_sync_interval_seconds"] == (
+                    0 if latency_repeat else 30
+                )
+                self.result["measurement_variant"] = (
+                    "controlled_latency_repeat" if latency_repeat
+                    else "default_config_status_repeat"
+                )
                 self.fanout(1)
                 self.fanout(max(self.clients), mixed=True)
                 self.held_permissions()
@@ -995,18 +1116,26 @@ def main():
     parser.add_argument("--mode", choices=("before", "after"), required=True)
     parser.add_argument("--clients", default="1,8,32")
     parser.add_argument("--cycles", type=int, default=5)
+    parser.add_argument("--status-cycles", type=int, help="Override worker status cycles only")
+    parser.add_argument("--protocols", choices=("auto", "legacy", "modern"), default="auto")
     variant = parser.add_mutually_exclusive_group()
     variant.add_argument("--query-counts-only", action="store_true")
     variant.add_argument("--latency-repeat", action="store_true")
+    variant.add_argument("--status-repeat", action="store_true",
+                         help="Repeat 1-client and shared-principal status phases at default30s sync")
     parser.add_argument("--output-suffix", default="results")
     args = parser.parse_args()
     clients = [int(value) for value in args.clients.split(",")]
     if any(value < 1 or value > 128 for value in clients) or not 1 <= args.cycles <= 50:
         parser.error("Use 1..128 clients and 1..50 cycles")
+    if args.status_cycles is not None and not 1 <= args.status_cycles <= 50:
+        parser.error("Use 1..50 status cycles")
     if not re.fullmatch(r"[a-z0-9-]+", args.output_suffix):
         parser.error("Output suffix accepts lowercase letters, digits and hyphens")
-    Runner(Fixture(args.run_dir), args.mode, clients, args.cycles, args.output_suffix).run(
-        query_counts_only=args.query_counts_only, latency_repeat=args.latency_repeat
+    Runner(Fixture(args.run_dir), args.mode, clients, args.cycles, args.output_suffix,
+           args.protocols, args.status_cycles).run(
+        query_counts_only=args.query_counts_only, latency_repeat=args.latency_repeat,
+        status_repeat=args.status_repeat,
     )
 
 

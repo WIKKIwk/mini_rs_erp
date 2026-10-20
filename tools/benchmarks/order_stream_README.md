@@ -62,6 +62,45 @@ restore the same saved dump and auxiliary data. Each `start` discards that mode'
 previous clone; result files persist until a subsequent benchmark uses the same
 output suffix.
 
+### Comparing two versions that already support the modern protocols
+
+For the cache optimization comparison, the baseline is the previously optimized
+`c50e40c0` release, **not** original `main`. Use `--protocols modern` for both
+`--mode before` and `--mode after`; mode determines the private port/database,
+while this option keeps page, notification and worker recovery behavior equal.
+Keep `include_control=true`, as used by the real mutation request.
+
+```sh
+python3 tools/db/macos_keychain.py --admin db -- "$BENCH_PYTHON" \
+  tools/benchmarks/order_stream_benchmark.py --run-dir "$BENCH_DIR" \
+  --mode before --protocols modern --clients 1,32 \
+  --cycles 5 --status-cycles 20
+```
+
+This measures 40 status events for one socket, 32 sockets sharing one principal,
+and 32 sockets across three principals. Other retained scenarios keep five
+cycles. Restore the same dump before each version. Compare the recorded actor,
+apparatus, order and participant fingerprints before interpreting differences.
+Do not rerun fixture discovery on an already mutated clone as a matched
+comparison: newly assigned workers may change which actor is selected.
+
+The result records the harness hash and command configuration. Every measured
+status event must show the exact generated hold ID with `running` status, or
+release that previous hold and restore the prior queue state. Event revisions,
+additional applied events, raw socket completion, JSON decode and reducer times
+are retained without saving IDs or business payloads. Control-present/null counts
+and HTTP response latency remain visible. `control_available_ms` is the arrival
+of the HTTP response containing the control, not isolated server computation
+time. The CPU/latency primary run must use a normal release without diagnostic
+tracing; collect SQL counts in a separate run.
+
+For an independent repeat in reverse version order, restore a fresh candidate
+clone, then a fresh baseline clone, and run `--protocols modern --clients 1,32
+--cycles 20 --status-repeat --output-suffix reverse-repeat` on each. This selects
+only the one-client/shared-principal status phases and permission checks while
+requiring the default 30-second reconciler. Keep each run's distribution visible;
+do not substitute a best run or pool unlike configurations.
+
 Run SQL-count diagnostics separately: restore/start with `--query-log`, then run
 the benchmark with `--query-counts-only --cycles 1 --output-suffix sql-counts`.
 Query logging changes runtime cost, so those timing numbers are not the primary
@@ -134,8 +173,10 @@ flush wait is outside the CPU/latency measurement window.
 WebSocket counts include frame headers but exclude the HTTP upgrade handshake;
 HTTP byte counts include response bodies (gzip where negotiated) but exclude
 HTTP headers. Network traffic is loopback, without TLS or WebSocket compression.
-Latency begins before the mutation HTTP request and ends after a client applies
-its response event. Bootstrap and exact-REST verification requests are outside
+Latency begins before receiver submission and the mutation HTTP request, and
+ends after the client applies the matching response event. It includes Python
+thread scheduling and reducer work; raw socket-completion and reducer timing
+help distinguish these costs. Bootstrap and exact-REST verification requests are outside
 fanout timing phases. Administrator required reload GETs are inside their phases.
 
 These results establish behavior and relative local server cost for the captured
