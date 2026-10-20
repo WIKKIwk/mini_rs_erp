@@ -34,6 +34,26 @@ fn normalized(values: &[String]) -> Vec<String> {
 }
 
 impl ProductionMapService {
+    #[cfg(test)]
+    pub(crate) async fn lock_worker_snapshot_for_test(
+        &self,
+        apparatus: &[String],
+    ) -> impl Drop + Send + 'static + use<> {
+        let entry = self
+            .snapshot_cache
+            .worker_snapshots
+            .lock()
+            .await
+            .get(&WorkerSnapshotScope {
+                apparatus: normalized(apparatus),
+                history: Vec::new(),
+                only_orders: false,
+            })
+            .expect("Test must warm the apparatus snapshot before locking it")
+            .clone();
+        entry.lock_owned().await
+    }
+
     /// Same authoritative revision as the full view, built only for worker
     /// orders and the queue context needed to preserve their route controls.
     /// Cached results are usable only at the exact current revision; no TTL.

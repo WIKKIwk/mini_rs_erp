@@ -1,6 +1,8 @@
-// Presentation is optional after a committed write. Bound it so snapshot
-// churn cannot delay the acknowledgement or invite a replay of the mutation.
-const QUEUE_ACTION_CONTROL_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(250);
+// Presentation is optional after a committed write. Allow an in-flight shared
+// snapshot to finish under fanout: a 250ms waiter deadline can expire while the
+// same authoritative build is still serving the stream. Keep a finite budget
+// so snapshot churn does not leave a committed mutation without an ACK.
+const QUEUE_ACTION_CONTROL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 
 pub(super) async fn queue_action_response_control(
     state: &AppState,
