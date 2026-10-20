@@ -7,6 +7,7 @@ The client reducer is checked against fresh authorized REST snapshots.
 """
 import argparse
 import concurrent.futures
+import contextlib
 import copy
 import ctypes
 import ctypes.util
@@ -18,6 +19,7 @@ import math
 import os
 from pathlib import Path
 import platform
+import re
 import socket
 import statistics
 import struct
@@ -201,6 +203,8 @@ class Phase:
         self.runner, self.name = runner, name
 
     def __enter__(self):
+        self.query_log = self.runner.fixture.run_dir / self.runner.mode / "server.log"
+        self.query_log_start = self.query_log.stat().st_size
         self.before = usage(self.runner.server["pid"])
         self.db_before = self.runner.database_counters()
         self.started = time.perf_counter()
@@ -242,6 +246,14 @@ class Phase:
                 key: db_after[key] - self.db_before[key] for key in db_after
             },
         }
+        if self.runner.server["query_log"]:
+            with open(self.query_log, "rb") as source:
+                source.seek(self.query_log_start)
+                # Store counts only; raw SQL/log material remains private.
+                lines = source.read().splitlines()
+            count = sum(b"sqlx::query" in line for line in lines)
+            self.result["sqlx_statement_events"] = count
+            self.result["sql_logging_observed"] = count > 0
         self.runner.result["phases"].append(self.result)
         self.runner.save()
         print(json.dumps({
@@ -305,12 +317,14 @@ def comparable(snapshot):
 
 
 class Runner:
-    def __init__(self, fixture, mode, clients, cycles):
+    def __init__(self, fixture, mode, clients, cycles, suffix="results"):
         self.fixture, self.mode = fixture, mode
         self.server = fixture.metadata["servers"][mode]
         assert self.server["ready"]
         self.port, self.clients, self.cycles = self.server["port"], clients, cycles
         self.sessions = []
+        assert re.fullmatch(r"[a-z0-9-]+", suffix)
+        self.suffix = suffix
         self.result = {
             "mode": mode, "server": self.server,
             "dataset_dump_sha256": fixture.metadata["dump_sha256"],
@@ -330,7 +344,7 @@ class Runner:
         }
 
     def save(self):
-        private_json(self.fixture.run_dir / (self.mode + "-results.json"), self.result)
+        private_json(self.fixture.run_dir / (self.mode + "-" + self.suffix + ".json"), self.result)
 
     def database_counters(self):
         database = self.server["database"]
@@ -494,9 +508,17 @@ class Runner:
             token = client["token"]
             if token not in expected:
                 _, expected[token] = self.snapshot(token)
-            assert comparable(client["view"]) == comparable(expected[token]), (
-                "Authorized REST and applied stream state differ: " + label
-            )
+            deadline = time.monotonic() + 10
+            while comparable(client["view"]) != comparable(expected[token]):
+                # A commit may produce multiple invalidations. Drain all real
+                # stream transitions; never repair the reducer from the oracle.
+                assert time.monotonic() < deadline, (
+                    "Authorized REST and applied stream state differ: " + label
+                )
+                event = self.receive(client, time.perf_counter(), 1)
+                assert event["type"] != "no_event", (
+                    "Stream did not converge to authorized REST: " + label
+                )
         self.result["correctness"].append({
             "scenario": label, "clients": len(clients),
             "distinct_principals": len(expected), "exact_rest_view_match": True,
@@ -690,7 +712,7 @@ class Runner:
                     del target[path[-1]]
         return pages
 
-    def admin_page(self, view="sequence", apparatus=None, length=40):
+    def admin_page(self, view="sequence", apparatus=None, length=40, verify_each=False):
         pages, bootstrap = self.load_pages(view, apparatus, length)
         request = {
             "id": "1", "view": view,
@@ -708,10 +730,12 @@ class Runner:
         assert ready["type"] == ("page_ready" if self.mode == "before" else "page_window_ready")
         assert not ready.get("resync")
         label = "admin_" + view + "_" + str(length)
+        if verify_each:
+            label += "_exact_each_event"
         records = []
         try:
-            with Phase(self, label):
-                for cycle in range(self.cycles):
+            with (contextlib.nullcontext() if verify_each else Phase(self, label)):
+                for cycle in range(1 if verify_each else self.cycles):
                     hold = "bench-page-" + str(time.time_ns())
                     for action in ("hold", "failed"):
                         started = time.perf_counter()
@@ -729,6 +753,18 @@ class Runner:
                             "reload_body_bytes": sum(item["body_bytes"] for item in metrics),
                             "latency_ms": (time.perf_counter() - started) * 1000,
                         })
+                        if verify_each:
+                            expected, _ = self.load_pages(view, apparatus, length)
+                            while pages != expected:
+                                _, extra = socket_.event(3)
+                                if extra["type"] in ("page_invalidated", "page_window_resync"):
+                                    pages, _ = self.load_pages(view, apparatus, length)
+                                else:
+                                    pages = self.apply_page(pages, extra)
+                            self.result["correctness"].append({
+                                "scenario": label + "_" + action,
+                                "exact_rest_page_match": True,
+                            })
             expected, _ = self.load_pages(view, apparatus, length)
             assert pages == expected, "Applied admin pages differ from authoritative HTTP pages"
             self.result["correctness"].append({
@@ -777,7 +813,7 @@ class Runner:
         states = clients[0]["view"]["queue_states"].get(self.apparatus, {})
         pair = next((
             (first, second) for first, second in zip(sequence, sequence[1:])
-            if all(states.get(order) not in ("in_progress", "print_preflight", "frozen")
+            if all(states.get(order) not in ("in_progress", "paused", "print_preflight", "frozen")
                    for order in (first, second))
         ), None)
         if pair is None:
@@ -840,9 +876,17 @@ class Runner:
                 client["socket"].close()
             socket_.close()
 
-    def run(self):
+    def run(self, query_counts_only=False):
         try:
             self.profiles()
+            if query_counts_only:
+                assert self.server["query_log"], "SQL diagnostic requires --query-log fixture"
+                for count in self.clients:
+                    self.fanout(count)
+                self.fanout(max(self.clients), mixed=True)
+                self.disjoint()
+                self.admin_page()
+                return
             self.idle()
             for count in self.clients:
                 self.fanout(count)
@@ -852,6 +896,8 @@ class Runner:
             self.recovery()
             self.admin_page()
             self.admin_page(view="orders", apparatus="", length=60)
+            self.admin_page(verify_each=True)
+            self.admin_page(view="orders", apparatus="", length=60, verify_each=True)
             self.reorder()
             self.notifications()
         finally:
@@ -872,11 +918,17 @@ def main():
     parser.add_argument("--mode", choices=("before", "after"), required=True)
     parser.add_argument("--clients", default="1,8,32")
     parser.add_argument("--cycles", type=int, default=5)
+    parser.add_argument("--query-counts-only", action="store_true")
+    parser.add_argument("--output-suffix", default="results")
     args = parser.parse_args()
     clients = [int(value) for value in args.clients.split(",")]
     if any(value < 1 or value > 128 for value in clients) or not 1 <= args.cycles <= 50:
         parser.error("Use 1..128 clients and 1..50 cycles")
-    Runner(Fixture(args.run_dir), args.mode, clients, args.cycles).run()
+    if not re.fullmatch(r"[a-z0-9-]+", args.output_suffix):
+        parser.error("Output suffix accepts lowercase letters, digits and hyphens")
+    Runner(Fixture(args.run_dir), args.mode, clients, args.cycles, args.output_suffix).run(
+        query_counts_only=args.query_counts_only
+    )
 
 
 if __name__ == "__main__":
