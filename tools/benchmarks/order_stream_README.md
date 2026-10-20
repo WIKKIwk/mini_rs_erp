@@ -72,6 +72,13 @@ order reconciliation runs once, then periodic reconciliation stops. This keeps
 unrelated 30-second background SQL out of the small per-mutation statement count.
 Primary timing and idle runs retain the production-default 30-second reconciler.
 
+For a separately labeled latency repeat, restore each mode with
+`--initial-sync-only` (without `--query-log`) and run the harness with
+`--clients 1,32 --cycles 20 --latency-repeat --output-suffix latency-repeat`.
+It measures 40 changes for one client and for 32 sockets across three worker
+principals, then verifies held/released controls. This repeat isolates the
+periodic reconciler; it never replaces the default-configuration primary files.
+
 For the separate two-OS-process check, stop the `before` server and run
 `order_stream_crossprocess.py --run-dir "$BENCH_DIR"` through the same maintenance
 wrapper while the candidate `after` server is ready. It starts a second candidate

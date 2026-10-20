@@ -139,7 +139,8 @@ class Fixture:
         }
         self.save()
 
-    def server_env(self, database, port, migration=False, query_log=False):
+    def server_env(self, database, port, migration=False, query_log=False,
+                   initial_sync_only=False):
         if not re.fullmatch(DB_PREFIX + r"[a-z0-9_]+", database):
             raise RuntimeError("Only isolated benchmark databases are accepted")
         env = {
@@ -158,8 +159,8 @@ class Fixture:
             MINI_ERP_PG_MAX_CONNECTIONS="16",
             RUST_LOG="warn,sqlx::query=debug" if query_log else "warn",
         )
-        if query_log:
-            # SQL diagnostic isolates this controlled stream workload. The
+        if query_log or initial_sync_only:
+            # Separate diagnostics isolate this controlled stream workload. The
             # normal timed runs retain the production-default 30 s reconciler.
             # Zero performs the initial reconciliation once, then exits its loop.
             env["MINI_ORDER_SYNC_INTERVAL_SECONDS"] = "0"
@@ -239,7 +240,7 @@ class Fixture:
         return len(principals)
 
     def restore_and_start(self, mode, binary, source_revision, migration_binary=None,
-                          query_log=False):
+                          query_log=False, initial_sync_only=False):
         if mode not in ("before", "after"):
             raise RuntimeError("Mode must be before or after")
         self.stop(mode)
@@ -282,7 +283,8 @@ class Fixture:
         with open(log_path, "wb") as log:
             process = subprocess.Popen(
                 [str(executable)], cwd=directory,
-                env=self.server_env(database, port, query_log=query_log),
+                env=self.server_env(database, port, query_log=query_log,
+                                    initial_sync_only=initial_sync_only),
                 stdout=log, stderr=log, start_new_session=True,
             )
         log_path.chmod(0o600)
@@ -292,7 +294,7 @@ class Fixture:
             "binary_sha256": sha256(executable),
             "binary_bytes": executable.stat().st_size,
             "query_log": query_log, "ready": False,
-            "mini_order_sync_interval_seconds": 0 if query_log else 30,
+            "mini_order_sync_interval_seconds": 0 if query_log or initial_sync_only else 30,
             "test_credentials_reseeded": credential_count,
         }
         self.metadata["servers"][mode] = server
@@ -373,6 +375,7 @@ def main():
     start.add_argument("--source-revision", required=True)
     start.add_argument("--migration-binary")
     start.add_argument("--query-log", action="store_true")
+    start.add_argument("--initial-sync-only", action="store_true")
     stop = sub.add_parser("stop")
     stop.add_argument("--mode", choices=("before", "after"), required=True)
     args = parser.parse_args()
@@ -386,7 +389,7 @@ def main():
     elif args.command == "start":
         print(json.dumps(fixture.restore_and_start(
             args.mode, args.binary, args.source_revision, args.migration_binary,
-            args.query_log,
+            args.query_log, args.initial_sync_only,
         )))
     else:
         fixture.stop(args.mode)

@@ -22,6 +22,13 @@ def main():
         for mode in ("before", "after")
     }
     crossprocess = json.loads((source / "crossprocess-results.json").read_text())
+    cleanup_path = source / "cleanup.json"
+    cleanup = json.loads(cleanup_path.read_text()) if cleanup_path.exists() else None
+    repeat_paths = {mode: source / (mode + "-latency-repeat.json") for mode in results}
+    repeats = (
+        {mode: json.loads(path.read_text()) for mode, path in repeat_paths.items()}
+        if all(path.exists() for path in repeat_paths.values()) else {}
+    )
     assert crossprocess["independent_os_processes"] == 2
     assert crossprocess["restored_original_order"]
     for mode, result in results.items():
@@ -85,6 +92,12 @@ def main():
         "local and PostgreSQL publication of the same preflight transaction. "
         "The final primary run keeps periodic reconciliation enabled so this "
         "background interaction remains part of the measurement.",
+        "",
+        "An intermediate candidate also duplicated local and PostgreSQL work "
+        "after real sequence moves. Sequence transactions now carry an exact "
+        "committed identity for deduplication, including listener-first delivery. "
+        "Unrelated external invalidations and updates on another server remain "
+        "observable. The move and inverse are measured separately below.",
         "",
         "Shared prepared projections preserve principal-specific controls. "
         "Administrator windows apply sparse row/property updates and metadata "
@@ -163,6 +176,71 @@ def main():
             b["all_views_latency_ms"], a["all_views_latency_ms"],
             b["reload_gets"], a["reload_gets"],
         ))
+    lines += [
+        "",
+        "Move server CPU changed by %+.1f%% and inverse-move CPU by %+.1f%%. "
+        "All-view delivery time changed by %+.1f%% and %+.1f%% respectively." % (
+            (phases["after"]["reorder_0"]["server_cpu_ms"] /
+             phases["before"]["reorder_0"]["server_cpu_ms"] - 1) * 100,
+            (phases["after"]["reorder_1"]["server_cpu_ms"] /
+             phases["before"]["reorder_1"]["server_cpu_ms"] - 1) * 100,
+            (after["reorder"]["records"][0]["all_views_latency_ms"] /
+             before["reorder"]["records"][0]["all_views_latency_ms"] - 1) * 100,
+            (after["reorder"]["records"][1]["all_views_latency_ms"] /
+             before["reorder"]["records"][1]["all_views_latency_ms"] - 1) * 100,
+        ),
+    ]
+    if repeats:
+        lines += [
+            "", "## Controlled latency repeat", "",
+            "A separate matched repeat uses fresh clones, the same binaries, "
+            "20 hold/release cycles (40 events) per scenario and no SQL logging. "
+            "This repeat disables periodic reconciliation after its initial "
+            "pass, to separate timer alignment from stream latency. The primary "
+            "default-30-second results and their slower tail samples above are "
+            "retained unchanged. Held/released permissions and final stream "
+            "state are still checked against authorized HTTP.",
+            "",
+            "| Clients / principals | Before CPU ms | After CPU ms | "
+            "Before median ms | After median ms | Before mean ms | After mean ms | "
+            "Before p95 ms | After p95 ms |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+        ]
+        repeat_phases = {
+            mode: {phase["name"]: phase for phase in result["phases"]}
+            for mode, result in repeats.items()
+        }
+        for mode, result in repeats.items():
+            assert result["measurement_variant"] == "controlled_latency_repeat"
+            assert result["server"]["query_log"] is False
+            assert result["server"]["mini_order_sync_interval_seconds"] == 0
+            assert result["server"]["binary_sha256"] == results[mode]["server"]["binary_sha256"]
+            assert result["fixture_roles"] == results[mode]["fixture_roles"]
+            assert all(row["exact_rest_view_match"] for row in result["correctness"])
+        for b, a in zip(repeats["before"]["fanout"], repeats["after"]["fanout"]):
+            assert b["cycles"] == a["cycles"] == 20
+            assert b["name"] == a["name"]
+            before_stats = b["all_clients_latency_ms"]
+            after_stats = a["all_clients_latency_ms"]
+            lines.append("| %s / %s | %.1f | %.1f | %.1f | %.1f | %.1f | %.1f | %.1f | %.1f |" % (
+                b["clients"], b["distinct_principals"],
+                repeat_phases["before"][b["name"]]["server_cpu_ms"],
+                repeat_phases["after"][a["name"]]["server_cpu_ms"],
+                before_stats["p50"], after_stats["p50"],
+                before_stats["mean"], after_stats["mean"],
+                before_stats["p95"], after_stats["p95"],
+            ))
+        lines += [
+            "",
+            "Repeat peak server RSS: %.1f → %.1f MiB. Recorded recoverable stream "
+            "errors: %s → %s. These are additional observations, not a replacement "
+            "for the primary run." % (
+                max(p["server_rss_peak_bytes"] for p in repeats["before"]["phases"]) / 2**20,
+                max(p["server_rss_peak_bytes"] for p in repeats["after"]["phases"]) / 2**20,
+                len(repeats["before"]["stream_error_recovery"]),
+                len(repeats["after"]["stream_error_recovery"]),
+            ),
+        ]
     lines += ["", "## Other measured behavior", "", "| Scenario | Before | After |",
               "|---|---:|---:|"]
     metrics = [
@@ -193,12 +271,17 @@ def main():
             max(p["server_rss_peak_bytes"] for p in results[mode]["phases"]) / 2**20
             for mode in ("before", "after")
         ),
+        "",
+        "Overall primary-run peak RSS changed by %+.1f%%." % (
+            (max(p["server_rss_peak_bytes"] for p in after["phases"]) /
+             max(p["server_rss_peak_bytes"] for p in before["phases"]) - 1) * 100
+        ),
         "", "## Separate SQL diagnostic", "",
         "One hold/release pair per scenario with SQLx query logging enabled. "
         "Counts are observed SQLx statement events, including incidental server "
         "maintenance in that interval. Diagnostic timings are intentionally not "
         "used above. Periodic order reconciliation stops after its initial run "
-        "only in this SQL diagnostic; primary timings retain its default 30-second "
+        "in this SQL diagnostic, as in the controlled repeat; primary timings retain its default 30-second "
         "interval. PostgreSQL transaction/tuple/buffer counters remain available "
         "in the JSON and are not labeled as SQL counts.",
         "",
@@ -220,14 +303,31 @@ def main():
         "order statuses, stage states, maps, pagination metadata and cursors. "
         "A real version-checked reorder and its inverse restored the original "
         "sequence with no lost rows. Reconnect state matched fresh HTTP.",
-        "The baseline initially aborted twice on a `store_failed` stream error "
-        "during an active-hold check. The published complete pair permits the "
+        "",
+        "Two initial baseline attempts aborted during active-hold checks: first "
+        "an untyped stream error, then a reproduced `store_failed` error. "
+        "The underlying storage error was not exposed by the baseline logs. "
+        "Those partial attempts are excluded from the measured pair. "
+        "The published complete pair permits the "
         "same explicit authorized HTTP/reconnect recovery in both versions and "
         "records each error and its extra GETs. Successful deltas are still "
         "compared exactly; mismatches never trigger a hidden oracle repair.",
         "",
         "- Before: %s recorded exact checks." % len(before["correctness"]),
         "- After: %s recorded exact checks." % len(after["correctness"]),
+        "",
+        "Separate focused Rust checks also passed: page-live unit checks 6/6, "
+        "actual WebSocket `worker_queue_window` integration checks 7/7, state "
+        "feed/hub/replay checks 21/21, sequence checks 4/4, realtime checks 3/3, "
+        "isolated PostgreSQL reorder checks 4/4 and listener/migration check 1/1. "
+        "These groups overlap and are not summed.",
+        "",
+        "The broader Rust GET test "
+        "`production_map_sequence_returns_backend_visible_order_ids` fails at "
+        "`src/http/admin_route_tests/production_map_basic.rs:256` on both the "
+        "immutable baseline and candidate with the same empty-apparatus assertion. "
+        "That existing failure was reproduced independently; these results do "
+        "not claim a completely passing full backend suite.",
         "",
         "## Two independent server processes", "",
         "A separate correctness run starts two OS processes against one disposable "
@@ -242,16 +342,17 @@ def main():
         "",
         "## Limits and reproduction", "",
         "See [the harness methodology](order_stream_README.md). This is one local "
-        "paired run with 32 sockets maximum, not a capacity forecast. p95 uses ten "
-        "samples per mutation scenario. Other role/capability combinations and broader "
+        "paired run with 32 sockets maximum, not a capacity forecast. Primary "
+        "fanout/admin p95 uses ten samples; the controlled repeat uses forty. "
+        "Other role/capability combinations and broader "
         "deployment stress need their own tests beyond the admin/aparatchi scopes here. "
         "CPU is the application server process only; database and load-client CPU "
         "are excluded. No WAN, TLS, battery, physical mobile rendering or reconnect "
         "storm is measured.",
         "",
-        "Replay is bounded: state history retains at most 64 entries / 256 KiB "
-        "for 90 seconds; page history retains at most 8 windows / 512 KiB for "
-        "90 seconds. Missing or expired history falls back to authoritative HTTP. "
+        "Replay is bounded per feed: state history retains at most 64 entries / "
+        "256 KiB for 90 seconds; page history retains at most 8 window versions / "
+        "512 KiB for 90 seconds. Missing or expired history falls back to authoritative HTTP. "
         "Role/config files are not automatically shared between deployment nodes.",
         "",
         "## Reference methods", "",
@@ -272,10 +373,25 @@ def main():
         "realtime platform or replacement project was introduced.",
         "",
     ]
+    if cleanup:
+        assert cleanup["benchmark_servers_stopped"]
+        lines += [
+            "## Local test cleanup", "",
+            "All benchmark server processes were stopped. Private dumps, "
+            "binaries, metadata and logs remain in `" + str(source.resolve()) +
+            "` with protected filesystem permissions for reproducibility. "
+            "The disposable `bench_order_stream_before_*` and "
+            "`bench_order_stream_after_*` databases remain in local PostgreSQL.",
+            "",
+            "PostgreSQL after testing: `" + cleanup["postgres_state"] + "`.",
+            "",
+        ]
     stem = "order_stream_" + args.date
     (output / (stem + ".md")).write_text("\n".join(lines))
     (output / (stem + ".json")).write_text(json.dumps({
         "primary": results, "sql_diagnostics": diagnostics, "crossprocess": crossprocess,
+        "cleanup": cleanup,
+        "controlled_latency_repeat": repeats,
     }, indent=2) + "\n")
     print("Generated " + stem + ".md and sanitized metrics JSON")
 

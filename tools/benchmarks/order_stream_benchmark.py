@@ -945,9 +945,17 @@ class Runner:
                 client["socket"].close()
             socket_.close()
 
-    def run(self, query_counts_only=False):
+    def run(self, query_counts_only=False, latency_repeat=False):
         try:
             self.profiles()
+            if latency_repeat:
+                assert not self.server["query_log"]
+                assert self.server["mini_order_sync_interval_seconds"] == 0
+                self.result["measurement_variant"] = "controlled_latency_repeat"
+                self.fanout(1)
+                self.fanout(max(self.clients), mixed=True)
+                self.held_permissions()
+                return
             if query_counts_only:
                 assert self.server["query_log"], "SQL diagnostic requires --query-log fixture"
                 for count in self.clients:
@@ -987,7 +995,9 @@ def main():
     parser.add_argument("--mode", choices=("before", "after"), required=True)
     parser.add_argument("--clients", default="1,8,32")
     parser.add_argument("--cycles", type=int, default=5)
-    parser.add_argument("--query-counts-only", action="store_true")
+    variant = parser.add_mutually_exclusive_group()
+    variant.add_argument("--query-counts-only", action="store_true")
+    variant.add_argument("--latency-repeat", action="store_true")
     parser.add_argument("--output-suffix", default="results")
     args = parser.parse_args()
     clients = [int(value) for value in args.clients.split(",")]
@@ -996,7 +1006,7 @@ def main():
     if not re.fullmatch(r"[a-z0-9-]+", args.output_suffix):
         parser.error("Output suffix accepts lowercase letters, digits and hyphens")
     Runner(Fixture(args.run_dir), args.mode, clients, args.cycles, args.output_suffix).run(
-        query_counts_only=args.query_counts_only
+        query_counts_only=args.query_counts_only, latency_repeat=args.latency_repeat
     )
 
 
