@@ -55,6 +55,45 @@ impl ProductionMapService {
         {
             return Err(ProductionMapError::QueueActionNotAllowed);
         }
+        if !scope.history.is_empty() {
+            // A genuinely additional history scope keeps its own cache entry.
+            // Rebuild that entry directly on later revisions: trying the base
+            // first every time would duplicate work for completed/foreign orders.
+            let has_exact_entry = {
+                let entries = self.snapshot_cache.worker_snapshots.lock().await;
+                entries.contains_key(&scope)
+            };
+            if !has_exact_entry {
+                let base_scope = WorkerSnapshotScope {
+                    apparatus: scope.apparatus.clone(),
+                    history: Vec::new(),
+                    only_orders: false,
+                };
+                loop {
+                    let (base, revision) = self
+                        .scoped_snapshot_shared_with_revision(base_scope.clone())
+                        .await?;
+                    // These are materialized output maps, not dependency-only
+                    // queue peers. Their complete route controls, stage states,
+                    // logs and lifecycle are already included in this snapshot.
+                    // Adding these IDs as history cannot expand its inputs.
+                    let covered = scope
+                        .history
+                        .iter()
+                        .all(|id| base.maps.iter().any(|saved| saved.map.id == *id));
+                    if self.snapshot_revision() != revision {
+                        continue;
+                    }
+                    if covered {
+                        return Ok((base, revision));
+                    }
+                    // A first unseen outside-history scope may build the base
+                    // once before falling back. Its exact entry below avoids
+                    // that extra build on subsequent revisions.
+                    break;
+                }
+            }
+        }
         self.scoped_snapshot_shared_with_revision(scope).await
     }
 
