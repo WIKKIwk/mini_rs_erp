@@ -23,7 +23,7 @@ mod management;
 pub use order_products::order_products;
 pub use product_transfer::product_transfer;
 pub use shared_sets::shared_sets;
-pub use management::{sets, product_molds};
+pub use management::{sets, create_set, product_molds};
 
 use self::support::*;
 pub use self::support::{

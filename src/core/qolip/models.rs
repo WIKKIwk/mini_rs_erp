@@ -281,6 +281,8 @@ pub enum QolipError {
     CheckoutAssignedToAnotherWorker,
     #[error("size is required")]
     InvalidSize,
+    #[error("a mold color is required")]
+    InvalidColor,
     #[error("quantity is required")]
     InvalidQuantity,
     #[error("location is invalid")]

@@ -7,7 +7,7 @@ use super::product_transfer::{
 use super::rows::{QolipProductSpecRow, row_to_product_spec};
 use crate::core::auth::models::Principal;
 use crate::core::qolip::{
-    QolipError, QolipManagedSet, QolipProductMoldEdits, QolipSetEdit, QolipSetProduct,
+    QolipError, QolipManagedSet, QolipProductMoldEdits, QolipSetCreate, QolipSetEdit, QolipSetProduct,
     QolipSetSnapshot, role_code,
 };
 
@@ -37,7 +37,7 @@ async fn read_sets(
     });
     let rows = sqlx::query_as::<_, (String, String, String, String, String)>(
         "SELECT sets.set_id, sets.warehouse_key,
-             COALESCE(item.code, sets.item_code_key), COALESCE(item.name, ''), COALESCE(item.item_group, '')
+             COALESCE(item.code, sets.item_code_key, ''), COALESCE(item.name, ''), COALESCE(item.item_group, '')
          FROM mini_qolip_sets sets
          LEFT JOIN mini_items item ON lower(btrim(item.code)) = sets.item_code_key
          WHERE NOT sets.is_product_local AND ($1::text[] IS NULL OR sets.warehouse_key = ANY($1))
@@ -173,6 +173,44 @@ async fn audit(
     Ok(())
 }
 
+pub(super) async fn create_set(
+    pool: &PgPool,
+    input: &QolipSetCreate,
+    principal: &Principal,
+    allowed: &[String],
+) -> Result<QolipManagedSet, QolipError> {
+    owner(&input.warehouse, Some(allowed))?;
+    let mut tx = pool.begin().await.map_err(|_| QolipError::StoreFailed)?;
+    lock_composition(&mut tx).await?;
+    let codes = input.members.iter().map(|draft| draft.qolip_code.clone()).collect::<Vec<_>>();
+    lock_codes(&mut tx, &codes).await?;
+    let existing_receipt: bool = sqlx::query_scalar(
+        "SELECT EXISTS (
+            SELECT 1 FROM mini_qolip_locations WHERE lower(qolip_code) = ANY($1)
+            UNION ALL SELECT 1 FROM mini_qolip_checkouts WHERE lower(qolip_code) = ANY($1)
+        )"
+    ).bind(codes.iter().map(|code| code.trim().to_lowercase()).collect::<Vec<_>>())
+        .fetch_one(&mut *tx).await.map_err(|_| QolipError::StoreFailed)?;
+    if existing_receipt {
+        return Err(QolipError::QolipCodeConflict);
+    }
+    let set_id: String = loop {
+        let candidate: String = sqlx::query_scalar("SELECT public.mini_qolip_next_set_id()")
+            .fetch_one(&mut *tx).await.map_err(|_| QolipError::StoreFailed)?;
+        if !codes.iter().any(|code| code.trim() == candidate) { break candidate; }
+    };
+    for draft in &input.members {
+        let spec = draft.standalone_spec(&input.warehouse, &set_id, principal)?;
+        super::catalog::save_product_spec_tx(&mut tx, spec).await?;
+    }
+    let created = read_sets(&mut tx, Some(allowed), Some(&set_id)).await?
+        .pop().ok_or(QolipError::StoreFailed)?;
+    audit(&mut tx, principal, "set_create", &set_id,
+        serde_json::json!({"set": created, "actor_name": principal.display_name})).await?;
+    tx.commit().await.map_err(|_| QolipError::StoreFailed)?;
+    Ok(created)
+}
+
 pub(super) async fn edit_set(
     pool: &PgPool,
     input: &QolipSetEdit,
@@ -212,12 +250,16 @@ pub(super) async fn edit_set(
         }
     }
     for draft in &input.add {
-        let spec = draft.spec(
-            (&current.item_code, &current.item_name, &current.item_group),
-            &current.warehouse,
-            &input.set_id,
-            principal,
-        )?;
+        let spec = if current.item_code.is_empty() {
+            draft.standalone_spec(&current.warehouse, &input.set_id, principal)?
+        } else {
+            draft.spec(
+                (&current.item_code, &current.item_name, &current.item_group),
+                &current.warehouse,
+                &input.set_id,
+                principal,
+            )?
+        };
         super::catalog::save_product_spec_tx(&mut tx, spec).await?;
     }
     if !input.remove.is_empty() {

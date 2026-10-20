@@ -58,6 +58,9 @@ impl QolipStorePort for PostgresQolipStore {
     async fn managed_sets(&self, allowed: Option<&[String]>) -> Result<Vec<crate::core::qolip::QolipManagedSet>, QolipError> {
         management::list(&self.pool, allowed).await
     }
+    async fn create_set(&self, input: &crate::core::qolip::QolipSetCreate, principal: &Principal, allowed: &[String]) -> Result<crate::core::qolip::QolipManagedSet, QolipError> {
+        management::create_set(&self.pool, input, principal, allowed).await
+    }
     async fn edit_set(&self, input: &crate::core::qolip::QolipSetEdit, principal: &Principal, allowed: Option<&[String]>) -> Result<crate::core::qolip::QolipManagedSet, QolipError> {
         management::edit_set(&self.pool, input, principal, allowed).await
     }

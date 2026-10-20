@@ -185,6 +185,7 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/v1/mobile/qolip/product-specs", any(qolip::product_specs))
         .route("/v1/mobile/qolip/shared-sets", any(qolip::shared_sets))
         .route("/v1/mobile/qolip/sets", any(qolip::sets))
+        .route("/v1/mobile/qolip/sets/create", any(qolip::create_set))
         .route("/v1/mobile/qolip/product-molds", any(qolip::product_molds))
         .route("/v1/mobile/qolip/product-transfer", any(qolip::product_transfer))
         .route(

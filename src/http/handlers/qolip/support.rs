@@ -320,6 +320,7 @@ pub(super) fn qolip_error(error: QolipError) -> (StatusCode, Json<QolipErrorResp
             )),
         ),
         QolipError::InvalidSize => bad_request("size_required"),
+        QolipError::InvalidColor => bad_request("color_required"),
         QolipError::InvalidQuantity => bad_request("quantity_required"),
         QolipError::InvalidLocation => bad_request("location_invalid"),
         QolipError::LocationNotFound => bad_request("location_not_found"),

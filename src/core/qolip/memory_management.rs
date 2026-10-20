@@ -12,6 +12,53 @@ fn memory_management_owner(warehouse: &str, allowed: Option<&[String]>) -> Resul
 }
 
 impl MemoryQolipStore {
+    async fn memory_create_set(
+        &self,
+        input: &super::QolipSetCreate,
+        principal: &Principal,
+        allowed: &[String],
+    ) -> Result<super::QolipManagedSet, QolipError> {
+        memory_management_owner(input.warehouse.trim(), Some(allowed))?;
+        let mut specs = self.product_specs.write().await;
+        let mut registry = self.managed_registry.write().await;
+        let locations = self.locations.read().await;
+        let checkouts = self.checkouts.read().await;
+        let codes = input.members.iter().map(|draft| draft.qolip_code.trim().to_lowercase()).collect::<BTreeSet<_>>();
+        if specs.values().any(|s| codes.contains(&s.qolip_code.to_lowercase()) || codes.contains(&s.set_id()))
+            || registry.keys().any(|id| codes.contains(id))
+            || locations.iter().any(|m| codes.contains(&m.qolip_code.to_lowercase()))
+            || checkouts.iter().any(|m| codes.contains(&m.qolip_code.to_lowercase()))
+        {
+            return Err(QolipError::QolipCodeConflict);
+        }
+        let id = loop {
+            let candidate = super::set_ids::next_memory_set_id()?;
+            if !registry.contains_key(&candidate)
+                && !codes.contains(&candidate)
+                && !specs.values().any(|s| s.set_id() == candidate || s.qolip_code == candidate)
+                && !locations.iter().any(|s| s.qolip_code == candidate)
+                && !checkouts.iter().any(|s| s.qolip_code == candidate)
+            {
+                break candidate;
+            }
+        };
+        let members = input.members.iter()
+            .map(|draft| draft.standalone_spec(&input.warehouse, &id, principal))
+            .collect::<Result<Vec<_>, _>>()?;
+        let set = super::QolipManagedSet {
+            snapshot: super::QolipSetSnapshot::new(id.clone(), members.clone(), Vec::new()),
+            warehouse: input.warehouse.trim().to_string(),
+            item_code: String::new(),
+            item_name: String::new(),
+            item_group: String::new(),
+        };
+        for member in members {
+            specs.insert(member.qolip_code.to_lowercase(), member);
+        }
+        registry.insert(id, set.clone());
+        Ok(set)
+    }
+
     async fn memory_managed_sets(
         &self,
         allowed: Option<&[String]>,
@@ -114,12 +161,16 @@ impl MemoryQolipStore {
         }
         let mut additions = Vec::new();
         for draft in &input.add {
-            let spec = draft.spec(
-                (&set.item_code, &set.item_name, &set.item_group),
-                &set.warehouse,
-                &input.set_id,
-                principal,
-            )?;
+            let spec = if set.item_code.is_empty() {
+                draft.standalone_spec(&set.warehouse, &input.set_id, principal)?
+            } else {
+                draft.spec(
+                    (&set.item_code, &set.item_name, &set.item_group),
+                    &set.warehouse,
+                    &input.set_id,
+                    principal,
+                )?
+            };
             if specs
                 .values()
                 .any(|s| s.qolip_code.eq_ignore_ascii_case(&spec.qolip_code))

@@ -13,6 +13,13 @@ pub struct QolipManagedSet {
     pub item_group: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QolipSetCreate {
+    pub warehouse: String,
+    pub members: Vec<QolipMoldDraft>,
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct QolipMoldDraft {
     pub qolip_code: String,
@@ -25,9 +32,44 @@ pub struct QolipMoldDraft {
 }
 
 impl QolipMoldDraft {
+    pub(crate) fn standalone_spec(
+        &self,
+        warehouse: &str,
+        set_id: &str,
+        principal: &Principal,
+    ) -> Result<QolipProductSpec, QolipError> {
+        if self.existing_only {
+            return Err(QolipError::QolipCodeConflict);
+        }
+        if self.color.trim().is_empty() || self.color.len() > 64 {
+            return Err(QolipError::InvalidColor);
+        }
+        self.physical_spec(warehouse, set_id, principal)
+    }
+
     pub(crate) fn spec(
         &self,
         item: (&str, &str, &str),
+        warehouse: &str,
+        set_id: &str,
+        principal: &Principal,
+    ) -> Result<QolipProductSpec, QolipError> {
+        if item.0.is_empty() || item.1.is_empty() {
+            return Err(QolipError::MissingItem);
+        }
+        if item.2.is_empty() {
+            return Err(QolipError::MissingItemGroup);
+        }
+        Ok(QolipProductSpec {
+            item_code: item.0.to_owned(),
+            item_name: item.1.to_owned(),
+            item_group: item.2.to_owned(),
+            ..self.physical_spec(warehouse, set_id, principal)?
+        })
+    }
+
+    fn physical_spec(
+        &self,
         warehouse: &str,
         set_id: &str,
         principal: &Principal,
@@ -38,18 +80,9 @@ impl QolipMoldDraft {
         if self.size <= 0 {
             return Err(QolipError::InvalidSize);
         }
-        if item.0.is_empty() || item.1.is_empty() {
-            return Err(QolipError::MissingItem);
-        }
-        if item.2.is_empty() {
-            return Err(QolipError::MissingItemGroup);
-        }
         Ok(QolipProductSpec {
             qolip_set_id: set_id.to_owned(),
             warehouse: warehouse.trim().to_owned(),
-            item_code: item.0.to_owned(),
-            item_name: item.1.to_owned(),
-            item_group: item.2.to_owned(),
             qolip_code: self.qolip_code.trim().to_owned(),
             size: self.size,
             color: self.color.trim().to_owned(),

@@ -8,7 +8,7 @@ fn memory_set_targets(
         .filter(|(id, _)| id == set_id)
         .map(|(_, code)| code.clone())
         .collect::<Vec<_>>();
-    if targets.is_empty() {
+    if targets.is_empty() && !native.trim().is_empty() {
         vec![native.trim().to_lowercase()]
     } else {
         targets
@@ -163,7 +163,9 @@ impl MemoryQolipStore {
         }
         if !links.iter().any(|(id, _)| id == set_id) {
             for spec in &current.members {
-                links.insert((set_id.to_string(), spec.item_code.trim().to_lowercase()));
+                if !spec.item_code.trim().is_empty() {
+                    links.insert((set_id.to_string(), spec.item_code.trim().to_lowercase()));
+                }
             }
         }
         links.insert((set_id.to_string(), item_code.trim().to_lowercase()));

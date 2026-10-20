@@ -1,4 +1,23 @@
 impl QolipService {
+    pub async fn create_set(
+        &self,
+        input: &super::QolipSetCreate,
+        principal: &Principal,
+        is_admin: bool,
+    ) -> Result<super::QolipManagedSet, QolipError> {
+        super::management::validate_codes(&input.members, &[])?;
+        let allowed = self.warehouses_for_principal(principal, is_admin).await?;
+        if input.warehouse.trim().is_empty()
+            || !allowed.iter().any(|warehouse| warehouse.eq_ignore_ascii_case(input.warehouse.trim()))
+        {
+            return Err(QolipError::AccessDenied);
+        }
+        for member in &input.members {
+            member.standalone_spec(&input.warehouse, "", principal)?;
+        }
+        self.store.create_set(input, principal, &allowed).await
+    }
+
     pub async fn managed_sets(
         &self,
         principal: &Principal,
