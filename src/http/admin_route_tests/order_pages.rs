@@ -1,7 +1,64 @@
 use super::*;
+use crate::core::pending_orders::{
+    PendingOrder, PendingOrderCompletion, PendingOrderError, PendingOrderStore,
+};
 use crate::core::production_map::{ProductionMapStorePort, queue_state};
 
 const PAGE_APPARATUS: &str = "apparatus:default:bosma_8";
+
+#[tokio::test]
+async fn admin_order_pages_reject_intake_read_invalidated_during_list() {
+    struct InvalidatingIntake(ProductionMapService);
+
+    #[async_trait]
+    impl PendingOrderStore for InvalidatingIntake {
+        async fn list(&self) -> Result<Vec<PendingOrder>, PendingOrderError> {
+            // The list was read before a concurrent intake write's live event.
+            self.0.notify_live();
+            Ok(Vec::new())
+        }
+
+        async fn create(
+            &self,
+            _: PendingOrder,
+            _: CalculateOrderImage,
+        ) -> Result<PendingOrder, PendingOrderError> {
+            unreachable!()
+        }
+
+        async fn get(&self, _: &str) -> Result<PendingOrder, PendingOrderError> {
+            unreachable!()
+        }
+
+        async fn image(&self, _: &str) -> Result<CalculateOrderImage, PendingOrderError> {
+            unreachable!()
+        }
+
+        async fn complete(
+            &self,
+            _: &str,
+            _: &str,
+            _: PendingOrderCompletion,
+            _: crate::core::production_map::ProductionMapSaved,
+        ) -> Result<(PendingOrderCompletion, bool), PendingOrderError> {
+            unreachable!()
+        }
+    }
+
+    let mut state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+    state.pending_orders = Some(Arc::new(InvalidatingIntake(state.production_maps.clone())));
+    let response = build_router(state)
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/order-page?view=orders",
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(json_body(response).await["error"], "order_page_changed");
+}
 
 #[tokio::test]
 async fn admin_order_pages_move_includes_unassigned_print_alternatives() {
@@ -391,4 +448,94 @@ async fn admin_order_pages_archive_uses_summaries_and_loads_one_history() {
         .await
         .unwrap();
     assert_eq!(json_body(search).await["total"], 25);
+}
+
+async fn paged_live_json(socket: &mut (impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin)) -> serde_json::Value {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let opcode = socket.read_u8().await.unwrap() & 0x0f;
+            let byte = socket.read_u8().await.unwrap();
+            assert_eq!(byte & 0x80, 0);
+            let length = match byte & 0x7f {
+                126 => socket.read_u16().await.unwrap() as usize,
+                127 => socket.read_u64().await.unwrap() as usize,
+                n => n as usize,
+            };
+            assert!(length < 2048, "paged socket must never send the order list: {length} bytes");
+            let mut payload = vec![0; length];
+            socket.read_exact(&mut payload).await.unwrap();
+            if opcode == 1 { return serde_json::from_slice(&payload).unwrap(); }
+            if opcode == 9 {
+                let mut pong = vec![0x8a, 0x80 | length as u8, 0, 0, 0, 0];
+                pong.extend(payload);
+                socket.write_all(&pong).await.unwrap();
+            }
+        }
+    }).await.expect("paged socket event")
+}
+
+#[tokio::test]
+async fn admin_order_pages_socket_preserves_delta_without_loading_1000_orders() {
+    use crate::core::production_map::{QueueActionActor, SequenceMove};
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+    let worker = session(&state, PrincipalRole::Aparatchi).await;
+    for index in 0..1000 {
+        state.production_maps.upsert_map(serde_json::from_str(&pechat_order_map_json(
+            &format!("zakaz-live-{index:04}"), "Live page", &format!("{index:04}"), PAGE_APPARATUS,
+        )).unwrap()).await.unwrap();
+    }
+    let app = build_router(state.clone());
+    let url = format!("/v1/mobile/admin/production-maps/order-page?view=sequence&apparatus={PAGE_APPARATUS}");
+    let first = json_body(app.clone().oneshot(request("GET", &url, &token)).await.unwrap()).await;
+    assert_eq!(first["total"], 1000);
+    assert_eq!(first["maps"].as_array().unwrap().len(), 20);
+    let first_id = first["order_ids"][0].as_str().unwrap().to_string();
+    let second_id = first["order_ids"][1].as_str().unwrap().to_string();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let client = reqwest::Client::new();
+    let connect = |token: String| client.get(format!("http://{address}/v1/mobile/admin/production-maps/live?protocol=delta&paged=true"))
+        .bearer_auth(token).header("Connection", "Upgrade").header("Upgrade", "websocket")
+        .header("Sec-WebSocket-Version", "13").header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==");
+    assert_eq!(connect(worker).send().await.unwrap().status(), StatusCode::FORBIDDEN);
+    let response = connect(token.clone()).send().await.unwrap();
+    assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+    let mut socket = response.upgrade().await.unwrap();
+    let ready = paged_live_json(&mut socket).await;
+    assert_eq!(ready["type"], "page_ready");
+    assert_eq!(ready["rev"], first["rev"]);
+    assert!(ready.get("maps").is_none());
+    let moved = state.production_maps.move_apparatus_sequence(SequenceMove {
+        apparatus: PAGE_APPARATUS.into(), order_id: first_id.clone(),
+        before_order_id: None, after_order_id: Some(second_id.clone()),
+        expected_version: first["sequence_versions"][PAGE_APPARATUS].as_str().unwrap().into(),
+        idempotency_key: "paged-live-move".into(),
+    }, QueueActionActor { role: "admin".into(), ref_: "admin".into(), display_name: "Admin".into() }).await.unwrap();
+    let delta = paged_live_json(&mut socket).await;
+    assert_eq!(delta["type"], "delta");
+    assert_eq!(delta["ops"][0]["id"], first_id);
+    assert_eq!(delta["ops"][0]["after_id"], second_id);
+    assert_eq!(delta["version"], moved.version);
+    assert_eq!(delta["snapshot_rev"], state.production_maps.snapshot_revision());
+    assert!(delta.get("maps").is_none());
+    let refreshed: serde_json::Value = client.get(format!("http://{address}{url}"))
+        .bearer_auth(&token).send().await.unwrap().json().await.unwrap();
+    assert_eq!(refreshed["order_ids"][0], second_id);
+    assert_eq!(refreshed["order_ids"][1], first_id);
+    assert_eq!(refreshed["maps"].as_array().unwrap().len(), 20);
+    assert_eq!(refreshed["total"], 1000);
+    state.production_maps.notify_live();
+    let invalidated = paged_live_json(&mut socket).await;
+    assert_eq!(invalidated["type"], "page_invalidated");
+    assert!(invalidated.get("maps").is_none());
+    drop(socket);
+    let mut reconnected = connect(token).send().await.unwrap().upgrade().await.unwrap();
+    let ready = paged_live_json(&mut reconnected).await;
+    assert_eq!(ready["type"], "page_ready");
+    assert_eq!(ready["rev"], invalidated["rev"]);
+    assert!(ready.get("maps").is_none());
+    server.abort();
 }

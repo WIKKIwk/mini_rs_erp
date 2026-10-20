@@ -119,6 +119,8 @@ pub async fn production_map_order_page(
 
     // Pending intake has its own store, so include its content in the version
     // instead of assuming every intake write increments the queue revision.
+    let epoch = state.production_maps.snapshot_epoch();
+    let revision = state.production_maps.snapshot_revision();
     let pending = if query.view == "orders" {
         match state.pending_orders.as_deref() {
             Some(store) => store
@@ -138,8 +140,11 @@ pub async fn production_map_order_page(
             Sha256::digest(serde_json::to_vec(&pending).unwrap())
         )
     };
-    let epoch = state.production_maps.snapshot_epoch();
-    let revision = state.production_maps.snapshot_revision();
+    // An intake insert can notify while list() is awaiting. Never stamp the
+    // older list (or a conditional response) with the newer live revision.
+    if state.production_maps.snapshot_revision() != revision {
+        return Err(conflict("order_page_changed"));
+    }
     let initial_version = version(&scope, &epoch, revision, &pending_version);
     if query.cursor.is_empty() && query.if_version == initial_version {
         return Ok(not_modified());

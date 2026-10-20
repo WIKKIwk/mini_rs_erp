@@ -33,6 +33,12 @@ pub async fn production_map_live(
     let include_completion_requests = matches!(principal.role, PrincipalRole::Admin);
     let delta_enabled = query.protocol.as_deref() == Some("delta");
     let state_delta_enabled = query.protocol.as_deref() == Some("state_delta_v1");
+    if query.paged {
+        if !delta_enabled {
+            return Err(bad_request("paged_live_requires_delta"));
+        }
+        require_paged_live_capability(&state, &principal).await?;
+    }
     let window = super::worker_snapshot::WorkerQueueWindow::new(
         query.queue_limit, &query.queue_search, query.worker_scope && state_delta_enabled)?;
     Ok(ws
@@ -58,6 +64,7 @@ pub async fn production_map_live(
                     principal,
                     include_completion_requests,
                     delta_enabled,
+                    query.paged,
                 )
                 .await
             })
@@ -83,6 +90,8 @@ pub struct ProductionMapLiveQuery {
     queue_limit: Option<usize>,
     #[serde(default)]
     queue_search: String,
+    #[serde(default)]
+    paged: bool,
 }
 
 async fn authenticated_principal_for_live(
@@ -122,12 +131,29 @@ async fn require_any_live_capability(
     Err(forbidden())
 }
 
+async fn require_paged_live_capability(
+    state: &AppState,
+    principal: &Principal,
+) -> Result<(), AdminError> {
+    for capability in [Capability::AdminAccess, Capability::ProductionMapManage] {
+        if state
+            .admin
+            .principal_has_capability(principal, capability)
+            .await
+        {
+            return Ok(());
+        }
+    }
+    Err(forbidden())
+}
+
 async fn production_map_live_socket(
     state: AppState,
     mut socket: WebSocket,
     principal: Principal,
     include_completion_requests: bool,
     delta_enabled: bool,
+    paged: bool,
 ) {
     let service = state.production_maps.clone();
     let mut rx = service.subscribe_live();
@@ -145,6 +171,7 @@ async fn production_map_live_socket(
         include_completion_requests,
         &mut last_payload_fingerprint,
         &mut last_payload_initialized,
+        paged,
     )
     .await
     {
@@ -172,13 +199,14 @@ async fn production_map_live_socket(
                             include_completion_requests,
                             &mut last_payload_fingerprint,
                             &mut last_payload_initialized,
+                            paged,
                         ).await {
                             break;
                         }
                     }
                     Ok(crate::core::production_map::ProductionMapLiveEvent::Delta(delta)) => {
                         if delta_enabled {
-                            let payload = serde_json::json!({
+                            let mut payload = serde_json::json!({
                                 "ok": true,
                                 "type": "delta",
                                 "epoch": &delta.epoch,
@@ -189,6 +217,9 @@ async fn production_map_live_socket(
                                 "version": &delta.version,
                                 "base_version": delta.ops.first().and_then(|op| op.get("base_version")),
                             });
+                            if paged {
+                                payload["snapshot_rev"] = service.snapshot_revision().into();
+                            }
                             if let Ok(json) = serde_json::to_string(&payload) {
                                 if !send_production_map_live_message(&mut socket, Message::Text(json.into())).await {
                                     break;
@@ -202,6 +233,7 @@ async fn production_map_live_socket(
                                 include_completion_requests,
                                 &mut last_payload_fingerprint,
                                 &mut last_payload_initialized,
+                                paged,
                             ).await {
                                 break;
                             }
@@ -215,6 +247,7 @@ async fn production_map_live_socket(
                             include_completion_requests,
                             &mut last_payload_fingerprint,
                             &mut last_payload_initialized,
+                            paged,
                         ).await {
                             break;
                         }
@@ -223,6 +256,11 @@ async fn production_map_live_socket(
                 }
             }
             _ = heartbeat.tick() => {
+                if paged && require_paged_live_capability(&state, &principal).await.is_err() {
+                    let _ = send_production_map_live_message(&mut socket,
+                        Message::Text(serde_json::json!({"ok": false, "error": "forbidden"}).to_string().into())).await;
+                    break;
+                }
                 if !send_production_map_live_message(&mut socket, Message::Ping(Vec::new().into())).await {
                     break;
                 }
@@ -245,7 +283,20 @@ async fn send_production_map_live_snapshot(
     include_completion_requests: bool,
     last_payload_fingerprint: &mut u64,
     last_payload_initialized: &mut bool,
+    paged: bool,
 ) -> bool {
+    if paged {
+        // Keep the existing delta operations. Bootstrap/invalidation carries
+        // only a cursor; the client reconciles its already requested pages.
+        let payload = serde_json::json!({
+            "ok": true,
+            "type": if *last_payload_initialized { "page_invalidated" } else { "page_ready" },
+            "epoch": state.production_maps.snapshot_epoch(),
+            "rev": state.production_maps.snapshot_revision(),
+        });
+        *last_payload_initialized = true;
+        return send_production_map_live_message(socket, Message::Text(payload.to_string().into())).await;
+    }
     let service = &state.production_maps;
     let actor_ref = queue_action_actor(principal).ref_;
     let snapshot = match service.live_snapshot_shared_with_revision().await {

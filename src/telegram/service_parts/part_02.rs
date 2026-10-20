@@ -112,6 +112,9 @@ impl TelegramService {
                 "Avtomatik map xizmati ulanmagan".into(),
             ));
         };
+        // Intake can remain pending when automatic map creation fails. Admin
+        // pages must learn about that insert without polling the intake store.
+        automatic.production_maps.notify_live();
         match automatic.complete(&saved, store.as_ref()).await {
             Ok(()) => Ok(super::automatic_orders::IntakeResult::completed()),
             Err(reason) => {
