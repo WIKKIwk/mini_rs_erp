@@ -200,7 +200,7 @@ fn stage_states_for_snapshot(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProductionMapLiveEvent {
     Invalidate,
-    PrintPreflight { revision: u64 },
+    PrintPreflight { revision: u64, order_id: String, apparatus: String },
     Delta(std::sync::Arc<ProductionMapLiveDelta>),
 }
 
@@ -423,11 +423,13 @@ impl ProductionMapService {
         self.snapshot_cache.revision.load(Ordering::Acquire)
     }
 
-    pub(super) fn notify_print_preflight(&self) {
+    pub(crate) fn notify_print_preflight(&self, order_id: &str, apparatus: &str) {
         let revision = self.snapshot_cache.revision.fetch_add(1, Ordering::AcqRel) + 1;
         let _ = self
             .live_notify
-            .send(ProductionMapLiveEvent::PrintPreflight { revision });
+            .send(ProductionMapLiveEvent::PrintPreflight {
+                revision, order_id: order_id.to_string(), apparatus: apparatus.to_string(),
+            });
     }
 
     pub async fn queue_events_replay(

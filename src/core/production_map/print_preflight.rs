@@ -110,7 +110,7 @@ impl ProductionMapService {
                     self.store
                         .update_print_preflight_hold(running.clone())
                         .await?;
-                    self.notify_print_preflight();
+                    self.notify_print_preflight(&running.order_id, &running.apparatus);
                     return Ok(running);
                 }
                 return Ok(existing);
@@ -137,7 +137,7 @@ impl ProductionMapService {
                     self.store
                         .update_print_preflight_hold(running.clone())
                         .await?;
-                    self.notify_print_preflight();
+                    self.notify_print_preflight(&running.order_id, &running.apparatus);
                     return Ok(running);
                 }
                 return Ok(existing.clone());
@@ -179,7 +179,7 @@ impl ProductionMapService {
             expires_at_unix: 0,
         };
         self.store.put_print_preflight_hold(hold.clone()).await?;
-        self.notify_print_preflight();
+        self.notify_print_preflight(&hold.order_id, &hold.apparatus);
         Ok(hold)
     }
 
@@ -239,7 +239,7 @@ impl ProductionMapService {
         hold.actor = actor;
         hold.updated_at_unix = now;
         self.store.update_print_preflight_hold(hold.clone()).await?;
-        self.notify_print_preflight();
+        self.notify_print_preflight(&hold.order_id, &hold.apparatus);
         Ok(hold)
     }
 

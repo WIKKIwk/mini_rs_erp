@@ -175,6 +175,19 @@ pub(super) fn join_patch(common: &Arc<str>, personal: &Map<String, Value>) -> Ar
 }
 
 impl StateFeedData {
+    pub(super) fn advance_unchanged(&mut self, revision: u64) {
+        let view = self.view.as_mut().expect("initialized view");
+        self.history.push(PreparedDelta::new(
+            &view.epoch,
+            &view.scope,
+            view.revision,
+            revision,
+            Arc::from("{}"),
+        ));
+        view.revision = revision;
+        self.used = Instant::now();
+    }
+
     pub(super) fn replace(&mut self, next: LiveView, patch: Option<Arc<str>>) {
         self.used = Instant::now();
         if let Some(previous) = &self.view {

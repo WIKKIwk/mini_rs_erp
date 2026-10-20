@@ -15,6 +15,8 @@ const MAX_STATE_DELTA_BYTES: usize = 64 * 1024;
 
 pub(super) struct LiveView {
     pub snapshot: Arc<ProductionMapLiveSnapshot>,
+    // Full authorized candidate routes before any UI queue window is applied.
+    dependency_snapshot: Arc<ProductionMapLiveSnapshot>,
     pub revision: u64,
     pub epoch: String,
     pub scope: String,
@@ -36,8 +38,31 @@ pub(super) async fn read_view(
     reuse_history: Option<(&LiveView, u64)>,
     window: &super::worker_snapshot::WorkerQueueWindow,
 ) -> Result<LiveView, AdminError> {
+    timeout(
+        Duration::from_secs(15),
+        read_view_consistent(
+            state,
+            principal,
+            include_requests,
+            worker_scope,
+            reuse_history,
+            window,
+        ),
+    )
+    .await
+    .map_err(|_| conflict("production_state_read_timeout"))?
+}
+
+async fn read_view_consistent(
+    state: &AppState,
+    principal: &Principal,
+    include_requests: bool,
+    worker_scope: bool,
+    reuse_history: Option<(&LiveView, u64)>,
+    window: &super::worker_snapshot::WorkerQueueWindow,
+) -> Result<LiveView, AdminError> {
     let service = &state.production_maps;
-    loop {
+    for _ in 0..3 {
         let started_revision = service.snapshot_revision();
         let actor = queue_action_actor(principal);
         // Reuse history only for an exact colour-only revision. Retry when a
@@ -65,7 +90,7 @@ pub(super) async fn read_view(
             )
             .map_err(production_map_error)?
         };
-        let (snapshot, revision, scope) = if worker_scope {
+        let (snapshot, revision, scope, dependency_snapshot) = if worker_scope {
             super::worker_snapshot::read_for_principal(
                 state,
                 principal,
@@ -88,7 +113,7 @@ pub(super) async fn read_view(
             )
             .await
             .map_err(super::super::training::training_workspace_error)?;
-            (snapshot, revision, String::new())
+            (snapshot.clone(), revision, String::new(), snapshot)
         };
         if revision != started_revision {
             continue;
@@ -99,6 +124,7 @@ pub(super) async fn read_view(
         }
         return Ok(LiveView {
             snapshot,
+            dependency_snapshot,
             revision,
             epoch: service.snapshot_epoch().to_string(),
             scope,
@@ -108,6 +134,7 @@ pub(super) async fn read_view(
             decisions,
         });
     }
+    Err(conflict("production_state_changed_during_read"))
 }
 
 // Values are compared before serialization. In particular, unchanged maps
@@ -266,13 +293,41 @@ async fn send_text(socket: &mut WebSocket, json: String) -> bool {
     .is_ok_and(|result| result.is_ok())
 }
 
+/// Print-preflight changes can also affect another order's permissions on
+/// the same machine. Keep the full route and alternative-machine dependency
+/// closure, not just the currently displayed apparatus or target order.
+fn preflight_outside_view(
+    snapshot: &ProductionMapLiveSnapshot,
+    order_id: &str,
+    apparatus: &str,
+) -> bool {
+    if order_id.is_empty() || !queue_state::is_canonical_apparatus_id(apparatus) {
+        return false;
+    }
+    let same = |id: &str| queue_state::apparatus_ids_match(id, apparatus);
+    !snapshot.maps.iter().any(|saved| {
+        saved.map.id == order_id
+            || saved.map.nodes.iter().any(|node| {
+                same(&node.apparatus_id) || same(&node.alternative_assigned_apparatus_id)
+            })
+    }) && !snapshot.sequences.keys().any(|id| same(id))
+        && !snapshot.visible_order_ids.keys().any(|id| same(id))
+        && !snapshot
+            .queue_action_controls
+            .iter()
+            .any(|(id, controls)| same(id) && !controls.is_empty())
+        && !snapshot.order_controls.contains_key(order_id)
+        && !snapshot.order_statuses.contains_key(order_id)
+        && !snapshot.stage_states.contains_key(order_id)
+}
+
 async fn refresh_feed(
     state: &AppState,
     feed: &super::live_hub::StateFeed,
     principal: &Principal,
     include_requests: bool,
     worker_scope: bool,
-    colour_revision: Option<u64>,
+    colour_event: Option<&ProductionMapLiveEvent>,
     window: &super::worker_snapshot::WorkerQueueWindow,
     force: bool,
 ) -> Result<(), AdminError> {
@@ -287,6 +342,40 @@ async fn refresh_feed(
             .is_some_and(|view| view.revision == state.production_maps.snapshot_revision())
     {
         return Ok(());
+    }
+    let colour_revision = colour_event.and_then(|event| match event {
+        ProductionMapLiveEvent::PrintPreflight { revision, .. } => Some(*revision),
+        _ => None,
+    });
+    if !force && worker_scope {
+        if let (
+            Some(before),
+            Some(ProductionMapLiveEvent::PrintPreflight {
+                revision,
+                order_id,
+                apparatus,
+            }),
+        ) = (data.view.as_ref(), colour_event)
+        {
+            if colour_history_unchanged(
+                before.revision,
+                state.production_maps.snapshot_revision(),
+                *revision,
+            ) && preflight_outside_view(&before.dependency_snapshot, order_id, apparatus)
+            {
+                let (assigned, scope) =
+                    super::worker_snapshot::scope_token(state, principal).await?;
+                if window.scope(&scope) == before.scope
+                    && !queue_state::apparatus_matches_assigned(apparatus, &assigned)
+                    && state.production_maps.snapshot_revision() == *revision
+                {
+                    // Exact evidence of a disjoint colour-only commit can be
+                    // retained without rebuilding the graph or reading history.
+                    data.advance_unchanged(*revision);
+                    return Ok(());
+                }
+            }
+        }
     }
     let next = read_view(
         state,
@@ -468,13 +557,13 @@ pub(super) fn production_map_state_live_socket(
                     _ => {}
                 },
                 received = events.recv() => {
-                    let colour_revision = match received {
-                        Ok(ProductionMapLiveEvent::PrintPreflight { revision, .. }) => Some(revision),
+                    let colour_event = match received {
+                        Ok(event @ ProductionMapLiveEvent::PrintPreflight { .. }) => Some(event),
                         Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => None,
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     };
                     if let Err(error) = refresh_feed(&state, &feed, &principal, include_requests,
-                        worker_scope, colour_revision, &window, false).await {
+                        worker_scope, colour_event.as_ref(), &window, false).await {
                         let _ = send(&mut socket, json!(error.1.0)).await; break;
                     }
                     let next = delivery(&feed, &client_epoch, client_revision, &client_scope, false).await;
@@ -517,6 +606,7 @@ mod tests {
 
     fn replay_view(revision: u64, scope: &str) -> LiveView {
         LiveView {
+            dependency_snapshot: Arc::new(ProductionMapLiveSnapshot::default()),
             snapshot: Arc::new(ProductionMapLiveSnapshot::default()),
             revision,
             epoch: "epoch".into(),
@@ -623,6 +713,71 @@ mod tests {
     }
 
     #[test]
+    fn preflight_relevance_preserves_shared_machine_and_cross_stage_dependencies() {
+        use crate::core::production_map::{
+            ProductionMapDefinition, ProductionMapSaved, compile_map,
+        };
+        let a = "apparatus:default:bosma_9";
+        let b = "apparatus:default:asset-008";
+        let c = "apparatus:default:asset-009";
+        let map: ProductionMapDefinition = serde_json::from_value(json!({
+            "id":"order-a", "product_code":"A", "title":"Order A",
+            "nodes":[{"id":"start","kind":"start","title":"Start"},
+                {"id":"work","kind":"task","title":"Work", "apparatus_id":a,
+                 "alternative_assigned_apparatus_id":b},
+                {"id":"end","kind":"end","title":"End"}],
+            "edges":[{"from":"start","to":"work"},{"from":"work","to":"end"}],
+        }))
+        .unwrap();
+        let program = compile_map(&map).unwrap();
+        let mut snapshot = ProductionMapLiveSnapshot::default();
+        snapshot.maps.push(ProductionMapSaved { map, program });
+        assert!(!preflight_outside_view(&snapshot, "order-a", c));
+        assert!(!preflight_outside_view(&snapshot, "another-order", a));
+        assert!(!preflight_outside_view(&snapshot, "another-order", b));
+        assert!(preflight_outside_view(&snapshot, "another-order", c));
+        assert!(!preflight_outside_view(
+            &snapshot,
+            "another-order",
+            "unknown"
+        ));
+        snapshot.sequences.insert(c.into(), Vec::new());
+        // An off-window job starting on our own machine may enter the window.
+        assert!(!preflight_outside_view(&snapshot, "off-window-order", c));
+    }
+
+    #[test]
+    fn unloaded_order_routes_remain_dependencies_of_a_bounded_queue_window() {
+        use crate::core::production_map::{ProductionMapDefinition, ProductionMapSaved, compile_map};
+        let assigned = "apparatus:default:bosma_9";
+        let upstream = "apparatus:default:asset-008";
+        let mut source = ProductionMapLiveSnapshot::default();
+        for index in 0..6 {
+            let map: ProductionMapDefinition = serde_json::from_value(json!({
+                "id":format!("order-{index}"), "product_code":"A", "title":"Order",
+                "nodes":[{"id":"start","kind":"start","title":"Start"},
+                    {"id":"work","kind":"task","title":"Work", "apparatus_id":assigned,
+                     "alternative_assigned_apparatus_id": if index == 5 {upstream} else {""}},
+                    {"id":"end","kind":"end","title":"End"}],
+                "edges":[{"from":"start","to":"work"},{"from":"work","to":"end"}],
+            })).unwrap();
+            let program = compile_map(&map).unwrap();
+            source.maps.push(ProductionMapSaved { map, program });
+        }
+        let ids = (0..6).map(|index| format!("order-{index}")).collect::<Vec<_>>();
+        source.sequences.insert(assigned.into(), ids.clone());
+        source.visible_order_ids.insert(assigned.into(), ids);
+        let window = super::super::worker_snapshot::WorkerQueueWindow::new(Some(5), "", true).unwrap();
+        let projected = window.project(&source, &[assigned.into()], &[], &BTreeMap::new());
+        assert_eq!(projected.maps.len(), 5);
+        assert!(preflight_outside_view(&projected, "order-5", upstream));
+        // refresh_feed uses the retained pre-window source, so neither this
+        // hidden target nor a competing job on its upstream machine is skipped.
+        assert!(!preflight_outside_view(&source, "order-5", upstream));
+        assert!(!preflight_outside_view(&source, "competing-order", upstream));
+    }
+
+    #[test]
     fn colour_state_patch_does_not_repeat_285_unchanged_maps() {
         use crate::core::production_map::{
             ProductionMapDefinition, ProductionMapSaved, compile_map,
@@ -658,6 +813,7 @@ mod tests {
         };
         let full_bytes = serde_json::to_vec(&snapshot).unwrap().len();
         let view = |snapshot, revision| LiveView {
+            dependency_snapshot: Arc::new(ProductionMapLiveSnapshot::default()),
             snapshot: Arc::new(snapshot),
             revision,
             epoch: "epoch".into(),

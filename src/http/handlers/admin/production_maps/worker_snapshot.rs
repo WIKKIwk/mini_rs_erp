@@ -171,7 +171,15 @@ pub(super) async fn read_for_principal(
     principal: &Principal,
     history_order_ids: impl IntoIterator<Item = String>,
     window: &WorkerQueueWindow,
-) -> Result<(Arc<ProductionMapLiveSnapshot>, u64, String), AdminError> {
+) -> Result<
+    (
+        Arc<ProductionMapLiveSnapshot>,
+        u64,
+        String,
+        Arc<ProductionMapLiveSnapshot>,
+    ),
+    AdminError,
+> {
     let history = history_order_ids.into_iter().collect::<Vec<_>>();
     loop {
         let (assigned, scope) = scope_token(state, principal).await?;
@@ -197,6 +205,7 @@ pub(super) async fn read_for_principal(
             continue;
         }
         let scope = window.scope(&scope);
+        let dependency_snapshot = snapshot.clone();
         let snapshot = if window.limit.is_some() {
             let customers = if window.search_active() {
                 production_map_order_customers(state, &snapshot.maps).await
@@ -239,7 +248,7 @@ pub(super) async fn read_for_principal(
                 project(&snapshot, &assigned, history.iter().cloned())
             })
         };
-        return Ok((snapshot, revision, scope));
+        return Ok((snapshot, revision, scope, dependency_snapshot));
     }
 }
 
