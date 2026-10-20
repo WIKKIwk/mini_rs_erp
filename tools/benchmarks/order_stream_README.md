@@ -97,9 +97,24 @@ tracing; collect SQL counts in a separate run.
 For an independent repeat in reverse version order, restore a fresh candidate
 clone, then a fresh baseline clone, and run `--protocols modern --clients 1,32
 --cycles 20 --status-repeat --output-suffix reverse-repeat` on each. This selects
-only the one-client/shared-principal status phases and permission checks while
-requiring the default 30-second reconciler. Keep each run's distribution visible;
+only the one-socket/one-principal and 32-socket/three-principal status phases,
+plus permission checks, while requiring the default 30-second reconciler.
+Keep each run's distribution visible;
 do not substitute a best run or pool unlike configurations.
+
+After the primary pair, reverse pair, SQL diagnostics, two-process check and
+cleanup are complete, render the comparison with:
+
+```sh
+"$BENCH_PYTHON" tools/benchmarks/order_stream_cache_report.py \
+  --run-dir "$BENCH_DIR" --output-dir tools/benchmarks --date 2026-10-20
+```
+
+The renderer requires explicit `cleanup.json` and `verification.json` evidence
+and validates source binaries, matching principal fingerprints, scenario lists,
+mutation correlation and worker payload byte counts. See
+[the cache comparison](order_stream_cache_2026-10-20.md) for the measured results,
+including the intermediate null-control regression and mixed-worker p95 limits.
 
 Run SQL-count diagnostics separately: restore/start with `--query-log`, then run
 the benchmark with `--query-counts-only --cycles 1 --output-suffix sql-counts`.

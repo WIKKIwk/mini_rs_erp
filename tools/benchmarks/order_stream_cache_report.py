@@ -56,6 +56,10 @@ def main():
     intermediate_path = root / 'intermediate-460f1d54-after-results.json'
     intermediate = load(root, intermediate_path.name) if intermediate_path.exists() else None
     before, after = primary['before'], primary['after']
+    if intermediate:
+        assert intermediate['server']['source_revision'].startswith('460f1d54')
+        assert intermediate['dataset_dump_sha256'] == before['dataset_dump_sha256']
+        assert intermediate['selection_fingerprints'] == before['selection_fingerprints']
     assert cleanup['benchmark_servers_stopped']
     for group, interval in ((primary, 30), (repeat, 30), (sql, 0)):
         for rows in ('phases', 'fanout', 'admin_pages'):
@@ -116,6 +120,8 @@ def main():
             'control deadline was too short for joining an in-flight shared '
             'snapshot. The final candidate allows a bounded 1-second shared '
             'cache wait while preserving authorization and revision checks. '
+            'This cooperative async timeout cannot preempt synchronous CPU work '
+            'and is not a hard ceiling for total POST latency. '
             'Final and reverse-repeat null counts and POST latency are shown '
             'below; the deadline tradeoff is not hidden.' % (
                 mixed(intermediate)['control_null'], mixed(before)['control_null']), '']
@@ -138,6 +144,29 @@ def main():
             lines.append('| %s / %s / %s | %.2f | %.2f | %.2f | %.2f | %+.1f%% | %.2f | %.2f |' % (
                 label, b['clients'], b['distinct_principals'], x['p50'], y['p50'],
                 x['p95'], y['p95'], pct(x['p95'], y['p95']), x['max'], y['max']))
+    mixed_p95 = []
+    for group in (primary, repeat):
+        values = [
+            next(row for row in group[mode]['fanout']
+                 if row['name'] == 'shared_apparatus_workers_32')['all_clients_latency_ms']['p95']
+            for mode in ('before', 'after')
+        ]
+        mixed_p95.append(pct(*values))
+    lines += ['', '**Mixed-worker p95 is not consistently improved:** '
+        'the primary run changes by %+.1f%%, while the reverse repeat changes '
+        'by %+.1f%%. CPU and control-return improvements repeat, but these '
+        'measurements do not show that the remaining latency tail is solved.' % tuple(mixed_p95)]
+    tail_counts = [
+        sum(record['all_clients_ms'] > 700 for record in next(
+            row for row in repeat[mode]['fanout']
+            if row['name'] == 'shared_apparatus_workers_32')['records'])
+        for mode in ('before', 'after')
+    ]
+    lines += ['', 'The reverse mixed-worker run has %s → %s events above '
+        '700 ms. Its aggregate p95 uses the third-largest sample. A late '
+        'principal group occurs in both versions; these user-space receive '
+        'timestamps include client scheduling and do not prove the cause '
+        'of the remaining delay.' % tuple(tail_counts)]
     lines += ['', '## Server cost and acknowledgement controls', '',
         'CPU is process CPU over the complete phase; memory is sampled RSS peak. '
         'Control latency below is the complete HTTP response arrival time, '
@@ -166,6 +195,16 @@ def main():
         'Each status condition makes 40 POSTs; the non-null control count is '
         '40 minus the null count above.' % (
             peaks['before'], peaks['after'], pct(peaks['before'], peaks['after']))]
+    mixed_posts = [
+        next(row for row in primary[mode]['fanout']
+             if row['name'] == 'shared_apparatus_workers_32')['post_latency_ms']['p95']
+        for mode in ('before', 'after')
+    ]
+    lines += ['', 'The primary mixed-worker POST p95 rises by %.2f ms (%+.1f%%) '
+        'while null controls fall from 2/40 to 0/40. Waiting for the shared '
+        'control can keep the initiating action pending longer; avoided '
+        'Flutter recovery GETs are not included in these measured costs.' % (
+            mixed_posts[1] - mixed_posts[0], pct(*mixed_posts))]
     lines += ['', '## Separate SQL-count diagnostic', '',
         'One hold/release cycle per status condition. Query logging and period0 '
         'are used only here. Counts include SQLx query events during each phase; '
