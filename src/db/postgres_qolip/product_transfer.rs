@@ -158,7 +158,7 @@ pub(super) async fn reject_product_in_use(tx: &mut Transaction<'_, Postgres>, it
     Ok(())
 }
 
-async fn write_override(tx: &mut Transaction<'_, Postgres>, item: &str, code: &str, mode: &str, principal: &Principal) -> Result<(), QolipError> {
+pub(super) async fn write_override(tx: &mut Transaction<'_, Postgres>, item: &str, code: &str, mode: &str, principal: &Principal) -> Result<(), QolipError> {
     sqlx::query("INSERT INTO mini_qolip_product_overrides
         (item_code, qolip_code, mode, created_by_role, created_by_ref, created_by_name)
         VALUES ($1, $2, $3, $4, $5, $6)
@@ -181,7 +181,7 @@ fn ensure_owner(spec: &QolipProductSpec, allowed: &[String]) -> Result<(), Qolip
     Ok(())
 }
 
-async fn load_spec(
+pub(super) async fn load_spec(
     tx: &mut Transaction<'_, Postgres>,
     code: &str,
 ) -> Result<QolipProductSpec, QolipError> {
@@ -215,7 +215,7 @@ async fn load_spec(
     Ok(row_to_product_spec(row))
 }
 
-async fn reject_in_use(tx: &mut Transaction<'_, Postgres>, code: &str) -> Result<(), QolipError> {
+pub(super) async fn reject_in_use(tx: &mut Transaction<'_, Postgres>, code: &str) -> Result<(), QolipError> {
     let blocked = sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS (
             SELECT 1 FROM mini_qolip_checkouts WHERE lower(qolip_code) = $1 AND status = 'open'

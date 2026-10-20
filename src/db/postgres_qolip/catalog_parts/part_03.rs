@@ -1,4 +1,4 @@
-async fn save_product_spec_tx(
+pub(super) async fn save_product_spec_tx(
     tx: &mut Transaction<'_, Postgres>,
     mut spec: QolipProductSpec,
 ) -> Result<QolipProductSpec, QolipError> {
@@ -10,11 +10,11 @@ async fn save_product_spec_tx(
              WHERE lower(qolip_code) = $1
              UNION ALL
              SELECT 1 FROM mini_qolip_sets sets WHERE lower(sets.set_id) = $1 OR (
-                 lower(sets.display_code) = $1 AND EXISTS (
-                     SELECT 1 FROM mini_qolip_product_specs member WHERE member.qolip_set_id = sets.set_id))
+                 lower(sets.display_code) = $1 AND sets.set_id <> $2)
          )",
     )
     .bind(&normalized_qolip_code)
+    .bind(spec.set_id())
     .fetch_one(&mut **tx)
     .await
     .map_err(|_| QolipError::StoreFailed)?;
@@ -88,6 +88,7 @@ pub(super) async fn rename_product_spec(
         return Err(QolipError::MissingQolipCode);
     }
     let mut tx = pool.begin().await.map_err(|_| QolipError::StoreFailed)?;
+    super::product_transfer::lock_composition(&mut tx).await?;
     let mut codes = vec![previous.clone(), next.clone()];
     codes.sort();
     codes.dedup();
@@ -216,8 +217,16 @@ pub(super) async fn rename_product_spec(
     Ok(row_to_product_spec(row))
 }
 
-pub(super) async fn delete_product_specs(
-    pool: &PgPool,
+pub(super) async fn delete_product_specs(pool: &PgPool, qolip_codes: &[String]) -> Result<usize, QolipError> {
+    let mut tx = pool.begin().await.map_err(|_| QolipError::StoreFailed)?;
+    super::product_transfer::lock_composition(&mut tx).await?;
+    let deleted = delete_product_specs_tx(&mut tx, qolip_codes).await?;
+    tx.commit().await.map_err(|_| QolipError::StoreFailed)?;
+    Ok(deleted)
+}
+
+pub(super) async fn delete_product_specs_tx(
+    tx: &mut Transaction<'_, Postgres>,
     qolip_codes: &[String],
 ) -> Result<usize, QolipError> {
     let mut normalized = qolip_codes
@@ -231,10 +240,9 @@ pub(super) async fn delete_product_specs(
         return Err(QolipError::MissingQolipCode);
     }
 
-    let mut tx = pool.begin().await.map_err(|_| QolipError::StoreFailed)?;
     for code in &normalized {
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
-            .bind(format!("qolip:{code}")).execute(&mut *tx).await
+            .bind(format!("qolip:{code}")).execute(&mut **tx).await
             .map_err(|_| QolipError::StoreFailed)?;
     }
     sqlx::query(
@@ -246,7 +254,7 @@ pub(super) async fn delete_product_specs(
          ) AS ordered_lock_keys",
     )
     .bind(&normalized)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await
     .map_err(|_| QolipError::StoreFailed)?;
 
@@ -258,7 +266,7 @@ pub(super) async fn delete_product_specs(
          FOR UPDATE",
     )
     .bind(&normalized)
-    .fetch_all(&mut *tx)
+    .fetch_all(&mut **tx)
     .await
     .map_err(|_| QolipError::StoreFailed)?;
     let _locked_locations = sqlx::query_scalar::<_, String>(
@@ -269,7 +277,7 @@ pub(super) async fn delete_product_specs(
          FOR UPDATE",
     )
     .bind(&normalized)
-    .fetch_all(&mut *tx)
+    .fetch_all(&mut **tx)
     .await
     .map_err(|_| QolipError::StoreFailed)?;
 
@@ -301,7 +309,7 @@ pub(super) async fn delete_product_specs(
          )",
     )
     .bind(&normalized)
-    .fetch_one(&mut *tx)
+    .fetch_one(&mut **tx)
     .await
     .map_err(|_| QolipError::StoreFailed)?;
     if in_use {
@@ -321,20 +329,19 @@ pub(super) async fn delete_product_specs(
          ) existing",
     )
     .bind(&normalized)
-    .fetch_one(&mut *tx)
+    .fetch_one(&mut **tx)
     .await
     .map_err(|_| QolipError::StoreFailed)? as usize;
 
     sqlx::query("DELETE FROM mini_qolip_locations WHERE lower(qolip_code) = ANY($1)")
         .bind(&normalized)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await
         .map_err(|_| QolipError::StoreFailed)?;
     sqlx::query("DELETE FROM mini_qolip_product_specs WHERE lower(qolip_code) = ANY($1)")
         .bind(&normalized)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await
         .map_err(|_| QolipError::StoreFailed)?;
-    tx.commit().await.map_err(|_| QolipError::StoreFailed)?;
     Ok(deleted)
 }

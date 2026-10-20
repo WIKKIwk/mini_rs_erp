@@ -1,5 +1,14 @@
 #[async_trait]
 impl QolipStorePort for MemoryQolipStore {
+    async fn managed_sets(&self, allowed: Option<&[String]>) -> Result<Vec<super::QolipManagedSet>, QolipError> {
+        self.memory_managed_sets(allowed).await
+    }
+    async fn edit_set(&self, input: &super::QolipSetEdit, principal: &Principal, allowed: Option<&[String]>) -> Result<super::QolipManagedSet, QolipError> {
+        self.memory_edit_set(input, principal, allowed).await
+    }
+    async fn edit_product_molds(&self, input: &super::QolipProductMoldEdits, principal: &Principal, allowed: Option<&[String]>) -> Result<(), QolipError> {
+        self.memory_edit_products(input, principal, allowed).await
+    }
     async fn product_by_code(&self, item_code: &str) -> Result<Option<QolipProduct>, QolipError> {
         let item_code = item_code.trim();
         if item_code.is_empty() {

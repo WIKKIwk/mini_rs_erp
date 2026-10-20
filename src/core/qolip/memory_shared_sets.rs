@@ -3,6 +3,7 @@ fn memory_set_targets(
     set_id: &str,
     native: &str,
 ) -> Vec<String> {
+    if set_id.starts_with("qolip-local:") { return Vec::new(); }
     let targets = links
         .iter()
         .filter(|(id, _)| id == set_id)
@@ -30,14 +31,17 @@ fn memory_shared_snapshot(
     links: &BTreeSet<(String, String)>,
     overrides: &BTreeMap<(String, String), bool>,
     identifier: &str,
+    registry: &BTreeMap<String, super::QolipManagedSet>,
 ) -> Result<Option<super::QolipSetSnapshot>, QolipError> {
     let mut groups = BTreeMap::<String, Vec<QolipProductSpec>>::new();
-    for spec in specs.values() {
+    for id in registry.keys() { groups.insert(id.clone(), Vec::new()); }
+    for spec in specs.values().filter(|spec| !spec.set_id().starts_with("qolip-local:")) {
         groups.entry(spec.set_id()).or_default().push(spec.clone());
     }
     let matches = |id: &str, members: &[QolipProductSpec], identifiers: &[String]| {
         identifiers.iter().any(|value| {
             id == value
+                || registry.get(id).is_some_and(|set| set.snapshot.display_code.eq_ignore_ascii_case(value))
                 || members
                     .iter()
                     .any(|spec| spec.qolip_code.eq_ignore_ascii_case(value))
@@ -60,12 +64,14 @@ fn memory_shared_snapshot(
     let Some((id, members)) = selected.first() else {
         return Ok(None);
     };
-    let display = members
+    let display = registry.get(*id).map(|set| set.snapshot.display_code.clone()).unwrap_or_else(|| members
         .iter()
         .max_by_key(|spec| (spec.qolip_code.len(), spec.qolip_code.clone()))
         .map(|spec| spec.qolip_code.clone())
-        .unwrap_or_default();
-    let mut targets = memory_set_targets(links, id, &members[0].item_code);
+        .unwrap_or_default());
+    let native = members.first().map(|spec| spec.item_code.as_str())
+        .or_else(|| registry.get(*id).map(|set| set.item_code.as_str())).unwrap_or("");
+    let mut targets = memory_set_targets(links, id, native);
     targets.extend(overrides.iter().filter(|((_, code), include)| **include && members.iter().any(|spec| spec.qolip_code.eq_ignore_ascii_case(code)))
         .map(|((item, _), _)| item.clone()));
     let products = products
@@ -116,7 +122,7 @@ impl MemoryQolipStore {
         let products = self.products.read().await.clone();
         let links = self.shared_links.read().await.clone();
         let overrides = self.product_overrides.read().await.clone();
-        memory_shared_snapshot(&specs, &products, &links, &overrides, identifier)
+        memory_shared_snapshot(&specs, &products, &links, &overrides, identifier, &*self.managed_registry.read().await)
     }
 
     async fn memory_reuse_set(
@@ -136,9 +142,10 @@ impl MemoryQolipStore {
         }
         let mut links = self.shared_links.write().await;
         let mut overrides = self.product_overrides.write().await;
-        let current = memory_shared_snapshot(&specs, &products, &links, &overrides, set_id)?
+        let registry = self.managed_registry.read().await;
+        let current = memory_shared_snapshot(&specs, &products, &links, &overrides, set_id, &registry)?
             .ok_or(QolipError::SetChanged)?;
-        if current.fingerprint != fingerprint {
+        if current.members.is_empty() || current.fingerprint != fingerprint {
             return Err(QolipError::SetChanged);
         }
         if current.members.iter().any(|spec| {
@@ -158,6 +165,6 @@ impl MemoryQolipStore {
         for member in &current.members {
             overrides.remove(&(item_code.trim().to_lowercase(), member.qolip_code.trim().to_lowercase()));
         }
-        memory_shared_snapshot(&specs, &products, &links, &overrides, set_id)?.ok_or(QolipError::SetChanged)
+        memory_shared_snapshot(&specs, &products, &links, &overrides, set_id, &registry)?.ok_or(QolipError::SetChanged)
     }
 }

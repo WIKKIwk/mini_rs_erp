@@ -47,6 +47,7 @@ include!("service_impl_parts/part_02.rs");
 
 include!("service_matches.rs");
 include!("service_shared_sets.rs");
+include!("service_management.rs");
 
 impl QolipService {
     pub async fn transfer_product_specs(

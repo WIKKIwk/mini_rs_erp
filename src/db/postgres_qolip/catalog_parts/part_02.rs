@@ -493,6 +493,7 @@ pub(super) async fn save_product_spec(
     spec: QolipProductSpec,
 ) -> Result<QolipProductSpec, QolipError> {
     let mut tx = pool.begin().await.map_err(|_| QolipError::StoreFailed)?;
+    super::product_transfer::lock_composition(&mut tx).await?;
     let saved = save_product_spec_tx(&mut tx, spec).await?;
     tx.commit().await.map_err(|_| QolipError::StoreFailed)?;
     Ok(saved)
@@ -506,9 +507,15 @@ pub(super) async fn save_product_specs(
         return Err(QolipError::MissingQolipCode);
     }
     let mut tx = pool.begin().await.map_err(|_| QolipError::StoreFailed)?;
+    super::product_transfer::lock_composition(&mut tx).await?;
     let mut saved = Vec::with_capacity(specs.len());
     for spec in specs {
         saved.push(save_product_spec_tx(&mut tx, spec).await?);
+    }
+    if let Some(last) = saved.last() {
+        sqlx::query("UPDATE mini_qolip_sets SET display_code = $2 WHERE set_id = $1")
+            .bind(last.set_id()).bind(&last.qolip_code).execute(&mut *tx).await
+            .map_err(|_| QolipError::StoreFailed)?;
     }
     tx.commit().await.map_err(|_| QolipError::StoreFailed)?;
     Ok(saved)

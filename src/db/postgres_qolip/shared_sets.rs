@@ -6,7 +6,7 @@ use crate::core::qolip::{
     QolipError, QolipProductSpec, QolipSetProduct, QolipSetSnapshot, role_code,
 };
 
-const COLUMNS: &str = "spec.item_code, spec.item_name, spec.item_group, spec.qolip_code, spec.size,
+pub(super) const COLUMNS: &str = "spec.item_code, spec.item_name, spec.item_group, spec.qolip_code, spec.size,
     COALESCE(spec.payload_json->>'warehouse', '') AS warehouse,
     COALESCE(spec.payload_json->>'color', '') AS color,
     COALESCE(spec.qolip_set_id, '') AS qolip_set_id,
@@ -21,7 +21,8 @@ async fn snapshot_identifiers(
          WHERE (sets.set_id = ANY($1) OR lower(sets.display_code) = ANY($2)
            OR EXISTS (SELECT 1 FROM mini_qolip_product_specs spec
                       WHERE spec.qolip_set_id = sets.set_id AND lower(spec.qolip_code) = ANY($2)))
-           AND EXISTS (SELECT 1 FROM mini_qolip_product_specs spec WHERE spec.qolip_set_id = sets.set_id)
+           AND NOT sets.is_product_local
+           AND EXISTS (SELECT 1 FROM mini_qolip_product_specs member WHERE member.qolip_set_id = sets.set_id)
          ORDER BY sets.set_id LIMIT 2",
     ).bind(identifiers).bind(identifiers.iter().map(|value| value.trim().to_lowercase()).collect::<Vec<_>>()).fetch_all(&mut *conn).await.map_err(|_| QolipError::StoreFailed)?;
     if sets.len() > 1 {

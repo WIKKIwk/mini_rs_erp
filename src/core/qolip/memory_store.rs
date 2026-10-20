@@ -19,6 +19,7 @@ pub struct MemoryQolipStore {
     blocks: RwLock<Vec<QolipBlock>>,
     products: RwLock<Vec<QolipProduct>>,
     product_specs: RwLock<BTreeMap<String, QolipProductSpec>>,
+    managed_registry: RwLock<BTreeMap<String, super::QolipManagedSet>>,
     shared_links: RwLock<BTreeSet<(String, String)>>,
     product_overrides: RwLock<BTreeMap<(String, String), bool>>,
     locations: RwLock<Vec<QolipLocation>>,
@@ -99,6 +100,7 @@ include!("memory_store_impl_parts/part_03.rs");
 include!("memory_store_trait_impl.rs");
 include!("memory_product_transfer.rs");
 include!("memory_shared_sets.rs");
+include!("memory_management.rs");
 
 fn apply_memory_location_move(
     locations: &mut Vec<QolipLocation>,

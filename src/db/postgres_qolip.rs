@@ -15,6 +15,7 @@ mod order_products;
 mod product_by_code;
 mod product_transfer;
 mod shared_sets;
+mod management;
 mod catalog_locations;
 mod rows;
 
@@ -48,6 +49,15 @@ impl PostgresQolipStore {
 
 #[async_trait]
 impl QolipStorePort for PostgresQolipStore {
+    async fn managed_sets(&self, allowed: Option<&[String]>) -> Result<Vec<crate::core::qolip::QolipManagedSet>, QolipError> {
+        management::list(&self.pool, allowed).await
+    }
+    async fn edit_set(&self, input: &crate::core::qolip::QolipSetEdit, principal: &Principal, allowed: Option<&[String]>) -> Result<crate::core::qolip::QolipManagedSet, QolipError> {
+        management::edit_set(&self.pool, input, principal, allowed).await
+    }
+    async fn edit_product_molds(&self, input: &crate::core::qolip::QolipProductMoldEdits, principal: &Principal, allowed: Option<&[String]>) -> Result<(), QolipError> {
+        management::edit_products(&self.pool, input, principal, allowed).await
+    }
     async fn product_by_code(&self, item_code: &str) -> Result<Option<QolipProduct>, QolipError> {
         product_by_code::load(&self.pool, item_code).await
     }
