@@ -8,6 +8,7 @@ whose names begin with bench_order_stream_. Secrets stay in process memory.
 import argparse
 import base64
 import hashlib
+import hmac
 import importlib.util
 import json
 import os
@@ -101,7 +102,7 @@ class Fixture:
         self.command("pg_dump", ["-Fc", "--file", str(dump)])
         dump.chmod(0o600)
         aux = self.run_dir / "auxiliary"
-        aux.mkdir(mode=0o700)
+        aux.mkdir(mode=0o700, exist_ok=True)
         for name in ("mobile_roles.json", "mobile_admin_store.json"):
             source = ROOT / "data" / name
             if source.exists():
@@ -114,7 +115,10 @@ class Fixture:
         ):
             source = ROOT / "data" / name
             if source.exists():
-                with sqlite3.connect("file:" + str(source) + "?mode=ro", uri=True) as db:
+                uri = "file:" + str(source) + "?mode=ro"
+                if not Path(str(source) + "-wal").exists():
+                    uri += "&immutable=1"
+                with sqlite3.connect(uri, uri=True) as db:
                     with sqlite3.connect(aux / name) as target:
                         db.backup(target)
                 (aux / name).chmod(0o600)
@@ -163,6 +167,72 @@ class Fixture:
             )
         return env
 
+    def seed_clone_credentials(self, database):
+        """Give cloned accounts private benchmark credentials, keeping scopes."""
+        from argon2 import PasswordHasher
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        if not database.startswith(DB_PREFIX):
+            raise RuntimeError("Credential fixtures are restricted to test clones")
+        seed_path = self.run_dir / "credential-seed.bin"
+        if not seed_path.exists():
+            with open(seed_path, "xb") as target:
+                target.write(os.urandom(32))
+            seed_path.chmod(0o600)
+        seed = seed_path.read_bytes()
+        principals = json.loads(self.sql("""
+            SELECT coalesce(json_agg(x),'[]') FROM (
+              SELECT a.principal_ref,
+                CASE WHEN w.id IS NOT NULL THEN '40'
+                  WHEN s.role='qolipchi' THEN '50'
+                  WHEN s.role='boyoqchi' THEN '80'
+                  WHEN s.role='tayyorlov_masteri' THEN '90'
+                  WHEN s.role='homashyo_rezkachi' THEN '91'
+                  WHEN a.principal_ref='werka' THEN '20'
+                  WHEN a.principal_ref='material_taminotchi' THEN '70'
+                  ELSE '99' END AS prefix
+              FROM mini_auth_accounts a
+              LEFT JOIN mini_workers w ON w.id=a.principal_ref
+              LEFT JOIN mini_system_users s ON s.id=a.principal_ref
+              WHERE a.credential_hash IS NOT NULL AND
+                (w.id IS NOT NULL OR s.id IS NOT NULL OR
+                 a.principal_ref IN ('admin','werka','material_taminotchi'))
+            ) x;
+        """, database))
+        key = AESGCM(base64.b64decode(
+            self.keychain.read(self.service, "access-code-encryption-key")
+        ))
+        hasher = PasswordHasher(time_cost=2, memory_cost=19456, parallelism=1)
+        quote = lambda value: "'" + value.replace("'", "''") + "'"
+        statements = ["BEGIN"]
+        for record in principals:
+            principal = record["principal_ref"]
+            code = record["prefix"] + str(int.from_bytes(
+                hmac.new(seed, principal.encode(), hashlib.sha256).digest()[:6], "big"
+            )).zfill(15)
+            credential_hash = hasher.hash(code)
+            nonce = os.urandom(12)
+            binding = (
+                "mini-rs-erp/access-code/v1\0" + principal + "\0" + credential_hash
+            ).encode()
+            encrypted = "v1:" + base64.b64encode(
+                nonce + key.encrypt(nonce, code.encode(), binding)
+            ).decode()
+            statements.append(
+                "UPDATE mini_auth_accounts SET credential_hash=" + quote(credential_hash)
+                + " WHERE principal_ref=" + quote(principal)
+            )
+            statements.append(
+                "INSERT INTO mini_auth_code_vault "
+                "(principal_ref,credential_hash,encrypted_code) VALUES ("
+                + ",".join(map(quote, (principal, credential_hash, encrypted)))
+                + ") ON CONFLICT(principal_ref) DO UPDATE SET "
+                "credential_hash=EXCLUDED.credential_hash,"
+                "encrypted_code=EXCLUDED.encrypted_code"
+            )
+        statements.append("COMMIT")
+        self.sql(";\n".join(statements) + ";", database)
+        return len(principals)
+
     def restore_and_start(self, mode, binary, source_revision, migration_binary=None,
                           query_log=False):
         if mode not in ("before", "after"):
@@ -182,6 +252,7 @@ class Fixture:
             "--no-owner", "--no-privileges", "--role", role,
             "--dbname", database, str(self.run_dir / "source.dump"),
         ])
+        credential_count = self.seed_clone_credentials(database)
         directory = self.run_dir / mode
         directory.mkdir(mode=0o700, exist_ok=True)
         data = directory / "data"
@@ -216,6 +287,7 @@ class Fixture:
             "binary_sha256": sha256(executable),
             "binary_bytes": executable.stat().st_size,
             "query_log": query_log, "ready": False,
+            "test_credentials_reseeded": credential_count,
         }
         self.metadata["servers"][mode] = server
         self.save()
