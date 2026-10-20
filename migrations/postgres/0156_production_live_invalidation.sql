@@ -9,6 +9,15 @@ AS $$
 DECLARE
     event_payload text;
 BEGIN
+    -- Reconciliation reads perform guarded UPSERT/DELETE statements. Statement
+    -- triggers fire even when those statements affect zero rows, creating a
+    -- read -> invalidation -> read loop. Row triggers below ignore zero-row
+    -- writes; this guard also ignores a matched UPDATE with unchanged values.
+    IF TG_OP = 'UPDATE' THEN
+        IF OLD IS NOT DISTINCT FROM NEW THEN
+            RETURN NULL;
+        END IF;
+    END IF;
     IF TG_TABLE_NAME IN (
         'mini_apparatus',
         'mini_apparatus_queue_policies',
@@ -42,7 +51,7 @@ DECLARE
     target record;
 BEGIN
     FOR target IN
-        SELECT n.nspname, c.relname
+        SELECT n.nspname, c.relname, c.relispartition AS is_partition
         FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = current_schema()
           AND c.relkind IN ('r', 'p')
@@ -53,8 +62,15 @@ BEGIN
           AND c.relname NOT LIKE '%chat_outbox'
           AND c.relname NOT LIKE '%change_outbox'
     LOOP
+        -- Parent row triggers are inherited by partitions automatically.
+        IF NOT target.is_partition THEN
+            EXECUTE format(
+                'CREATE TRIGGER mini_production_live_changed AFTER INSERT OR UPDATE OR DELETE ON %I.%I FOR EACH ROW EXECUTE FUNCTION mini_notify_production_live()',
+                target.nspname, target.relname
+            );
+        END IF;
         EXECUTE format(
-            'CREATE TRIGGER mini_production_live_changed AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON %I.%I FOR EACH STATEMENT EXECUTE FUNCTION mini_notify_production_live()',
+            'CREATE TRIGGER mini_production_live_truncated AFTER TRUNCATE ON %I.%I FOR EACH STATEMENT EXECUTE FUNCTION mini_notify_production_live()',
             target.nspname, target.relname
         );
     END LOOP;
