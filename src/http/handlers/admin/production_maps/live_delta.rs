@@ -341,7 +341,23 @@ async fn refresh_feed(
             .as_ref()
             .is_some_and(|view| view.revision == state.production_maps.snapshot_revision())
     {
-        return Ok(());
+        // A long-lived socket keeps its original registry key when an
+        // assignment changes. Its feed may now contain another scope at this
+        // same production revision. Recheck the live authorization before
+        // sharing that cached view with a reconnect under the old key.
+        let scope_matches = if worker_scope {
+            let (_, assignment_scope) =
+                super::worker_snapshot::scope_token(state, principal).await?;
+            data.view.as_ref().is_some_and(|view| {
+                view.scope == window.scope(&assignment_scope)
+                    && view.revision == state.production_maps.snapshot_revision()
+            })
+        } else {
+            true
+        };
+        if scope_matches {
+            return Ok(());
+        }
     }
     let colour_revision = colour_event.and_then(|event| match event {
         ProductionMapLiveEvent::PrintPreflight { revision, .. } => Some(*revision),
@@ -616,6 +632,103 @@ mod tests {
             requests: Vec::new(),
             decisions: Vec::new(),
         }
+    }
+
+    #[tokio::test]
+    async fn same_revision_assignment_roundtrip_cannot_reuse_or_replay_other_scope() {
+        use crate::config::AppConfig;
+        use crate::core::admin::service::AdminService;
+        use crate::core::authz::RoleAssignmentUpsert;
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = AppState::new(AppConfig {
+            bind_addr: "127.0.0.1:0".parse().unwrap(),
+            default_target_warehouse: String::new(),
+            http_timeout: Duration::from_secs(2),
+            session_store_path: dir.path().join("sessions.json"),
+            profile_store_path: dir.path().join("profiles.json"),
+            push_token_store_path: dir.path().join("push.json"),
+            session_ttl_seconds: Some(3600),
+            supplier_prefix: "10".into(),
+            werka_prefix: "20".into(),
+            werka_code: String::new(),
+            werka_name: String::new(),
+            werka_phone: String::new(),
+            material_taminotchi_code: String::new(),
+            material_taminotchi_name: String::new(),
+            material_taminotchi_phone: String::new(),
+            admin_phone: String::new(),
+            admin_name: String::new(),
+            admin_code: String::new(),
+        });
+        state.admin = AdminService::new(&state.config);
+        state.worker_show_all_apparatus_tabs = false;
+        let principal = Principal {
+            role: PrincipalRole::Aparatchi,
+            ref_: "scope-roundtrip".into(),
+            display_name: "Worker".into(),
+            legal_name: String::new(),
+            phone: String::new(),
+            avatar_url: String::new(),
+        };
+        let assign = |apparatus: &str| RoleAssignmentUpsert {
+            principal_role: principal.role,
+            principal_ref: principal.ref_.clone(),
+            role_id: "aparatchi".into(),
+            assigned_apparatus: vec![apparatus.into()],
+            assigned_item_groups: Vec::new(),
+        };
+        let apparatus_a = "apparatus:default:asset-010";
+        let apparatus_b = "apparatus:default:asset-007";
+        let window = super::super::worker_snapshot::WorkerQueueWindow::new(
+            Some(5), "", true,
+        ).unwrap();
+        let feed = super::super::live_hub::StateFeed::default();
+        state.production_maps.notify_live();
+        let revision = state.production_maps.snapshot_revision();
+        let epoch = state.production_maps.snapshot_epoch().to_string();
+        state.admin.upsert_role_assignment(assign(apparatus_a)).await.unwrap();
+        refresh_feed(&state, &feed, &principal, false, true, None, &window, false)
+            .await.unwrap();
+        let scope_a = feed.data.lock().await.view.as_ref().unwrap().scope.clone();
+
+        // The existing A-key socket follows reassignment to B without changing
+        // its registry entry, exactly as its heartbeat does in production.
+        state.admin.upsert_role_assignment(assign(apparatus_b)).await.unwrap();
+        refresh_feed(&state, &feed, &principal, false, true, None, &window, true)
+            .await.unwrap();
+        let scope_b = {
+            let mut data = feed.data.lock().await;
+            let view = data.view.as_mut().unwrap();
+            view.customers.insert("private-b-order".into(), "B".into());
+            let scope = view.scope.clone();
+            data.history.push(super::super::live_feed::PreparedDelta::new(
+                &epoch, &scope, revision - 1, revision,
+                Arc::from(r#"{"order_customers":{"upsert":{"private-b-order":"B"},"remove":[]}}"#),
+            ));
+            scope
+        };
+        assert_ne!(scope_a, scope_b);
+        assert!(!delivery(&feed, &epoch, Some(revision - 1), &scope_b, true).await.resync);
+
+        // A reconnect can now reuse the original A-key feed while the
+        // production revision has not changed. Both current data and B replay
+        // history must be discarded before certifying any client cursor.
+        state.admin.upsert_role_assignment(assign(apparatus_a)).await.unwrap();
+        assert_eq!(state.production_maps.snapshot_revision(), revision);
+        refresh_feed(&state, &feed, &principal, false, true, None, &window, false)
+            .await.unwrap();
+        {
+            let mut data = feed.data.lock().await;
+            assert_eq!(data.view.as_ref().unwrap().scope, scope_a);
+            assert!(!data.view.as_ref().unwrap().customers.contains_key("private-b-order"));
+            assert!(data.history.recover(revision - 1, revision).is_none());
+        }
+        assert!(delivery(&feed, &epoch, Some(revision - 1), &scope_b, true).await.resync);
+        assert!(!delivery(&feed, &epoch, Some(revision), &scope_a, true).await.resync);
+
+        state.admin.delete_role_assignment(&principal.role, &principal.ref_).await.unwrap();
+        assert!(refresh_feed(&state, &feed, &principal, false, true, None, &window, false)
+            .await.is_err(), "An unassigned worker must not receive an old cached scope");
     }
 
     #[tokio::test]
