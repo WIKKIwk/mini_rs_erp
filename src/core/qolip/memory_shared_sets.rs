@@ -31,12 +31,33 @@ fn memory_shared_snapshot(
     links: &BTreeSet<(String, String)>,
     overrides: &BTreeMap<(String, String), bool>,
     identifier: &str,
-    registry: &BTreeMap<String, super::QolipManagedSet>,
+    registry: &mut BTreeMap<String, super::QolipManagedSet>,
 ) -> Result<Option<super::QolipSetSnapshot>, QolipError> {
     let mut groups = BTreeMap::<String, Vec<QolipProductSpec>>::new();
     for id in registry.keys() { groups.insert(id.clone(), Vec::new()); }
     for spec in specs.values().filter(|spec| !spec.set_id().starts_with("qolip-local:")) {
         groups.entry(spec.set_id()).or_default().push(spec.clone());
+    }
+    for (id, members) in &groups {
+        if registry.contains_key(id) { continue; }
+        let Some(first) = members.first() else { continue; };
+        let mut number = registry.len() + 1;
+        let code = loop {
+            let candidate = format!("K-{number:06}");
+            if !registry.values().any(|set| set.snapshot.display_code == candidate)
+                && !specs.values().any(|spec| spec.qolip_code.eq_ignore_ascii_case(&candidate))
+            {
+                break candidate;
+            }
+            number += 1;
+        };
+        registry.insert(id.clone(), super::QolipManagedSet {
+            snapshot: super::QolipSetSnapshot::new(id.clone(), code, members.clone(), Vec::new()),
+            warehouse: first.warehouse.clone(),
+            item_code: first.item_code.clone(),
+            item_name: first.item_name.clone(),
+            item_group: first.item_group.clone(),
+        });
     }
     let matches = |id: &str, members: &[QolipProductSpec], identifiers: &[String]| {
         identifiers.iter().any(|value| {
@@ -64,11 +85,7 @@ fn memory_shared_snapshot(
     let Some((id, members)) = selected.first() else {
         return Ok(None);
     };
-    let display = registry.get(*id).map(|set| set.snapshot.display_code.clone()).unwrap_or_else(|| members
-        .iter()
-        .max_by_key(|spec| (spec.qolip_code.len(), spec.qolip_code.clone()))
-        .map(|spec| spec.qolip_code.clone())
-        .unwrap_or_default());
+    let display = registry.get(*id).ok_or(QolipError::SetChanged)?.snapshot.display_code.clone();
     let native = members.first().map(|spec| spec.item_code.as_str())
         .or_else(|| registry.get(*id).map(|set| set.item_code.as_str())).unwrap_or("");
     let mut targets = memory_set_targets(links, id, native);
@@ -122,7 +139,9 @@ impl MemoryQolipStore {
         let products = self.products.read().await.clone();
         let links = self.shared_links.read().await.clone();
         let overrides = self.product_overrides.read().await.clone();
-        memory_shared_snapshot(&specs, &products, &links, &overrides, identifier, &*self.managed_registry.read().await)
+        let mut registry = self.managed_registry.write().await;
+        Ok(memory_shared_snapshot(&specs, &products, &links, &overrides, identifier, &mut registry)?
+            .filter(|set| !set.members.is_empty()))
     }
 
     async fn memory_reuse_set(
@@ -142,8 +161,8 @@ impl MemoryQolipStore {
         }
         let mut links = self.shared_links.write().await;
         let mut overrides = self.product_overrides.write().await;
-        let registry = self.managed_registry.read().await;
-        let current = memory_shared_snapshot(&specs, &products, &links, &overrides, set_id, &registry)?
+        let mut registry = self.managed_registry.write().await;
+        let current = memory_shared_snapshot(&specs, &products, &links, &overrides, set_id, &mut registry)?
             .ok_or(QolipError::SetChanged)?;
         if current.members.is_empty() || current.fingerprint != fingerprint {
             return Err(QolipError::SetChanged);
@@ -165,6 +184,6 @@ impl MemoryQolipStore {
         for member in &current.members {
             overrides.remove(&(item_code.trim().to_lowercase(), member.qolip_code.trim().to_lowercase()));
         }
-        memory_shared_snapshot(&specs, &products, &links, &overrides, set_id, &registry)?.ok_or(QolipError::SetChanged)
+        memory_shared_snapshot(&specs, &products, &links, &overrides, set_id, &mut registry)?.ok_or(QolipError::SetChanged)
     }
 }

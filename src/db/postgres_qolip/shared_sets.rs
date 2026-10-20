@@ -17,8 +17,9 @@ async fn snapshot_identifiers(
     identifiers: &[String],
 ) -> Result<Option<QolipSetSnapshot>, QolipError> {
     let sets = sqlx::query_as::<_, (String, String)>(
-        "SELECT sets.set_id, sets.display_code FROM mini_qolip_sets sets
-         WHERE (sets.set_id = ANY($1) OR lower(sets.display_code) = ANY($2)
+        "SELECT sets.set_id, sets.set_code FROM mini_qolip_sets sets
+         WHERE (sets.set_id = ANY($1) OR lower(sets.set_code) = ANY($2)
+           OR lower(sets.display_code) = ANY($2)
            OR EXISTS (SELECT 1 FROM mini_qolip_product_specs spec
                       WHERE spec.qolip_set_id = sets.set_id AND lower(spec.qolip_code) = ANY($2)))
            AND NOT sets.is_product_local

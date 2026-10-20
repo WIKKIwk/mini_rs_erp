@@ -12,6 +12,7 @@ pub struct QolipSetProduct {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QolipSetSnapshot {
     pub set_id: String,
+    /// Stable public set code, independent of internal IDs and member codes.
     pub display_code: String,
     pub fingerprint: String,
     pub members: Vec<QolipProductSpec>,

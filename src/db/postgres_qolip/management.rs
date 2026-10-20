@@ -36,13 +36,13 @@ async fn read_sets(
             .collect::<Vec<_>>()
     });
     let rows = sqlx::query_as::<_, (String, String, String, String, String, String)>(
-        "SELECT sets.set_id, sets.display_code, sets.warehouse_key,
+        "SELECT sets.set_id, sets.set_code, sets.warehouse_key,
              COALESCE(item.code, sets.item_code_key), COALESCE(item.name, ''), COALESCE(item.item_group, '')
          FROM mini_qolip_sets sets
          LEFT JOIN mini_items item ON lower(btrim(item.code)) = sets.item_code_key
          WHERE NOT sets.is_product_local AND ($1::text[] IS NULL OR sets.warehouse_key = ANY($1))
            AND ($2::text IS NULL OR sets.set_id = $2)
-         ORDER BY lower(sets.display_code), sets.set_id",
+         ORDER BY length(sets.set_code), sets.set_code",
     ).bind(warehouses).bind(id).fetch_all(&mut **tx).await.map_err(|_| QolipError::StoreFailed)?;
     if rows.is_empty() {
         return Ok(Vec::new());
@@ -113,7 +113,11 @@ pub(super) async fn list(
         .execute(&mut *tx)
         .await
         .map_err(|_| QolipError::StoreFailed)?;
-    let result = read_sets(&mut tx, allowed, None).await?;
+    let result = read_sets(&mut tx, allowed, None)
+        .await?
+        .into_iter()
+        .filter(|set| !set.snapshot.members.is_empty())
+        .collect();
     tx.commit().await.map_err(|_| QolipError::StoreFailed)?;
     Ok(result)
 }

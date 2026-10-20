@@ -30,7 +30,7 @@ impl MemoryQolipStore {
         let mut result = Vec::new();
         for id in ids {
             let snapshot =
-                memory_shared_snapshot(&specs, &products, &links, &overrides, &id, &registry)?
+                memory_shared_snapshot(&specs, &products, &links, &overrides, &id, &mut registry)?
                     .ok_or(QolipError::SetChanged)?;
             let mut set = match registry.get(&id) {
                 Some(set) => set.clone(),
@@ -51,7 +51,9 @@ impl MemoryQolipStore {
                 .products
                 .retain(|product| targets.contains(&product.code.to_lowercase()));
             registry.insert(id, set.clone());
-            if memory_management_owner(&set.warehouse, allowed).is_ok() {
+            if !set.snapshot.members.is_empty()
+                && memory_management_owner(&set.warehouse, allowed).is_ok()
+            {
                 result.push(set);
             }
         }
@@ -77,7 +79,7 @@ impl MemoryQolipStore {
             &links,
             &overrides,
             &input.set_id,
-            &registry,
+            &mut registry,
         )?
         .ok_or(QolipError::SetChanged)?;
         if current.fingerprint != input.fingerprint {
@@ -122,11 +124,10 @@ impl MemoryQolipStore {
                 .values()
                 .any(|s| s.qolip_code.eq_ignore_ascii_case(&spec.qolip_code))
                 || registry.values().any(|other| {
-                    other.snapshot.set_id != input.set_id
-                        && other
-                            .snapshot
-                            .display_code
-                            .eq_ignore_ascii_case(&spec.qolip_code)
+                    other
+                        .snapshot
+                        .display_code
+                        .eq_ignore_ascii_case(&spec.qolip_code)
                 })
             {
                 return Err(QolipError::QolipCodeConflict);
@@ -148,7 +149,7 @@ impl MemoryQolipStore {
             &links,
             &overrides,
             &input.set_id,
-            &registry,
+            &mut registry,
         )?
         .ok_or(QolipError::SetChanged)?;
         let targets = memory_set_targets(&links, &input.set_id, &set.item_code);

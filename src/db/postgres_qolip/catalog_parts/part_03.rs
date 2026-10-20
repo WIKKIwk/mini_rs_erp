@@ -9,7 +9,8 @@ pub(super) async fn save_product_spec_tx(
              FROM mini_qolip_product_specs
              WHERE lower(qolip_code) = $1
              UNION ALL
-             SELECT 1 FROM mini_qolip_sets sets WHERE lower(sets.set_id) = $1 OR (
+             SELECT 1 FROM mini_qolip_sets sets
+             WHERE lower(sets.set_id) = $1 OR lower(sets.set_code) = $1 OR (
                  lower(sets.display_code) = $1 AND sets.set_id <> $2)
          )",
     )
@@ -117,10 +118,10 @@ pub(super) async fn rename_product_spec(
                  SELECT 1 FROM mini_qolip_product_specs WHERE lower(qolip_code) = $1
                  UNION ALL
                  SELECT 1 FROM mini_qolip_sets sets
-                 WHERE (lower(sets.set_id) = $1 OR (
+                 WHERE lower(sets.set_code) = $1 OR ((lower(sets.set_id) = $1 OR (
                      lower(sets.display_code) = $1 AND EXISTS (
                          SELECT 1 FROM mini_qolip_product_specs member WHERE member.qolip_set_id = sets.set_id)))
-                   AND sets.set_id <> $2
+                   AND sets.set_id <> $2)
                  UNION ALL
                  SELECT 1 FROM mini_qolip_locations WHERE lower(qolip_code) = $1
                  UNION ALL
