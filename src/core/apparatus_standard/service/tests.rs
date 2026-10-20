@@ -206,3 +206,17 @@ async fn factory_default_bootstrap_is_restart_safe() {
     assert_eq!(created, 0);
     assert_eq!(after, before);
 }
+
+#[tokio::test]
+async fn external_commit_invalidation_evicts_both_apparatus_read_caches() {
+    let service = CanonicalApparatusService::memory_with_standard_test_apparatus();
+    let id = service.list_runtime_projections().await.unwrap().remove(0).apparatus_id;
+    let runtime = service.current_projection(&id).await.unwrap().unwrap();
+    let configuration = service.current_configuration(&id).await.unwrap().unwrap();
+    assert!(Arc::ptr_eq(&runtime, &service.current_projection(&id).await.unwrap().unwrap()));
+    assert!(Arc::ptr_eq(&configuration, &service.current_configuration(&id).await.unwrap().unwrap()));
+    service.invalidate_runtime_caches().await;
+    assert!(!Arc::ptr_eq(&runtime, &service.current_projection(&id).await.unwrap().unwrap()));
+    assert!(!Arc::ptr_eq(&configuration, &service.current_configuration(&id).await.unwrap().unwrap()));
+    assert_eq!(service.cache_generation.load(Ordering::Acquire), 1);
+}

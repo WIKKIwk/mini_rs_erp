@@ -10,6 +10,7 @@ mod tests;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use tokio::sync::RwLock;
@@ -36,6 +37,7 @@ use super::{
 #[derive(Clone)]
 pub struct CanonicalApparatusService {
     repository: Arc<dyn CanonicalApparatusRepository>,
+    cache_generation: Arc<AtomicU64>,
     runtime_cache: Arc<RwLock<BTreeMap<ApparatusId, Arc<RuntimeApparatusProjection>>>>,
     configuration_cache: Arc<RwLock<BTreeMap<ApparatusId, Arc<RuntimeApparatusConfiguration>>>>,
 }
@@ -44,6 +46,7 @@ impl CanonicalApparatusService {
     pub(crate) fn new(repository: Arc<dyn CanonicalApparatusRepository>) -> Self {
         Self {
             repository,
+            cache_generation: Arc::new(AtomicU64::new(0)),
             runtime_cache: Arc::new(RwLock::new(BTreeMap::new())),
             configuration_cache: Arc::new(RwLock::new(BTreeMap::new())),
         }
@@ -268,18 +271,22 @@ impl CanonicalApparatusService {
         &self,
         apparatus_id: &ApparatusId,
     ) -> Result<Option<Arc<RuntimeApparatusProjection>>, CanonicalApparatusError> {
-        if let Some(cached) = self.runtime_cache.read().await.get(apparatus_id).cloned() {
-            return Ok(Some(cached));
+        loop {
+            let generation = self.cache_generation.load(Ordering::Acquire);
+            if let Some(cached) = self.runtime_cache.read().await.get(apparatus_id).cloned() {
+                return Ok(Some(cached));
+            }
+            let projection = self.repository.current_projection(apparatus_id).await?;
+            let mut cache = self.runtime_cache.write().await;
+            if self.cache_generation.load(Ordering::Acquire) != generation {
+                continue;
+            }
+            return Ok(projection.map(|projection| {
+                let projection = Arc::new(projection);
+                cache.insert(apparatus_id.clone(), projection.clone());
+                projection
+            }));
         }
-        let Some(projection) = self.repository.current_projection(apparatus_id).await? else {
-            return Ok(None);
-        };
-        let projection = Arc::new(projection);
-        self.runtime_cache
-            .write()
-            .await
-            .insert(apparatus_id.clone(), projection.clone());
-        Ok(Some(projection))
     }
 
     pub async fn current_aasx(
@@ -293,24 +300,33 @@ impl CanonicalApparatusService {
         &self,
         apparatus_id: &ApparatusId,
     ) -> Result<Option<Arc<RuntimeApparatusConfiguration>>, CanonicalApparatusError> {
-        if let Some(cached) = self
-            .configuration_cache
-            .read()
-            .await
-            .get(apparatus_id)
-            .cloned()
-        {
-            return Ok(Some(cached));
+        loop {
+            let generation = self.cache_generation.load(Ordering::Acquire);
+            if let Some(cached) = self.configuration_cache.read().await.get(apparatus_id).cloned() {
+                return Ok(Some(cached));
+            }
+            let configuration = self.repository.current_configuration(apparatus_id).await?;
+            let mut cache = self.configuration_cache.write().await;
+            if self.cache_generation.load(Ordering::Acquire) != generation {
+                continue;
+            }
+            return Ok(configuration.map(|configuration| {
+                let configuration = Arc::new(configuration);
+                cache.insert(apparatus_id.clone(), configuration.clone());
+                configuration
+            }));
         }
-        let Some(configuration) = self.repository.current_configuration(apparatus_id).await? else {
-            return Ok(None);
-        };
-        let configuration = Arc::new(configuration);
-        self.configuration_cache
-            .write()
-            .await
-            .insert(apparatus_id.clone(), configuration.clone());
-        Ok(Some(configuration))
+    }
+
+    /// A committed external change invalidates both permanent read caches.
+    /// Generation checks prevent an in-flight old database read repopulating
+    /// either cache after this boundary.
+    pub(crate) async fn invalidate_runtime_caches(&self) {
+        let mut runtime = self.runtime_cache.write().await;
+        let mut configuration = self.configuration_cache.write().await;
+        self.cache_generation.fetch_add(1, Ordering::AcqRel);
+        runtime.clear();
+        configuration.clear();
     }
 
     pub async fn list_runtime_configurations(

@@ -188,9 +188,11 @@ pub(super) fn build_production_map_service(
     apparatus: CanonicalApparatusService,
     pool: sqlx::PgPool,
 ) -> ProductionMapService {
-    let resolver = Arc::new(CanonicalServiceApparatusResolver::new(apparatus));
+    let resolver = Arc::new(CanonicalServiceApparatusResolver::new(apparatus.clone()));
     tracing::info!("mini ERP postgres production map store configured");
-    ProductionMapService::new(Arc::new(PostgresProductionMapStore::new(pool)), resolver)
+    let service = ProductionMapService::new(Arc::new(PostgresProductionMapStore::new(pool.clone())), resolver);
+    crate::db::postgres_production_map::realtime::start_listener(pool, service.clone(), apparatus);
+    service
 }
 
 pub(super) fn build_factory_location_service(

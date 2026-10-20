@@ -78,6 +78,7 @@ pub(super) async fn put(
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
     lock_order_and_apparatuses_tx(&mut tx, &hold.order_id, &[hold.apparatus.as_str()]).await?;
+    tag_preflight_notification(&mut tx, hold).await?;
     let current = sqlx::query_scalar::<_, String>(
         "SELECT state FROM mini_queue_states WHERE canonical_apparatus_id = $1 AND order_id = $2 FOR UPDATE",
     ).bind(&hold.apparatus).bind(&hold.order_id).fetch_optional(&mut *tx).await
@@ -141,6 +142,7 @@ pub(super) async fn update(
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
     lock_order_and_apparatuses_tx(&mut tx, &hold.order_id, &[hold.apparatus.as_str()]).await?;
+    tag_preflight_notification(&mut tx, hold).await?;
     let result = sqlx::query(
         "UPDATE mini_print_preflight_holds
          SET status = $2, actor_role = $3, actor_ref = $4,
@@ -288,4 +290,15 @@ async fn persist_queue_status(
         "print_preflight",
     )
     .await
+}
+
+// Only these two dedicated transactions have a colour-only dependency set.
+// Queue actions consuming a hold use the conservative generic notification.
+async fn tag_preflight_notification(
+    tx: &mut Transaction<'_, Postgres>, hold: &PrintPreflightHold,
+) -> Result<(), ProductionMapError> {
+    let payload = serde_json::json!({"kind":"preflight", "order_id":hold.order_id, "apparatus":hold.apparatus}).to_string();
+    sqlx::query("SELECT set_config('mini.production_live', $1, true)")
+        .bind(payload).execute(&mut **tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
+    Ok(())
 }
