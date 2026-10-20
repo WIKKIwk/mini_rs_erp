@@ -27,6 +27,9 @@ const QUEUE: &str = "/v1/mobile/admin/production-maps/sequence";
 // Verification AppState shares the process-wide RPS store.
 static FIXTURE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+#[path = "worker_queue_window/page_stream.rs"]
+mod page_stream;
+
 struct Fixture {
     _dir: tempfile::TempDir,
     state: AppState,

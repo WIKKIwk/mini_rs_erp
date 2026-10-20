@@ -397,7 +397,6 @@ async fn update(
         let mut feed = sub.feed.lock().await;
         let current = match feed.current(state, principal, &sub.request).await {
             Ok(current) => current,
-            Err(error) if error.0 == StatusCode::CONFLICT => continue,
             Err(error) => {
                 let _ = send(socket, &json!(error.1.0).to_string()).await;
                 return false;
