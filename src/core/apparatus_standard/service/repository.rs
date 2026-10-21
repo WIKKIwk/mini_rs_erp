@@ -264,6 +264,9 @@ fn apply_patch(draft: &mut CanonicalApparatusDraft, patch: CanonicalApparatusPat
     if let Some(value) = patch.policies {
         draft.policies = value;
     }
+    if let Some(value) = patch.worker_material_assignment_allowed {
+        draft.policies.worker_material_assignment_allowed = value;
+    }
     if let Some(value) = patch.capacity {
         draft.capacity = value;
     }

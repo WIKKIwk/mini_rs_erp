@@ -47,6 +47,8 @@ pub struct CanonicalApparatusPatch {
     pub capabilities: Option<Vec<EquipmentCapability>>,
     pub execution_profile: Option<ExecutionProfile>,
     pub policies: Option<ApparatusOperationalPolicies>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_material_assignment_allowed: Option<bool>,
     pub capacity: Option<ApparatusCapacity>,
     #[serde(
         default,

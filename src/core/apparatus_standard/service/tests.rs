@@ -220,3 +220,24 @@ async fn external_commit_invalidation_evicts_both_apparatus_read_caches() {
     assert!(!Arc::ptr_eq(&configuration, &service.current_configuration(&id).await.unwrap().unwrap()));
     assert_eq!(service.cache_generation.load(Ordering::Acquire), 1);
 }
+
+#[tokio::test]
+async fn worker_material_permission_patch_preserves_other_apparatus_policies() {
+    let service = CanonicalApparatusService::memory();
+    service.bootstrap_factory_defaults().await.unwrap();
+    let id = ApparatusId::new("apparatus:default:bosma_7").unwrap();
+    let before = service.current_configuration(&id).await.unwrap().unwrap();
+    assert!(!before.runtime.worker_material_assignment_allowed);
+    service.patch(id.clone(), before.runtime.source_revision, CanonicalApparatusPatch {
+        worker_material_assignment_allowed: Some(true), ..Default::default()
+    }, CanonicalCommandMetadata::new("admin", "worker-material-toggle")).await.unwrap();
+    let enabled = service.current_configuration(&id).await.unwrap().unwrap();
+    assert!(enabled.runtime.worker_material_assignment_allowed);
+    assert_eq!(before.material.policy, enabled.material.policy);
+    assert_eq!(before.material.tooling, enabled.material.tooling);
+    assert_eq!(before.queue.discipline, enabled.queue.discipline);
+    service.patch(id.clone(), enabled.runtime.source_revision, CanonicalApparatusPatch {
+        worker_material_assignment_allowed: Some(false), ..Default::default()
+    }, CanonicalCommandMetadata::new("admin", "worker-material-toggle-off")).await.unwrap();
+    assert!(!service.current_configuration(&id).await.unwrap().unwrap().runtime.worker_material_assignment_allowed);
+}
