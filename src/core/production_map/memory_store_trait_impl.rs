@@ -365,6 +365,10 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         &self,
         hold: PrintPreflightHold,
     ) -> Result<(), ProductionMapError> {
+        let mut holds = self.print_preflight_holds.write().await;
+        if holds.contains_key(hold.hold_id.trim()) {
+            return Err(ProductionMapError::PrintPreflightActive);
+        }
         let order_id = hold.order_id.clone();
         self.queue_states
             .write()
@@ -372,10 +376,8 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
             .entry(hold.apparatus.clone())
             .or_default()
             .insert(order_id.clone(), "print_preflight".to_string());
-        self.print_preflight_holds
-            .write()
-            .await
-            .insert(hold.hold_id.trim().to_string(), hold);
+        holds.insert(hold.hold_id.trim().to_string(), hold);
+        drop(holds);
         queue::refresh_production_order_lifecycles(self, &[order_id]).await
     }
 
@@ -384,8 +386,15 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         hold: PrintPreflightHold,
     ) -> Result<(), ProductionMapError> {
         let mut holds = self.print_preflight_holds.write().await;
-        if !holds.contains_key(hold.hold_id.trim()) {
-            return Err(ProductionMapError::PrintPreflightNotFound);
+        let current = holds.get(hold.hold_id.trim())
+            .ok_or(ProductionMapError::PrintPreflightNotFound)?;
+        if !current.status.reserves_apparatus()
+            || current.revision.checked_add(1) != Some(hold.revision)
+            || current.order_id != hold.order_id
+            || current.apparatus != hold.apparatus
+            || current.stage_node_id != hold.stage_node_id
+        {
+            return Err(ProductionMapError::PrintPreflightNotReady);
         }
         let order_id = hold.order_id.clone();
         let mut queue_states = self.queue_states.write().await;
@@ -415,6 +424,7 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         let controls = self.order_controls.read().await;
         if hold.status != PrintPreflightStatus::Running
             || current.status != PrintPreflightStatus::Passed
+            || current.revision.checked_add(1) != Some(hold.revision)
             || current.order_id != hold.order_id
             || current.apparatus != hold.apparatus
             || current.stage_node_id != hold.stage_node_id
@@ -448,6 +458,8 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         {
             return Err(ProductionMapError::PrintPreflightNotReady);
         }
+        hold.revision = hold.revision.checked_add(1)
+            .ok_or(ProductionMapError::PrintPreflightNotReady)?;
         hold.status = PrintPreflightStatus::Consumed;
         hold.actor = actor.clone();
         hold.updated_at_unix = now;
@@ -477,6 +489,8 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         {
             return Err(ProductionMapError::PrintPreflightNotReady);
         }
+        hold.revision = hold.revision.checked_add(1)
+            .ok_or(ProductionMapError::PrintPreflightNotReady)?;
         hold.status = PrintPreflightStatus::Cancelled;
         hold.actor = actor.clone();
         hold.updated_at_unix = now;

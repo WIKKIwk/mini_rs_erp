@@ -1,6 +1,73 @@
 use super::*;
 
 #[tokio::test]
+async fn print_preflight_retries_cannot_overwrite_later_colour_decisions() {
+    use crate::core::production_map::ProductionMapDefinition;
+    use serde_json::{Value, json};
+
+    const PRINT: &str = "apparatus:default:bosma_7";
+    const ORDER: &str = "zakaz-versioned-colour";
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+    state.production_maps.upsert_map(serde_json::from_value::<ProductionMapDefinition>(json!({
+        "id":ORDER,"product_code":"COLOUR","title":"Colour",
+        "nodes":[{"id":"start","kind":"start","title":"Start"},
+            {"id":"print","kind":"apparatus","title":"Bosma","apparatus_id":PRINT},
+            {"id":"end","kind":"end","title":"End"}],
+        "edges":[{"from":"start","to":"print"},{"from":"print","to":"end"}]
+    })).unwrap()).await.unwrap();
+    let router = build_router(state.clone());
+    let base = json!({"apparatus":PRINT,"order_id":ORDER,"hold_id":"versioned-colour"});
+    let send = |action: &str, expected: Option<i64>| {
+        let mut payload: Value = base.clone();
+        payload["action"] = json!(action);
+        if action == "hold" { payload["idempotency_key"] = json!("versioned-colour"); }
+        if let Some(revision) = expected { payload["expected_revision"] = json!(revision); }
+        let request = Request::builder().method("POST")
+            .uri("/v1/mobile/admin/production-maps/print-preflight")
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(payload.to_string())).unwrap();
+        router.clone().oneshot(request)
+    };
+    let held = send("hold", None).await.unwrap();
+    assert_eq!(held.status(), StatusCode::OK);
+    assert_eq!(json_body(held).await["hold"]["revision"], 0);
+    // Initial legacy decisions still work, but versionless commands cannot
+    // participate in a reopened trial.
+    let passed = send("passed", None).await.unwrap();
+    assert_eq!(passed.status(), StatusCode::OK);
+    assert_eq!(json_body(passed).await["hold"]["revision"], 1);
+    assert_eq!(send("reopen", None).await.unwrap().status(), StatusCode::CONFLICT);
+    let reopened = send("reopen", Some(1)).await.unwrap();
+    assert_eq!(reopened.status(), StatusCode::OK);
+    assert_eq!(json_body(reopened).await["hold"]["revision"], 2);
+    let revision = state.production_maps.live_snapshot_shared_with_revision().await.unwrap().1;
+    let repeated = send("reopen", Some(1)).await.unwrap();
+    assert_eq!(repeated.status(), StatusCode::OK);
+    assert_eq!(json_body(repeated).await["hold"]["revision"], 2);
+    for (action, expected) in [("passed", Some(0)), ("passed", None), ("failed", Some(0)), ("cancel", Some(0))] {
+        assert_eq!(send(action, expected).await.unwrap().status(), StatusCode::CONFLICT);
+    }
+    assert_eq!(state.production_maps.live_snapshot_shared_with_revision().await.unwrap().1, revision,
+        "retries and rejected commands must not notify or change the snapshot");
+    let passed_again = send("passed", Some(2)).await.unwrap();
+    assert_eq!(passed_again.status(), StatusCode::OK);
+    assert_eq!(json_body(passed_again).await["hold"]["revision"], 3);
+    assert_eq!(send("reopen", Some(1)).await.unwrap().status(), StatusCode::CONFLICT);
+    let snapshot = state.production_maps.live_snapshot().await.unwrap();
+    assert_eq!(snapshot.queue_action_controls[PRINT][ORDER].print_preflight.as_ref().unwrap().revision, 3);
+    assert_eq!(snapshot.queue_action_controls[PRINT][ORDER].print_preflight.as_ref().unwrap().status,
+        crate::core::production_map::PrintPreflightStatus::Passed);
+    let reopened_again = send("reopen", Some(3)).await.unwrap();
+    assert_eq!(reopened_again.status(), StatusCode::OK);
+    assert_eq!(json_body(reopened_again).await["hold"]["revision"], 4);
+    assert_eq!(send("passed", Some(2)).await.unwrap().status(), StatusCode::CONFLICT);
+    assert_eq!(send("passed", Some(-1)).await.unwrap().status(), StatusCode::CONFLICT);
+    assert_eq!(send("passed", Some(99)).await.unwrap().status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
 async fn sequence_keeps_frozen_colour_detail_controls_in_full_and_scoped_reads() {
     use crate::core::production_map::{ProductionMapDefinition, QueueActionActor};
 

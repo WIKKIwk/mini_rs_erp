@@ -30,6 +30,8 @@ async fn postgres_print_preflight_persists_common_status_and_restores_without_ex
         .execute(&pool).await.unwrap();
     sqlx::raw_sql(include_str!("../../../migrations/postgres/0121_print_preflight_order_status.sql"))
         .execute(&pool).await.expect("migration accepts the new common status");
+    sqlx::raw_sql(include_str!("../../../migrations/postgres/0157_print_preflight_revision.sql"))
+        .execute(&pool).await.unwrap();
     let map = serde_json::json!({
         "id":"colour", "product_code":"COLOUR", "title":"Colour",
         "nodes":[{"id":"start","kind":"start","title":"Start"},
@@ -45,6 +47,7 @@ async fn postgres_print_preflight_persists_common_status_and_restores_without_ex
         hold_id: "colour-trial".into(), idempotency_key: "colour-trial".into(),
         order_id: "colour".into(), apparatus: "apparatus:test:print".into(), stage_node_id: "print".into(),
         status: PrintPreflightStatus::Running,
+        revision: 0,
         actor: QueueActionActor { role: "aparatchi".into(), ref_: "worker".into(), display_name: "Worker".into() },
         created_at_unix: 1, updated_at_unix: 1, expires_at_unix: 2, previous_queue_state: None,
     };
@@ -59,10 +62,24 @@ async fn postgres_print_preflight_persists_common_status_and_restores_without_ex
         .fetch_one(&pool).await.unwrap();
     assert_eq!(queue, "print_preflight");
     hold.status = PrintPreflightStatus::Passed;
+    hold.revision += 1;
     print_preflight::update(&pool, &hold).await.unwrap();
+    let stale_pass = hold.clone();
     hold.status = PrintPreflightStatus::Running;
+    hold.revision += 1;
     print_preflight::reopen_with_event(&pool, &hold).await.unwrap();
     assert_eq!(print_preflight::load_active(&pool).await.unwrap(), vec![hold.clone()]);
+    assert!(matches!(print_preflight::update(&pool, &stale_pass).await,
+        Err(ProductionMapError::PrintPreflightNotReady)));
+    let stale_reopen = hold.clone();
+    hold.status = PrintPreflightStatus::Passed;
+    hold.revision += 1;
+    print_preflight::update(&pool, &hold).await.unwrap();
+    assert!(matches!(print_preflight::reopen_with_event(&pool, &stale_reopen).await,
+        Err(ProductionMapError::PrintPreflightNotReady)));
+    assert_eq!(print_preflight::load_active(&pool).await.unwrap(), vec![hold.clone()]);
+    hold.status = PrintPreflightStatus::Running;
+    hold.revision += 1;
     // A Start committed on another connection must make a stale reopen fail.
     sqlx::query("UPDATE mini_print_preflight_holds SET status = 'consumed' WHERE hold_id = $1")
         .bind(&hold.hold_id).execute(&pool).await.unwrap();

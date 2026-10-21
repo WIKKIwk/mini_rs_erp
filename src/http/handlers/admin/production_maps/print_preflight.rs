@@ -11,6 +11,8 @@ struct PrintPreflightRequest {
     hold_id: String,
     #[serde(default)]
     idempotency_key: String,
+    #[serde(default)]
+    expected_revision: Option<i64>,
     action: String,
     #[serde(default)]
     include_control: bool,
@@ -79,11 +81,12 @@ pub async fn production_map_print_preflight(
             }
             state
                 .production_maps
-                .advance_print_preflight(
+                .advance_print_preflight_at_revision(
                     &apparatus.id.to_string(),
                     order_id,
                     &input.hold_id,
                     input.action.trim(),
+                    input.expected_revision,
                     actor,
                 )
                 .await

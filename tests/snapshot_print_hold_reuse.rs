@@ -155,6 +155,7 @@ fn hold(
         apparatus: apparatus.into(),
         stage_node_id: "node-0".into(),
         status,
+        revision: 0,
         actor: QueueActionActor {
             role: "aparatchi".into(),
             ref_: "fixture".into(),

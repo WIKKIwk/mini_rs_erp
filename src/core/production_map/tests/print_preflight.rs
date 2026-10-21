@@ -28,13 +28,13 @@ async fn reopen_passed_colour_restores_outcomes_without_moving_the_order() {
     let hold = service.begin_print_preflight(
         PRINT_ID, order_id, "reopen-colour", "reopen-colour", actor(),
     ).await.unwrap();
-    service.advance_print_preflight(
+    let passed_hold = service.advance_print_preflight(
         PRINT_ID, order_id, &hold.hold_id, "passed", actor(),
     ).await.unwrap();
     let passed = service.live_snapshot().await.unwrap();
     let mut events = service.subscribe_live();
-    let reopened = service.advance_print_preflight(
-        PRINT_ID, order_id, &hold.hold_id, "reopen", actor(),
+    let reopened = service.advance_print_preflight_at_revision(
+        PRINT_ID, order_id, &hold.hold_id, "reopen", Some(passed_hold.revision), actor(),
     ).await.unwrap();
     assert_eq!(reopened.status, PrintPreflightStatus::Running);
     assert_eq!(reopened.hold_id, hold.hold_id);
@@ -49,12 +49,12 @@ async fn reopen_passed_colour_restores_outcomes_without_moving_the_order() {
     assert!(control.allowed_actions.is_empty());
     assert_eq!(control.print_preflight.as_ref().unwrap().status, PrintPreflightStatus::Running);
     assert!(store.order_run_sessions_for_order(order_id).await.unwrap().is_empty());
-    assert_eq!(service.advance_print_preflight(
-        PRINT_ID, order_id, &hold.hold_id, "reopen", actor(),
+    assert_eq!(service.advance_print_preflight_at_revision(
+        PRINT_ID, order_id, &hold.hold_id, "reopen", Some(passed_hold.revision), actor(),
     ).await.unwrap(), reopened);
     assert!(events.try_recv().is_err(), "retry must not publish a second change");
-    service.advance_print_preflight(
-        PRINT_ID, order_id, &hold.hold_id, "failed", actor(),
+    service.advance_print_preflight_at_revision(
+        PRINT_ID, order_id, &hold.hold_id, "failed", Some(reopened.revision), actor(),
     ).await.unwrap();
     let reset = service.live_snapshot().await.unwrap();
     assert_eq!(reset.queue_states, before.queue_states);

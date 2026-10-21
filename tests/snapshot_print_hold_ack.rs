@@ -156,6 +156,7 @@ async fn committed_mutation_ack_and_next_live_snapshot_preserve_authority_and_so
                 apparatus: PRINT.into(),
                 stage_node_id: "print".into(),
                 status: PrintPreflightStatus::Running,
+                revision: 0,
                 actor: QueueActionActor {
                     role: "admin".into(),
                     ref_: "fixture".into(),
@@ -210,7 +211,11 @@ async fn committed_mutation_ack_and_next_live_snapshot_preserve_authority_and_so
         assert_eq!(store.hold_reads.load(Ordering::SeqCst), 2);
         assert_eq!(
             events.try_recv().unwrap(),
-            ProductionMapLiveEvent::PrintPreflight { revision: 1 }
+            ProductionMapLiveEvent::PrintPreflight {
+                revision: 1,
+                order_id: ORDER.into(),
+                apparatus: PRINT.into(),
+            }
         );
         let committed = store
             .inner

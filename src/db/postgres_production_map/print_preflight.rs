@@ -14,6 +14,7 @@ struct PrintPreflightHoldRow {
     canonical_apparatus_id: String,
     stage_node_id: String,
     status: String,
+    revision: i64,
     actor_role: String,
     actor_ref: String,
     actor_display_name: String,
@@ -25,7 +26,7 @@ struct PrintPreflightHoldRow {
 
 const HOLD_COLUMNS: &str = "hold_id, idempotency_key, order_id, canonical_apparatus_id,
     stage_node_id, status, actor_role, actor_ref, actor_display_name,
-    created_at_unix, updated_at_unix, expires_at_unix, previous_queue_state";
+    created_at_unix, updated_at_unix, expires_at_unix, previous_queue_state, revision";
 
 pub(super) async fn load_active(
     pool: &PgPool,
@@ -104,19 +105,13 @@ pub(super) async fn put_with_event(
     {
         return Err(ProductionMapError::QueueActionNotAllowed);
     }
-    sqlx::query(
+    let result = sqlx::query(
         "INSERT INTO mini_print_preflight_holds (
             hold_id, idempotency_key, order_id, canonical_apparatus_id,
             stage_node_id, status, actor_role, actor_ref, actor_display_name,
-            created_at_unix, updated_at_unix, expires_at_unix, previous_queue_state
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-         ON CONFLICT (hold_id) DO UPDATE SET
-            status = EXCLUDED.status,
-            actor_role = EXCLUDED.actor_role,
-            actor_ref = EXCLUDED.actor_ref,
-            actor_display_name = EXCLUDED.actor_display_name,
-            updated_at_unix = EXCLUDED.updated_at_unix,
-            expires_at_unix = EXCLUDED.expires_at_unix",
+            created_at_unix, updated_at_unix, expires_at_unix, previous_queue_state, revision
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+         ON CONFLICT (hold_id) DO NOTHING",
     )
     .bind(&hold.hold_id)
     .bind(&hold.idempotency_key)
@@ -131,9 +126,13 @@ pub(super) async fn put_with_event(
     .bind(hold.updated_at_unix)
     .bind(hold.expires_at_unix)
     .bind(&hold.previous_queue_state)
+    .bind(hold.revision)
     .execute(&mut *tx)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
+    if result.rows_affected() != 1 {
+        return Err(ProductionMapError::PrintPreflightActive);
+    }
     persist_queue_status(&mut tx, hold).await?;
     tx.commit()
         .await
@@ -201,8 +200,10 @@ async fn update_with_event_checked(
         "UPDATE mini_print_preflight_holds
          SET status = $2, actor_role = $3, actor_ref = $4,
              actor_display_name = $5, updated_at_unix = $6,
-             expires_at_unix = $7
-         WHERE hold_id = $1 AND status IN ('held', 'running', 'passed')",
+             expires_at_unix = $7, revision = $8
+         WHERE hold_id = $1 AND status IN ('held', 'running', 'passed')
+             AND revision = $8 - 1 AND $8 > 0
+             AND order_id = $9 AND canonical_apparatus_id = $10 AND stage_node_id = $11",
     )
     .bind(&hold.hold_id)
     .bind(hold.status.as_str())
@@ -211,11 +212,15 @@ async fn update_with_event_checked(
     .bind(&hold.actor.display_name)
     .bind(hold.updated_at_unix)
     .bind(hold.expires_at_unix)
+    .bind(hold.revision)
+    .bind(&hold.order_id)
+    .bind(&hold.apparatus)
+    .bind(&hold.stage_node_id)
     .execute(&mut *tx)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
     if result.rows_affected() == 0 {
-        return Err(ProductionMapError::PrintPreflightNotFound);
+        return Err(ProductionMapError::PrintPreflightNotReady);
     }
     persist_queue_status(&mut tx, hold).await?;
     tx.commit()
@@ -236,7 +241,7 @@ pub(super) async fn consume_print_preflight_hold_tx(
         "UPDATE mini_print_preflight_holds
          SET status = 'consumed', actor_role = $4, actor_ref = $5,
              actor_display_name = $6,
-             updated_at_unix = EXTRACT(EPOCH FROM now())::BIGINT
+             updated_at_unix = EXTRACT(EPOCH FROM now())::BIGINT, revision = revision + 1
          WHERE hold_id = $1 AND order_id = $2 AND canonical_apparatus_id = $3
            AND status = 'passed'",
     )
@@ -267,7 +272,7 @@ pub(super) async fn cancel_print_preflight_hold_tx(
         "UPDATE mini_print_preflight_holds
          SET status = 'cancelled', actor_role = $4, actor_ref = $5,
              actor_display_name = $6,
-             updated_at_unix = EXTRACT(EPOCH FROM now())::BIGINT
+             updated_at_unix = EXTRACT(EPOCH FROM now())::BIGINT, revision = revision + 1
          WHERE hold_id = $1 AND order_id = $2 AND canonical_apparatus_id = $3
            AND status IN ('held', 'running', 'passed')",
     )
@@ -295,6 +300,7 @@ fn row_to_hold(row: PrintPreflightHoldRow) -> Result<PrintPreflightHold, Product
         apparatus: row.canonical_apparatus_id,
         stage_node_id: row.stage_node_id,
         status,
+        revision: row.revision,
         actor: QueueActionActor {
             role: row.actor_role,
             ref_: row.actor_ref,

@@ -55,6 +55,9 @@ pub struct PrintPreflightHold {
     #[serde(default)]
     pub stage_node_id: String,
     pub status: PrintPreflightStatus,
+    /// Monotonic decision version; timestamps cannot distinguish rapid retries.
+    #[serde(default)]
+    pub revision: i64,
     pub actor: QueueActionActor,
     pub created_at_unix: i64,
     pub updated_at_unix: i64,
@@ -108,6 +111,7 @@ impl ProductionMapService {
                     let now = progress::unix_seconds();
                     let mut running = existing;
                     running.status = PrintPreflightStatus::Running;
+                    running.revision = next_revision(running.revision)?;
                     running.updated_at_unix = now;
                     let event_id = self
                         .store
@@ -140,6 +144,7 @@ impl ProductionMapService {
                     let now = progress::unix_seconds();
                     let mut running = existing.clone();
                     running.status = PrintPreflightStatus::Running;
+                    running.revision = next_revision(running.revision)?;
                     running.updated_at_unix = now;
                     let event_id = self
                         .store
@@ -185,6 +190,7 @@ impl ProductionMapService {
             // the reservation and the running state in one server write so
             // the client never exposes a second Start button.
             status: PrintPreflightStatus::Running,
+            revision: 0,
             actor,
             created_at_unix: now,
             updated_at_unix: now,
@@ -208,6 +214,19 @@ impl ProductionMapService {
         action: &str,
         actor: QueueActionActor,
     ) -> Result<PrintPreflightHold, ProductionMapError> {
+        self.advance_print_preflight_at_revision(apparatus, order_id, hold_id, action, None, actor)
+            .await
+    }
+
+    pub async fn advance_print_preflight_at_revision(
+        &self,
+        apparatus: &str,
+        order_id: &str,
+        hold_id: &str,
+        action: &str,
+        expected_revision: Option<i64>,
+        actor: QueueActionActor,
+    ) -> Result<PrintPreflightHold, ProductionMapError> {
         let _guard = self.apparatus_action_guard(apparatus).await;
         let hold_id = hold_id.trim();
         let order_id = order_id.trim();
@@ -224,8 +243,13 @@ impl ProductionMapService {
             return Err(ProductionMapError::PrintPreflightNotReady);
         }
         let action = action.trim().to_ascii_lowercase();
-        // A lost response may be retried after the transition committed. Return
-        // that same result without rewriting its actor/time or broadcasting it.
+        // A retry may acknowledge the same decision, but must never cross a
+        // passed -> running -> passed cycle and overwrite a newer decision.
+        if expected_revision.is_some_and(|revision| {
+            revision < 0 || (revision != hold.revision && revision.checked_add(1) != Some(hold.revision))
+        }) {
+            return Err(ProductionMapError::PrintPreflightNotReady);
+        }
         if matches!(
             (action.as_str(), hold.status),
             ("start", PrintPreflightStatus::Running)
@@ -235,6 +259,13 @@ impl ProductionMapService {
                 | ("reopen", PrintPreflightStatus::Running)
         ) {
             return Ok(hold);
+        }
+        // Legacy clients may finish an untouched trial. After any decision,
+        // mutations require a version, and reopening always requires one.
+        if expected_revision != Some(hold.revision)
+            && !(expected_revision.is_none() && hold.revision == 0 && action != "reopen")
+        {
+            return Err(ProductionMapError::PrintPreflightNotReady);
         }
         if !hold.is_live_at(now) {
             return Err(ProductionMapError::PrintPreflightNotReady);
@@ -255,6 +286,7 @@ impl ProductionMapService {
             _ => return Err(ProductionMapError::PrintPreflightActionNotAllowed),
         };
         hold.status = next_status;
+        hold.revision = next_revision(hold.revision)?;
         hold.actor = actor;
         hold.updated_at_unix = now;
         let event_id = if action == "reopen" {
@@ -306,4 +338,8 @@ impl ProductionMapService {
         }
         Ok(())
     }
+}
+
+fn next_revision(revision: i64) -> Result<i64, ProductionMapError> {
+    revision.checked_add(1).ok_or(ProductionMapError::PrintPreflightNotReady)
 }
