@@ -456,6 +456,13 @@ pub trait ProductionMapStorePort: Send + Sync {
         self.update_print_preflight_hold(hold).await?;
         Ok(None)
     }
+    /// Atomically reopen only an unconsumed, passed trial on an active order.
+    async fn reopen_print_preflight_hold_with_event(
+        &self,
+        _hold: PrintPreflightHold,
+    ) -> StoreResult<Option<String>> {
+        Err(ProductionMapError::PrintPreflightActionNotAllowed)
+    }
     async fn consume_print_preflight_hold(
         &self,
         _hold_id: &str,

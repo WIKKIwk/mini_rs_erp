@@ -403,6 +403,32 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         queue::refresh_production_order_lifecycles(self, &[order_id]).await
     }
 
+    async fn reopen_print_preflight_hold_with_event(
+        &self,
+        hold: PrintPreflightHold,
+    ) -> Result<Option<String>, ProductionMapError> {
+        let mut holds = self.print_preflight_holds.write().await;
+        let current = holds
+            .get_mut(hold.hold_id.trim())
+            .ok_or(ProductionMapError::PrintPreflightNotFound)?;
+        let states = self.queue_states.read().await;
+        let controls = self.order_controls.read().await;
+        if hold.status != PrintPreflightStatus::Running
+            || current.status != PrintPreflightStatus::Passed
+            || current.order_id != hold.order_id
+            || current.apparatus != hold.apparatus
+            || current.stage_node_id != hold.stage_node_id
+            || states.get(&hold.apparatus).and_then(|s| s.get(&hold.order_id))
+                .map(String::as_str) != Some("print_preflight")
+            || controls.get(&hold.order_id)
+                .is_some_and(|c| c.state != OrderControlState::Active)
+        {
+            return Err(ProductionMapError::PrintPreflightNotReady);
+        }
+        *current = hold;
+        Ok(None)
+    }
+
     async fn consume_print_preflight_hold(
         &self,
         hold_id: &str,

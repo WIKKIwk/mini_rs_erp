@@ -17,6 +17,82 @@ fn actor() -> QueueActionActor {
 }
 
 #[tokio::test]
+async fn reopen_passed_colour_restores_outcomes_without_moving_the_order() {
+    let store = Arc::new(MemoryProductionMapStore::new());
+    let service = service_with_default_apparatus(store.clone()).await;
+    let order_id = "zakaz-reopen-colour";
+    service.upsert_map(canonical_apparatus_stage_map(
+        order_id, PRINT_ID, "7 ta rangli bosma aparat",
+    )).await.unwrap();
+    let before = service.live_snapshot().await.unwrap();
+    let hold = service.begin_print_preflight(
+        PRINT_ID, order_id, "reopen-colour", "reopen-colour", actor(),
+    ).await.unwrap();
+    service.advance_print_preflight(
+        PRINT_ID, order_id, &hold.hold_id, "passed", actor(),
+    ).await.unwrap();
+    let passed = service.live_snapshot().await.unwrap();
+    let mut events = service.subscribe_live();
+    let reopened = service.advance_print_preflight(
+        PRINT_ID, order_id, &hold.hold_id, "reopen", actor(),
+    ).await.unwrap();
+    assert_eq!(reopened.status, PrintPreflightStatus::Running);
+    assert_eq!(reopened.hold_id, hold.hold_id);
+    assert_eq!(reopened.created_at_unix, hold.created_at_unix);
+    assert_eq!(reopened.previous_queue_state, hold.previous_queue_state);
+    events.try_recv().expect("reopening notifies live clients");
+    let running = service.live_snapshot().await.unwrap();
+    assert_eq!(running.sequences, passed.sequences);
+    assert_eq!(running.queue_states, passed.queue_states);
+    assert_eq!(running.order_statuses, passed.order_statuses);
+    let control = &running.queue_action_controls[PRINT_ID][order_id];
+    assert!(control.allowed_actions.is_empty());
+    assert_eq!(control.print_preflight.as_ref().unwrap().status, PrintPreflightStatus::Running);
+    assert!(store.order_run_sessions_for_order(order_id).await.unwrap().is_empty());
+    assert_eq!(service.advance_print_preflight(
+        PRINT_ID, order_id, &hold.hold_id, "reopen", actor(),
+    ).await.unwrap(), reopened);
+    assert!(events.try_recv().is_err(), "retry must not publish a second change");
+    service.advance_print_preflight(
+        PRINT_ID, order_id, &hold.hold_id, "failed", actor(),
+    ).await.unwrap();
+    let reset = service.live_snapshot().await.unwrap();
+    assert_eq!(reset.queue_states, before.queue_states);
+    assert_eq!(reset.order_statuses, before.order_statuses);
+}
+
+#[tokio::test]
+async fn reopen_colour_rejects_started_work_and_stale_persistence_requests() {
+    let store = Arc::new(MemoryProductionMapStore::new());
+    let service = service_with_default_apparatus(store.clone()).await;
+    let order_id = "zakaz-started-colour";
+    service.upsert_map(canonical_apparatus_stage_map(
+        order_id, PRINT_ID, "7 ta rangli bosma aparat",
+    )).await.unwrap();
+    let hold = service.begin_print_preflight(
+        PRINT_ID, order_id, "started-colour", "started-colour", actor(),
+    ).await.unwrap();
+    service.advance_print_preflight(
+        PRINT_ID, order_id, &hold.hold_id, "passed", actor(),
+    ).await.unwrap();
+    let mut start = service.prepare_apparatus_queue_action_with_progress(
+        PRINT_ID, order_id, queue_state::ApparatusQueueAction::Start,
+        &[PRINT_ID.to_string()], actor(), QueueProgressInput::default(),
+    ).await.unwrap();
+    start.attach_print_preflight_hold_id(&hold.hold_id);
+    service.commit_prepared_queue_action(start).await.unwrap();
+    assert!(matches!(service.advance_print_preflight(
+        PRINT_ID, order_id, &hold.hold_id, "reopen", actor(),
+    ).await, Err(ProductionMapError::PrintPreflightNotReady)));
+    assert!(matches!(store.reopen_print_preflight_hold_with_event(hold).await,
+        Err(ProductionMapError::PrintPreflightNotReady)));
+    let snapshot = service.live_snapshot().await.unwrap();
+    assert_eq!(snapshot.queue_states[PRINT_ID][order_id], "in_progress");
+    assert!(snapshot.queue_action_controls[PRINT_ID][order_id].print_preflight.is_none());
+    assert_eq!(store.order_run_sessions_for_order(order_id).await.unwrap().len(), 1);
+}
+
+#[tokio::test]
 async fn passed_colour_freeze_keeps_detail_controls_without_starting_production() {
     const LAMINATION_ID: &str = "apparatus:default:asset-007";
     let store = Arc::new(MemoryProductionMapStore::new());

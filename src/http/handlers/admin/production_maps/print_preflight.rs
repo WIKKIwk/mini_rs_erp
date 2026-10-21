@@ -73,7 +73,7 @@ pub async fn production_map_print_preflight(
                 .await
                 .map_err(production_map_error)?
         }
-        "start" | "passed" | "failed" | "cancel" => {
+        "start" | "passed" | "failed" | "cancel" | "reopen" => {
             if input.hold_id.trim().is_empty() {
                 return Err(bad_request("hold_id is required"));
             }

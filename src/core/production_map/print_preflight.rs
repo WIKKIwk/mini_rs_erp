@@ -232,6 +232,7 @@ impl ProductionMapService {
                 | ("passed", PrintPreflightStatus::Passed)
                 | ("failed", PrintPreflightStatus::Failed)
                 | ("cancel", PrintPreflightStatus::Cancelled)
+                | ("reopen", PrintPreflightStatus::Running)
         ) {
             return Ok(hold);
         }
@@ -244,6 +245,7 @@ impl ProductionMapService {
         let next_status = match (action.as_str(), hold.status) {
             ("start", PrintPreflightStatus::Held) => PrintPreflightStatus::Running,
             ("passed", PrintPreflightStatus::Running) => PrintPreflightStatus::Passed,
+            ("reopen", PrintPreflightStatus::Passed) => PrintPreflightStatus::Running,
             ("failed", PrintPreflightStatus::Held | PrintPreflightStatus::Running) => {
                 PrintPreflightStatus::Failed
             }
@@ -255,10 +257,17 @@ impl ProductionMapService {
         hold.status = next_status;
         hold.actor = actor;
         hold.updated_at_unix = now;
-        let event_id = self
-            .store
-            .update_print_preflight_hold_with_event(hold.clone())
-            .await?;
+        let event_id = if action == "reopen" {
+            // Recheck the committed hold and queue under the same database
+            // locks as Start, so a stale confirmation cannot undo real work.
+            self.store
+                .reopen_print_preflight_hold_with_event(hold.clone())
+                .await?
+        } else {
+            self.store
+                .update_print_preflight_hold_with_event(hold.clone())
+                .await?
+        };
         self.notify_print_preflight_once(event_id.as_deref(), &hold.order_id, &hold.apparatus);
         Ok(hold)
     }

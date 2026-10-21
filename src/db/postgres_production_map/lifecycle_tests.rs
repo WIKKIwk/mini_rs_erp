@@ -7,6 +7,7 @@ async fn postgres_print_preflight_persists_common_status_and_restores_without_ex
     let pool = isolated_pool().await;
     sqlx::raw_sql("
         CREATE TEMP TABLE mini_apparatus (id TEXT PRIMARY KEY, name TEXT);
+        CREATE TEMP TABLE mini_order_control_states (order_id TEXT PRIMARY KEY, state TEXT);
         ALTER TABLE mini_queue_states ADD COLUMN apparatus TEXT, ADD COLUMN updated_at TIMESTAMPTZ;
         ALTER TABLE mini_queue_states ADD PRIMARY KEY (canonical_apparatus_id, order_id);
         ALTER TABLE mini_queue_states ADD CONSTRAINT mini_queue_states_state_allowed
@@ -57,6 +58,23 @@ async fn postgres_print_preflight_persists_common_status_and_restores_without_ex
     let queue: String = sqlx::query_scalar("SELECT state FROM mini_queue_states WHERE order_id = 'colour'")
         .fetch_one(&pool).await.unwrap();
     assert_eq!(queue, "print_preflight");
+    hold.status = PrintPreflightStatus::Passed;
+    print_preflight::update(&pool, &hold).await.unwrap();
+    hold.status = PrintPreflightStatus::Running;
+    print_preflight::reopen_with_event(&pool, &hold).await.unwrap();
+    assert_eq!(print_preflight::load_active(&pool).await.unwrap(), vec![hold.clone()]);
+    // A Start committed on another connection must make a stale reopen fail.
+    sqlx::query("UPDATE mini_print_preflight_holds SET status = 'consumed' WHERE hold_id = $1")
+        .bind(&hold.hold_id).execute(&pool).await.unwrap();
+    assert!(matches!(print_preflight::reopen_with_event(&pool, &hold).await,
+        Err(ProductionMapError::PrintPreflightNotReady)));
+    sqlx::query("UPDATE mini_print_preflight_holds SET status = 'passed' WHERE hold_id = $1")
+        .bind(&hold.hold_id).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO mini_order_control_states VALUES ('colour', 'freeze_requested')")
+        .execute(&pool).await.unwrap();
+    assert!(matches!(print_preflight::reopen_with_event(&pool, &hold).await,
+        Err(ProductionMapError::PrintPreflightNotReady)));
+    sqlx::query("DELETE FROM mini_order_control_states").execute(&pool).await.unwrap();
     hold.status = PrintPreflightStatus::Failed;
     print_preflight::update(&pool, &hold).await.unwrap();
     let reset = load_production_order_lifecycles(&pool, &["colour".into()]).await.unwrap();

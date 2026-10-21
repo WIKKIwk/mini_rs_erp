@@ -152,11 +152,50 @@ pub(super) async fn update_with_event(
     pool: &PgPool,
     hold: &PrintPreflightHold,
 ) -> Result<String, ProductionMapError> {
+    update_with_event_checked(pool, hold, false).await
+}
+
+pub(super) async fn reopen_with_event(
+    pool: &PgPool,
+    hold: &PrintPreflightHold,
+) -> Result<String, ProductionMapError> {
+    update_with_event_checked(pool, hold, true).await
+}
+
+async fn update_with_event_checked(
+    pool: &PgPool,
+    hold: &PrintPreflightHold,
+    reopening: bool,
+) -> Result<String, ProductionMapError> {
     let mut tx = pool
         .begin()
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
     lock_order_and_apparatuses_tx(&mut tx, &hold.order_id, &[hold.apparatus.as_str()]).await?;
+    if reopening {
+        let ready: bool = sqlx::query_scalar(
+            "SELECT EXISTS (
+                SELECT 1 FROM mini_print_preflight_holds h
+                JOIN mini_queue_states q ON q.order_id = h.order_id
+                    AND q.canonical_apparatus_id = h.canonical_apparatus_id
+                LEFT JOIN mini_order_control_states c ON c.order_id = h.order_id
+                WHERE h.hold_id = $1 AND h.order_id = $2
+                    AND h.canonical_apparatus_id = $3 AND h.stage_node_id = $4
+                    AND h.status = 'passed' AND q.state = 'print_preflight'
+                    AND (c.state IS NULL OR c.state = 'active')
+            )",
+        )
+        .bind(&hold.hold_id)
+        .bind(&hold.order_id)
+        .bind(&hold.apparatus)
+        .bind(&hold.stage_node_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+        if hold.status != PrintPreflightStatus::Running || !ready {
+            return Err(ProductionMapError::PrintPreflightNotReady);
+        }
+    }
     let event_id = tag_preflight_notification(&mut tx, hold).await?;
     let result = sqlx::query(
         "UPDATE mini_print_preflight_holds
