@@ -50,7 +50,7 @@ fn store(state: &AppState) -> Result<&MaterialLinkStore, AdminError> {
         .ok_or_else(|| server_error("material_link_unavailable"))
 }
 
-async fn worker_scope(
+pub(super) async fn worker_scope(
     state: &AppState,
     principal: &Principal,
     order: &str,

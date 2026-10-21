@@ -125,6 +125,9 @@ pub struct MaterialLinkStore {
 }
 
 impl MaterialLinkStore {
+    pub(crate) fn production_store(&self) -> super::PostgresProductionMapStore {
+        super::PostgresProductionMapStore::new(self.pool.clone())
+    }
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }

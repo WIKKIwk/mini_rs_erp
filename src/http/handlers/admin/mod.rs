@@ -29,7 +29,7 @@ pub use customers::{
 pub use items::{item_detail, item_uoms};
 pub use production_maps::{
     production_map_layer_remainders, production_map_layer_remainder_reprint,
-    material_link_requests, production_map_active_paddon, production_map_apparatus_transfer,
+    material_link_requests, worker_material_use, production_map_active_paddon, production_map_apparatus_transfer,
     production_map_audit, production_map_auto_open, production_map_bosma_astatka,
     production_map_capacity, production_map_capacity_downtime, production_map_closed_orders,
     production_map_completed_orders, production_map_completion_request_decision,

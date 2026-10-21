@@ -63,6 +63,8 @@ pub use re_pause::production_map_re_pause;
 mod raw_material_details;
 mod material_link_requests;
 pub use material_link_requests::material_link_requests;
+mod worker_material_use;
+pub use worker_material_use::worker_material_use;
 pub(crate) use raw_materials::validate_receipt_order_assignment;
 mod raw_material_reprint;
 mod raw_materials;

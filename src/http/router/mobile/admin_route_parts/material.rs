@@ -2,6 +2,7 @@ fn material_routes() -> Router<AppState> {
     Router::new()
         .route("/v1/mobile/admin/raw-material-start-receipt", any(admin::raw_material_start_receipt))
         .route("/v1/mobile/material-link-requests", any(admin::material_link_requests))
+        .route("/v1/mobile/worker-material-use", any(admin::worker_material_use))
         .route(
             "/v1/mobile/admin/raw-material-rules",
             any(admin::raw_material_rules),
