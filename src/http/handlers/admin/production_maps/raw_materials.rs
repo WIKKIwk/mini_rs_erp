@@ -414,6 +414,7 @@ pub async fn raw_material_rules(
                     input.expected_revision,
                     CanonicalApparatusPatch {
                         policies: Some(ApparatusOperationalPolicies {
+                            worker_material_assignment_allowed: current.runtime.worker_material_assignment_allowed,
                             queue: current.queue.discipline,
                             material: input.material,
                             tooling: input.tooling,

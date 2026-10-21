@@ -117,6 +117,8 @@ pub struct RuntimeApparatusProjection {
     pub placement: Option<FactoryMapPlacement>,
     pub training: TrainingProfile,
     pub lifecycle: ApparatusLifecycle,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub worker_material_assignment_allowed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -260,6 +262,7 @@ pub fn project_apparatus_revision(
 
     let (id, source_revision, hash) = provenance();
     let runtime = RuntimeApparatusProjection {
+        worker_material_assignment_allowed: revision.policies.worker_material_assignment_allowed,
         apparatus_id: id,
         source_revision,
         source_aasx_sha256: hash,

@@ -159,6 +159,8 @@ pub struct ApparatusOperationalPolicies {
     pub queue: QueueDiscipline,
     pub material: MaterialExecutionPolicy,
     pub tooling: ToolingExecutionPolicy,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub worker_material_assignment_allowed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

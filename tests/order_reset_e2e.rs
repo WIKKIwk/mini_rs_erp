@@ -429,6 +429,7 @@ async fn seed_canonical_apparatus(
                     capability_compatible_reroute: true,
                 },
                 policies: ApparatusOperationalPolicies {
+                    worker_material_assignment_allowed: false,
                     queue: QueueDiscipline::StrictSequence,
                     material: MaterialExecutionPolicy::NotRequired {
                         item_group_ids: Vec::new(),

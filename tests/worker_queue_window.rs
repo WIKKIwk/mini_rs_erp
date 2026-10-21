@@ -156,6 +156,7 @@ impl Fixture {
                 config.runtime.source_revision,
                 CanonicalApparatusPatch {
                     policies: Some(ApparatusOperationalPolicies {
+                        worker_material_assignment_allowed: false,
                         queue: QueueDiscipline::FreePick,
                         material: config.material.policy.clone(),
                         tooling: config.material.tooling.clone(),
@@ -439,6 +440,7 @@ async fn window_is_bounded_revision_scoped_searchable_and_refills_over_websocket
             configuration.runtime.source_revision,
             CanonicalApparatusPatch {
                 policies: Some(ApparatusOperationalPolicies {
+                    worker_material_assignment_allowed: false,
                     queue: QueueDiscipline::FreePick,
                     material: configuration.material.policy.clone(),
                     tooling: configuration.material.tooling.clone(),

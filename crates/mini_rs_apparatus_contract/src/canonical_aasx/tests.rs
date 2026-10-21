@@ -25,6 +25,21 @@ fn revision_has_byte_identical_aasx_and_exact_hash() {
 }
 
 #[test]
+fn worker_material_assignment_is_opt_in_and_survives_aasx_roundtrip() {
+    let mut revision = fixture();
+    let legacy = serde_json::to_value(&revision).unwrap();
+    assert!(legacy["policies"].get("worker_material_assignment_allowed").is_none());
+    assert!(!serde_json::from_value::<CanonicalApparatusRevision>(legacy)
+        .unwrap().policies.worker_material_assignment_allowed);
+    revision.policies.worker_material_assignment_allowed = true;
+    let artifact = export_canonical_aasx(&revision).unwrap();
+    let parsed = parse_canonical_aasx(artifact.bytes()).unwrap();
+    assert!(parsed.policies.worker_material_assignment_allowed);
+    let projection = crate::projector::project_apparatus_revision(&parsed, artifact.sha256());
+    assert!(projection.runtime.worker_material_assignment_allowed);
+}
+
+#[test]
 fn optional_material_groups_are_preserved_in_deterministic_aasx() {
     let mut revision = fixture();
     revision.policies.material = MaterialExecutionPolicy::NotRequired {

@@ -303,6 +303,7 @@ pub async fn production_map_queue_policies(
                     input.expected_revision,
                     CanonicalApparatusPatch {
                         policies: Some(ApparatusOperationalPolicies {
+                            worker_material_assignment_allowed: current.runtime.worker_material_assignment_allowed,
                             queue: input.discipline,
                             material: current.material.policy.clone(),
                             tooling: current.material.tooling.clone(),

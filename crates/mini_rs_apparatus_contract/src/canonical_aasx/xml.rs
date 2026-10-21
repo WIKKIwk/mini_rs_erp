@@ -168,6 +168,9 @@ fn push_execution(xml: &mut String, revision: &CanonicalApparatusRevision) {
 
 fn push_policies(xml: &mut String, revision: &CanonicalApparatusRevision) {
     collection_start(xml, "OperationalPolicies");
+    if revision.policies.worker_material_assignment_allowed {
+        property(xml, "WorkerMaterialAssignmentAllowed", "xs:boolean", "true");
+    }
     property(
         xml,
         "QueueDiscipline",

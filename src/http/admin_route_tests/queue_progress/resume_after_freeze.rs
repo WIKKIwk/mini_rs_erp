@@ -27,6 +27,7 @@ async fn unfrozen_order_resumes_saved_resources_without_scans_in_both_queue_mode
                         current.runtime.source_revision,
                         CanonicalApparatusPatch {
                             policies: Some(ApparatusOperationalPolicies {
+                                worker_material_assignment_allowed: false,
                                 queue: discipline,
                                 material: current.material.policy.clone(),
                                 tooling: current.material.tooling.clone(),

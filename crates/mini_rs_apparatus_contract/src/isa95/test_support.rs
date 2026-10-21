@@ -48,6 +48,7 @@ pub fn revision_with(
                 capability_compatible_reroute: true,
             },
             policies: ApparatusOperationalPolicies {
+                worker_material_assignment_allowed: false,
                 queue: QueueDiscipline::StrictSequence,
                 material: MaterialExecutionPolicy::AllRequired {
                     item_group_ids: vec!["item-group:paint".to_string()],

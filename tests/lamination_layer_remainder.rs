@@ -112,6 +112,7 @@ async fn checks(pool: PgPool) {
             current.runtime.source_revision,
             CanonicalApparatusPatch {
                 policies: Some(ApparatusOperationalPolicies {
+                    worker_material_assignment_allowed: false,
                     queue: current.queue.discipline,
                     material: MaterialExecutionPolicy::AllRequired {
                         item_group_ids: vec!["All Item Groups".into()],

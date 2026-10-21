@@ -84,6 +84,7 @@ async fn checks(pool: PgPool) {
                 current.runtime.source_revision,
                 CanonicalApparatusPatch {
                     policies: Some(ApparatusOperationalPolicies {
+                        worker_material_assignment_allowed: false,
                         queue: current.queue.discipline,
                         material: MaterialExecutionPolicy::NotRequired {
                             item_group_ids: groups,
@@ -205,6 +206,7 @@ async fn checks(pool: PgPool) {
         let id = ApparatusId::new(LAM).unwrap();
         let current = canonical.current_configuration(&id).await.unwrap().unwrap();
         let optional_policies = ApparatusOperationalPolicies {
+            worker_material_assignment_allowed: false,
             queue: current.queue.discipline,
             material: current.material.policy.clone(),
             tooling: current.material.tooling.clone(),

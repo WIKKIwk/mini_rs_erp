@@ -588,6 +588,7 @@ async fn set_test_queue_policy(
         .expect("current canonical configuration")
         .expect("seeded canonical configuration");
     let policies = ApparatusOperationalPolicies {
+        worker_material_assignment_allowed: false,
         queue: match policy {
             ApparatusQueuePolicy::StrictSequence => QueueDiscipline::StrictSequence,
             ApparatusQueuePolicy::FreePick => QueueDiscipline::FreePick,
@@ -653,6 +654,7 @@ async fn set_test_material_rule(
             current.runtime.source_revision,
             CanonicalApparatusPatch {
                 policies: Some(ApparatusOperationalPolicies {
+                    worker_material_assignment_allowed: false,
                     queue: current.queue.discipline,
                     material,
                     tooling: current.material.tooling.clone(),
