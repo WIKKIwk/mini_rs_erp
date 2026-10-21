@@ -247,6 +247,29 @@ pub struct FormulaUpsert {
     pub lines: Vec<FormulaLine>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FormulaSetRename {
+    pub set_id: String,
+    pub name: String,
+}
+
+impl FormulaSetRename {
+    pub fn normalized(&self) -> Result<(&str, &str), PreparationError> {
+        let id = self.set_id.trim();
+        let name = self.name.trim();
+        if id.len() != 12 || !id.starts_with("9502") || !id.bytes().all(|c| c.is_ascii_digit()) {
+            return Err(PreparationError::Invalid("Formula komplekti kodi noto‘g‘ri"));
+        }
+        if name.is_empty() || name.chars().count() > 160 {
+            return Err(PreparationError::Invalid(
+                "Komplekt nomi 1–160 ta belgidan iborat bo‘lishi kerak",
+            ));
+        }
+        Ok((id, name))
+    }
+}
+
 fn default_formula_name() -> String {
     "Asosiy".to_string()
 }

@@ -100,7 +100,8 @@ async fn run_checks(pool: &PgPool, options: PgConnectOptions) {
         INSERT INTO mini_production_maps(id,product_code,title,code,map_json) VALUES
           ('o1','P','Product','O1','{}'),('o2','P','Product','O2','{}'),
           ('stale','P','Product','STALE','{}'),('empty','NO-FORMULA','Empty','EMPTY','{}'),
-          ('legacy','P','Legacy order','LEGACY','{}'),('unrelated','P','No matching scope','UNRELATED','{}');
+          ('legacy','P','Legacy order','LEGACY','{}'),('unrelated','P','No matching scope','UNRELATED','{}'),
+          ('template-o1','P','Product','','{}');
         INSERT INTO mini_order_products(id,order_id,product_name,layers_json) VALUES
           ('p1','o1','Product','[{\"material_id\":\"mat-a\"},{\"material_id\":\"mat-b\"}]'),
           ('p2','o2','Product','[{\"material_id\":\"mat-a\"}]'),
@@ -109,7 +110,8 @@ async fn run_checks(pool: &PgPool, options: PgConnectOptions) {
         INSERT INTO mini_quick_order_templates(id,owner_key,code,name,product_name,quick_key,payload_json) VALUES
           ('t1','test','LEGACY','Legacy','Product','legacy','{\"source_map_id\":\"legacy\",\"first_layer_material\":\"Mat A\"}'),
           ('t2','test','STALE','Stale','Product','stale','{\"source_map_id\":\"stale\",\"layers\":[{\"material_id\":\"mat-a\"}]}'),
-          ('t3','test','UNRELATED','Unrelated','Product','unrelated','{\"source_map_id\":\"different-order\",\"layers\":[{\"material_id\":\"mat-a\"}]}');")
+          ('t3','test','UNRELATED','Unrelated','Product','unrelated','{\"source_map_id\":\"different-order\",\"layers\":[{\"material_id\":\"mat-a\"}]}'),
+          ('t4','test','TEMPLATE','Saved product template','Product','template','{\"source_map_id\":\"template-o1\",\"layers\":[{\"material_id\":\"mat-a\"}]}');")
         .execute(pool).await.unwrap();
     let runtime = PgPoolOptions::new()
         .after_connect(|conn, _| {

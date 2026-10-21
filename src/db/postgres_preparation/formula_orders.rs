@@ -3,6 +3,7 @@ use super::*;
 impl PostgresPreparationStore {
     /// Formulas retain their existing owner/product/material identity. An order
     /// is shown only when its current layers match a currently assigned scope.
+    /// Product templates are not order entries, even when their layers match.
     /// Saved formulas without such an order remain manageable under their product.
     pub async fn formula_orders(&self, owner: &str) -> Result<Value, PreparationError> {
         let orders: Vec<Value> = sqlx::query_scalar(
@@ -14,7 +15,7 @@ impl PostgresPreparationStore {
                 JOIN mini_preparation_material_responsibilities r
                   ON r.principal_role='tayyorlov_masteri' AND r.principal_ref=$1
                  AND lower(r.material_id)=lower(f.material_id)
-                WHERE EXISTS (
+                WHERE m.id NOT LIKE 'template-%' AND (EXISTS (
                     SELECT 1 FROM mini_order_products p
                     LEFT JOIN LATERAL jsonb_array_elements(COALESCE(p.layers_json,'[]'::jsonb)) l ON true
                     WHERE p.order_id=m.id AND (
@@ -36,7 +37,7 @@ impl PostgresPreparationStore {
                         OR lower(t.payload_json->>'second_layer_material')=lower(r.material_name)
                         OR lower(t.payload_json->>'third_layer_material')=lower(r.material_name)
                       )
-                )
+                ))
             ), entries AS (
                 SELECT *, true AS has_order FROM matched
                 UNION ALL

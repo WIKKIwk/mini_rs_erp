@@ -422,6 +422,23 @@ pub async fn formula_orders(
         .map_err(error)
 }
 
+pub async fn formula_sets(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    let actor = authorize(&state, &headers).await?;
+    store(&state)?.formula_sets(&actor.ref_).await.map(Json).map_err(error)
+}
+
+pub async fn rename_formula_set(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<FormulaSetRename>,
+) -> Result<Json<Value>, ApiError> {
+    let actor = authorize(&state, &headers).await?;
+    store(&state)?.rename_formula_set(&actor.ref_, input).await.map(Json).map_err(error)
+}
+
 pub async fn saved_formula_show(
     State(state): State<AppState>,
     headers: HeaderMap,

@@ -22,6 +22,8 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/v1/mobile/werka/paddons/receive", axum::routing::post(crate::http::handlers::admin::werka_paddon_receive))
         .route("/v1/mobile/preparation/snapshot", get(crate::http::handlers::preparation::snapshot))
         .route("/v1/mobile/preparation/formula-orders", get(crate::http::handlers::preparation::formula_orders))
+        .route("/v1/mobile/preparation/formula-sets", get(crate::http::handlers::preparation::formula_sets)
+            .patch(crate::http::handlers::preparation::rename_formula_set))
         .route("/v1/mobile/preparation/formulas/saved", get(crate::http::handlers::preparation::saved_formula_show)
             .patch(crate::http::handlers::preparation::saved_formula_update)
             .delete(crate::http::handlers::preparation::saved_formula_delete))

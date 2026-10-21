@@ -7,6 +7,7 @@ use sqlx::{PgPool, Postgres, Row, Transaction};
 mod warehouses;
 mod materials;
 mod formula_orders;
+mod formula_sets;
 mod saved_formulas;
 
 impl From<sqlx::Error> for PreparationError {
