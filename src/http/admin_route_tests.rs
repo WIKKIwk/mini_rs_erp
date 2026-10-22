@@ -87,6 +87,7 @@ mod opening_wip;
 mod print_val;
 mod production_map_basic;
 mod production_map_canonical_snapshot;
+mod production_map_persistent_resume;
 mod queue_action_control_wait;
 mod progress_qr_order_control;
 mod production_map_save_order;
