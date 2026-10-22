@@ -27,17 +27,60 @@ fn insert_cors_headers(headers: &mut HeaderMap) {
     headers.insert(
         header::ACCESS_CONTROL_ALLOW_HEADERS,
         HeaderValue::from_static(
-            "authorization,content-length,content-range,content-type,idempotency-key,x-file-name,range,if-none-match",
+            "authorization,content-length,content-range,content-type,idempotency-key,x-file-name,range,if-none-match,prefer",
         ),
     );
     headers.insert(
         header::ACCESS_CONTROL_EXPOSE_HEADERS,
         HeaderValue::from_static(
-            "accept-ranges,content-length,content-range,content-type,location,etag",
+            "accept-ranges,content-length,content-range,content-type,location,etag,preference-applied",
         ),
     );
     headers.insert(
         header::ACCESS_CONTROL_MAX_AGE,
         HeaderValue::from_static("86400"),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{Router, middleware, routing::post};
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn browser_minimal_ack_preflight_allows_prefer_and_exposes_confirmation() {
+        let router = Router::new()
+            .route("/sequence", post(|| async { StatusCode::OK }))
+            .layer(middleware::from_fn(cors_headers));
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method(Method::OPTIONS)
+                    .uri("/sequence")
+                    .header(header::ORIGIN, "https://accord.example")
+                    .header(header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+                    .header(
+                        header::ACCESS_CONTROL_REQUEST_HEADERS,
+                        "authorization,content-type,prefer",
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        for (header, token) in [
+            (header::ACCESS_CONTROL_ALLOW_HEADERS, "prefer"),
+            (header::ACCESS_CONTROL_EXPOSE_HEADERS, "preference-applied"),
+        ] {
+            assert!(
+                response.headers()[header]
+                    .to_str()
+                    .unwrap()
+                    .split(',')
+                    .any(|value| value.trim().eq_ignore_ascii_case(token))
+            );
+        }
+    }
 }

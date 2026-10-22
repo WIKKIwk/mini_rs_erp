@@ -1,6 +1,7 @@
 mod archive_pdf;
 pub mod handlers;
 pub mod router;
+pub mod ws;
 
 #[cfg(test)]
 mod admin_route_tests;

@@ -1,4 +1,4 @@
-use super::live_delta::{LiveView, snapshot_patch};
+use super::live_delta::{LiveView, snapshot_patch_for_protocol};
 use super::live_feed::{LiveHistory, PreparedDelta};
 use crate::core::production_map::ProductionMapLiveSnapshot;
 use serde_json::{Map, Value};
@@ -28,6 +28,7 @@ pub(super) struct StateFeedData {
     pub view: Option<LiveView>,
     pub history: LiveHistory,
     pub used: Instant,
+    pub compact: bool,
 }
 
 impl Default for StateFeedData {
@@ -36,6 +37,7 @@ impl Default for StateFeedData {
             view: None,
             history: LiveHistory::default(),
             used: Instant::now(),
+            compact: false,
         }
     }
 }
@@ -50,12 +52,20 @@ struct PatchEntry {
     before: Weak<ProductionMapLiveSnapshot>,
     after: Weak<ProductionMapLiveSnapshot>,
     patch: Arc<str>,
+    compact: bool,
 }
 
 impl StateLiveHub {
     /// Actor identity is mandatory: completed history, decisions and training
     /// overlays are personal even when two workers operate the same apparatus.
+    #[cfg(test)]
     pub(super) fn feed(&self, key: String) -> Arc<StateFeed> {
+        self.feed_for_protocol(key, false)
+    }
+
+    pub(super) fn feed_for_protocol(&self, key: String, compact: bool) -> Arc<StateFeed> {
+        // Replay history is a protocol contract as well as an actor scope.
+        let key = format!("{}:{key}", u8::from(compact));
         let mut feeds = self.feeds.lock().expect("live feed registry poisoned");
         if let Some(feed) = feeds.get(&key) {
             return feed.clone();
@@ -83,7 +93,12 @@ impl StateLiveHub {
                 feeds.remove(&key);
             }
         }
-        let feed = Arc::new(StateFeed::default());
+        let feed = Arc::new(StateFeed {
+            data: tokio::sync::Mutex::new(StateFeedData {
+                compact,
+                ..StateFeedData::default()
+            }),
+        });
         // Uncached overflow remains correct and bounded per live connection.
         if feeds.len() < MAX_FEEDS {
             feeds.insert(key, feed.clone());
@@ -125,17 +140,28 @@ impl StateLiveHub {
 
     /// The expensive graph/list comparison and serialization is performed once
     /// for an identical before/after list pair, including across actor feeds.
+    #[cfg(test)]
     pub(super) fn snapshot_patch(
         &self,
         before: &Arc<ProductionMapLiveSnapshot>,
         after: &Arc<ProductionMapLiveSnapshot>,
     ) -> Arc<str> {
+        self.snapshot_patch_for_protocol(before, after, false)
+    }
+
+    pub(super) fn snapshot_patch_for_protocol(
+        &self,
+        before: &Arc<ProductionMapLiveSnapshot>,
+        after: &Arc<ProductionMapLiveSnapshot>,
+        compact: bool,
+    ) -> Arc<str> {
         let mut entries = self.patches.lock().expect("patch cache poisoned");
         if let Some(entry) = entries.iter().find(|entry| {
-            entry
-                .before
-                .upgrade()
-                .is_some_and(|value| Arc::ptr_eq(&value, before))
+            entry.compact == compact
+                && entry
+                    .before
+                    .upgrade()
+                    .is_some_and(|value| Arc::ptr_eq(&value, before))
                 && entry
                     .after
                     .upgrade()
@@ -143,9 +169,10 @@ impl StateLiveHub {
         }) {
             return entry.patch.clone();
         }
-        let patch: Arc<str> = serde_json::to_string(&snapshot_patch(before, after))
-            .expect("snapshot patch serialization")
-            .into();
+        let patch: Arc<str> =
+            serde_json::to_string(&snapshot_patch_for_protocol(before, after, compact))
+                .expect("snapshot patch serialization")
+                .into();
         if patch.len() > MAX_CACHED_PATCH_BYTES {
             return patch;
         }
@@ -157,6 +184,7 @@ impl StateLiveHub {
             before: Arc::downgrade(before),
             after: Arc::downgrade(after),
             patch: patch.clone(),
+            compact,
         });
         patch
     }
@@ -177,12 +205,13 @@ pub(super) fn join_patch(common: &Arc<str>, personal: &Map<String, Value>) -> Ar
 impl StateFeedData {
     pub(super) fn advance_unchanged(&mut self, revision: u64) {
         let view = self.view.as_mut().expect("initialized view");
-        self.history.push(PreparedDelta::new(
+        self.history.push(PreparedDelta::for_protocol(
             &view.epoch,
             &view.scope,
             view.revision,
             revision,
             Arc::from("{}"),
+            self.compact,
         ));
         view.revision = revision;
         self.used = Instant::now();
@@ -194,12 +223,13 @@ impl StateFeedData {
             if previous.epoch != next.epoch || previous.scope != next.scope || patch.is_none() {
                 self.history.clear();
             } else if previous.revision != next.revision {
-                self.history.push(PreparedDelta::new(
+                self.history.push(PreparedDelta::for_protocol(
                     &next.epoch,
                     &next.scope,
                     previous.revision,
                     next.revision,
                     patch.expect("checked patch"),
+                    self.compact,
                 ));
             }
         }
@@ -220,6 +250,40 @@ mod tests {
         let b = hub.feed("epoch/worker-b/scope".into());
         assert!(Arc::ptr_eq(&a, &repeated));
         assert!(!Arc::ptr_eq(&a, &b));
+    }
+
+    #[tokio::test]
+    async fn wire_versions_never_share_replay_or_prepared_patch_caches() {
+        let hub = StateLiveHub::default();
+        let legacy = hub.feed_for_protocol("same-actor/same-scope".into(), false);
+        let compact = hub.feed_for_protocol("same-actor/same-scope".into(), true);
+        assert!(!Arc::ptr_eq(&legacy, &compact));
+        assert!(!legacy.data.lock().await.compact);
+        assert!(compact.data.lock().await.compact);
+        let mut before = ProductionMapLiveSnapshot::default();
+        before.sequences.insert(
+            "press".into(),
+            (0..1_000).map(|i| format!("order-{i:06}")).collect(),
+        );
+        let mut after = before.clone();
+        after.sequences.get_mut("press").unwrap().rotate_right(1);
+        let (before, after) = (Arc::new(before), Arc::new(after));
+        let v1 = hub.snapshot_patch_for_protocol(&before, &after, false);
+        let v2 = hub.snapshot_patch_for_protocol(&before, &after, true);
+        assert!(!Arc::ptr_eq(&v1, &v2));
+        assert!(Arc::ptr_eq(
+            &v2,
+            &hub.snapshot_patch_for_protocol(&before, &after, true)
+        ));
+        let v1: Value = serde_json::from_str(&v1).unwrap();
+        let v2: Value = serde_json::from_str(&v2).unwrap();
+        assert_eq!(
+            v1["sequences"]["upsert"]["press"].as_array().unwrap().len(),
+            1_000
+        );
+        assert!(v1["sequences"].get("edit").is_none());
+        assert!(v2["sequences"]["upsert"].as_object().unwrap().is_empty());
+        assert_eq!(v2["sequences"]["edit"]["press"]["len"], 1_000);
     }
 
     #[test]

@@ -26,9 +26,11 @@ import struct
 import subprocess
 import threading
 import time
+import zlib
 from urllib.parse import urlencode, quote
 
 from order_stream_fixture import Fixture, private_json
+from sockudo_stream_benchmark import fingerprint, sequence_edit
 
 LIVE = "/v1/mobile/admin/production-maps/live"
 SNAPSHOT = "/v1/mobile/admin/production-maps/sequence"
@@ -58,8 +60,9 @@ class HTTP:
         self.port, self.token = port, token
         self.connection = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
 
-    def request(self, path, method="GET", payload=None):
+    def request(self, path, method="GET", payload=None, extra_headers=None):
         headers = {"Accept-Encoding": "gzip", "User-Agent": "Accord-stream-benchmark/1"}
+        headers.update(extra_headers or {})
         if self.token:
             headers["Authorization"] = "Bearer " + self.token
         body = None
@@ -84,6 +87,7 @@ class HTTP:
             "status": response.status, "latency_ms": elapsed,
             "body_bytes": len(raw), "decoded_bytes": len(decoded),
             "response_decode_ms": (time.perf_counter() - raw_complete) * 1000,
+            "preference_applied": response.getheader("Preference-Applied"),
         }, value
 
     def close(self):
@@ -91,20 +95,29 @@ class HTTP:
 
 
 class WS:
-    def __init__(self, port, token, query):
+    def __init__(self, port, token, query, compression=False):
         assert port in (18091, 18092)
         self.socket = socket.create_connection(("127.0.0.1", port), timeout=30)
         self.buffer = b""
         self.received = self.sent = 0
         self.fragments = []
+        self.fragment_compressed = False
+        self.fragment_wire_bytes = 0
+        self.inflater = None
+        self.server_no_context = False
+        self.window_bits = 15
         query = dict(query, token=token)
         path = LIVE + "?" + urlencode(query)
+        extension_offer = (
+            "Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits\r\n"
+            if compression else ""
+        )
         handshake = (
             "GET %s HTTP/1.1\r\nHost: 127.0.0.1:%s\r\n"
             "Upgrade: websocket\r\nConnection: Upgrade\r\n"
             "Sec-WebSocket-Key: YWNjb3JkLWJlbmNobWFyaw==\r\n"
-            "Sec-WebSocket-Version: 13\r\n\r\n"
-        ) % (path, port)
+            "Sec-WebSocket-Version: 13\r\n%s\r\n"
+        ) % (path, port, extension_offer)
         self.socket.sendall(handshake.encode())
         while b"\r\n\r\n" not in self.buffer:
             self.buffer += self.socket.recv(65536)
@@ -112,6 +125,24 @@ class WS:
         if b" 101 " not in head.split(b"\r\n")[0]:
             self.socket.close()
             raise RuntimeError("WebSocket handshake rejected")
+        headers = {
+            key.lower().strip(): value.strip()
+            for key, value in (
+                line.split(":", 1) for line in head.decode("ascii").split("\r\n")[1:]
+            )
+        }
+        extension = headers.get("sec-websocket-extensions", "")
+        if compression:
+            assert extension.startswith("permessage-deflate"), "Expected negotiated WS compression"
+        elif extension:
+            raise AssertionError("Server negotiated compression without a client offer")
+        self.compression = bool(extension)
+        for option in extension.split(";"):
+            option = option.strip()
+            if option == "server_no_context_takeover":
+                self.server_no_context = True
+            elif option.startswith("server_max_window_bits="):
+                self.window_bits = int(option.partition("=")[2])
 
     def exact(self, size):
         while len(self.buffer) < size:
@@ -151,15 +182,30 @@ class WS:
                 raise OSError("WebSocket closed by server")
             if opcode not in (0, 1):
                 continue
+            if opcode == 1:
+                assert not self.fragments, "Unexpected new fragmented message"
+                self.fragment_compressed = bool(head[0] & 0x40)
+                assert not self.fragment_compressed or self.compression
+            else:
+                assert not head[0] & 0x40
             self.fragments.append(payload)
+            self.fragment_wire_bytes += size + overhead
             if not head[0] & 0x80:
                 continue
             payload = b"".join(self.fragments)
             self.fragments = []
             raw_complete = time.perf_counter()
+            compressed_bytes = len(payload)
+            if self.fragment_compressed:
+                if self.inflater is None or self.server_no_context:
+                    self.inflater = zlib.decompressobj(-self.window_bits)
+                payload = self.inflater.decompress(payload + b"\x00\x00\xff\xff")
+                assert not self.inflater.unconsumed_tail
             value = json.loads(payload)
+            frame_bytes, self.fragment_wire_bytes = self.fragment_wire_bytes, 0
             return {
-                "payload_bytes": len(payload), "frame_bytes": size + overhead,
+                "payload_bytes": compressed_bytes, "decoded_bytes": len(payload),
+                "frame_bytes": frame_bytes,
                 "raw_complete_monotonic_s": raw_complete,
                 "json_decode_ms": (time.perf_counter() - raw_complete) * 1000,
             }, value
@@ -274,6 +320,9 @@ def field_patch(before, patch):
     for key in patch["remove"]:
         result.pop(key, None)
     result.update(patch["upsert"])
+    for key, edit in patch.get("edit", {}).items():
+        assert key in before and isinstance(before[key], list), "Missing edit baseline"
+        result[key] = sequence_edit(before[key], edit)
     return result
 
 
@@ -286,7 +335,7 @@ def apply_state(before, event):
         if field == "maps":
             mapped = {item["map"]["id"]: item for item in before["maps"]}
             after["maps"] = list(field_patch(mapped, patch).values())
-        elif field == "map_order":
+        elif field in ("map_order", "map_order_edit"):
             continue
         elif field in ("completed_orders", "completion_requests", "completion_request_decisions"):
             after[field] = patch
@@ -305,6 +354,11 @@ def apply_state(before, event):
     if "map_order" in event["patch"]:
         mapped = {item["map"]["id"]: item for item in after["maps"]}
         after["maps"] = [mapped[identifier] for identifier in event["patch"]["map_order"]]
+    elif "map_order_edit" in event["patch"]:
+        previous = [item["map"]["id"] for item in before["maps"]]
+        ordered = sequence_edit(previous, event["patch"]["map_order_edit"])
+        mapped = {item["map"]["id"]: item for item in after["maps"]}
+        after["maps"] = [mapped[identifier] for identifier in ordered]
     after["rev"] = event["rev"]
     return after
 
@@ -324,12 +378,16 @@ def comparable(snapshot):
 
 class Runner:
     def __init__(self, fixture, mode, clients, cycles, suffix="results",
-                 protocols="auto", status_cycles=None):
+                 protocols="auto", status_cycles=None, websocket_compression=False,
+                 minimal_ack=False):
         self.fixture, self.mode = fixture, mode
         self.server = fixture.metadata["servers"][mode]
         assert self.server["ready"]
         self.port, self.clients, self.cycles = self.server["port"], clients, cycles
         self.status_cycles = cycles if status_cycles is None else status_cycles
+        self.websocket_compression = websocket_compression
+        self.minimal_ack = minimal_ack
+        self.state_protocol = "state_delta_v2" if protocols == "modern-v2" else "state_delta_v1"
         self.sessions = []
         assert re.fullmatch(r"[a-z0-9-]+", suffix)
         self.suffix = suffix
@@ -338,13 +396,17 @@ class Runner:
         )
         self.result = {
             "mode": mode, "server": self.server,
-            "protocols": "legacy" if self.legacy_protocols else "modern",
+            "protocols": "legacy" if self.legacy_protocols else protocols,
+            "websocket_compression": websocket_compression,
             "include_control": True,
             "harness_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
             "command_config": {
                 "clients": clients, "cycles": cycles,
                 "status_cycles": self.status_cycles, "output_suffix": suffix,
                 "requested_protocols": protocols,
+                "state_protocol": self.state_protocol,
+                "websocket_compression": websocket_compression,
+                "minimal_ack_capability_probe": minimal_ack,
             },
             "dataset_dump_sha256": fixture.metadata["dump_sha256"],
             "source_counts": fixture.metadata["source_counts"],
@@ -496,9 +558,9 @@ class Runner:
         if snapshot is None:
             _, snapshot = self.snapshot(token)
         socket_ = WS(self.port, token, {
-            "protocol": "state_delta_v1", "worker_scope": "true", "queue_limit": "10",
+            "protocol": self.state_protocol, "worker_scope": "true", "queue_limit": "10",
             "epoch": snapshot["epoch"], "rev": snapshot["rev"], "scope": snapshot["scope"],
-        })
+        }, compression=self.websocket_compression)
         metric, ready = socket_.event()
         assert ready["type"] == "state_ready", "Expected state stream bootstrap"
         bootstrap_reload = None
@@ -774,9 +836,9 @@ class Runner:
                 self.receive(keeper, started)
             started = time.perf_counter()
             socket_ = WS(self.port, self.actor["token"], {
-                "protocol": "state_delta_v1", "worker_scope": "true", "queue_limit": "10",
+                "protocol": self.state_protocol, "worker_scope": "true", "queue_limit": "10",
                 "epoch": saved["epoch"], "rev": saved["rev"], "scope": saved["scope"],
-            })
+            }, compression=self.websocket_compression)
             replayed, reloads = 0, 0
             client = {"socket": socket_, "token": self.actor["token"], "view": saved}
             try:
@@ -906,7 +968,7 @@ class Runner:
             if self.legacy_protocols
             else {"protocol": "page_delta_v1", "pages": json.dumps([request])}
         )
-        socket_ = WS(self.port, self.admin, query)
+        socket_ = WS(self.port, self.admin, query, compression=self.websocket_compression)
         _, ready = socket_.event()
         assert ready["type"] == ("page_ready" if self.legacy_protocols else "page_window_ready")
         assert not ready.get("resync")
@@ -971,7 +1033,7 @@ class Runner:
         query = {} if self.legacy_protocols else {"protocol": "notifications_v1"}
         started = time.perf_counter()
         with Phase(self, "notifications_bootstrap"):
-            socket_ = WS(self.port, self.admin, query)
+            socket_ = WS(self.port, self.admin, query, compression=self.websocket_compression)
             metric, payload = socket_.event()
             elapsed = (time.perf_counter() - started) * 1000
         try:
@@ -1006,7 +1068,7 @@ class Runner:
         query = ({"protocol": "delta", "paged": "true"} if self.legacy_protocols else {
             "protocol": "page_delta_v1", "pages": json.dumps([request]),
         })
-        socket_ = WS(self.port, self.admin, query)
+        socket_ = WS(self.port, self.admin, query, compression=self.websocket_compression)
         _, ready = socket_.event()
         assert not ready.get("resync")
         records = []
@@ -1057,6 +1119,68 @@ class Runner:
                 client["socket"].close()
             socket_.close()
 
+    def minimal_ack_capability(self):
+        """Explicit opt-in with a complete canonical baseline, never a UI page."""
+        _, initial = self.get(self.admin, SNAPSHOT)
+        canonical = initial["sequences"][self.apparatus]
+        states = initial["queue_states"].get(self.apparatus, {})
+        pair = next((
+            (first, second) for first, second in zip(canonical, canonical[1:])
+            if all(states.get(item) not in ("in_progress", "paused", "print_preflight", "frozen")
+                   for item in (first, second))
+        ), None)
+        assert pair is not None, "No canonical movable pair for minimal ACK probe"
+        current, records = initial, []
+        for minimal, anchor in ((False, "after_order_id"), (True, "before_order_id")):
+            previous = list(current["sequences"][self.apparatus])
+            version = current["sequence_versions"][self.apparatus]
+            client = HTTP(self.port, self.admin)
+            try:
+                metric, response = client.request(SNAPSHOT, "POST", {
+                    "apparatus": self.apparatus, "order_id": pair[0], anchor: pair[1],
+                    "expected_version": version,
+                    "idempotency_key": "bench-minimal-ack-" + str(time.time_ns()),
+                }, extra_headers={"Prefer": "return=minimal"} if minimal else None)
+            finally:
+                client.close()
+            assert response.get("ops"), "ACK probe did not change the sequence"
+            if minimal:
+                assert "order_ids" not in response
+                assert metric["preference_applied"] == "return=minimal"
+                assert response["base_version"] == version
+                reconstructed = list(previous)
+                for operation in response["ops"]:
+                    assert operation["type"] == "move"
+                    assert operation["base_version"] == version
+                    assert operation["version"] == response["version"]
+                    item = operation["id"]
+                    assert reconstructed.count(item) == 1
+                    reconstructed.remove(item)
+                    before, after = operation.get("before_id"), operation.get("after_id")
+                    if before is not None:
+                        index = reconstructed.index(before)
+                    elif after is not None:
+                        index = reconstructed.index(after) + 1
+                    else:
+                        assert not reconstructed
+                        index = 0
+                    assert (reconstructed[index - 1] if index > 0 else None) == after
+                    assert (reconstructed[index] if index < len(reconstructed) else None) == before
+                    reconstructed.insert(index, item)
+                assert response["order_count"] == len(reconstructed)
+                assert response["order_hash"] == fingerprint(reconstructed)
+            else:
+                reconstructed = response["order_ids"]
+            _, current = self.get(self.admin, SNAPSHOT)
+            assert reconstructed == current["sequences"][self.apparatus]
+            records.append({"response": "minimal" if minimal else "full", **metric,
+                "canonical_queue_orders": len(reconstructed), "exact_rest_match": True})
+        assert current["sequences"][self.apparatus] == canonical
+        self.result["minimal_ack_capability"] = {"records": records,
+            "complete_canonical_baseline": True, "original_order_restored": True,
+            "paged_admin_default": "full ACK retained"}
+        self.save()
+
     def run(self, query_counts_only=False, latency_repeat=False, status_repeat=False):
         self.result["command_config"].update(
             query_counts_only=query_counts_only, latency_repeat=latency_repeat,
@@ -1097,6 +1221,8 @@ class Runner:
             self.admin_page(verify_each=True)
             self.admin_page(view="orders", apparatus="", length=60, verify_each=True)
             self.reorder()
+            if self.minimal_ack:
+                self.minimal_ack_capability()
             self.notifications()
         finally:
             for token in self.sessions:
@@ -1117,7 +1243,11 @@ def main():
     parser.add_argument("--clients", default="1,8,32")
     parser.add_argument("--cycles", type=int, default=5)
     parser.add_argument("--status-cycles", type=int, help="Override worker status cycles only")
-    parser.add_argument("--protocols", choices=("auto", "legacy", "modern"), default="auto")
+    parser.add_argument("--protocols", choices=("auto", "legacy", "modern", "modern-v2"), default="auto")
+    parser.add_argument("--websocket-compression", action="store_true",
+                        help="Offer/require permessage-deflate for the new transport")
+    parser.add_argument("--minimal-ack", action="store_true",
+                        help="Probe explicit minimal ACK using a complete canonical baseline")
     variant = parser.add_mutually_exclusive_group()
     variant.add_argument("--query-counts-only", action="store_true")
     variant.add_argument("--latency-repeat", action="store_true")
@@ -1133,7 +1263,7 @@ def main():
     if not re.fullmatch(r"[a-z0-9-]+", args.output_suffix):
         parser.error("Output suffix accepts lowercase letters, digits and hyphens")
     Runner(Fixture(args.run_dir), args.mode, clients, args.cycles, args.output_suffix,
-           args.protocols, args.status_cycles).run(
+           args.protocols, args.status_cycles, args.websocket_compression, args.minimal_ack).run(
         query_counts_only=args.query_counts_only, latency_repeat=args.latency_repeat,
         status_repeat=args.status_repeat,
     )

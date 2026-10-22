@@ -1,0 +1,1650 @@
+--- a/src/axum_integration.rs
++++ b/src/axum_integration.rs
+@@ -40,6 +40,7 @@
+ use axum::body::Body;
+ use axum::http::{Method, Response, StatusCode, header};
+ use axum::response::IntoResponse;
++use base64::Engine;
+ use futures_core::Stream;
+ use futures_sink::Sink;
+ use hyper::upgrade::OnUpgrade;
+@@ -66,12 +67,37 @@
+ pub struct WebSocketUpgrade {
+     key: String,
+     protocol: Option<String>,
++    offered_protocols: Vec<String>,
+     extensions: Option<String>,
+     config: Config,
+     on_upgrade: OnUpgrade,
+ }
+ 
+ impl WebSocketUpgrade {
++    /// Select the first server-supported subprotocol offered by the client.
++    /// No protocol is selected by default; a query-level application protocol
++    /// must never accidentally be conflated with Sec-WebSocket-Protocol.
++    pub fn protocols<I, P>(mut self, protocols: I) -> Self
++    where
++        I: IntoIterator<Item = P>,
++        P: AsRef<str>,
++    {
++        self.protocol = protocols.into_iter().find_map(|protocol| {
++            let protocol = protocol.as_ref();
++            let valid_token = !protocol.is_empty()
++                && protocol
++                    .bytes()
++                    .all(|byte| byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte));
++            (valid_token
++                && self
++                    .offered_protocols
++                    .iter()
++                    .any(|offered| offered == protocol))
++            .then(|| protocol.to_owned())
++        });
++        self
++    }
++
+     /// Set a custom configuration
+     pub fn config(mut self, config: Config) -> Self {
+         self.config = config;
+@@ -112,27 +138,27 @@
+         #[cfg(feature = "permessage-deflate")]
+         let (extensions, negotiated_deflate) = {
+             // Get deflate config from either explicit config or compression mode
+-            let deflate_config = handler_config
++            let mut deflate_config = handler_config
+                 .deflate
+                 .clone()
+                 .or_else(|| handler_config.compression.to_deflate_config());
+ 
++            if handler_config.compression.is_shared()
++                && let Some(config) = deflate_config.as_mut()
++            {
++                // A pooled encoder cannot retain another connection's history.
++                config.server_no_context_takeover = true;
++            }
++
+             if let Some(ref server_config) = deflate_config {
+                 // Check if client offers permessage-deflate
+-                let negotiated = self.extensions.as_deref().and_then(|ext| {
+-                    crate::deflate::parse_deflate_offer(ext).and_then(|params| {
+-                        // Parse and validate deflate parameters from the client's offer
+-                        crate::deflate::DeflateConfig::from_params(&params)
+-                            .ok()
+-                            .map(|_client_config| {
+-                                // Use server's config but respect client's constraints
+-                                server_config.clone()
+-                            })
+-                    })
+-                });
+-
+-                if let Some(ref config) = negotiated {
+-                    (Some(config.to_response_header()), Some(config.clone()))
++                let negotiated = self
++                    .extensions
++                    .as_deref()
++                    .and_then(|ext| crate::deflate::negotiate_deflate(ext, server_config));
++
++                if let Some((response, config)) = negotiated {
++                    (Some(response), Some(config))
+                 } else {
+                     (None, None)
+                 }
+@@ -198,7 +224,10 @@
+             .and_then(|v| v.to_str().ok())
+             .ok_or(WebSocketUpgradeRejection::MissingUpgradeHeader)?;
+ 
+-        if !upgrade.to_ascii_lowercase().contains("websocket") {
++        if !upgrade
++            .split(',')
++            .any(|token| token.trim().eq_ignore_ascii_case("websocket"))
++        {
+             return Err(WebSocketUpgradeRejection::InvalidUpgradeHeader);
+         }
+ 
+@@ -209,7 +238,10 @@
+             .and_then(|v| v.to_str().ok())
+             .ok_or(WebSocketUpgradeRejection::MissingConnectionHeader)?;
+ 
+-        if !connection.to_ascii_lowercase().contains("upgrade") {
++        if !connection
++            .split(',')
++            .any(|token| token.trim().eq_ignore_ascii_case("upgrade"))
++        {
+             return Err(WebSocketUpgradeRejection::InvalidConnectionHeader);
+         }
+ 
+@@ -221,6 +253,11 @@
+             .ok_or(WebSocketUpgradeRejection::MissingSecWebSocketKey)?
+             .to_string();
+ 
++        if !matches!(base64::engine::general_purpose::STANDARD.decode(&key), Ok(decoded) if decoded.len() == 16)
++        {
++            return Err(WebSocketUpgradeRejection::InvalidSecWebSocketKey);
++        }
++
+         // Check Sec-WebSocket-Version
+         let version = parts
+             .headers
+@@ -233,18 +270,25 @@
+         }
+ 
+         // Optional: Sec-WebSocket-Protocol
+-        let protocol = parts
++        let offered_protocols = parts
+             .headers
+-            .get("sec-websocket-protocol")
+-            .and_then(|v| v.to_str().ok())
+-            .map(|s| s.split(',').next().unwrap_or("").trim().to_string());
++            .get_all("sec-websocket-protocol")
++            .iter()
++            .filter_map(|value| value.to_str().ok())
++            .flat_map(|value| value.split(','))
++            .map(|value| value.trim().to_owned())
++            .collect();
+ 
+         // Optional: Sec-WebSocket-Extensions
+         let extensions = parts
+             .headers
+-            .get("sec-websocket-extensions")
+-            .and_then(|v| v.to_str().ok())
+-            .map(|s| s.to_string());
++            .get_all("sec-websocket-extensions")
++            .iter()
++            .map(|value| value.to_str())
++            .collect::<std::result::Result<Vec<_>, _>>()
++            .ok()
++            .filter(|values| !values.is_empty())
++            .map(|values| values.join(", "));
+ 
+         // Extract OnUpgrade from extensions (placed there by Axum/Hyper)
+         let on_upgrade = parts
+@@ -254,7 +298,8 @@
+ 
+         Ok(WebSocketUpgrade {
+             key,
+-            protocol,
++            protocol: None,
++            offered_protocols,
+             extensions,
+             config: Config::default(),
+             on_upgrade,
+@@ -271,6 +316,7 @@
+     MissingConnectionHeader,
+     InvalidConnectionHeader,
+     MissingSecWebSocketKey,
++    InvalidSecWebSocketKey,
+     MissingSecWebSocketVersion,
+     UnsupportedVersion,
+     MissingUpgrade,
+@@ -285,6 +331,7 @@
+             Self::MissingConnectionHeader => (StatusCode::BAD_REQUEST, "Missing Connection header"),
+             Self::InvalidConnectionHeader => (StatusCode::BAD_REQUEST, "Invalid Connection header"),
+             Self::MissingSecWebSocketKey => (StatusCode::BAD_REQUEST, "Missing Sec-WebSocket-Key"),
++            Self::InvalidSecWebSocketKey => (StatusCode::BAD_REQUEST, "Invalid Sec-WebSocket-Key"),
+             Self::MissingSecWebSocketVersion => {
+                 (StatusCode::BAD_REQUEST, "Missing Sec-WebSocket-Version")
+             }
+@@ -686,6 +733,92 @@
+ mod tests {
+     use super::*;
+ 
++    #[tokio::test]
++    async fn subprotocols_are_only_selected_from_explicit_server_support() {
++        let mut request = axum::http::Request::builder()
++            .method("GET")
++            .header("upgrade", "websocket")
++            .header("connection", "Upgrade")
++            .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
++            .header("sec-websocket-version", "13")
++            .header(
++                "sec-websocket-protocol",
++                "unsupported, accord.v2, accord.v1",
++            )
++            .body(())
++            .unwrap();
++        let on_upgrade = hyper::upgrade::on(&mut request);
++        request.extensions_mut().insert(on_upgrade);
++        let (mut parts, _) = request.into_parts();
++        let upgrade = WebSocketUpgrade::from_request_parts(&mut parts, &())
++            .await
++            .unwrap();
++        assert!(
++            upgrade.protocol.is_none(),
++            "unsupported offers must not be echoed"
++        );
++        let upgrade = upgrade.protocols(["accord.v1", "accord.v2"]);
++        assert_eq!(upgrade.protocol.as_deref(), Some("accord.v1"));
++        assert!(
++            upgrade
++                .protocols(["unsupported-by-client"])
++                .protocol
++                .is_none()
++        );
++    }
++
++    #[tokio::test]
++    async fn extractor_rejects_invalid_key_and_substring_header_tokens() {
++        for (upgrade, connection, key, rejection) in [
++            ("websocket", "Upgrade", "invalid", "key"),
++            ("websocket", "Upgrade", "YQ==", "key"),
++            (
++                "not-websocket",
++                "Upgrade",
++                "dGhlIHNhbXBsZSBub25jZQ==",
++                "upgrade",
++            ),
++            (
++                "websocket",
++                "not-upgrade",
++                "dGhlIHNhbXBsZSBub25jZQ==",
++                "connection",
++            ),
++        ] {
++            let request = axum::http::Request::builder()
++                .method("GET")
++                .header("upgrade", upgrade)
++                .header("connection", connection)
++                .header("sec-websocket-key", key)
++                .header("sec-websocket-version", "13")
++                .body(())
++                .unwrap();
++            let (mut parts, _) = request.into_parts();
++            let error = WebSocketUpgrade::from_request_parts(&mut parts, &())
++                .await
++                .err()
++                .unwrap();
++            assert!(match rejection {
++                "key" => matches!(error, WebSocketUpgradeRejection::InvalidSecWebSocketKey),
++                "upgrade" => matches!(error, WebSocketUpgradeRejection::InvalidUpgradeHeader),
++                _ => matches!(error, WebSocketUpgradeRejection::InvalidConnectionHeader),
++            });
++        }
++        let request = axum::http::Request::builder()
++            .method("GET")
++            .header("upgrade", "WebSocket")
++            .header("connection", "keep-alive, Upgrade")
++            .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
++            .header("sec-websocket-version", "13")
++            .body(())
++            .unwrap();
++        let (mut parts, _) = request.into_parts();
++        assert!(matches!(
++            WebSocketUpgrade::from_request_parts(&mut parts, &()).await,
++            Err(WebSocketUpgradeRejection::MissingUpgrade)
++        ));
++    }
++
+     #[test]
+     fn test_accept_key() {
+         // RFC 6455 test vector
+@@ -843,27 +976,32 @@
+         state: &HeartbeatTestState,
+     ) {
+         let mut stream = connect_raw_websocket(address, path, deflate).await;
+-        tokio::time::pause();
+-        tokio::task::yield_now().await;
+-
+-        tokio::time::advance(std::time::Duration::from_secs(1)).await;
+-        let first_ping = read_server_control_frame(&mut stream, 0x09).await;
++        // Real TCP readiness and Tokio's automatically advancing paused clock
++        // race each other. Use bounded real time for this socket integration;
++        // deterministic virtual-time cases remain in the in-memory tests.
++        let deadline = std::time::Duration::from_secs(3);
++        let first_ping =
++            tokio::time::timeout(deadline, read_server_control_frame(&mut stream, 0x09))
++                .await
++                .unwrap();
+         assert_eq!(first_ping.len(), 8);
+         send_masked_pong(&mut stream, &first_ping).await;
+-        tokio::time::resume();
+-        state.pong_seen.notified().await;
+-        tokio::time::pause();
+-
+-        tokio::time::advance(std::time::Duration::from_secs(1)).await;
+-        let second_ping = read_server_control_frame(&mut stream, 0x09).await;
++        tokio::time::timeout(deadline, state.pong_seen.notified())
++            .await
++            .unwrap();
++
++        let second_ping =
++            tokio::time::timeout(deadline, read_server_control_frame(&mut stream, 0x09))
++                .await
++                .unwrap();
+         assert_eq!(second_ping.len(), 8);
+         assert_ne!(first_ping, second_ping);
+ 
+-        tokio::time::advance(std::time::Duration::from_secs(1)).await;
+-        let close = read_server_control_frame(&mut stream, 0x08).await;
++        let close = tokio::time::timeout(deadline, read_server_control_frame(&mut stream, 0x08))
++            .await
++            .unwrap();
+         assert_eq!(u16::from_be_bytes([close[0], close[1]]), 4201);
+         assert_eq!(&close[2..], b"Pong reply not received in time");
+-        tokio::time::resume();
+     }
+ 
+     #[cfg(feature = "permessage-deflate")]
+--- a/src/compression.rs
++++ b/src/compression.rs
+@@ -6,7 +6,8 @@
+ //! - **Shared**: Connections share a pool of compressors
+ //! - **Window sizes**: Various window sizes for memory/compression tradeoffs
+ 
+-use std::sync::Arc;
++use std::collections::HashMap;
++use std::sync::{Arc, OnceLock, Weak};
+ 
+ use bytes::Bytes;
+ use parking_lot::Mutex;
+@@ -39,14 +40,7 @@
+             Compression::Disabled => CompressionContext::Disabled,
+             Compression::Shared => {
+                 let config = mode.to_deflate_config().unwrap();
+-                CompressionContext::Shared {
+-                    pool: Arc::new(SharedCompressorPool::new(config.clone())),
+-                    decoder: DeflateDecoder::new(
+-                        config.client_max_window_bits,
+-                        config.client_no_context_takeover,
+-                    ),
+-                    config,
+-                }
++                Self::server_with_config(mode, config)
+             }
+             _ => {
+                 let config = mode.to_deflate_config().unwrap();
+@@ -62,7 +56,7 @@
+             Compression::Shared => {
+                 let config = mode.to_deflate_config().unwrap();
+                 CompressionContext::Shared {
+-                    pool: Arc::new(SharedCompressorPool::new(config.clone())),
++                    pool: configured_shared_pool(&config, false),
+                     decoder: DeflateDecoder::new(
+                         config.server_max_window_bits,
+                         config.server_no_context_takeover,
+@@ -74,6 +68,31 @@
+                 let config = mode.to_deflate_config().unwrap();
+                 CompressionContext::Dedicated(DeflateContext::client(config))
+             }
++        }
++    }
++
++    /// Construct from the configuration agreed during the server handshake.
++    /// Context takeover must have been disabled on the wire before pooling.
++    pub fn server_with_config(mode: Compression, config: DeflateConfig) -> Self {
++        if mode.is_shared() && config.server_no_context_takeover {
++            Self::Shared {
++                pool: configured_shared_pool(&config, true),
++                decoder: DeflateDecoder::new(
++                    config.client_max_window_bits,
++                    config.client_no_context_takeover,
++                ),
++                config,
++            }
++        } else {
++            Self::Dedicated(DeflateContext::server(config))
++        }
++    }
++
++    pub(crate) fn into_parts(self) -> (DeflateDecoder, CompressionEncoder) {
++        match self {
++            Self::Dedicated(ctx) => (ctx.decoder, CompressionEncoder::Dedicated(ctx.encoder)),
++            Self::Shared { pool, decoder, .. } => (decoder, CompressionEncoder::Shared(pool)),
++            Self::Disabled => unreachable!("compressed protocol requires a compression context"),
+         }
+     }
+ 
+@@ -107,7 +126,8 @@
+ 
+     /// Compress a message payload
+     ///
+-    /// Returns `None` if compression is disabled or if compression wouldn't reduce size.
++    /// Returns `None` if compression is disabled, below threshold, or an
++    /// independent (no takeover) encoding would not reduce size.
+     pub fn compress(&mut self, data: &[u8]) -> Result<Option<Bytes>> {
+         match self {
+             CompressionContext::Disabled => Ok(None),
+@@ -141,6 +161,21 @@
+             CompressionContext::Disabled => None,
+             CompressionContext::Dedicated(ctx) => Some(&ctx.config),
+             CompressionContext::Shared { config, .. } => Some(config),
++        }
++    }
++}
++
++/// Writer state preserved when a compressed protocol is split.
++pub(crate) enum CompressionEncoder {
++    Dedicated(DeflateEncoder),
++    Shared(Arc<SharedCompressorPool>),
++}
++
++impl CompressionEncoder {
++    pub(crate) fn compress(&mut self, data: &[u8]) -> Result<Option<Bytes>> {
++        match self {
++            Self::Dedicated(encoder) => encoder.compress(data),
++            Self::Shared(pool) => pool.compress(data),
+         }
+     }
+ }
+@@ -161,10 +196,18 @@
+ impl SharedCompressorPool {
+     /// Create a new shared compressor pool
+     pub fn new(config: DeflateConfig) -> Self {
++        Self::for_role(config, true)
++    }
++
++    fn for_role(config: DeflateConfig, is_server: bool) -> Self {
+         let encoders = (0..SHARED_POOL_SIZE)
+             .map(|_| {
+                 Mutex::new(DeflateEncoder::new(
+-                    config.server_max_window_bits,
++                    if is_server {
++                        config.server_max_window_bits
++                    } else {
++                        config.client_max_window_bits
++                    },
+                     true, // Always reset for shared mode (no context takeover)
+                     config.compression_level,
+                     config.compression_threshold,
+@@ -197,6 +240,23 @@
+     }
+ }
+ 
++/// Weak entries prevent negotiated configurations from retaining compressor
++/// memory after their last connection closes. Every live connection with the
++/// same exact agreement and role receives the same pool.
++fn configured_shared_pool(config: &DeflateConfig, is_server: bool) -> Arc<SharedCompressorPool> {
++    type PoolRegistry = Mutex<HashMap<(DeflateConfig, bool), Weak<SharedCompressorPool>>>;
++    static POOLS: OnceLock<PoolRegistry> = OnceLock::new();
++    let mut pools = POOLS.get_or_init(|| Mutex::new(HashMap::new())).lock();
++    let key = (config.clone(), is_server);
++    if let Some(pool) = pools.get(&key).and_then(Weak::upgrade) {
++        return pool;
++    }
++    pools.retain(|_, pool| pool.strong_count() != 0);
++    let pool = Arc::new(SharedCompressorPool::for_role(config.clone(), is_server));
++    pools.insert(key, Arc::downgrade(&pool));
++    pool
++}
++
+ /// Global shared compressor pool for the default `Shared` mode
+ ///
+ /// This is initialized lazily and provides a singleton pool for
+@@ -208,7 +268,7 @@
+     GLOBAL_POOL
+         .get_or_init(|| {
+             let config = Compression::Shared.to_deflate_config().unwrap();
+-            Arc::new(SharedCompressorPool::new(config))
++            configured_shared_pool(&config, true)
+         })
+         .clone()
+ }
+@@ -216,6 +276,61 @@
+ #[cfg(test)]
+ mod tests {
+     use super::*;
++
++    #[test]
++    fn negotiated_shared_contexts_reuse_only_matching_pools() {
++        let config = Compression::Shared.to_deflate_config().unwrap();
++        let first = CompressionContext::server_with_config(Compression::Shared, config.clone());
++        let second = CompressionContext::server_with_config(Compression::Shared, config.clone());
++        let different = CompressionContext::server_with_config(
++            Compression::Shared,
++            DeflateConfig {
++                server_max_window_bits: 11,
++                ..config
++            },
++        );
++        match (first, second, different) {
++            (
++                CompressionContext::Shared { pool: a, .. },
++                CompressionContext::Shared { pool: b, .. },
++                CompressionContext::Shared { pool: c, .. },
++            ) => {
++                assert!(Arc::ptr_eq(&a, &b));
++                assert!(!Arc::ptr_eq(&a, &c));
++            }
++            _ => panic!("Shared mode must use an actual shared encoder pool"),
++        }
++    }
++
++    #[test]
++    fn shared_connections_do_not_leak_dictionary_between_clients() {
++        let config = Compression::Shared.to_deflate_config().unwrap();
++        let mut a = CompressionContext::server_with_config(Compression::Shared, config.clone());
++        let mut b = CompressionContext::server_with_config(Compression::Shared, config.clone());
++        let mut client_a = DeflateContext::client(config.clone());
++        let mut client_b = DeflateContext::client(config);
++        for revision in 0..24 {
++            let first = format!("private actor a; queue revision {revision}; ").repeat(40);
++            let second = format!("private actor b; queue revision {revision}; ").repeat(40);
++            let compressed_a = a.compress(first.as_bytes()).unwrap().unwrap();
++            let compressed_b = b.compress(second.as_bytes()).unwrap().unwrap();
++            assert_eq!(
++                client_a.decompress(&compressed_a, 8192).unwrap().as_ref(),
++                first.as_bytes()
++            );
++            assert_eq!(
++                client_b.decompress(&compressed_b, 8192).unwrap().as_ref(),
++                second.as_bytes()
++            );
++        }
++    }
++
++    #[test]
++    fn shared_mode_does_not_override_an_already_negotiated_takeover_agreement() {
++        let context =
++            CompressionContext::server_with_config(Compression::Shared, DeflateConfig::default());
++        assert!(matches!(context, CompressionContext::Dedicated(_)));
++    }
+ 
+     #[test]
+     fn test_compression_context_disabled() {
+--- a/src/deflate.rs
++++ b/src/deflate.rs
+@@ -21,7 +21,7 @@
+ pub const MAX_WINDOW_BITS: u8 = 15;
+ 
+ /// Configuration for permessage-deflate extension
+-#[derive(Debug, Clone)]
++#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+ pub struct DeflateConfig {
+     /// Server's maximum LZ77 window bits (for compression when server, decompression when client)
+     pub server_max_window_bits: u8,
+@@ -78,8 +78,14 @@
+     /// Parse extension parameters from handshake
+     pub fn from_params(params: &[(&str, Option<&str>)]) -> Result<Self> {
+         let mut config = Self::default();
++        let mut seen = std::collections::HashSet::new();
+ 
+         for (name, value) in params {
++            if !seen.insert(*name) {
++                return Err(Error::HandshakeFailed(
++                    "duplicate permessage-deflate parameter",
++                ));
++            }
+             match *name {
+                 "server_no_context_takeover" => {
+                     if value.is_some() {
+@@ -96,34 +102,16 @@
+                         ));
+                     }
+                     config.client_no_context_takeover = true;
+-                    // When client uses no_context_takeover, server should too
+-                    // to ensure decompression works correctly on client side
+-                    config.server_no_context_takeover = true;
+                 }
+                 "server_max_window_bits" => {
+-                    if let Some(v) = value {
+-                        let bits: u8 = v.parse().map_err(|_| {
+-                            Error::HandshakeFailed("invalid server_max_window_bits value")
+-                        })?;
+-                        if !(MIN_WINDOW_BITS..=MAX_WINDOW_BITS).contains(&bits) {
+-                            return Err(Error::HandshakeFailed(
+-                                "server_max_window_bits out of range (8-15)",
+-                            ));
+-                        }
+-                        config.server_max_window_bits = bits;
+-                    }
++                    let v = value.ok_or(Error::HandshakeFailed(
++                        "server_max_window_bits requires a value",
++                    ))?;
++                    config.server_max_window_bits = parse_window_bits(v)?;
+                 }
+                 "client_max_window_bits" => {
+                     if let Some(v) = value {
+-                        let bits: u8 = v.parse().map_err(|_| {
+-                            Error::HandshakeFailed("invalid client_max_window_bits value")
+-                        })?;
+-                        if !(MIN_WINDOW_BITS..=MAX_WINDOW_BITS).contains(&bits) {
+-                            return Err(Error::HandshakeFailed(
+-                                "client_max_window_bits out of range (8-15)",
+-                            ));
+-                        }
+-                        config.client_max_window_bits = bits;
++                        config.client_max_window_bits = parse_window_bits(v)?;
+                     }
+                     // If no value, client just indicates support
+                 }
+@@ -195,8 +183,9 @@
+ 
+     /// Compress a message payload
+     ///
+-    /// Returns None if the message is too small to benefit from compression
+-    /// or if compression would make it larger.
++    /// Returns None before touching the dictionary for messages below the
++    /// threshold. After an attempted compression, a context-taking encoder must
++    /// send the compressed result even if larger, keeping the peer in sync.
+     pub fn compress(&mut self, data: &[u8]) -> Result<Option<Bytes>> {
+         if data.len() < self.threshold {
+             return Ok(None);
+@@ -233,21 +222,14 @@
+             let before_out = self.compress.total_out();
+             let before_in = self.compress.total_in();
+ 
+-            // Get writable slice using spare_capacity_mut to avoid UB with uninitialized memory.
+-            // We get the spare capacity, compress into it, then only set_len for bytes actually written.
++            // flate2's uninitialized-output API accepts spare capacity directly;
++            // never reinterpret uninitialized memory as initialized byte values.
+             let out_start = output.len();
+             let spare = output.spare_capacity_mut();
+ 
+-            // SAFETY: We're creating a &mut [u8] from MaybeUninit<u8> slice.
+-            // flate2's compress() will write to this buffer and tell us how many bytes were written.
+-            // We only call set_len() for the bytes that were actually initialized by compress().
+-            let spare_slice = unsafe {
+-                std::slice::from_raw_parts_mut(spare.as_mut_ptr() as *mut u8, spare.len())
+-            };
+-
+             let status = self
+                 .compress
+-                .compress(input, spare_slice, FlushCompress::Sync)
++                .compress_uninit(input, spare, FlushCompress::Sync)
+                 .map_err(|e| Error::Compression(format!("deflate error: {}", e)))?;
+ 
+             let consumed = (self.compress.total_in() - before_in) as usize;
+@@ -255,7 +237,7 @@
+ 
+             total_in += consumed;
+ 
+-            // SAFETY: compress() wrote exactly `produced` bytes to spare_slice.
++            // SAFETY: compress_uninit() initialized exactly `produced` bytes.
+             // We're only extending the length by the number of bytes that were initialized.
+             unsafe {
+                 output.set_len(out_start + produced);
+@@ -263,7 +245,7 @@
+ 
+             match status {
+                 Status::Ok | Status::BufError => {
+-                    if total_in >= data.len() {
++                    if total_in >= data.len() && output.len() < output.capacity() {
+                         break;
+                     }
+                 }
+@@ -277,7 +259,7 @@
+         }
+ 
+         // Only use compression if it actually reduces size
+-        if output.len() >= data.len() {
++        if self.no_context_takeover && output.len() >= data.len() {
+             return Ok(None);
+         }
+ 
+@@ -302,7 +284,9 @@
+     /// Create a new decoder
+     pub fn new(window_bits: u8, no_context_takeover: bool) -> Self {
+         // Use raw deflate (no zlib header) with the negotiated window_bits
+-        let decompress = Decompress::new_with_window_bits(false, window_bits);
++        // A 9-bit decoder also accepts a peer's valid 8-bit DEFLATE stream.
++        // flate2 does not expose an 8-bit allocation and would otherwise panic.
++        let decompress = Decompress::new_with_window_bits(false, window_bits.max(9));
+ 
+         Self {
+             decompress,
+@@ -324,7 +308,8 @@
+         input.extend_from_slice(&DEFLATE_TRAILER);
+ 
+         // Start with reasonable output buffer (at least 1KB or 4x input)
+-        let initial_cap = std::cmp::max(1024, data.len() * 4);
++        let allocation_limit = max_size.saturating_add(1);
++        let initial_cap = std::cmp::max(1024, data.len().saturating_mul(4)).min(allocation_limit);
+         let mut output = BytesMut::with_capacity(initial_cap);
+         let mut total_in: usize = 0;
+         let mut iterations = 0u32;
+@@ -346,31 +331,28 @@
+             // Ensure we have space in output buffer
+             let available = output.capacity() - output.len();
+             if available == 0 {
+-                if output.capacity() >= max_size {
++                if output.len() >= allocation_limit {
+                     return Err(Error::MessageTooLarge);
+                 }
+                 // At least double or add 4KB, whichever is larger
+-                let additional = std::cmp::max(output.capacity(), 4096);
++                let additional =
++                    std::cmp::max(output.capacity(), 4096).min(allocation_limit - output.len());
+                 output.reserve(additional);
+             }
+ 
+             let before_out = self.decompress.total_out();
+             let before_in = self.decompress.total_in();
+ 
+-            // Get writable slice using spare_capacity_mut to avoid UB with uninitialized memory.
++            // Restrict the uninitialized output slice before asking flate2 to
++            // initialize it, keeping the decompressed limit independently bound.
+             let out_start = output.len();
+             let spare = output.spare_capacity_mut();
+-
+-            // SAFETY: We're creating a &mut [u8] from MaybeUninit<u8> slice.
+-            // flate2's decompress() will write to this buffer and tell us how many bytes were written.
+-            // We only call set_len() for the bytes that were actually initialized by decompress().
+-            let spare_slice = unsafe {
+-                std::slice::from_raw_parts_mut(spare.as_mut_ptr() as *mut u8, spare.len())
+-            };
++            let writable = spare.len().min(allocation_limit - out_start);
++            let spare = &mut spare[..writable];
+ 
+             let status = self
+                 .decompress
+-                .decompress(&input[total_in..], spare_slice, FlushDecompress::Sync)
++                .decompress_uninit(&input[total_in..], spare, FlushDecompress::Sync)
+                 .map_err(|e| Error::Compression(format!("inflate error: {}", e)))?;
+ 
+             let consumed = (self.decompress.total_in() - before_in) as usize;
+@@ -378,10 +360,20 @@
+ 
+             total_in += consumed;
+ 
+-            // SAFETY: decompress() wrote exactly `produced` bytes to spare_slice.
++            // SAFETY: decompress_uninit() initialized exactly `produced` bytes.
+             // We're only extending the length by the number of bytes that were initialized.
+             unsafe {
+                 output.set_len(out_start + produced);
++            }
++
++            if output.len() > max_size {
++                return Err(Error::MessageTooLarge);
++            }
++            if consumed == 0 && produced == 0 {
++                if total_in == input.len() {
++                    break;
++                }
++                return Err(Error::Compression("inflate made no progress".into()));
+             }
+ 
+             match status {
+@@ -468,49 +460,285 @@
+     }
+ }
+ 
+-/// Parse permessage-deflate extension parameters from header value
++fn parse_window_bits(value: &str) -> Result<u8> {
++    if !matches!(value, "8" | "9" | "10" | "11" | "12" | "13" | "14" | "15") {
++        return Err(Error::HandshakeFailed(
++            "invalid permessage-deflate window bits",
++        ));
++    }
++    Ok(value.parse().expect("validated decimal window bits"))
++}
++
++// Extension separators inside HTTP quoted strings do not delimit offers or
++// parameters. An unterminated quote invalidates the header rather than making
++// an arbitrary suffix into a separately negotiated extension.
++fn split_extensions(value: &str, delimiter: u8) -> Option<Vec<&str>> {
++    let mut parts = Vec::new();
++    let (mut start, mut quoted, mut escaped) = (0, false, false);
++    for (index, byte) in value.bytes().enumerate() {
++        if escaped {
++            escaped = false;
++        } else if quoted && byte == b'\\' {
++            escaped = true;
++        } else if byte == b'"' {
++            quoted = !quoted;
++        } else if !quoted && byte == delimiter {
++            parts.push(value[start..index].trim());
++            start = index + 1;
++        }
++    }
++    if quoted || escaped {
++        return None;
++    }
++    parts.push(value[start..].trim());
++    Some(parts)
++}
++
++/// Parse a single permessage-deflate offer. Header alternatives are handled by
++/// `negotiate_deflate`, never folded into the first offer's parameters.
+ pub fn parse_deflate_offer(value: &str) -> Option<Vec<(&str, Option<&str>)>> {
+-    let value = value.trim();
+-
+-    // Check if this is a permessage-deflate offer
+-    if !value.starts_with("permessage-deflate") {
++    let parts = split_extensions(value, b';')?;
++    if *parts.first()? != "permessage-deflate" {
+         return None;
+     }
+-
+-    let rest = value.strip_prefix("permessage-deflate")?.trim_start();
+-
+-    if rest.is_empty() {
+-        return Some(Vec::new());
+-    }
+-
+-    // Must start with semicolon if there are parameters
+-    if !rest.starts_with(';') {
+-        return None;
+-    }
+-
+     let mut params = Vec::new();
+-
+-    for part in rest[1..].split(';') {
+-        let part = part.trim();
+-        if part.is_empty() {
+-            continue;
+-        }
+-
++    for part in &parts[1..] {
++        if part.is_empty() || part.contains(',') {
++            return None;
++        }
+         if let Some((name, value)) = part.split_once('=') {
+             let name = name.trim();
+-            let value = value.trim().trim_matches('"');
++            let value = value.trim();
++            let value = if value.starts_with('"') {
++                value.strip_prefix('"')?.strip_suffix('"')?
++            } else {
++                value
++            };
++            if name.is_empty() || value.is_empty() || value.contains(['"', '\\']) {
++                return None;
++            }
+             params.push((name, Some(value)));
+         } else {
+-            params.push((part, None));
+-        }
+-    }
+-
++            params.push((*part, None));
++        }
++    }
+     Some(params)
++}
++
++/// Negotiate the first supported offer from an RFC 6455 extension list.
++/// The returned configuration is exactly what the response advertises.
++pub fn negotiate_deflate(
++    value: &str,
++    preferred: &DeflateConfig,
++) -> Option<(String, DeflateConfig)> {
++    if !(9..=15).contains(&preferred.server_max_window_bits)
++        || !(8..=15).contains(&preferred.client_max_window_bits)
++        || preferred.compression_level > 9
++    {
++        return None;
++    }
++    for offer in split_extensions(value, b',')? {
++        let Some(params) = parse_deflate_offer(offer) else {
++            continue;
++        };
++        let Ok(client) = DeflateConfig::from_params(&params) else {
++            continue;
++        };
++        let has = |name: &str| params.iter().any(|(key, _)| *key == name);
++        let mut agreed = preferred.clone();
++        agreed.server_max_window_bits = preferred
++            .server_max_window_bits
++            .min(client.server_max_window_bits);
++        // flate2 cannot encode with an 8-bit window. Decline that offer, leaving
++        // the connection uncompressed or allowing a later compatible offer.
++        if agreed.server_max_window_bits < 9 {
++            continue;
++        }
++        agreed.server_no_context_takeover |= client.server_no_context_takeover;
++        agreed.client_no_context_takeover |= client.client_no_context_takeover;
++        agreed.client_max_window_bits = if has("client_max_window_bits") {
++            preferred
++                .client_max_window_bits
++                .min(client.client_max_window_bits)
++        } else {
++            // MUST NOT advertise client_max_window_bits unless it was offered.
++            MAX_WINDOW_BITS
++        };
++        let mut response = agreed.to_response_header();
++        // Explicit 15-bit limits must also be echoed when offered; omitting
++        // them otherwise means the normal, implicit RFC 7692 32 KiB default.
++        if has("server_max_window_bits") && agreed.server_max_window_bits == MAX_WINDOW_BITS {
++            response.push_str("; server_max_window_bits=15");
++        }
++        if has("client_max_window_bits") && agreed.client_max_window_bits == MAX_WINDOW_BITS {
++            response.push_str("; client_max_window_bits=15");
++        }
++        return Some((response, agreed));
++    }
++    None
+ }
+ 
+ #[cfg(test)]
+ mod tests {
+     use super::*;
++
++    #[test]
++    fn takeover_keeps_dictionary_in_sync_when_compression_expands() {
++        let config = DeflateConfig {
++            compression_threshold: 0,
++            ..Default::default()
++        };
++        let mut server = DeflateContext::server(config.clone());
++        let mut client = DeflateContext::client(config);
++        let mut seed = 0x9e37_79b9u32;
++        let noise: Vec<u8> = (0..512)
++            .map(|_| {
++                seed ^= seed << 13;
++                seed ^= seed >> 17;
++                seed ^= seed << 5;
++                seed as u8
++            })
++            .collect();
++        let first = server
++            .compress(&noise)
++            .unwrap()
++            .expect("mutated context must be sent");
++        assert!(
++            first.len() >= noise.len(),
++            "fixture must exercise the expanding branch"
++        );
++        assert_eq!(client.decompress(&first, 4096).unwrap().as_ref(), noise);
++        let repeated = noise.repeat(4);
++        let second = server.compress(&repeated).unwrap().unwrap();
++        assert_eq!(client.decompress(&second, 4096).unwrap().as_ref(), repeated);
++    }
++
++    #[test]
++    fn no_takeover_can_skip_expanding_message_without_affecting_next_message() {
++        let config = DeflateConfig {
++            server_no_context_takeover: true,
++            compression_threshold: 0,
++            ..Default::default()
++        };
++        let mut server = DeflateContext::server(config.clone());
++        let mut client = DeflateContext::client(config);
++        assert!(server.compress(b"1").unwrap().is_none());
++        let next = b"queue revision apparatus order controls ".repeat(20);
++        let payload = server.compress(&next).unwrap().unwrap();
++        assert_eq!(client.decompress(&payload, 4096).unwrap().as_ref(), next);
++    }
++
++    #[test]
++    fn negotiation_respects_each_direction_and_rejects_unsupported_windows() {
++        let (header, agreed) = negotiate_deflate(
++            "permessage-deflate; server_max_window_bits=10; client_max_window_bits=12; server_no_context_takeover",
++            &DeflateConfig::default(),
++        ).unwrap();
++        assert_eq!(agreed.server_max_window_bits, 10);
++        assert_eq!(agreed.client_max_window_bits, 12);
++        assert!(agreed.server_no_context_takeover);
++        assert!(header.contains("server_max_window_bits=10"));
++        assert!(header.contains("client_max_window_bits=12"));
++        assert!(
++            negotiate_deflate(
++                "permessage-deflate; server_max_window_bits=8",
++                &DeflateConfig::default()
++            )
++            .is_none()
++        );
++    }
++
++    #[test]
++    fn negotiation_does_not_advertise_unoffered_client_window_constraint() {
++        let preferred = DeflateConfig::low_memory();
++        let (header, agreed) = negotiate_deflate("permessage-deflate", &preferred).unwrap();
++        assert_eq!(agreed.client_max_window_bits, 15);
++        assert!(!header.contains("client_max_window_bits"));
++    }
++
++    #[test]
++    fn negotiation_handles_alternative_offers_and_quoted_parameters() {
++        let (header, agreed) = negotiate_deflate(
++            "other-extension; value=\"a,b;c\", permessage-deflate; unknown=1, permessage-deflate; server_max_window_bits=\"11\"; client_max_window_bits",
++            &DeflateConfig::default(),
++        ).unwrap();
++        assert_eq!(agreed.server_max_window_bits, 11);
++        assert!(header.contains("client_max_window_bits=15"));
++        assert!(
++            negotiate_deflate(
++                "permessage-deflate; server_max_window_bits=8, permessage-deflate",
++                &DeflateConfig::default()
++            )
++            .is_some()
++        );
++    }
++
++    #[test]
++    fn malformed_parameters_and_duplicates_are_declined() {
++        for offer in [
++            "permessage-deflate; server_max_window_bits",
++            "permessage-deflate; server_max_window_bits=09",
++            "permessage-deflate; server_max_window_bits=+9",
++            "permessage-deflate; server_max_window_bits=16",
++            "permessage-deflate; server_no_context_takeover=1",
++            "permessage-deflate; client_max_window_bits=10; client_max_window_bits=12",
++            "permessage-deflate; client_no_context_takeover; client_no_context_takeover",
++            "permessage-deflate; client_max_window_bits=\"12",
++            "permessage-deflate;",
++        ] {
++            assert!(
++                negotiate_deflate(offer, &DeflateConfig::default()).is_none(),
++                "accepted {offer}"
++            );
++        }
++    }
++
++    #[test]
++    fn client_no_context_takeover_does_not_force_server_no_context_takeover() {
++        let config = DeflateConfig::from_params(&[("client_no_context_takeover", None)]).unwrap();
++        assert!(config.client_no_context_takeover);
++        assert!(!config.server_no_context_takeover);
++    }
++
++    #[test]
++    fn decompressed_size_limit_is_checked_before_returning_a_single_chunk() {
++        let mut encoder = DeflateEncoder::new(15, true, 3, 0);
++        let message = b"large queue snapshot ".repeat(200);
++        let encoded = encoder.compress(&message).unwrap().unwrap();
++        assert!(matches!(
++            DeflateDecoder::new(15, true).decompress(&encoded, 100),
++            Err(Error::MessageTooLarge)
++        ));
++        assert_eq!(
++            DeflateDecoder::new(15, true)
++                .decompress(&encoded, message.len())
++                .unwrap()
++                .as_ref(),
++            message
++        );
++    }
++
++    #[test]
++    fn multi_megabyte_incompressible_message_finishes_the_deflate_flush() {
++        let mut seed = 0x1234_5678u32;
++        let message: Vec<u8> = (0..(2 * 1024 * 1024))
++            .map(|_| {
++                seed ^= seed << 13;
++                seed ^= seed >> 17;
++                seed ^= seed << 5;
++                seed as u8
++            })
++            .collect();
++        let mut encoder = DeflateEncoder::new(15, false, 3, 0);
++        let encoded = encoder.compress(&message).unwrap().unwrap();
++        assert_eq!(
++            DeflateDecoder::new(15, false)
++                .decompress(&encoded, message.len())
++                .unwrap()
++                .as_ref(),
++            message
++        );
++    }
+ 
+     #[test]
+     fn test_compress_decompress() {
+--- a/src/protocol.rs
++++ b/src/protocol.rs
+@@ -14,7 +14,9 @@
+ use crate::utf8::{validate_utf8, validate_utf8_incomplete};
+ 
+ #[cfg(feature = "permessage-deflate")]
+-use crate::deflate::{DeflateConfig, DeflateContext};
++use crate::compression::{CompressionContext, CompressionEncoder};
++#[cfg(feature = "permessage-deflate")]
++use crate::deflate::DeflateConfig;
+ 
+ /// WebSocket endpoint role
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+@@ -729,7 +731,7 @@
+     /// Base protocol handler
+     inner: Protocol,
+     /// Deflate compression context
+-    deflate: DeflateContext,
++    deflate: CompressionContext,
+     /// Whether the current fragmented message is compressed
+     fragment_compressed: bool,
+     /// Buffer for decompressed fragment data
+@@ -740,12 +742,27 @@
+ impl CompressedProtocol {
+     /// Create a new compressed protocol handler for server role
+     pub fn server(max_frame_size: usize, max_message_size: usize, config: DeflateConfig) -> Self {
++        Self::server_with_compression(
++            max_frame_size,
++            max_message_size,
++            config,
++            crate::Compression::Dedicated,
++        )
++    }
++
++    /// Build with the requested encoder ownership after extension negotiation.
++    pub fn server_with_compression(
++        max_frame_size: usize,
++        max_message_size: usize,
++        config: DeflateConfig,
++        mode: crate::Compression,
++    ) -> Self {
+         let mut inner = Protocol::new(Role::Server, max_frame_size, max_message_size);
+         inner.enable_compression();
+ 
+         Self {
+             inner,
+-            deflate: DeflateContext::server(config),
++            deflate: CompressionContext::server_with_config(mode, config),
+             fragment_compressed: false,
+             decompress_buf: BytesMut::new(),
+         }
+@@ -758,7 +775,7 @@
+ 
+         Self {
+             inner,
+-            deflate: DeflateContext::client(config),
++            deflate: CompressionContext::Dedicated(crate::deflate::DeflateContext::client(config)),
+             fragment_compressed: false,
+             decompress_buf: BytesMut::new(),
+         }
+@@ -827,6 +844,12 @@
+     fn handle_frame(&mut self, frame: Frame) -> Result<Option<Message>> {
+         let is_compressed = frame.header.rsv1;
+ 
++        if is_compressed && !matches!(frame.header.opcode, OpCode::Text | OpCode::Binary) {
++            return Err(Error::Protocol(
++                "RSV1 is only valid on the first data frame",
++            ));
++        }
++
+         match frame.header.opcode {
+             OpCode::Continuation => self.handle_continuation(frame),
+             OpCode::Text => self.handle_text(frame, is_compressed),
+@@ -860,6 +883,9 @@
+             } else {
+                 frame.payload
+             };
++            if payload.len() > self.inner.max_message_size {
++                return Err(Error::MessageTooLarge);
++            }
+ 
+             if !validate_utf8(&payload) {
+                 return Err(Error::InvalidUtf8);
+@@ -904,6 +930,9 @@
+             } else {
+                 frame.payload
+             };
++            if payload.len() > self.inner.max_message_size {
++                return Err(Error::MessageTooLarge);
++            }
+             Ok(Some(Message::Binary(payload)))
+         } else {
+             // Start of fragmented message
+@@ -1023,6 +1052,7 @@
+         max_message_size: usize,
+     ) -> (CompressedReaderProtocol, CompressedWriterProtocol) {
+         let role = self.inner.role;
++        let (decoder, encoder) = self.deflate.into_parts();
+ 
+         // Create fresh reader protocol (decoder state)
+         let reader = CompressedReaderProtocol {
+@@ -1031,15 +1061,12 @@
+             fragment_buf: self.inner.fragment_buf,
+             fragment_opcode: self.inner.fragment_opcode,
+             max_message_size,
+-            decoder: self.deflate.decoder,
++            decoder,
+             fragment_compressed: self.fragment_compressed,
+         };
+ 
+         // Create fresh writer protocol (encoder state)
+-        let writer = CompressedWriterProtocol {
+-            role,
+-            encoder: self.deflate.encoder,
+-        };
++        let writer = CompressedWriterProtocol { role, encoder };
+ 
+         (reader, writer)
+     }
+@@ -1132,6 +1159,12 @@
+     fn handle_frame(&mut self, frame: Frame) -> Result<Option<Message>> {
+         let is_compressed = frame.header.rsv1;
+ 
++        if is_compressed && !matches!(frame.header.opcode, OpCode::Text | OpCode::Binary) {
++            return Err(Error::Protocol(
++                "RSV1 is only valid on the first data frame",
++            ));
++        }
++
+         match frame.header.opcode {
+             OpCode::Continuation => self.handle_continuation(frame),
+             OpCode::Text => self.handle_text(frame, is_compressed),
+@@ -1155,6 +1188,9 @@
+             } else {
+                 frame.payload
+             };
++            if payload.len() > self.max_message_size {
++                return Err(Error::MessageTooLarge);
++            }
+ 
+             if !validate_utf8(&payload) {
+                 return Err(Error::InvalidUtf8);
+@@ -1180,6 +1216,9 @@
+             } else {
+                 frame.payload
+             };
++            if payload.len() > self.max_message_size {
++                return Err(Error::MessageTooLarge);
++            }
+             Ok(Some(Message::Binary(payload)))
+         } else {
+             self.fragment_compressed = compressed;
+@@ -1283,7 +1322,79 @@
+     /// Endpoint role
+     role: Role,
+     /// Deflate encoder
+-    encoder: crate::deflate::DeflateEncoder,
++    encoder: CompressionEncoder,
++}
++
++#[cfg(all(test, feature = "permessage-deflate"))]
++mod accord_compression_tests {
++    use super::*;
++
++    #[test]
++    fn negotiated_compression_rejects_rsv1_on_control_or_continuation_frames() {
++        for opcode in [
++            OpCode::Ping,
++            OpCode::Pong,
++            OpCode::Close,
++            OpCode::Continuation,
++        ] {
++            let mut encoded = BytesMut::new();
++            encode_frame_with_rsv(&mut encoded, opcode, b"", true, None, true);
++            let mut client = CompressedProtocol::client(1024, 1024, DeflateConfig::default());
++            assert!(matches!(
++                client.process(&mut encoded.clone()),
++                Err(Error::Protocol(_))
++            ));
++            let (mut reader, _) = client.split(1024, 1024);
++            assert!(matches!(
++                reader.process(&mut encoded),
++                Err(Error::Protocol(_))
++            ));
++        }
++    }
++
++    #[test]
++    fn negotiated_compression_still_limits_uncompressed_data_messages() {
++        for opcode in [OpCode::Text, OpCode::Binary] {
++            let mut encoded = BytesMut::new();
++            encode_frame(&mut encoded, opcode, &[b'a'; 32], true, None);
++            let mut client = CompressedProtocol::client(1024, 16, DeflateConfig::default());
++            assert!(matches!(
++                client.process(&mut encoded.clone()),
++                Err(Error::MessageTooLarge)
++            ));
++            let (mut reader, _) = client.split(1024, 16);
++            assert!(matches!(
++                reader.process(&mut encoded),
++                Err(Error::MessageTooLarge)
++            ));
++        }
++    }
++
++    #[test]
++    fn shared_protocol_keeps_pool_after_split_and_roundtrips() {
++        let config = crate::Compression::Shared.to_deflate_config().unwrap();
++        let server = CompressedProtocol::server_with_compression(
++            8192,
++            8192,
++            config.clone(),
++            crate::Compression::Shared,
++        );
++        assert!(matches!(&server.deflate, CompressionContext::Shared { .. }));
++        let (_, mut writer) = server.split(8192, 8192);
++        assert!(matches!(&writer.encoder, CompressionEncoder::Shared(_)));
++        let mut client = CompressedProtocol::client(8192, 8192, config);
++        for revision in 0..8 {
++            let message = Message::text(format!(
++                "{{\"revision\":{revision},\"queue\":\"{}\"}}",
++                "order ".repeat(100)
++            ));
++            let mut encoded = BytesMut::new();
++            writer.encode_message(&message, &mut encoded).unwrap();
++            let decoded = client.process(&mut encoded).unwrap();
++            assert_eq!(decoded.len(), 1);
++            assert_eq!(decoded[0].as_bytes(), message.as_bytes());
++        }
++    }
+ }
+ 
+ #[cfg(feature = "permessage-deflate")]
+@@ -1292,12 +1403,12 @@
+     pub fn server(config: &DeflateConfig) -> Self {
+         Self {
+             role: Role::Server,
+-            encoder: crate::deflate::DeflateEncoder::new(
++            encoder: CompressionEncoder::Dedicated(crate::deflate::DeflateEncoder::new(
+                 config.server_max_window_bits,
+                 config.server_no_context_takeover,
+                 config.compression_level,
+                 config.compression_threshold,
+-            ),
++            )),
+         }
+     }
+ 
+@@ -1305,12 +1416,12 @@
+     pub fn client(config: &DeflateConfig) -> Self {
+         Self {
+             role: Role::Client,
+-            encoder: crate::deflate::DeflateEncoder::new(
++            encoder: CompressionEncoder::Dedicated(crate::deflate::DeflateEncoder::new(
+                 config.client_max_window_bits,
+                 config.client_no_context_takeover,
+                 config.compression_level,
+                 config.compression_threshold,
+-            ),
++            )),
+         }
+     }
+ 
+--- a/src/stream/websocket.rs
++++ b/src/stream/websocket.rs
+@@ -557,9 +557,12 @@
+ {
+     type Error = Error;
+ 
+-    fn poll_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<()>> {
++    fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
+         if self.state != StreamState::Open {
+             return Poll::Ready(Err(Error::ConnectionClosed));
++        }
++        if self.write_buf.pending_bytes() >= self.high_water_mark {
++            return self.as_mut().poll_flush(cx);
+         }
+         Poll::Ready(Ok(()))
+     }
+@@ -581,6 +584,13 @@
+         // Encode message into write buffer
+         this.protocol
+             .encode_message(&item, this.write_buf.buffer_mut())?;
++        if this.write_buf.pending_bytes() > this.config.max_backpressure {
++            this.state = StreamState::Closed;
++            this.heartbeat.stop();
++            this.heartbeat_sleep = None;
++            this.write_buf.clear();
++            return Err(Error::BufferFull);
++        }
+         Ok(())
+     }
+ 
+@@ -747,7 +757,7 @@
+ 
+ use std::marker::PhantomData;
+ use std::sync::Arc;
+-use std::sync::atomic::{AtomicU8, Ordering};
++use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+ 
+ use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf};
+ use tokio::sync::{mpsc, oneshot, watch};
+@@ -787,7 +797,7 @@
+ 
+ #[derive(Debug)]
+ enum ApplicationRequest {
+-    Send(Message, oneshot::Sender<Result<()>>),
++    Send(Message, oneshot::Sender<Result<()>>, QueueReservation),
+     Flush(oneshot::Sender<Result<()>>),
+ }
+ 
+@@ -795,15 +805,54 @@
+     status: AtomicU8,
+     terminal_tx: watch::Sender<Option<TerminalCause>>,
+     cancel: CancellationToken,
++    queued_bytes: AtomicUsize,
++    max_queue_bytes: usize,
++}
++
++struct QueueReservation {
++    shared: Arc<SplitShared>,
++    bytes: usize,
++}
++
++impl std::fmt::Debug for QueueReservation {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        f.debug_tuple("QueueReservation")
++            .field(&self.bytes)
++            .finish()
++    }
++}
++
++impl Drop for QueueReservation {
++    fn drop(&mut self) {
++        self.shared
++            .queued_bytes
++            .fetch_sub(self.bytes, Ordering::AcqRel);
++    }
+ }
+ 
+ impl SplitShared {
+-    fn new(closed: bool) -> Arc<Self> {
++    fn new(closed: bool, max_message_size: usize) -> Arc<Self> {
+         let (terminal_tx, _) = watch::channel(closed.then_some(TerminalCause::ConnectionClosed));
+         Arc::new(Self {
+             status: AtomicU8::new(if closed { SPLIT_CLOSED } else { SPLIT_OPEN }),
+             terminal_tx,
+             cancel: CancellationToken::new(),
++            queued_bytes: AtomicUsize::new(0),
++            max_queue_bytes: max_message_size.saturating_add(crate::MAX_FRAME_HEADER_SIZE),
++        })
++    }
++
++    fn reserve(self: &Arc<Self>, bytes: usize) -> Result<QueueReservation> {
++        self.queued_bytes
++            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |queued| {
++                queued
++                    .checked_add(bytes)
++                    .filter(|total| *total <= self.max_queue_bytes)
++            })
++            .map_err(|_| Error::BufferFull)?;
++        Ok(QueueReservation {
++            shared: self.clone(),
++            bytes,
+         })
+     }
+ 
+@@ -883,7 +932,10 @@
+         let (reader, writer) = tokio::io::split(self.inner);
+         let (control_tx, control_rx) = mpsc::channel(SPLIT_CONTROL_CAPACITY);
+         let (application_tx, application_rx) = mpsc::channel(SPLIT_APPLICATION_CAPACITY);
+-        let shared = SplitShared::new(self.state != StreamState::Open);
++        let shared = SplitShared::new(
++            self.state != StreamState::Open,
++            self.config.max_message_size,
++        );
+         let terminal_rx = shared.terminal_tx.subscribe();
+         let reader_protocol = Protocol::new(
+             self.protocol.role,
+@@ -1034,9 +1086,14 @@
+         if !self.shared.is_open() {
+             return Err(self.current_error());
+         }
++        let reservation = self.shared.reserve(
++            msg.as_bytes()
++                .len()
++                .saturating_add(crate::MAX_FRAME_HEADER_SIZE),
++        )?;
+         let (tx, rx) = oneshot::channel();
+         self.application_tx
+-            .send(ApplicationRequest::Send(msg, tx))
++            .send(ApplicationRequest::Send(msg, tx, reservation))
+             .await
+             .map_err(|_| self.current_error())?;
+         rx.await.map_err(|_| self.current_error())?
+@@ -1177,7 +1234,7 @@
+                     break;
+                 };
+                 match request {
+-                    ApplicationRequest::Send(message, completion) => {
++                    ApplicationRequest::Send(message, completion, _reservation) => {
+                         if !shared.is_open() {
+                             let _ = completion.send(Err(Error::ConnectionClosed));
+                             continue;
+@@ -1191,6 +1248,7 @@
+                         write_buf.clear();
+                         let result = encoder.encode_message(&message, &mut write_buf);
+                         let result = match result {
++                            Ok(()) if write_buf.len() > config.max_backpressure => Err(Error::BufferFull),
+                             Ok(()) => {
+                                 write_split_bytes(&mut writer, &write_buf, &shared.cancel).await
+                             }
+@@ -1372,10 +1430,11 @@
+ {
+     /// Create a new compressed WebSocket stream for server role
+     pub fn server(inner: S, config: Config, deflate_config: crate::deflate::DeflateConfig) -> Self {
+-        let protocol = crate::protocol::CompressedProtocol::server(
++        let protocol = crate::protocol::CompressedProtocol::server_with_compression(
+             config.max_frame_size,
+             config.max_message_size,
+             deflate_config,
++            config.compression,
+         );
+ 
+         let clock_epoch = tokio::time::Instant::now();
+@@ -1755,9 +1814,12 @@
+ {
+     type Error = Error;
+ 
+-    fn poll_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<()>> {
++    fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
+         if self.state != StreamState::Open {
+             return Poll::Ready(Err(Error::ConnectionClosed));
++        }
++        if self.write_buf.pending_bytes() >= self.high_water_mark {
++            return self.as_mut().poll_flush(cx);
+         }
+         Poll::Ready(Ok(()))
+     }
+@@ -1777,6 +1839,15 @@
+ 
+         this.protocol
+             .encode_message(&item, this.write_buf.buffer_mut())?;
++        if this.write_buf.pending_bytes() > this.config.max_backpressure {
++            // Once compression history advances, rejecting a frame requires
++            // terminating the connection rather than continuing out of sync.
++            this.state = StreamState::Closed;
++            this.heartbeat.stop();
++            this.heartbeat_sleep = None;
++            this.write_buf.clear();
++            return Err(Error::BufferFull);
++        }
+         Ok(())
+     }
+ 
+@@ -1938,7 +2009,10 @@
+ 
+         let (control_tx, control_rx) = mpsc::channel(SPLIT_CONTROL_CAPACITY);
+         let (application_tx, application_rx) = mpsc::channel(SPLIT_APPLICATION_CAPACITY);
+-        let shared = SplitShared::new(self.state != StreamState::Open);
++        let shared = SplitShared::new(
++            self.state != StreamState::Open,
++            self.config.max_message_size,
++        );
+         let terminal_rx = shared.terminal_tx.subscribe();
+ 
+         // Split the protocol into reader and writer halves
+@@ -2092,9 +2166,14 @@
+         if !self.shared.is_open() {
+             return Err(self.current_error());
+         }
++        let reservation = self.shared.reserve(
++            msg.as_bytes()
++                .len()
++                .saturating_add(crate::MAX_FRAME_HEADER_SIZE),
++        )?;
+         let (tx, rx) = oneshot::channel();
+         self.application_tx
+-            .send(ApplicationRequest::Send(msg, tx))
++            .send(ApplicationRequest::Send(msg, tx, reservation))
+             .await
+             .map_err(|_| self.current_error())?;
+         rx.await.map_err(|_| self.current_error())?
+@@ -2150,8 +2229,82 @@
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+-    use futures_util::StreamExt;
++    use futures_util::{SinkExt, StreamExt};
+     use tokio::io::{AsyncReadExt, AsyncWriteExt};
++
++    #[test]
++    fn split_queue_has_a_byte_budget_and_releases_cancelled_reservations() {
++        let shared = SplitShared::new(false, 1024);
++        let first = shared.reserve(1000).unwrap();
++        assert!(matches!(shared.reserve(100), Err(Error::BufferFull)));
++        drop(first);
++        assert_eq!(shared.queued_bytes.load(Ordering::Acquire), 0);
++        assert!(shared.reserve(1024).is_ok());
++    }
++
++    #[tokio::test]
++    async fn buffered_stream_enforces_encoded_byte_limit_and_becomes_terminal() {
++        let (server_io, _peer) = tokio::io::duplex(64);
++        let config = Config::builder()
++            .auto_ping(false)
++            .idle_timeout(0)
++            .max_backpressure(32)
++            .build();
++        let mut socket = WebSocketStream::server(server_io, config);
++        let result = socket.send(Message::binary(Bytes::from(vec![0; 64]))).await;
++        assert!(matches!(result, Err(Error::BufferFull)));
++        assert!(socket.is_closed());
++        assert!(matches!(
++            socket.send(Message::text("after limit")).await,
++            Err(Error::ConnectionClosed)
++        ));
++    }
++
++    #[cfg(feature = "permessage-deflate")]
++    #[tokio::test]
++    async fn compressed_stream_counts_encoded_bytes_and_split_limit_is_terminal() {
++        let (server_io, peer_io) = tokio::io::duplex(1024);
++        let config = Config::builder()
++            .auto_ping(false)
++            .idle_timeout(0)
++            .max_backpressure(128)
++            .build();
++        let deflate = crate::deflate::DeflateConfig::default();
++        let mut server =
++            CompressedWebSocketStream::server(server_io, config.clone(), deflate.clone());
++        // Raw payload exceeds the budget but compressed wire bytes fit.
++        server
++            .send(Message::text("queue order revision ".repeat(100)))
++            .await
++            .unwrap();
++        let mut client = CompressedWebSocketStream::client(peer_io, config, deflate);
++        assert_eq!(
++            client.next().await.unwrap().unwrap().as_bytes(),
++            "queue order revision ".repeat(100).as_bytes()
++        );
++
++        let (server_io, _peer) = tokio::io::duplex(64);
++        let config = Config::builder()
++            .auto_ping(false)
++            .idle_timeout(0)
++            .max_backpressure(8)
++            .build();
++        let stream = CompressedWebSocketStream::server(
++            server_io,
++            config,
++            crate::deflate::DeflateConfig::default(),
++        );
++        let (_reader, mut writer) = stream.split();
++        assert!(matches!(
++            writer.send_text("a long enough uncompressed frame").await,
++            Err(Error::BufferFull)
++        ));
++        assert!(writer.is_closed());
++        assert!(matches!(
++            writer.send_text("later").await,
++            Err(Error::ConnectionClosed)
++        ));
++    }
+ 
+     async fn read_masked_control_payload(
+         io: &mut tokio::io::DuplexStream,
+@@ -2387,7 +2540,11 @@
+     #[tokio::test]
+     async fn blocked_split_writer_is_cancelled_when_reader_drops() {
+         let (client_io, _peer_io) = tokio::io::duplex(64);
+-        let config = Config::builder().auto_ping(false).idle_timeout(0).build();
++        let config = Config::builder()
++            .auto_ping(false)
++            .idle_timeout(0)
++            .max_backpressure(2 * 1024 * 1024)
++            .build();
+         let (reader, mut writer) = WebSocketStream::client(client_io, config).split();
+         let send = tokio::spawn(async move {
+             writer

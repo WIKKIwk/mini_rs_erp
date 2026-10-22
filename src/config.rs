@@ -79,6 +79,24 @@ impl AppConfig {
     }
 }
 
+/// Calibrated for the zlib-rs backend also used by negotiated WebSocket deflate.
+/// The HTTP snapshot path favors traffic savings; the live transport has its
+/// own independent low-latency compression level.
+pub(crate) fn http_gzip_level_from_env() -> Result<i32, AppError> {
+    http_gzip_level(read_env("MINI_ERP_HTTP_GZIP_LEVEL")?.as_deref())
+}
+
+fn http_gzip_level(raw: Option<&str>) -> Result<i32, AppError> {
+    match raw {
+        None => Ok(8),
+        Some(raw) => raw
+            .parse::<i32>()
+            .ok()
+            .filter(|level| (0..=9).contains(level))
+            .ok_or_else(|| invalid_config("MINI_ERP_HTTP_GZIP_LEVEL", "must be an integer in 0..=9")),
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct DotEnvPersister {
     path: PathBuf,
@@ -229,6 +247,8 @@ fn positive_u64_from_raw(key: &'static str, raw: &str) -> Result<u64, AppError> 
 }
 
 fn validate_runtime_env() -> Result<(), AppError> {
+    http_gzip_level_from_env()?;
+    crate::http::ws::validate_environment()?;
     worker_show_all_apparatus_tabs_from_env()?;
     for key in [
         "MOBILE_API_SESSION_STORE_BACKEND",

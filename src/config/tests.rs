@@ -1,9 +1,28 @@
 use super::{
-    DotEnvPersister, parse_bind_addr, positive_u64_from_raw, validate_backend_value,
+    DotEnvPersister, http_gzip_level, parse_bind_addr, positive_u64_from_raw, validate_backend_value,
     validate_positive_usize_raw,
 };
 use crate::core::admin::ports::AdminEnvPersister;
 use crate::error::AppError;
+
+#[test]
+fn http_gzip_defaults_to_the_calibrated_traffic_profile() {
+    assert_eq!(http_gzip_level(None).unwrap(), 8);
+    assert_eq!(http_gzip_level(Some("6")).unwrap(), 6);
+}
+
+#[test]
+fn http_gzip_accepts_only_supported_compression_levels() {
+    for level in 0..=9 {
+        assert_eq!(http_gzip_level(Some(&level.to_string())).unwrap(), level);
+    }
+    for value in ["", "-1", "10", "1.5", "fast", "99999999999999999999"] {
+        assert!(matches!(
+            http_gzip_level(Some(value)),
+            Err(AppError::InvalidConfig { key: "MINI_ERP_HTTP_GZIP_LEVEL", .. })
+        ));
+    }
+}
 
 #[test]
 fn parses_go_style_bind_addr() {

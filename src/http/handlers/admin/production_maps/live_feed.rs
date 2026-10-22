@@ -4,7 +4,7 @@
 //! revision. Revisions skipped while building a view are never assumed to have
 //! equivalent data. Prepared wire bytes are reused like Centrifuge's channel
 //! publication cache; callers remain responsible for authorization and scope.
-use axum::extract::ws::Utf8Bytes;
+use crate::http::ws::Utf8Bytes;
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -23,15 +23,28 @@ pub(super) struct PreparedDelta {
     scope_json: String,
     patch: Arc<str>,
     prepared: Mutex<BTreeMap<u64, Utf8Bytes>>,
+    compact: bool,
 }
 
 impl PreparedDelta {
+    #[cfg(test)]
     pub fn new(
         epoch: &str,
         scope: &str,
         base_revision: u64,
         revision: u64,
         patch: Arc<str>,
+    ) -> Self {
+        Self::for_protocol(epoch, scope, base_revision, revision, patch, false)
+    }
+
+    pub fn for_protocol(
+        epoch: &str,
+        scope: &str,
+        base_revision: u64,
+        revision: u64,
+        patch: Arc<str>,
+        compact: bool,
     ) -> Self {
         Self {
             base_revision,
@@ -42,6 +55,7 @@ impl PreparedDelta {
             scope_json: serde_json::to_string(scope).expect("string serialization"),
             patch,
             prepared: Mutex::new(BTreeMap::new()),
+            compact,
         }
     }
 
@@ -56,8 +70,13 @@ impl PreparedDelta {
         if let Some(frame) = prepared.get(&base_revision) {
             return frame.clone();
         }
+        let protocol = if self.compact {
+            ",\"protocol\":\"state_delta_v2\""
+        } else {
+            ""
+        };
         let frame: Utf8Bytes = format!(
-            "{{\"ok\":true,\"type\":\"state_delta\",\"epoch\":{},\"scope\":{},\"base_rev\":{},\"rev\":{},\"patch\":{}}}",
+            "{{\"ok\":true,\"type\":\"state_delta\"{protocol},\"epoch\":{},\"scope\":{},\"base_rev\":{},\"rev\":{},\"patch\":{}}}",
             self.epoch_json, self.scope_json, base_revision, self.revision, self.patch,
         )
         .into();
@@ -166,6 +185,18 @@ mod tests {
         assert_eq!(value["rev"], 4);
         assert_eq!(value["patch"]["order_statuses"]["remove"], json!(["a"]));
         assert_eq!(first.as_str().as_ptr(), repeated.as_str().as_ptr());
+    }
+
+    #[test]
+    fn compact_replay_frames_explicitly_identify_the_negotiated_protocol() {
+        let legacy = delta(1, 2, "{}");
+        let compact = PreparedDelta::for_protocol("epoch", "scope", 1, 2, Arc::from("{}"), true);
+        let legacy: serde_json::Value = serde_json::from_str(legacy.frame(1).as_str()).unwrap();
+        let compact: serde_json::Value = serde_json::from_str(compact.frame(1).as_str()).unwrap();
+        assert!(legacy.get("protocol").is_none());
+        assert_eq!(compact["protocol"], "state_delta_v2");
+        assert_eq!(compact["base_rev"], 1);
+        assert_eq!(compact["patch"], json!({}));
     }
 
     #[test]

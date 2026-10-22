@@ -1,5 +1,5 @@
 use super::*;
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use crate::http::ws::{Message, WebSocket, WebSocketUpgrade};
 use tokio::time::{Duration, timeout};
 
 // Large order lists serialize to multi-megabyte snapshots. Dropping a slow
@@ -32,7 +32,8 @@ pub async fn production_map_live(
     require_any_live_capability(&state, &principal).await?;
     let include_completion_requests = matches!(principal.role, PrincipalRole::Admin);
     let delta_enabled = query.protocol.as_deref() == Some("delta");
-    let state_delta_enabled = query.protocol.as_deref() == Some("state_delta_v1");
+    let compact_state_delta = query.protocol.as_deref() == Some("state_delta_v2");
+    let state_delta_enabled = compact_state_delta || query.protocol.as_deref() == Some("state_delta_v1");
     let page_delta_enabled = query.protocol.as_deref() == Some("page_delta_v1");
     let notifications_enabled = query.protocol.as_deref() == Some("notifications_v1");
     let page_windows = if page_delta_enabled {
@@ -77,6 +78,7 @@ pub async fn production_map_live(
                     query.worker_scope,
                     query.scope,
                     window,
+                    compact_state_delta,
                 );
             }
             // Box both protocol futures to retain the legacy wire contract.
@@ -286,9 +288,8 @@ async fn production_map_live_socket(
                         Message::Text(serde_json::json!({"ok": false, "error": "forbidden"}).to_string().into())).await;
                     break;
                 }
-                if !send_production_map_live_message(&mut socket, Message::Ping(Vec::new().into())).await {
-                    break;
-                }
+                // The transport owns native Ping/Pong deadlines. This timer
+                // remains responsible only for live authorization checks.
             }
         }
     }

@@ -147,17 +147,38 @@ pub async fn production_map_sequence(
             authorize_any_capability(&state, &headers,
                 &[Capability::AdminAccess, Capability::ProductionMapManage]).await?;
             let command: crate::core::production_map::SequenceMove = parse_json(&body)?;
+            let base_version = command.expected_version.clone();
+            let minimal = headers.get_all("prefer").iter().filter_map(|value| value.to_str().ok())
+                .flat_map(|value| value.split(','))
+                .filter_map(|preference| preference.split(';').next()?.split_once('='))
+                .any(|(name, value)| name.trim().eq_ignore_ascii_case("return")
+                    && value.trim().trim_matches('"').eq_ignore_ascii_case("minimal"));
             let result = state.production_maps.move_apparatus_sequence(command, queue_action_actor(&principal))
                 .await.map_err(production_map_error)?;
-            Ok(json_response(serde_json::json!({
+            let mut payload = serde_json::json!({
                 "ok": true,
-                "order_ids": result.order_ids,
                 "version": result.version,
                 "adjusted": result.adjusted,
                 "revision": result.revision,
                 "epoch": state.production_maps.snapshot_epoch(),
                 "ops": result.event.as_ref().map(|e| vec![e.clone()]).unwrap_or_default(),
-            })))
+            });
+            if minimal {
+                // The operation receipt and version remain unchanged. A client
+                // can reconstruct only from its exact captured canonical list;
+                // length plus fingerprint certify the server-clamped result.
+                payload["base_version"] = serde_json::json!(base_version);
+                payload["order_count"] = serde_json::json!(result.order_ids.len());
+                payload["order_hash"] = serde_json::json!(sequence_delta::fingerprint(&result.order_ids));
+            } else {
+                payload["order_ids"] = serde_json::json!(result.order_ids);
+            }
+            let mut response = json_response(payload);
+            if minimal {
+                response.headers_mut().insert("preference-applied",
+                    axum::http::HeaderValue::from_static("return=minimal"));
+            }
+            Ok(response)
         }
         Method::PUT => {
             authorize_any_capability(

@@ -3,7 +3,7 @@ use crate::core::admin::models::{
     AdminServerMonitorDatabase, AdminServerMonitorResponse, AdminServerMonitorRuntime,
     AdminServerMonitorServer,
 };
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use crate::http::ws::{Message, WebSocket, WebSocketUpgrade};
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
@@ -21,7 +21,6 @@ pub use backup_api::{system_backup_create, system_backup_download, system_backup
 const DATABASE_PING_TIMEOUT: Duration = Duration::from_secs(2);
 const LIVE_SNAPSHOT_INTERVAL: Duration = Duration::from_secs(2);
 const LIVE_SEND_TIMEOUT: Duration = Duration::from_secs(5);
-const LIVE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(25);
 
 pub async fn system_monitor(
     State(state): State<AppState>,
@@ -104,7 +103,6 @@ async fn authenticated_principal_for_live(
 async fn system_monitor_live_socket(state: AppState, mut socket: WebSocket) {
     ensure_system_monitor_hub_started(&state);
     let mut snapshots = state.system_monitor_hub.subscribe();
-    let mut heartbeat = tokio::time::interval(LIVE_HEARTBEAT_INTERVAL);
 
     let initial_report = { snapshots.borrow().clone() };
     if let Some(report) = initial_report
@@ -138,11 +136,6 @@ async fn system_monitor_live_socket(state: AppState, mut socket: WebSocket) {
                 let report = { snapshots.borrow().clone() };
                 if let Some(report) = report
                     && !send_system_monitor_snapshot(&mut socket, report).await {
-                    break;
-                }
-            }
-            _ = heartbeat.tick() => {
-                if !send_system_monitor_message(&mut socket, Message::Ping(Vec::new().into())).await {
                     break;
                 }
             }

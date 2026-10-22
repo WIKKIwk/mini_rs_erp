@@ -864,6 +864,19 @@ async fn production_map_sequence_move_versions_retries_and_strict_input() {
     let retry = router.clone().oneshot(request_with_body("POST",path,&token,&command.to_string())).await.unwrap();
     assert_eq!(retry.status(),StatusCode::OK);
     assert_eq!(json_body(retry).await,result);
+    let mut minimal = request_with_body("POST",path,&token,&command.to_string());
+    minimal.headers_mut().insert("Prefer", "return=minimal".parse().unwrap());
+    let minimal = router.clone().oneshot(minimal).await.unwrap();
+    assert_eq!(minimal.status(), StatusCode::OK);
+    assert_eq!(minimal.headers().get("Preference-Applied").unwrap(), "return=minimal");
+    let minimal = json_body(minimal).await;
+    assert!(minimal.get("order_ids").is_none());
+    assert_eq!(minimal["order_count"], result["order_ids"].as_array().unwrap().len());
+    assert_eq!(minimal["order_hash"].as_str().unwrap().len(), 16);
+    assert_eq!(minimal["base_version"], command["expected_version"]);
+    for key in ["version", "adjusted", "revision", "epoch", "ops"] {
+        assert_eq!(minimal[key], result[key]);
+    }
     let mut stale = command.clone();
     stale["idempotency_key"] = serde_json::json!("stale-client");
     let response = router.clone().oneshot(request_with_body("POST",path,&token,&stale.to_string())).await.unwrap();

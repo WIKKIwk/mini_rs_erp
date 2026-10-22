@@ -2,7 +2,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use axum::Json;
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use crate::http::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, Method};
 use axum::response::{IntoResponse, Response};
@@ -136,12 +136,6 @@ async fn chat_socket(state: AppState, mut socket: WebSocket, principal: Principa
             }
             _ = heartbeat.tick() => {
                 if last_inbound.elapsed() > CHAT_HEARTBEAT_INTERVAL * 3 {
-                    break;
-                }
-                if !matches!(
-                    timeout(CHAT_SEND_TIMEOUT, socket.send(Message::Ping(Vec::new().into()))).await,
-                    Ok(Ok(()))
-                ) {
                     break;
                 }
             }

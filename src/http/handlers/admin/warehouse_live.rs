@@ -1,5 +1,5 @@
 use super::*;
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use crate::http::ws::{Message, WebSocket, WebSocketUpgrade};
 
 #[derive(Default, Deserialize)]
 pub struct WarehouseLiveQuery {
@@ -36,18 +36,12 @@ async fn authenticated_principal_for_live(
 
 async fn warehouse_live_socket(state: AppState, mut socket: WebSocket) {
     let mut rx = state.warehouse_events.subscribe();
-    let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(25));
     loop {
         tokio::select! {
             inbound = socket.recv() => {
                 match inbound {
                     Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
                     _ => {}
-                }
-            }
-            _ = heartbeat.tick() => {
-                if !send_warehouse_live_message(&mut socket, Message::Ping(Vec::new().into())).await {
-                    break;
                 }
             }
             received = rx.recv() => {

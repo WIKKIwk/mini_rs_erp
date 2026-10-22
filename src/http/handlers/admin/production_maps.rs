@@ -36,6 +36,7 @@ pub(crate) use page_live::PageLiveHub;
 mod live_delta;
 mod live_feed;
 mod live_hub;
+pub(crate) mod sequence_delta;
 pub(crate) use live_hub::StateLiveHub;
 mod worker_snapshot;
 mod helpers;

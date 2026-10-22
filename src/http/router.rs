@@ -10,10 +10,12 @@ use tower_http::compression::{CompressionLayer, CompressionLevel, DefaultPredica
 use crate::app::AppState;
 
 pub fn build_router(state: AppState) -> Router {
+    let gzip_level = crate::config::http_gzip_level_from_env()
+        .expect("HTTP gzip level must be validated before building the router");
     health::routes()
         .merge(mobile::routes(state))
         .layer(CompressionLayer::new()
-            .quality(CompressionLevel::Precise(3))
+            .quality(CompressionLevel::Precise(gzip_level))
             .compress_when(DefaultPredicate::new().and(compress_json)))
         .layer(middleware::from_fn(cors::cors_headers))
 }

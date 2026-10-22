@@ -3,7 +3,7 @@ use crate::core::production_map::{
     CompletedQueueOrder, CompletionRequestDecisionNotification, CompletionRequestNotification,
     ProductionMapLiveEvent, ProductionMapLiveSnapshot,
 };
-use axum::extract::ws::{Message, Utf8Bytes, WebSocket};
+use crate::http::ws::{Message, Utf8Bytes, WebSocket};
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
@@ -176,9 +176,18 @@ fn nested_patch<T: PartialEq + Serialize>(
     (!scopes.is_empty() || !remove.is_empty()).then(|| json!({"scopes": scopes, "remove": remove}))
 }
 
+#[cfg(test)]
 pub(super) fn snapshot_patch(
     old: &ProductionMapLiveSnapshot,
     new: &ProductionMapLiveSnapshot,
+) -> Map<String, Value> {
+    snapshot_patch_for_protocol(old, new, false)
+}
+
+pub(super) fn snapshot_patch_for_protocol(
+    old: &ProductionMapLiveSnapshot,
+    new: &ProductionMapLiveSnapshot,
+    compact: bool,
 ) -> Map<String, Value> {
     let mut patch = Map::new();
     macro_rules! field {
@@ -195,10 +204,25 @@ pub(super) fn snapshot_patch(
             }
         };
     }
-    field!(sequences);
+    if compact {
+        for (name, before, after) in [
+            ("sequences", &old.sequences, &new.sequences),
+            (
+                "visible_order_ids",
+                &old.visible_order_ids,
+                &new.visible_order_ids,
+            ),
+        ] {
+            if let Some(value) = sequence_map_patch(before, after) {
+                patch.insert(name.into(), value);
+            }
+        }
+    } else {
+        field!(sequences);
+        field!(visible_order_ids);
+    }
     field!(sequence_versions);
     field!(sequence_revisions);
-    field!(visible_order_ids);
     field!(order_statuses);
     field!(order_controls);
     field!(frozen_orders_by_apparatus);
@@ -224,15 +248,24 @@ pub(super) fn snapshot_patch(
         .map(|saved| &saved.map.id)
         .ne(new.maps.iter().map(|saved| &saved.map.id))
     {
-        patch.insert(
-            "map_order".into(),
-            json!(
-                new.maps
-                    .iter()
-                    .map(|saved| &saved.map.id)
-                    .collect::<Vec<_>>()
-            ),
-        );
+        let before = old
+            .maps
+            .iter()
+            .map(|saved| saved.map.id.clone())
+            .collect::<Vec<_>>();
+        let after = new
+            .maps
+            .iter()
+            .map(|saved| saved.map.id.clone())
+            .collect::<Vec<_>>();
+        if let Some(edit) = compact
+            .then(|| super::sequence_delta::sequence_edit(&before, &after))
+            .flatten()
+        {
+            patch.insert("map_order_edit".into(), edit);
+        } else {
+            patch.insert("map_order".into(), json!(after));
+        }
     }
     let old_policies = old
         .queue_policies
@@ -248,6 +281,33 @@ pub(super) fn snapshot_patch(
         patch.insert("queue_policies".into(), value);
     }
     patch
+}
+
+fn sequence_map_patch(
+    before: &BTreeMap<String, Vec<String>>,
+    after: &BTreeMap<String, Vec<String>>,
+) -> Option<Value> {
+    let mut upsert = Map::new();
+    let mut edit = Map::new();
+    for (key, values) in after {
+        if before.get(key) == Some(values) {
+            continue;
+        }
+        if let Some(delta) = before
+            .get(key)
+            .and_then(|previous| super::sequence_delta::sequence_edit(previous, values))
+        {
+            edit.insert(key.clone(), delta);
+        } else {
+            upsert.insert(key.clone(), json!(values));
+        }
+    }
+    let remove = before
+        .keys()
+        .filter(|key| !after.contains_key(*key))
+        .collect::<Vec<_>>();
+    (!upsert.is_empty() || !edit.is_empty() || !remove.is_empty())
+        .then(|| json!({"upsert": upsert, "remove": remove, "edit": edit}))
 }
 
 fn personal_patch(before: &LiveView, after: &LiveView) -> Map<String, Value> {
@@ -406,9 +466,11 @@ async fn refresh_feed(
         if before.scope != next.scope || before.epoch != next.epoch {
             return None;
         }
-        let common = state
-            .production_state_live
-            .snapshot_patch(&before.snapshot, &next.snapshot);
+        let common = state.production_state_live.snapshot_patch_for_protocol(
+            &before.snapshot,
+            &next.snapshot,
+            data.compact,
+        );
         let patch = super::live_hub::join_patch(&common, &personal_patch(before, &next));
         (patch.len() <= MAX_STATE_DELTA_BYTES.saturating_sub(512)).then_some(patch)
     });
@@ -422,6 +484,7 @@ struct Delivery {
     scope: String,
     revision: u64,
     resync: bool,
+    compact: bool,
 }
 
 async fn delivery(
@@ -449,6 +512,7 @@ async fn delivery(
             scope,
             revision,
             resync: true,
+            compact: data.compact,
         };
     };
     let mut cursor = client_revision.expect("recovery requires cursor");
@@ -474,6 +538,7 @@ async fn delivery(
         scope,
         revision: cursor,
         resync: false,
+        compact: data.compact,
     }
 }
 
@@ -490,17 +555,17 @@ async fn send_delivery(socket: &mut WebSocket, delivery: &Delivery, ready: bool)
         }
     }
     if ready || delivery.resync {
-        return send(
-            socket,
-            json!({
-                "ok": true,
-                "type": if ready { "state_ready" } else { "state_resync" },
-                "epoch": delivery.epoch, "scope": delivery.scope, "rev": delivery.revision,
-                "resync": delivery.resync, "recovered": !delivery.resync,
-                "recovery_supported": true,
-            }),
-        )
-        .await;
+        let mut value = json!({
+            "ok": true,
+            "type": if ready { "state_ready" } else { "state_resync" },
+            "epoch": delivery.epoch, "scope": delivery.scope, "rev": delivery.revision,
+            "resync": delivery.resync, "recovered": !delivery.resync,
+            "recovery_supported": true,
+        });
+        if delivery.compact {
+            value["protocol"] = json!("state_delta_v2");
+        }
+        return send(socket, value).await;
     }
     true
 }
@@ -515,6 +580,7 @@ pub(super) fn production_map_state_live_socket(
     worker_scope: bool,
     mut client_scope: String,
     window: super::worker_snapshot::WorkerQueueWindow,
+    compact: bool,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
     Box::pin(async move {
         // Subscribe before any read so the initial cursor cannot miss a commit.
@@ -539,7 +605,7 @@ pub(super) fn production_map_state_live_socket(
             window.scope(&assignment_scope),
         ))
         .expect("authorized feed key");
-        let feed = state.production_state_live.feed(key);
+        let feed = state.production_state_live.feed_for_protocol(key, compact);
         if let Err(error) = refresh_feed(
             &state,
             &feed,
@@ -608,8 +674,7 @@ pub(super) fn production_map_state_live_socket(
                     client_epoch = next.epoch;
                     client_scope = next.scope;
                     client_revision = Some(next.revision);
-                    if !timeout(Duration::from_secs(15), socket.send(Message::Ping(Vec::new().into())))
-                        .await.is_ok_and(|result| result.is_ok()) { break; }
+                    // Native keepalive and Pong deadlines belong to the transport.
                 }
             }
         }

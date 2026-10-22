@@ -1,7 +1,7 @@
 //! Shared, bounded live projections of the exact HTTP admin windows.
 //! Domain ordering, visibility and action permissions stay in `order_page`.
 use super::*;
-use axum::extract::ws::{Message, WebSocket};
+use crate::http::ws::{Message, WebSocket};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
@@ -525,8 +525,6 @@ pub(super) async fn socket(
                     let _ = send(&mut socket, &json!({"ok":false,"error":"forbidden"}).to_string()).await;
                     break;
                 }
-                if !tokio::time::timeout(Duration::from_secs(15),
-                    socket.send(Message::Ping(Vec::new().into()))).await.is_ok_and(|r| r.is_ok()) { break; }
             }
         }
     }
@@ -582,8 +580,6 @@ pub(super) async fn notifications_socket(
                     let _ = send(&mut socket, &json!({"ok":false,"error":"forbidden"}).to_string()).await;
                     break;
                 }
-                if !tokio::time::timeout(Duration::from_secs(15),
-                    socket.send(Message::Ping(Vec::new().into()))).await.is_ok_and(|r| r.is_ok()) { break; }
             }
         }
     }
