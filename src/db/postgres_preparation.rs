@@ -9,6 +9,8 @@ mod materials;
 mod formula_orders;
 mod formula_sets;
 mod saved_formulas;
+mod formula_shares;
+mod formula_variants;
 
 impl From<sqlx::Error> for PreparationError {
     fn from(error: sqlx::Error) -> Self {
@@ -1070,6 +1072,11 @@ impl PostgresPreparationStore {
         actor: &Principal,
         input: FormulaUpsert,
     ) -> Result<Value, PreparationError> {
+        self.upsert_formula_variant(actor, input, "").await
+    }
+
+    pub async fn upsert_formula_variant(&self, actor: &Principal, input: FormulaUpsert, variant_id: &str)
+        -> Result<Value, PreparationError> {
         let product_code = input.product_key()?;
         let name = input.formula_name()?;
         let material_id = input.material_key()?;
@@ -1085,6 +1092,7 @@ impl PostgresPreparationStore {
         // Scope: formula faqat o'ziga biriktirilgan homashyoga yoziladi.
         let scope_material_name =
             responsibility_material_name(&mut tx, &actor.ref_, &material_id).await?;
+        let variant = formula_variants::variant_scope(&mut tx, &actor.ref_, &product_code, &material_id, variant_id, true).await?;
         // Resolve names in code order (deadlock-safe), then sort lines
         // alphabetically by material name for stable display.
         let mut lines: Vec<(String, String, i64)> = Vec::new();
@@ -1103,11 +1111,14 @@ impl PostgresPreparationStore {
                 json!({"item_code": code, "name": material, "percent": decimal_text(*percent)})
             })
             .collect();
-        sqlx::query(
-            "INSERT INTO mini_preparation_formulas(owner_ref, product_code, material_id, material_name, name, lines, updated_at)
-             VALUES ($1,$2,$3,$4,$5,$6,now())
-             ON CONFLICT (owner_ref, product_code, material_id, name)
-             DO UPDATE SET material_name = EXCLUDED.material_name, lines = EXCLUDED.lines, updated_at = now()",
+        let share: Option<String> = sqlx::query_scalar(
+            "INSERT INTO mini_preparation_formulas(owner_ref, product_code, material_id, material_name, name, lines, updated_at, variant_id, share_percent)
+             VALUES ($1,$2,$3,$4,$5,$6,now(),$7, CASE WHEN NOT EXISTS (
+                 SELECT 1 FROM mini_preparation_formulas WHERE owner_ref=$1
+                 AND product_code=$2 AND lower(material_id)=lower($3) AND variant_id=$7) THEN 100 ELSE NULL END)
+             ON CONFLICT (owner_ref, product_code, material_id, variant_id, name)
+             DO UPDATE SET material_name = EXCLUDED.material_name, lines = EXCLUDED.lines, updated_at = now()
+             RETURNING share_percent::text",
         )
         .bind(&actor.ref_)
         .bind(&product_code)
@@ -1115,12 +1126,13 @@ impl PostgresPreparationStore {
         .bind(&scope_material_name)
         .bind(&name)
         .bind(json!(payload))
-        .execute(&mut *tx)
+        .bind(&variant)
+        .fetch_one(&mut *tx)
         .await?;
         tx.commit().await?;
         Ok(
             json!({"product_code": product_code, "material_id": material_id,
-            "material_name": scope_material_name, "name": name, "lines": payload}),
+            "material_name": scope_material_name, "name": name, "lines": payload, "share_percent": share, "variant_id":variant}),
         )
     }
 
@@ -1130,6 +1142,11 @@ impl PostgresPreparationStore {
         product_code: &str,
         material_id: &str,
     ) -> Result<Value, PreparationError> {
+        self.list_formulas_variant(owner, product_code, material_id, "").await
+    }
+
+    pub async fn list_formulas_variant(&self, owner: &str, product_code: &str, material_id: &str, variant_id: &str)
+        -> Result<Value, PreparationError> {
         let code = product_code.trim();
         if code.is_empty() || code.chars().count() > 160 {
             return Err(PreparationError::Invalid("Mahsulot kodi noto‘g‘ri"));
@@ -1140,13 +1157,16 @@ impl PostgresPreparationStore {
         }
         let formulas_value: Value = sqlx::query_scalar(
             "SELECT COALESCE(jsonb_agg(f ORDER BY lower(f->>'name'), f->>'name') FILTER (WHERE f IS NOT NULL), '[]'::jsonb)
-             FROM (SELECT jsonb_build_object('name', name, 'lines', lines) AS f
+             FROM (SELECT jsonb_build_object('name', name, 'lines', lines, 'share_percent', share_percent::text, 'variant_id',variant_id) AS f
                    FROM mini_preparation_formulas
-                   WHERE owner_ref=$1 AND product_code=$2 AND lower(material_id)=lower($3)) s",
+                   WHERE owner_ref=$1 AND product_code=$2 AND lower(material_id)=lower($3)
+                   AND variant_id=COALESCE(NULLIF($4,''),(SELECT id FROM mini_preparation_formula_variants
+                       WHERE owner_ref=$1 AND product_code=$2 AND material_id=$3 AND is_default))) s",
         )
         .bind(owner)
         .bind(code)
         .bind(material)
+        .bind(variant_id.trim())
         .fetch_one(&self.pool)
         .await
         .map_err(PreparationError::from)?;
@@ -1176,6 +1196,11 @@ impl PostgresPreparationStore {
         name: &str,
         material_id: &str,
     ) -> Result<Value, PreparationError> {
+        self.delete_formula_variant(owner, product_code, name, material_id, "").await
+    }
+
+    pub async fn delete_formula_variant(&self, owner: &str, product_code: &str, name: &str,
+        material_id: &str, variant_id: &str) -> Result<Value, PreparationError> {
         let code = product_code.trim();
         let formula = name.trim();
         let material = material_id.trim();
@@ -1194,22 +1219,26 @@ impl PostgresPreparationStore {
         responsibility_material_name_tx(&self.pool, owner, material)
             .await?
             .ok_or(PreparationError::Forbidden)?;
+        let mut tx = self.formula_write_transaction(owner).await?;
+        let variant = formula_variants::variant_scope(&mut tx, owner, code, material, variant_id, false).await?;
         let deleted: bool = sqlx::query_scalar(
             "DELETE FROM mini_preparation_formulas
              WHERE owner_ref=$1 AND product_code=$2 AND name=$3
-               AND lower(material_id)=lower($4)
+               AND lower(material_id)=lower($4) AND variant_id=$5
              RETURNING TRUE",
         )
         .bind(owner)
         .bind(code)
         .bind(formula)
         .bind(material)
-        .fetch_optional(&self.pool)
+        .bind(&variant)
+        .fetch_optional(&mut *tx)
         .await?
         .unwrap_or(false);
         if !deleted {
             return Err(PreparationError::Invalid("Formula topilmadi"));
         }
+        tx.commit().await?;
         Ok(json!({"product_code": code, "material_id": material,
             "name": formula, "deleted": true}))
     }

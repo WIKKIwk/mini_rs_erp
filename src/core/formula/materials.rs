@@ -4,6 +4,67 @@ use crate::core::calculate_materials::{
     DEFAULT_PET_DENSITY_G_CM3, DEFAULT_PP_FILM_DENSITY_G_CM3, effective_variant_gsm, normalize_key,
 };
 
+/// Planned film mass for one material, including every matching layer. The
+/// supplied production length already includes the order's waste and rounding.
+pub fn planned_material_kg(
+    layers: &[super::LayerInput],
+    material_id: &str,
+    width_mm: f64,
+    planned_length_m: f64,
+    catalog: &[CalculateMaterial],
+) -> Result<f64, String> {
+    if !width_mm.is_finite()
+        || width_mm <= 0.0
+        || !planned_length_m.is_finite()
+        || planned_length_m <= 0.0
+    {
+        return Err("Rejalashtirilgan en yoki metraj mavjud emas".into());
+    }
+    let material = catalog
+        .iter()
+        .find(|m| m.id.trim().eq_ignore_ascii_case(material_id.trim()))
+        .filter(|m| !m.id.trim().is_empty())
+        .ok_or("Homashyo katalogda topilmadi")?;
+    let mut gsm = 0.0;
+    for layer in layers {
+        let matches = if layer.material_id.trim().is_empty() {
+            normalize_key(&layer.material) == normalize_key(&material.name)
+                && catalog
+                    .iter()
+                    .filter(|m| normalize_key(&m.name) == normalize_key(&layer.material))
+                    .count()
+                    == 1
+        } else {
+            layer
+                .material_id
+                .trim()
+                .eq_ignore_ascii_case(material.id.trim())
+        };
+        if !matches {
+            continue;
+        }
+        let microns = parse_micron_parts(&layer.micron)?;
+        let [micron] = microns.as_slice() else {
+            return Err("Qavatning mikroni aniq tanlanmagan".into());
+        };
+        if *micron == 0 {
+            return Err("Qavatning mikroni noto‘g‘ri".into());
+        }
+        gsm += gsm_cell_with_catalog(
+            &material.name,
+            &material.id,
+            &layer.micron,
+            *micron,
+            catalog,
+        )?;
+    }
+    let kg = width_mm * planned_length_m * gsm / 1_000_000.0;
+    if !kg.is_finite() || kg < 0.000001 || kg > 999_999_999_999.0 {
+        return Err("Homashyo og‘irligini hisoblab bo‘lmadi".into());
+    }
+    Ok(kg)
+}
+
 pub(super) fn gsm_cell_with_catalog(
     material: &str,
     material_id: &str,

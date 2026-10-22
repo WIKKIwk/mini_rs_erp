@@ -18,6 +18,8 @@ use std::collections::BTreeMap;
 
 type ApiError = (StatusCode, Json<Value>);
 
+mod order_estimates;
+
 async fn authorize(state: &AppState, headers: &HeaderMap) -> Result<Principal, ApiError> {
     let token = super::auth::bearer_token(headers).unwrap_or_default();
     let principal = state.sessions.get(&token).await.map_err(|_| {
@@ -370,6 +372,8 @@ pub async fn consumption(
 pub struct FormulaQuery {
     pub product_code: String,
     pub material_id: String,
+    #[serde(default)]
+    pub variant_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -377,6 +381,37 @@ pub struct FormulaDeleteQuery {
     pub product_code: String,
     pub name: String,
     pub material_id: String,
+    #[serde(default)]
+    pub variant_id: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct FormulaVariantQuery {
+    #[serde(default)]
+    pub variant_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FormulaVariantsQuery {
+    pub product_code: String,
+    pub material_id: String,
+    #[serde(default)]
+    pub saved_only: bool,
+}
+
+pub async fn formula_variants(
+    State(state): State<AppState>, headers: HeaderMap, Query(query): Query<FormulaVariantsQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let actor = authorize(&state, &headers).await?;
+    store(&state)?.formula_variants(&actor.ref_, &query.product_code, &query.material_id, query.saved_only)
+        .await.map(Json).map_err(error)
+}
+
+pub async fn formula_variant_create(
+    State(state): State<AppState>, headers: HeaderMap, Json(input): Json<FormulaVariantCreate>,
+) -> Result<Json<Value>, ApiError> {
+    let actor = authorize(&state, &headers).await?;
+    store(&state)?.create_formula_variant(&actor.ref_, input).await.map(Json).map_err(error)
 }
 
 #[derive(Debug, Deserialize)]
@@ -387,14 +422,29 @@ pub struct OrderMaterialsQuery {
 pub async fn formula_upsert(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<FormulaVariantQuery>,
     Json(input): Json<FormulaUpsert>,
 ) -> Result<Json<Value>, ApiError> {
     let actor = authorize(&state, &headers).await?;
     store(&state)?
-        .upsert_formula(&actor, input)
+        .upsert_formula_variant(&actor, input, &query.variant_id)
         .await
         .map(Json)
         .map_err(error)
+}
+
+pub async fn formula_shares_update(
+    State(state): State<AppState>, headers: HeaderMap, Query(query): Query<FormulaVariantQuery>, Json(input): Json<FormulaSharesUpdate>,
+) -> Result<Json<Value>, ApiError> {
+    let actor = authorize(&state, &headers).await?;
+    store(&state)?.update_formula_variant_shares(&actor.ref_, input, false, &query.variant_id).await.map(Json).map_err(error)
+}
+
+pub async fn saved_formula_shares_update(
+    State(state): State<AppState>, headers: HeaderMap, Query(query): Query<FormulaVariantQuery>, Json(input): Json<FormulaSharesUpdate>,
+) -> Result<Json<Value>, ApiError> {
+    let actor = authorize(&state, &headers).await?;
+    store(&state)?.update_formula_variant_shares(&actor.ref_, input, true, &query.variant_id).await.map(Json).map_err(error)
 }
 
 pub async fn formula_show(
@@ -404,7 +454,7 @@ pub async fn formula_show(
 ) -> Result<Json<Value>, ApiError> {
     let actor = authorize(&state, &headers).await?;
     store(&state)?
-        .list_formulas(&actor.ref_, &query.product_code, &query.material_id)
+        .list_formulas_variant(&actor.ref_, &query.product_code, &query.material_id, &query.variant_id)
         .await
         .map(Json)
         .map_err(error)
@@ -445,17 +495,18 @@ pub async fn saved_formula_show(
     Query(query): Query<FormulaQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let actor = authorize(&state, &headers).await?;
-    store(&state)?.list_saved_formulas(&actor.ref_, &query.product_code, &query.material_id)
+    store(&state)?.list_saved_formulas_variant(&actor.ref_, &query.product_code, &query.material_id, &query.variant_id)
         .await.map(Json).map_err(error)
 }
 
 pub async fn saved_formula_update(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<FormulaVariantQuery>,
     Json(input): Json<FormulaUpsert>,
 ) -> Result<Json<Value>, ApiError> {
     let actor = authorize(&state, &headers).await?;
-    store(&state)?.update_saved_formula(&actor, input).await.map(Json).map_err(error)
+    store(&state)?.update_saved_formula_variant(&actor, input, &query.variant_id).await.map(Json).map_err(error)
 }
 
 pub async fn saved_formula_delete(
@@ -464,7 +515,7 @@ pub async fn saved_formula_delete(
     Query(query): Query<FormulaDeleteQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let actor = authorize(&state, &headers).await?;
-    store(&state)?.delete_saved_formula(&actor.ref_, &query.product_code, &query.name, &query.material_id)
+    store(&state)?.delete_saved_formula_variant(&actor.ref_, &query.product_code, &query.name, &query.material_id, &query.variant_id)
         .await.map(Json).map_err(error)
 }
 
@@ -475,11 +526,12 @@ pub async fn formula_delete(
 ) -> Result<Json<Value>, ApiError> {
     let actor = authorize(&state, &headers).await?;
     store(&state)?
-        .delete_formula(
+        .delete_formula_variant(
             &actor.ref_,
             &query.product_code,
             &query.name,
             &query.material_id,
+            &query.variant_id,
         )
         .await
         .map(Json)
@@ -511,7 +563,7 @@ pub async fn order_materials(
                 .collect()
         })
         .unwrap_or_default();
-    let filtered: Vec<Value> = result
+    let mut filtered: Vec<Value> = result
         .get("materials")
         .and_then(|v| v.as_array())
         .map(|items| {
@@ -526,6 +578,7 @@ pub async fn order_materials(
                 .collect()
         })
         .unwrap_or_default();
+    order_estimates::enrich(&state, query.order_id.trim(), &mut filtered).await;
     Ok(Json(
         serde_json::json!({"order_id": result["order_id"], "materials": filtered}),
     ))

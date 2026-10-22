@@ -7,6 +7,7 @@ mod materials;
 mod request_layers;
 
 pub use self::calculation::{calculate, calculate_with_material_catalog, derive_width_mm};
+pub use self::materials::planned_material_kg;
 use self::calculation::{close, normalize, parse_micron_parts, split_parts};
 
 pub const DEFAULT_EDGE_ALLOWANCE_MM: f64 = 15.0;

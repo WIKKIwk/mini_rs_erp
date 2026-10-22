@@ -44,10 +44,12 @@ impl PostgresPreparationStore {
                 ) codes),'[]'::jsonb),
                 'formulas',jsonb_agg(jsonb_build_object(
                     'material_id',f.material_id,'material_name',COALESCE(r.material_name,f.material_name),
-                    'name',f.name,'lines',f.lines)
+                    'name',f.name,'lines',f.lines,'share_percent',f.share_percent::text,
+                    'variant_id',f.variant_id,'variant_name',v.name)
                     ORDER BY lower(COALESCE(r.material_name,f.material_name)),f.material_id,lower(f.name),f.name))
             FROM mini_preparation_formula_sets s
             JOIN mini_preparation_formulas f ON f.set_id=s.set_id
+            JOIN mini_preparation_formula_variants v ON v.id=f.variant_id
             LEFT JOIN mini_preparation_material_responsibilities r
               ON r.principal_role='tayyorlov_masteri' AND r.principal_ref=s.owner_ref
              AND lower(r.material_id)=lower(f.material_id)

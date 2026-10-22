@@ -254,6 +254,77 @@ pub struct FormulaSetRename {
     pub name: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FormulaVariantCreate {
+    pub product_code: String,
+    pub material_id: String,
+    pub name: String,
+    pub request_id: String,
+}
+
+impl FormulaVariantCreate {
+    pub fn normalized_name(&self) -> Result<String, PreparationError> {
+        let name = self.name.split_whitespace().collect::<Vec<_>>().join(" ");
+        if self.product_code.trim().is_empty() || self.product_code.trim().chars().count() > 160
+            || self.material_id.trim().is_empty() || self.material_id.trim().chars().count() > 128
+            || self.request_id.trim().is_empty() || self.request_id.trim().chars().count() > 160
+        {
+            return Err(PreparationError::Invalid("Variant ma’lumotlari noto‘g‘ri"));
+        }
+        if name.is_empty() || name.chars().count() > 160 {
+            return Err(PreparationError::Invalid("Variant nomi 1–160 ta belgidan iborat bo‘lishi kerak"));
+        }
+        Ok(name)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FormulaShare {
+    pub name: String,
+    pub percent: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FormulaSharesUpdate {
+    pub product_code: String,
+    pub material_id: String,
+    pub shares: Vec<FormulaShare>,
+}
+
+impl FormulaSharesUpdate {
+    pub fn normalized(&self) -> Result<Vec<(String, i64)>, PreparationError> {
+        if self.product_code.trim().is_empty() || self.product_code.trim().chars().count() > 160
+            || self.material_id.trim().chars().count() > 128
+        {
+            return Err(PreparationError::Invalid("Mahsulot yoki homashyo noto‘g‘ri"));
+        }
+        if self.shares.is_empty() || self.shares.len() > 100 {
+            return Err(PreparationError::Invalid("1–100 ta shnek formulasi bo‘lishi kerak"));
+        }
+        let mut shares = BTreeMap::new();
+        let mut total = 0;
+        for share in &self.shares {
+            let name = share.name.trim();
+            if name.is_empty() || name.chars().count() > 80 || shares.contains_key(name) {
+                return Err(PreparationError::Invalid("Shnek formulasi bo‘sh yoki takrorlangan"));
+            }
+            let percent = decimal(&share.percent)?;
+            if percent > 100 * SCALE {
+                return Err(PreparationError::Invalid("Shnek ulushi 100% dan oshmasligi kerak"));
+            }
+            total += percent;
+            shares.insert(name.to_owned(), percent);
+        }
+        if total != 100 * SCALE {
+            return Err(PreparationError::Invalid("Shnek ulushlari jami 100% bo‘lishi kerak"));
+        }
+        Ok(shares.into_iter().collect())
+    }
+}
+
 impl FormulaSetRename {
     pub fn normalized(&self) -> Result<(&str, &str), PreparationError> {
         let id = self.set_id.trim();

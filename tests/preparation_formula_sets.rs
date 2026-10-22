@@ -116,6 +116,10 @@ async fn run_checks(pool: &PgPool, options: PgConnectOptions) {
     .await
     .unwrap();
     migration.commit().await.unwrap();
+    sqlx::raw_sql(include_str!("../migrations/postgres/0159_preparation_screw_shares.sql"))
+        .execute(pool).await.unwrap();
+    sqlx::raw_sql(include_str!("../migrations/postgres/0160_preparation_formula_variants.sql"))
+        .execute(pool).await.unwrap();
 
     let runtime = PgPoolOptions::new()
         .after_connect(|connection, _| {

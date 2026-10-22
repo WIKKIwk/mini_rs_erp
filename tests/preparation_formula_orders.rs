@@ -84,6 +84,10 @@ async fn run_checks(pool: &PgPool, options: PgConnectOptions) {
     apply_postgres_migrations_through_version(pool, "0128")
         .await
         .unwrap();
+    sqlx::raw_sql(include_str!("../migrations/postgres/0159_preparation_screw_shares.sql"))
+        .execute(pool).await.unwrap();
+    sqlx::raw_sql(include_str!("../migrations/postgres/0160_preparation_formula_variants.sql"))
+        .execute(pool).await.unwrap();
     sqlx::raw_sql("INSERT INTO mini_system_users(id,role,name,phone) VALUES
         ('prep-1','tayyorlov_masteri','Master','901234567'),('prep-2','tayyorlov_masteri','Other','901234568');
         INSERT INTO mini_warehouses(id,name) VALUES ('own','Own');
