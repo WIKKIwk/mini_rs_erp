@@ -8,6 +8,10 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
+#[path = "order_page_list.rs"]
+mod list;
+pub(super) const SEQUENCE_LIST_PROJECTION: &str = "sequence_list_v1";
+
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct OrderPageQuery {
     #[serde(default)]
@@ -22,6 +26,8 @@ pub struct OrderPageQuery {
     pub(super) cursor: String,
     #[serde(default)]
     pub(super) if_version: String,
+    #[serde(default)]
+    pub(super) projection: String,
     pub(super) limit: Option<usize>,
 }
 
@@ -111,6 +117,8 @@ pub(super) async fn read_page(
             "sequence" | "orders" | "move" | "closed" | "audit"
         )
         || (query.view == "sequence" && !queue_state::is_canonical_apparatus_id(&query.apparatus))
+        || (!query.projection.is_empty()
+            && (query.projection != SEQUENCE_LIST_PROJECTION || query.view != "sequence"))
         || (query.view == "move"
             && (!valid_move_apparatus(&query.apparatus)
                 || !valid_move_apparatus(&query.target)
@@ -119,7 +127,7 @@ pub(super) async fn read_page(
         return Err(bad_request("invalid_order_page_scope"));
     }
     // No account may reuse another account's conditional response/cursor.
-    let scope = serde_json::to_string(&(
+    let mut scope_value = serde_json::to_value(&(
         &principal.role,
         &principal.ref_,
         &query.view,
@@ -127,8 +135,13 @@ pub(super) async fn read_page(
         &query.target,
         &query.search,
         limit,
-    ))
-    .map_err(|_| bad_request("invalid_order_page_scope"))?;
+    )).map_err(|_| bad_request("invalid_order_page_scope"))?;
+    // Preserve legacy scopes byte-for-byte; a new projection cannot reuse a
+    // full-page cursor, conditional response, live baseline or disk cache.
+    if !query.projection.is_empty() {
+        scope_value.as_array_mut().unwrap().push(query.projection.clone().into());
+    }
+    let scope = scope_value.to_string();
 
     // Pending intake has its own store, so include its content in the version
     // instead of assuming every intake write increments the queue revision.
@@ -250,7 +263,7 @@ pub(super) async fn read_page(
         &query.apparatus
     };
     let mut sequence_positions = BTreeMap::new();
-    let (ids, customers, snapshot, revision, existing_ids) = if query.view == "orders"
+    let (ids, mut customers, snapshot, revision, existing_ids) = if query.view == "orders"
         || query.apparatus == "unassigned"
     {
         let (catalog, existing_ids) = state
@@ -291,7 +304,14 @@ pub(super) async fn read_page(
         )
         .await
         .map_err(super::super::training::training_workspace_error)?;
-        let customers = production_map_order_customers(&state, &snapshot.maps).await;
+        // An unfiltered lightweight page needs customer fallbacks only for its
+        // selected rows. One old order outside the page must not force an
+        // archive lookup before the first twenty current rows are selected.
+        let customers = if query.projection == SEQUENCE_LIST_PROJECTION && query.search.is_empty() {
+            BTreeMap::new()
+        } else {
+            production_map_order_customers(&state, &snapshot.maps).await
+        };
         let by_id = snapshot
             .maps
             .iter()
@@ -396,12 +416,32 @@ pub(super) async fn read_page(
     if state.production_maps.snapshot_revision() != revision {
         return Err(conflict("order_page_changed"));
     }
-    let projected = project(&snapshot, &selected);
-    let calculation_templates = page_calculation_templates(&state, &projected.maps).await;
+    let mut payload = if query.projection == SEQUENCE_LIST_PROJECTION {
+        if !snapshot.sequence_versions.contains_key(apparatus)
+            || !snapshot.queue_policies.iter().any(|policy| policy.apparatus_id.as_str() == apparatus)
+        {
+            return Err(bad_request("invalid_order_page_scope"));
+        }
+        if query.search.is_empty() {
+            customers = production_map_definition_customers(state, &snapshot.maps.iter()
+                .filter(|saved| selected.contains(&saved.map.id))
+                .map(|saved| &saved.map).collect::<Vec<_>>()).await;
+        }
+        list::project(&snapshot, &selected, apparatus, &query.search, &customers)
+    } else {
+        let projected = project(&snapshot, &selected);
+        let calculation_templates = page_calculation_templates(&state, &projected.maps).await;
+        let mut payload = serde_json::to_value(projected).unwrap();
+        payload["pending_orders"] = serde_json::json!(selected_pending);
+        payload["calculation_templates"] = serde_json::json!(calculation_templates);
+        payload["order_customers"] = serde_json::json!(
+            customers.iter().filter(|(id, _)| selected.contains(id)).collect::<BTreeMap<_, _>>()
+        );
+        payload
+    };
     if state.production_maps.snapshot_revision() != revision {
         return Err(conflict("order_page_changed"));
     }
-    let mut payload = serde_json::to_value(projected).unwrap();
     payload["ok"] = true.into();
     payload["epoch"] = epoch.into();
     payload["rev"] = revision.into();
@@ -416,15 +456,7 @@ pub(super) async fn read_page(
             .filter(|(id, _)| selected.contains(id))
             .collect::<BTreeMap<_, _>>()
     );
-    payload["pending_orders"] = serde_json::json!(selected_pending);
-    payload["calculation_templates"] = serde_json::json!(calculation_templates);
     payload["next_cursor"] = serde_json::json!(next_cursor(&page_version, end, total));
-    payload["order_customers"] = serde_json::json!(
-        customers
-            .into_iter()
-            .filter(|(id, _)| selected.contains(id))
-            .collect::<BTreeMap<_, _>>()
-    );
     Ok(Some(payload))
 }
 
@@ -487,6 +519,42 @@ async fn page_calculation_templates(
         }
     }
     selected
+}
+
+/// Demand-loaded canonical detail for exactly one admin row. Cross-machine
+/// controls remain complete for that order; unrelated orders never go on wire.
+pub(super) async fn read_detail(
+    state: &AppState,
+    principal: &Principal,
+    apparatus: &str,
+    order_id: &str,
+) -> Result<Response, AdminError> {
+    for _ in 0..3 {
+        let (snapshot, revision) = state.production_maps
+            .order_snapshot_shared_with_revision(&[order_id.to_string()])
+            .await.map_err(production_map_error)?;
+        let snapshot = super::super::training::merge_worker_training_snapshot_shared(
+            state, principal, snapshot,
+        ).await.map_err(super::super::training::training_workspace_error)?;
+        if state.production_maps.snapshot_revision() != revision { continue; }
+        let projected = project(&snapshot, &[order_id.to_string()]);
+        if projected.maps.len() != 1 { return Err(not_found("order_not_available")); }
+        let customers = production_map_order_customers(state, &projected.maps).await;
+        if state.production_maps.snapshot_revision() != revision { continue; }
+        let mut payload = serde_json::to_value(projected).unwrap();
+        payload["ok"] = true.into();
+        payload["projection"] = "order_detail_v1".into();
+        payload["order_id"] = order_id.into();
+        payload["apparatus"] = apparatus.into();
+        payload["epoch"] = state.production_maps.snapshot_epoch().into();
+        payload["rev"] = revision.into();
+        payload["scope"] = serde_json::json!([
+            principal.role, principal.ref_, "order_detail_v1", apparatus, order_id,
+        ]).to_string().into();
+        payload["order_customers"] = serde_json::json!(customers);
+        return Ok(json_response(payload));
+    }
+    Err(conflict("order_page_changed"))
 }
 
 pub async fn production_map_closed_order_detail(
@@ -621,7 +689,7 @@ fn ordered_ids(snapshot: &ProductionMapLiveSnapshot, apparatus: &str) -> Vec<Str
     }
 }
 
-fn project(snapshot: &ProductionMapLiveSnapshot, ids: &[String]) -> ProductionMapLiveSnapshot {
+pub(super) fn project(snapshot: &ProductionMapLiveSnapshot, ids: &[String]) -> ProductionMapLiveSnapshot {
     let selected = ids.iter().cloned().collect::<BTreeSet<_>>();
     fn keep<T: Clone>(
         values: &BTreeMap<String, T>,

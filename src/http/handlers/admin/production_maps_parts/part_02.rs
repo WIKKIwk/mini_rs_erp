@@ -22,6 +22,8 @@ pub struct ProductionMapSequenceQuery {
     queue_search: String,
     #[serde(default)]
     queue_positions: bool,
+    #[serde(default)]
+    detail: bool,
 }
 
 pub async fn production_map_sequence(
@@ -54,6 +56,18 @@ pub async fn production_map_sequence(
                 || (!apparatus.is_empty() && !queue_state::is_canonical_apparatus_id(apparatus))
             {
                 return Err(bad_request("canonical apparatus and order_id are required together"));
+            }
+            if query.detail {
+                if apparatus.is_empty() || query.worker_scope {
+                    return Err(bad_request("order detail requires apparatus and order_id"));
+                }
+                // A full map is an explicit admin-only detail expansion. Old
+                // scoped reads and every worker bootstrap keep their contract.
+                authorize_any_capability(&state, &headers,
+                    &[Capability::AdminAccess, Capability::ProductionMapManage]).await?;
+                return tokio::time::timeout(std::time::Duration::from_secs(15),
+                    order_page::read_detail(&state, &principal, apparatus, order_id))
+                    .await.map_err(|_| conflict("order_page_changed"))?;
             }
             if query.worker_scope && apparatus.is_empty() && query.if_rev.is_some()
                 && worker_snapshot::snapshot_unchanged(&state, &principal,

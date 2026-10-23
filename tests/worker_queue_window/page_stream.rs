@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "sequence_list.rs"]
+mod sequence_list;
+
 async fn admin(f: &Fixture, name: &str) -> String {
     f.state
         .sessions

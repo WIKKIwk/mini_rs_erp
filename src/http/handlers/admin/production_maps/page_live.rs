@@ -40,6 +40,8 @@ pub(super) struct WindowRequest {
     length: usize,
     #[serde(default)]
     version: String,
+    #[serde(default)]
+    projection: String,
 }
 
 pub(super) fn requests(raw: &str) -> Result<Vec<WindowRequest>, AdminError> {
@@ -66,6 +68,9 @@ pub(super) fn requests(raw: &str) -> Result<Vec<WindowRequest>, AdminError> {
             )
             || window.apparatus.len() > 160
             || window.target.len() > 160
+            || (!window.projection.is_empty()
+                && (window.projection != super::order_page::SEQUENCE_LIST_PROJECTION
+                    || window.view != "sequence"))
         {
             return Err(bad_request("invalid_page_live_windows"));
         }
@@ -77,7 +82,7 @@ impl WindowRequest {
     fn key(&self, principal: &Principal) -> String {
         // Session tokens and client-assigned IDs are never cache keys. The
         // principal boundary also isolates training projections.
-        json!([
+        let mut key = json!([
             principal.role,
             principal.ref_,
             self.view,
@@ -85,8 +90,11 @@ impl WindowRequest {
             self.target,
             self.search,
             self.length
-        ])
-        .to_string()
+        ]);
+        if !self.projection.is_empty() {
+            key.as_array_mut().unwrap().push(self.projection.clone().into());
+        }
+        key.to_string()
     }
 
     fn query(&self, cursor: String) -> super::order_page::OrderPageQuery {
@@ -96,6 +104,7 @@ impl WindowRequest {
             target: self.target.clone(),
             search: self.search.clone(),
             cursor,
+            projection: self.projection.clone(),
             limit: Some(20),
             ..Default::default()
         }
