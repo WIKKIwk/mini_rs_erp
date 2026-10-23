@@ -22,48 +22,76 @@ fn assert_sequence_positions(page: &serde_json::Value, queue: &[String]) {
     assert_eq!(page["sequence_positions"], serde_json::json!(expected));
 }
 
-#[tokio::test]
-async fn admin_order_pages_reject_intake_read_invalidated_during_list() {
-    struct InvalidatingIntake(ProductionMapService);
+struct InvalidatingIntake {
+    service: ProductionMapService,
+    remaining: AtomicUsize,
+    failure: AtomicUsize,
+}
 
-    #[async_trait]
-    impl PendingOrderStore for InvalidatingIntake {
-        async fn list(&self) -> Result<Vec<PendingOrder>, PendingOrderError> {
-            // The list was read before a concurrent intake write's live event.
-            self.0.notify_live();
-            Ok(Vec::new())
-        }
-
-        async fn create(
-            &self,
-            _: PendingOrder,
-            _: CalculateOrderImage,
-        ) -> Result<PendingOrder, PendingOrderError> {
-            unreachable!()
-        }
-
-        async fn get(&self, _: &str) -> Result<PendingOrder, PendingOrderError> {
-            unreachable!()
-        }
-
-        async fn image(&self, _: &str) -> Result<CalculateOrderImage, PendingOrderError> {
-            unreachable!()
-        }
-
-        async fn complete(
-            &self,
-            _: &str,
-            _: &str,
-            _: PendingOrderCompletion,
-            _: crate::core::production_map::ProductionMapSaved,
-        ) -> Result<(PendingOrderCompletion, bool), PendingOrderError> {
-            unreachable!()
+impl InvalidatingIntake {
+    fn new(service: ProductionMapService, remaining: usize) -> Self {
+        Self {
+            service,
+            remaining: AtomicUsize::new(remaining),
+            failure: AtomicUsize::new(0),
         }
     }
+}
 
+#[async_trait]
+impl PendingOrderStore for InvalidatingIntake {
+    async fn list(&self) -> Result<Vec<PendingOrder>, PendingOrderError> {
+        match self.failure.load(Ordering::SeqCst) {
+            1 => return Err(PendingOrderError::Store),
+            2 => return Err(PendingOrderError::Conflict),
+            _ => {}
+        }
+        // Invalidate exactly the armed number of reads, then become stable.
+        if self
+            .remaining
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok()
+        {
+            self.service.notify_live();
+        }
+        Ok(Vec::new())
+    }
+
+    async fn create(
+        &self,
+        _: PendingOrder,
+        _: CalculateOrderImage,
+    ) -> Result<PendingOrder, PendingOrderError> {
+        unreachable!()
+    }
+
+    async fn get(&self, _: &str) -> Result<PendingOrder, PendingOrderError> {
+        unreachable!()
+    }
+
+    async fn image(&self, _: &str) -> Result<CalculateOrderImage, PendingOrderError> {
+        unreachable!()
+    }
+
+    async fn complete(
+        &self,
+        _: &str,
+        _: &str,
+        _: PendingOrderCompletion,
+        _: crate::core::production_map::ProductionMapSaved,
+    ) -> Result<(PendingOrderCompletion, bool), PendingOrderError> {
+        unreachable!()
+    }
+}
+
+#[tokio::test]
+async fn admin_order_pages_reject_intake_read_invalidated_during_list() {
     let mut state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
-    state.pending_orders = Some(Arc::new(InvalidatingIntake(state.production_maps.clone())));
+    state.pending_orders = Some(Arc::new(InvalidatingIntake::new(
+        state.production_maps.clone(),
+        1,
+    )));
     let response = build_router(state)
         .oneshot(request(
             "GET",
@@ -74,6 +102,127 @@ async fn admin_order_pages_reject_intake_read_invalidated_during_list() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::CONFLICT);
     assert_eq!(json_body(response).await["error"], "order_page_changed");
+}
+
+async fn page_window_socket(
+    state: AppState,
+    windows: serde_json::Value,
+    token: &str,
+) -> (tokio::task::JoinHandle<()>, reqwest::Upgraded) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, build_router(state)).await.unwrap();
+    });
+    let response = reqwest::Client::new()
+        .get(format!(
+            "http://{address}/v1/mobile/admin/production-maps/live?protocol=page_delta_v1&pages={}",
+            urlencoding::encode(&windows.to_string()),
+        ))
+        .bearer_auth(token)
+        .header("Connection", "Upgrade")
+        .header("Upgrade", "websocket")
+        .header("Sec-WebSocket-Version", "13")
+        .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+    (server, response.upgrade().await.unwrap())
+}
+
+#[tokio::test]
+async fn admin_order_pages_live_retries_transient_initial_and_established_windows() {
+    let mut state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+    let intake = Arc::new(InvalidatingIntake::new(state.production_maps.clone(), 0));
+    state.pending_orders = Some(intake.clone());
+    // Three invalidated reads exhaust read_window's bounded staging retries.
+    intake.remaining.store(3, Ordering::SeqCst);
+    let windows = serde_json::json!([
+        {"id":"intake", "view":"orders", "length":20},
+        {"id":"closed", "view":"closed", "length":20},
+    ]);
+    let (server, mut socket) = page_window_socket(state.clone(), windows, &token).await;
+    let mut baselines = BTreeMap::new();
+    for _ in 0..2 {
+        let ready = paged_live_json(&mut socket).await;
+        assert_eq!(
+            ready["type"], "page_window_ready",
+            "transient read must defer, not close: {ready}"
+        );
+        let id = ready["window"].as_str().unwrap().to_string();
+        assert!(
+            baselines.insert(id, ready.clone()).is_none(),
+            "each window becomes ready once"
+        );
+        assert_eq!(ready["rev"], state.production_maps.snapshot_revision());
+    }
+    assert_eq!(intake.remaining.load(Ordering::SeqCst), 0);
+    assert_eq!(baselines.len(), 2);
+    // Repeat the conflict with a retained baseline. Recovery must advance that
+    // baseline only after a whole consistent window has been staged.
+    intake.remaining.store(3, Ordering::SeqCst);
+    state.production_maps.notify_live();
+    let mut updates = BTreeMap::new();
+    for _ in 0..2 {
+        let checkpoint = paged_live_json(&mut socket).await;
+        assert_eq!(checkpoint["type"], "page_window_checkpoint", "{checkpoint}");
+        let id = checkpoint["window"].as_str().unwrap().to_string();
+        let baseline = &baselines[&id];
+        assert_eq!(checkpoint["epoch"], baseline["epoch"]);
+        assert_eq!(checkpoint["base_version"], baseline["version"]);
+        assert!(checkpoint["rev"].as_u64().unwrap() > baseline["rev"].as_u64().unwrap());
+        assert_eq!(checkpoint["rev"], state.production_maps.snapshot_revision());
+        assert!(checkpoint.get("changes").is_none());
+        assert!(updates.insert(id, checkpoint).is_none());
+    }
+    let app = build_router(state.clone());
+    for (id, view) in [("intake", "orders"), ("closed", "closed")] {
+        let fresh = json_body(
+            app.clone()
+                .oneshot(request(
+                    "GET",
+                    &format!("/v1/mobile/admin/production-maps/order-page?view={view}"),
+                    &token,
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(updates[id]["version"], fresh["version"]);
+        assert_eq!(updates[id]["rev"], fresh["rev"]);
+    }
+    server.abort();
+}
+
+#[tokio::test]
+async fn admin_order_pages_live_closes_on_fatal_read_errors() {
+    use tokio::io::AsyncReadExt;
+    for (failure, expected) in [
+        (1, "pending order store failed"),
+        (2, "pending_order_conflict"),
+    ] {
+        let mut state = test_state();
+        let token = session(&state, PrincipalRole::Admin).await;
+        let intake = Arc::new(InvalidatingIntake::new(state.production_maps.clone(), 0));
+        state.pending_orders = Some(intake.clone());
+        let windows = serde_json::json!([{"id":"intake", "view":"orders", "length":20}]);
+        let (server, mut socket) = page_window_socket(state.clone(), windows, &token).await;
+        assert_eq!(
+            paged_live_json(&mut socket).await["type"],
+            "page_window_ready"
+        );
+        intake.failure.store(failure, Ordering::SeqCst);
+        state.production_maps.notify_live();
+        assert_eq!(paged_live_json(&mut socket).await["error"], expected);
+        let mut tail = Vec::new();
+        tokio::time::timeout(Duration::from_secs(2), socket.read_to_end(&mut tail))
+            .await
+            .expect("fatal read must close the socket")
+            .unwrap();
+        server.abort();
+    }
 }
 
 #[tokio::test]

@@ -16,6 +16,7 @@ const HISTORY_TTL: Duration = Duration::from_secs(90);
 const MAX_DELTA_BYTES: usize = 256 * 1024;
 const MAX_WINDOW_BYTES: usize = 8 * 1024 * 1024;
 const READ_TIMEOUT: Duration = Duration::from_secs(15);
+const RETRY_READ_DELAY: Duration = Duration::from_millis(100);
 
 async fn read_before_deadline<T>(
     deadline: tokio::time::Instant,
@@ -426,21 +427,37 @@ struct Subscription {
     baseline: Option<Arc<Window>>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum UpdateStatus {
+    Complete,
+    Pending,
+    Closed,
+}
+
 async fn update(
     state: &AppState,
     principal: &Principal,
     socket: &mut WebSocket,
     subscriptions: &mut [Subscription],
-    initial: bool,
-) -> bool {
+) -> UpdateStatus {
+    let mut pending = false;
     for sub in subscriptions {
         let mut feed = sub.feed.lock().await;
         let current = match feed.current(state, principal, &sub.request).await {
             Ok(current) => current,
+            Err(error)
+                if error.0 == StatusCode::CONFLICT && error.1.0.error == "order_page_changed" =>
+            {
+                // A concurrent write invalidated staging. Keep the last sent
+                // baseline and retry the whole window after writes settle.
+                drop(feed);
+                pending = true;
+                continue;
+            }
             Err(error) => {
                 drop(feed);
                 let _ = send(socket, &json!(error.1.0).to_string()).await;
-                return false;
+                return UpdateStatus::Closed;
             }
         };
         let baseline = sub
@@ -448,10 +465,11 @@ async fn update(
             .clone()
             .or_else(|| feed.version(&sub.request.version));
         drop(feed);
+        let initial = sub.baseline.is_none();
         if let Some(before) = baseline {
             if before.version != current.version {
                 if !send(socket, &prepared(&before, &current, &sub.request.id).await).await {
-                    return false;
+                    return UpdateStatus::Closed;
                 }
             }
             if initial
@@ -464,7 +482,7 @@ async fn update(
                 )
                 .await
             {
-                return false;
+                return UpdateStatus::Closed;
             }
         } else {
             if !send(
@@ -476,12 +494,16 @@ async fn update(
             )
             .await
             {
-                return false;
+                return UpdateStatus::Closed;
             }
         }
         sub.baseline = Some(current);
     }
-    true
+    if pending {
+        UpdateStatus::Pending
+    } else {
+        UpdateStatus::Complete
+    }
 }
 
 pub(super) async fn socket(
@@ -503,9 +525,14 @@ pub(super) async fn socket(
             baseline: None,
         });
     }
-    if !update(&state, &principal, &mut socket, &mut subscriptions, true).await {
+    let status = update(&state, &principal, &mut socket, &mut subscriptions).await;
+    if status == UpdateStatus::Closed {
         return;
     }
+    let mut retry_pending = status == UpdateStatus::Pending;
+    let mut retry = tokio::time::interval(RETRY_READ_DELAY);
+    retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    retry.reset();
     let mut heartbeat = tokio::time::interval(Duration::from_secs(25));
     heartbeat.tick().await;
     loop {
@@ -516,9 +543,21 @@ pub(super) async fn socket(
             },
             event = events.recv() => {
                 if matches!(event, Err(tokio::sync::broadcast::error::RecvError::Closed)) { break; }
+                // Pending reads retry on the timer, even if this was the last
+                // notification. Draining events here avoids a conflict loop.
+                if retry_pending { continue; }
                 // Reads after lag use a fresh canonical view and diff from the
                 // subscriber's retained baseline, so no partial chain is applied.
-                if !update(&state, &principal, &mut socket, &mut subscriptions, false).await { break; }
+                let status = update(&state, &principal, &mut socket, &mut subscriptions).await;
+                if status == UpdateStatus::Closed { break; }
+                retry_pending = status == UpdateStatus::Pending;
+                if retry_pending { retry.reset(); }
+            },
+            _ = retry.tick(), if retry_pending => {
+                let status = update(&state, &principal, &mut socket, &mut subscriptions).await;
+                if status == UpdateStatus::Closed { break; }
+                retry_pending = status == UpdateStatus::Pending;
+                if retry_pending { retry.reset(); }
             },
             _ = heartbeat.tick() => {
                 if super::completion::require_paged_live_capability(&state, &principal).await.is_err() {
