@@ -28,6 +28,8 @@ pub struct OrderPageQuery {
     pub(super) if_version: String,
     #[serde(default)]
     pub(super) projection: String,
+    #[serde(default)]
+    pub(super) compression: String,
     pub(super) limit: Option<usize>,
 }
 
@@ -93,10 +95,12 @@ pub async fn production_map_order_page(
         &[Capability::AdminAccess, Capability::ProductionMapManage],
     )
     .await?;
-    Ok(match read_page(&state, &principal, query).await? {
+    let identity = query.compression == "identity";
+    let response = match read_page(&state, &principal, query).await? {
         Some(payload) => json_response(payload),
         None => not_modified(),
-    })
+    };
+    Ok(if identity { crate::http::router::identity_response(response) } else { response })
 }
 
 /// The HTTP bootstrap and live windows use the same domain projection and
@@ -119,6 +123,8 @@ pub(super) async fn read_page(
         || (query.view == "sequence" && !queue_state::is_canonical_apparatus_id(&query.apparatus))
         || (!query.projection.is_empty()
             && (query.projection != SEQUENCE_LIST_PROJECTION || query.view != "sequence"))
+        || (!query.compression.is_empty()
+            && (query.compression != "identity" || query.view != "sequence"))
         || (query.view == "move"
             && (!valid_move_apparatus(&query.apparatus)
                 || !valid_move_apparatus(&query.target)

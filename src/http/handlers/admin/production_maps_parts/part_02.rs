@@ -24,6 +24,8 @@ pub struct ProductionMapSequenceQuery {
     queue_positions: bool,
     #[serde(default)]
     detail: bool,
+    #[serde(default)]
+    compression: String,
 }
 
 pub async fn production_map_sequence(
@@ -61,13 +63,19 @@ pub async fn production_map_sequence(
                 if apparatus.is_empty() || query.worker_scope {
                     return Err(bad_request("order detail requires apparatus and order_id"));
                 }
+                if !query.compression.is_empty() && query.compression != "identity" {
+                    return Err(bad_request("invalid_detail_compression"));
+                }
                 // A full map is an explicit admin-only detail expansion. Old
                 // scoped reads and every worker bootstrap keep their contract.
                 authorize_any_capability(&state, &headers,
                     &[Capability::AdminAccess, Capability::ProductionMapManage]).await?;
-                return tokio::time::timeout(std::time::Duration::from_secs(15),
+                let response = tokio::time::timeout(std::time::Duration::from_secs(15),
                     order_page::read_detail(&state, &principal, apparatus, order_id))
-                    .await.map_err(|_| conflict("order_page_changed"))?;
+                    .await.map_err(|_| conflict("order_page_changed"))??;
+                return Ok(if query.compression == "identity" {
+                    crate::http::router::identity_response(response)
+                } else { response });
             }
             if query.worker_scope && apparatus.is_empty() && query.if_rev.is_some()
                 && worker_snapshot::snapshot_unchanged(&state, &principal,

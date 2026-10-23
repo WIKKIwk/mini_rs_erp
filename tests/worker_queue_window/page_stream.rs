@@ -3,6 +3,9 @@ use super::*;
 #[path = "sequence_list.rs"]
 mod sequence_list;
 
+#[path = "http_compression.rs"]
+mod http_compression;
+
 async fn admin(f: &Fixture, name: &str) -> String {
     f.state
         .sessions
