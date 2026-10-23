@@ -249,6 +249,7 @@ pub(super) async fn read_page(
     } else {
         &query.apparatus
     };
+    let mut sequence_positions = BTreeMap::new();
     let (ids, customers, snapshot, revision, existing_ids) = if query.view == "orders"
         || query.apparatus == "unassigned"
     {
@@ -317,17 +318,27 @@ pub(super) async fn read_page(
         } else {
             None
         };
+        // Count eligible queue rows before search or pagination. Only matching
+        // IDs are retained here, and only selected page IDs go on the wire.
+        let mut position = 0usize;
         ids.retain(|id| {
             by_id.get(id.as_str()).is_some_and(|saved| {
-                is_order(id)
-                    && matches_search(&saved.map, &query.search, &customers)
+                if !is_order(id) {
+                    return false;
+                }
+                position += 1;
+                let matches = matches_search(&saved.map, &query.search, &customers)
                     && (query.view != "move"
                         || state.production_maps.admin_move_page_matches(
                             &saved.map,
                             &query.apparatus,
                             &query.target,
                             configurations.as_ref().unwrap(),
-                        ))
+                        ));
+                if matches && query.view == "sequence" {
+                    sequence_positions.insert(id.clone(), position);
+                }
+                matches
             })
         });
         let existing_ids = by_id.keys().map(|id| id.to_string()).collect();
@@ -399,6 +410,12 @@ pub(super) async fn read_page(
     payload["offset"] = start.into();
     payload["total"] = total.into();
     payload["order_ids"] = serde_json::json!(selected);
+    payload["sequence_positions"] = serde_json::json!(
+        sequence_positions
+            .into_iter()
+            .filter(|(id, _)| selected.contains(id))
+            .collect::<BTreeMap<_, _>>()
+    );
     payload["pending_orders"] = serde_json::json!(selected_pending);
     payload["calculation_templates"] = serde_json::json!(calculation_templates);
     payload["next_cursor"] = serde_json::json!(next_cursor(&page_version, end, total));

@@ -6,6 +6,22 @@ use crate::core::production_map::{ProductionMapStorePort, queue_state};
 
 const PAGE_APPARATUS: &str = "apparatus:default:bosma_8";
 
+fn assert_sequence_positions(page: &serde_json::Value, queue: &[String]) {
+    let expected = page["order_ids"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|id| {
+            let id = id.as_str().unwrap();
+            (
+                id.to_string(),
+                queue.iter().position(|item| item == id).unwrap() + 1,
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(page["sequence_positions"], serde_json::json!(expected));
+}
+
 #[tokio::test]
 async fn admin_order_pages_reject_intake_read_invalidated_during_list() {
     struct InvalidatingIntake(ProductionMapService);
@@ -168,6 +184,7 @@ async fn admin_order_pages_preserve_order_and_reject_changed_cursors() {
     assert_eq!(first["maps"].as_array().unwrap().len(), 20);
     assert_eq!(first["total"], 45);
     assert_eq!(first["order_ids"], serde_json::json!(&expected[..20]));
+    assert_sequence_positions(&first, &expected);
     let cursor = first["next_cursor"].as_str().unwrap();
     let second = app
         .clone()
@@ -177,6 +194,7 @@ async fn admin_order_pages_preserve_order_and_reject_changed_cursors() {
     assert_eq!(second.status(), StatusCode::OK);
     let second = json_body(second).await;
     assert_eq!(second["order_ids"], serde_json::json!(&expected[20..40]));
+    assert_sequence_positions(&second, &expected);
     let tail = app
         .clone()
         .oneshot(request(
@@ -188,6 +206,7 @@ async fn admin_order_pages_preserve_order_and_reject_changed_cursors() {
         .unwrap();
     let tail = json_body(tail).await;
     assert_eq!(tail["order_ids"], serde_json::json!(&expected[40..]));
+    assert_sequence_positions(&tail, &expected);
     assert!(tail["next_cursor"].is_null());
     let conditional = format!("{url}&if_version={}", first["version"].as_str().unwrap());
     assert_eq!(
@@ -222,6 +241,45 @@ async fn admin_order_pages_preserve_order_and_reject_changed_cursors() {
         "search must run before the twenty-row limit"
     );
     assert_eq!(search["order_ids"], serde_json::json!(["zakaz-page-0044"]));
+    assert_sequence_positions(&search, &expected);
+
+    let matches = expected
+        .iter()
+        .filter(|id| id.starts_with("zakaz-page-00"))
+        .cloned()
+        .collect::<Vec<_>>();
+    let filtered = json_body(
+        app.clone()
+            .oneshot(request(
+                "GET",
+                &format!("{url}&search=zakaz-page-00"),
+                &token,
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(filtered["order_ids"], serde_json::json!(&matches[..20]));
+    assert_sequence_positions(&filtered, &expected);
+    let filtered_second = json_body(
+        app.clone()
+            .oneshot(request(
+                "GET",
+                &format!(
+                    "{url}&search=zakaz-page-00&cursor={}",
+                    filtered["next_cursor"].as_str().unwrap()
+                ),
+                &token,
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(
+        filtered_second["order_ids"],
+        serde_json::json!(&matches[20..40])
+    );
+    assert_sequence_positions(&filtered_second, &expected);
 
     let mut changed = expected.clone();
     changed.rotate_right(1);
@@ -255,6 +313,253 @@ async fn admin_order_pages_preserve_order_and_reject_changed_cursors() {
             .status(),
         StatusCode::FORBIDDEN
     );
+}
+
+#[tokio::test]
+async fn admin_order_pages_search_keeps_eligible_queue_positions_in_both_policies() {
+    use crate::core::apparatus_standard::{
+        ApparatusOperationalPolicies, CanonicalApparatusPatch, CanonicalCommandMetadata,
+        QueueDiscipline,
+    };
+    for discipline in [QueueDiscipline::StrictSequence, QueueDiscipline::FreePick] {
+        let state = test_state();
+        let token = session(&state, PrincipalRole::Admin).await;
+        let apparatus_id = ApparatusId::new(PAGE_APPARATUS).unwrap();
+        let current = state
+            .apparatus
+            .current_configuration(&apparatus_id)
+            .await
+            .unwrap()
+            .unwrap();
+        state
+            .apparatus
+            .patch(
+                apparatus_id,
+                current.runtime.source_revision,
+                CanonicalApparatusPatch {
+                    policies: Some(ApparatusOperationalPolicies {
+                        worker_material_assignment_allowed: false,
+                        queue: discipline,
+                        material: current.material.policy.clone(),
+                        tooling: current.material.tooling.clone(),
+                    }),
+                    ..Default::default()
+                },
+                CanonicalCommandMetadata::new("user:admin", "page-rank-policy"),
+            )
+            .await
+            .unwrap();
+        for index in 0..26 {
+            let title = if index == 3 || index == 23 {
+                "Sparse rank match"
+            } else {
+                "Other row"
+            };
+            state
+                .production_maps
+                .upsert_map(
+                    serde_json::from_str(&pechat_order_map_json(
+                        &format!("zakaz-rank-{index:04}"),
+                        title,
+                        &format!("{index:04}"),
+                        PAGE_APPARATUS,
+                    ))
+                    .unwrap(),
+                )
+                .await
+                .unwrap();
+        }
+        let snapshot = state.production_maps.live_snapshot().await.unwrap();
+        let visible = snapshot.visible_order_ids[PAGE_APPARATUS].clone();
+        let mut reversed = visible.clone();
+        reversed.reverse();
+        state
+            .production_maps
+            .set_apparatus_sequence(PAGE_APPARATUS, reversed.clone())
+            .await
+            .unwrap();
+        let snapshot = state.production_maps.live_snapshot().await.unwrap();
+        let visible = &snapshot.visible_order_ids[PAGE_APPARATUS];
+        let expected = if discipline == QueueDiscipline::FreePick {
+            visible.clone()
+        } else {
+            queue_state::effective_apparatus_sequence(&snapshot.sequences[PAGE_APPARATUS], visible)
+        };
+        let url = format!(
+            "/v1/mobile/admin/production-maps/order-page?view=sequence&apparatus={PAGE_APPARATUS}&limit=50"
+        );
+        let app = build_router(state);
+        let full = json_body(
+            app.clone()
+                .oneshot(request("GET", &url, &token))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(full["order_ids"], serde_json::json!(expected));
+        assert_sequence_positions(&full, &expected);
+        let fourth = &expected[3];
+        let searched = json_body(
+            app.clone()
+                .oneshot(request("GET", &format!("{url}&search={fourth}"), &token))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(searched["order_ids"], serde_json::json!([fourth]));
+        assert_eq!(
+            searched["sequence_positions"],
+            serde_json::json!({fourth:4})
+        );
+        assert_eq!(searched["maps"].as_array().unwrap().len(), 1);
+        let sparse = json_body(
+            app.clone()
+                .oneshot(request(
+                    "GET",
+                    &format!("{url}&search=Sparse%20rank%20match"),
+                    &token,
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(sparse["total"], 2);
+        assert_eq!(sparse["maps"].as_array().unwrap().len(), 2);
+        assert_sequence_positions(&sparse, &expected);
+        assert!(
+            sparse["sequence_positions"]
+                .as_object()
+                .unwrap()
+                .values()
+                .any(|value| value.as_u64().unwrap() > 20)
+        );
+        let absent = json_body(
+            app.oneshot(request(
+                "GET",
+                &format!("{url}&search=does-not-exist"),
+                &token,
+            ))
+            .await
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(absent["sequence_positions"], serde_json::json!({}));
+    }
+}
+
+#[tokio::test]
+async fn admin_order_pages_search_streams_rank_only_reorder_as_bounded_delta() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+    let ids = (0..25)
+        .map(|index| format!("zakaz-rank-live-{index:04}"))
+        .collect::<Vec<_>>();
+    for (index, id) in ids.iter().enumerate() {
+        state
+            .production_maps
+            .upsert_map(
+                serde_json::from_str(&pechat_order_map_json(
+                    id,
+                    "Rank only live",
+                    &format!("{index:04}"),
+                    PAGE_APPARATUS,
+                ))
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+    }
+    state
+        .production_maps
+        .set_apparatus_sequence(PAGE_APPARATUS, ids.clone())
+        .await
+        .unwrap();
+    let selected = &ids[3];
+    let url = format!(
+        "/v1/mobile/admin/production-maps/order-page?view=sequence&apparatus={PAGE_APPARATUS}&search={selected}"
+    );
+    let app = build_router(state.clone());
+    let before = json_body(
+        app.clone()
+            .oneshot(request("GET", &url, &token))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(
+        before["sequence_positions"],
+        serde_json::json!({selected:4})
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let pages = serde_json::json!([{"id":"rank", "view":"sequence", "apparatus":PAGE_APPARATUS,
+        "search":selected, "length":20, "version":before["version"]}]);
+    let client = reqwest::Client::new();
+    let response = client
+        .get(format!(
+            "http://{address}/v1/mobile/admin/production-maps/live?protocol=page_delta_v1&pages={}",
+            urlencoding::encode(&pages.to_string())
+        ))
+        .bearer_auth(&token)
+        .header("Connection", "Upgrade")
+        .header("Upgrade", "websocket")
+        .header("Sec-WebSocket-Version", "13")
+        .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+    let mut socket = response.upgrade().await.unwrap();
+    let ready = paged_live_json(&mut socket).await;
+    assert_eq!(ready["type"], "page_window_ready");
+    assert_eq!(ready["resync"], false);
+    assert_eq!(ready["version"], before["version"]);
+    let mut reordered = ids.clone();
+    reordered.swap(3, 4);
+    state
+        .production_maps
+        .set_apparatus_sequence(PAGE_APPARATUS, reordered)
+        .await
+        .unwrap();
+    let delta = paged_live_json(&mut socket).await;
+    assert_eq!(delta["type"], "page_window_delta");
+    assert_eq!(delta["epoch"], before["epoch"]);
+    assert_eq!(delta["base_version"], before["version"]);
+    assert!(delta["rev"].as_u64().unwrap() > before["rev"].as_u64().unwrap());
+    assert_eq!(delta["page_count"], 1);
+    let changes = delta["changes"].as_array().unwrap();
+    assert_eq!(changes.len(), 1);
+    let ops = changes[0]["ops"].as_array().unwrap();
+    assert!(ops.iter().any(|op| op["op"] == "set"
+        && op["path"] == serde_json::json!(["sequence_positions", selected])
+        && op["value"] == 5));
+    assert!(
+        ops.iter().all(|op| {
+            let path = op["path"].as_array().unwrap();
+            !path.is_empty()
+                && !matches!(
+                    path[0].as_str(),
+                    Some("maps" | "order_ids" | "sequences" | "visible_order_ids")
+                )
+        }),
+        "rank-only change must not retransmit unchanged orders or full queues"
+    );
+    let after: serde_json::Value = client
+        .get(format!("http://{address}{url}"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(after["version"], delta["version"]);
+    assert_eq!(after["sequence_positions"], serde_json::json!({selected:5}));
+    for field in ["maps", "order_ids", "sequences", "visible_order_ids"] {
+        assert_eq!(before[field], after[field], "{field} did not change");
+    }
+    server.abort();
 }
 
 #[tokio::test]
