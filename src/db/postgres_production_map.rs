@@ -906,7 +906,7 @@ impl PostgresProductionMapStore {
     }
 
     async fn paddons(&self, limit: usize) -> Result<Vec<PaddonSummary>, ProductionMapError> {
-        load_paddons(&self.pool, limit, false, None).await
+        load_paddons(&self.pool, limit, false, None, None).await
     }
 
     async fn paddon_summary(

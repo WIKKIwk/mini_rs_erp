@@ -23,6 +23,9 @@ pub struct PaddonReceiveWrite {
 pub struct PaddonSummary {
     pub id: String,
     pub code: String,
+    /// Durable producing apparatus; empty for legacy or unscoped administrative packages.
+    #[serde(default)]
+    pub apparatus_id: String,
     #[serde(default)]
     pub location: String,
     #[serde(default)]
@@ -70,6 +73,7 @@ pub struct PaddonPrintConfirmation {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PaddonCreateInput {
+    pub apparatus_id: String,
     pub location: String,
     pub note: String,
     pub actor_ref: String,

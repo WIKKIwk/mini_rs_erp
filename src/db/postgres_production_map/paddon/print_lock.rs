@@ -128,15 +128,15 @@ pub(super) async fn successor(
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
     super::active_paddon::lock_scope(&mut tx, apparatus, actor).await?;
-    let locked = sqlx::query_scalar::<_, bool>(
-        "SELECT locked_at IS NOT NULL FROM mini_paddons WHERE code=$1 FOR UPDATE",
+    let (locked, source_apparatus) = sqlx::query_as::<_, (bool, String)>(
+        "SELECT locked_at IS NOT NULL, apparatus_id FROM mini_paddons WHERE code=$1 FOR UPDATE",
     )
     .bind(source_code)
     .fetch_optional(&mut *tx)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?
     .ok_or(ProductionMapError::PaddonNotFound)?;
-    if !locked {
+    if !locked || source_apparatus != apparatus {
         return Err(ProductionMapError::PaddonInvalidInput);
     }
     let existing = sqlx::query_scalar::<_, String>(
@@ -145,8 +145,8 @@ pub(super) async fn successor(
         .fetch_optional(&mut *tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
     let code = if let Some(code) = existing {
         let unavailable = sqlx::query_scalar::<_, bool>(
-            "SELECT locked_at IS NOT NULL OR receipt_json IS NOT NULL FROM mini_paddons WHERE code=$1 FOR UPDATE",
-        ).bind(&code).fetch_one(&mut *tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
+            "SELECT locked_at IS NOT NULL OR receipt_json IS NOT NULL OR apparatus_id <> $2 FROM mini_paddons WHERE code=$1 FOR UPDATE",
+        ).bind(&code).bind(apparatus).fetch_one(&mut *tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
         if unavailable {
             return Err(ProductionMapError::PaddonLocked);
         }
@@ -155,6 +155,7 @@ pub(super) async fn successor(
         let code = super::paddon_helpers::create_paddon_tx(
             &mut tx,
             PaddonCreateInput {
+                apparatus_id: source_apparatus.clone(),
                 location: apparatus.to_string(),
                 note: String::new(),
                 actor_ref: actor.ref_.trim().to_string(),

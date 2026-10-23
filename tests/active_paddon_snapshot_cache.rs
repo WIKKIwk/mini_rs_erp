@@ -65,7 +65,7 @@ struct Fixture {
     other_worker: String,
     admin: String,
     denied: String,
-    codes: [String; 2],
+    codes: [String; 3],
 }
 
 struct SharedApp {
@@ -125,14 +125,17 @@ impl Fixture {
         let actor = actor();
         let first = state
             .production_maps
-            .create_paddon("Cutting", "First", &actor)
+            .create_paddon_for_apparatus(Some(CUT), "Cutting", "First", &actor)
             .await
             .unwrap();
         let second = state
             .production_maps
-            .create_paddon("Cutting", "Second", &actor)
+            .create_paddon_for_apparatus(Some(CUT), "Cutting", "Second", &actor)
             .await
             .unwrap();
+        let third = state.production_maps
+            .create_paddon_for_apparatus(Some(OTHER_CUT), "Cutting 2", "Third", &actor)
+            .await.unwrap();
         let router = build_router(state.clone());
         Self {
             state,
@@ -142,7 +145,7 @@ impl Fixture {
             other_worker,
             admin,
             denied,
-            codes: [first.code, second.code],
+            codes: [first.code, second.code, third.code],
         }
     }
 
@@ -311,12 +314,15 @@ async fn selection_set_change_repeat_clear_leave_shared_snapshot_untouched() {
 async fn selection_is_scoped_by_actor_role_reference_and_apparatus() {
     let f = Fixture::new().await;
     let service = &f.state.production_maps;
+    service.update_paddon_settings(None, Some(true), &QueueActionActor {
+        role: "admin".into(), ref_: "manager".into(), display_name: "Manager".into(),
+    }).await.unwrap();
     let (before, revision) = service.live_snapshot_shared_with_revision().await.unwrap();
     for (token, apparatus, code) in [
         (&f.worker, CUT, &f.codes[0]),
         (&f.other_worker, CUT, &f.codes[1]),
         (&f.admin, CUT, &f.codes[1]),
-        (&f.worker, OTHER_CUT, &f.codes[1]),
+        (&f.worker, OTHER_CUT, &f.codes[2]),
     ] {
         f.selection("GET", token, apparatus, "", None).await;
         f.selection("PUT", token, apparatus, code, Some(code)).await;
@@ -325,18 +331,18 @@ async fn selection_is_scoped_by_actor_role_reference_and_apparatus() {
         (&f.worker, CUT, &f.codes[0]),
         (&f.other_worker, CUT, &f.codes[1]),
         (&f.admin, CUT, &f.codes[1]),
-        (&f.worker, OTHER_CUT, &f.codes[1]),
+        (&f.worker, OTHER_CUT, &f.codes[2]),
     ] {
         f.selection("GET", token, apparatus, "", Some(code)).await;
     }
     f.selection("PUT", &f.worker, CUT, "", None).await;
     f.selection("GET", &f.worker, CUT, "", None).await;
-    for (token, apparatus) in [
-        (&f.other_worker, CUT),
-        (&f.admin, CUT),
-        (&f.worker, OTHER_CUT),
+    for (token, apparatus, code) in [
+        (&f.other_worker, CUT, &f.codes[1]),
+        (&f.admin, CUT, &f.codes[1]),
+        (&f.worker, OTHER_CUT, &f.codes[2]),
     ] {
-        f.selection("GET", token, apparatus, "", Some(&f.codes[1]))
+        f.selection("GET", token, apparatus, "", Some(code))
             .await;
     }
     let (after, after_revision) = service.live_snapshot_shared_with_revision().await.unwrap();

@@ -6,10 +6,12 @@ use sqlx::{PgPool, Postgres, Transaction};
 pub(super) async fn load_available(
     pool: &PgPool,
     target_id: &str,
+    target_apparatus: &str,
 ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
     let ids = sqlx::query_scalar::<_, String>(
         "SELECT b.batch_id FROM mini_progress_batches b
          WHERE b.wip_status='waiting'
+           AND ($2='' OR b.canonical_apparatus_id=$2)
            AND COALESCE(b.payload_json->>'finished_goods_stock_id', '')=''
            AND COALESCE(b.payload_json->>'received_warehouse', '')=''
            AND NOT EXISTS (SELECT 1 FROM mini_paddon_items i JOIN mini_paddons p ON p.id=i.paddon_id
@@ -18,6 +20,7 @@ pub(super) async fn load_available(
          ORDER BY b.updated_at DESC, b.batch_id LIMIT 500",
     )
     .bind(target_id)
+    .bind(target_apparatus)
     .fetch_all(pool)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
@@ -42,21 +45,26 @@ pub(super) async fn move_items(
     lock_ids.insert(target.clone());
     // Lock source and destination in one stable order, then the rolls in order.
     // Receipt takes the same pallet and roll locks and remains authoritative.
-    let locked = sqlx::query_as::<_, (String, Option<serde_json::Value>, bool)>(
-        "SELECT id, receipt_json, locked_at IS NOT NULL FROM mini_paddons WHERE id=ANY($1) ORDER BY id FOR UPDATE",
+    let locked = sqlx::query_as::<_, (String, Option<serde_json::Value>, bool, String)>(
+        "SELECT id, receipt_json, locked_at IS NOT NULL, apparatus_id FROM mini_paddons WHERE id=ANY($1) ORDER BY id FOR UPDATE",
     )
     .bind(lock_ids.iter().cloned().collect::<Vec<_>>())
     .fetch_all(&mut **tx)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
-    if !locked.iter().any(|(id, _, _)| id == &target) {
+    if !locked.iter().any(|(id, _, _, _)| id == &target) {
         return Err(ProductionMapError::PaddonNotFound);
     }
-    if locked.iter().any(|(_, receipt, _)| receipt.is_some()) {
+    if locked.iter().any(|(_, receipt, _, _)| receipt.is_some()) {
         return Err(ProductionMapError::PaddonAlreadyReceived);
     }
-    if locked.iter().any(|(_, _, printed)| *printed) {
+    if locked.iter().any(|(_, _, printed, _)| *printed) {
         return Err(ProductionMapError::PaddonLocked);
+    }
+    let target_apparatus = &locked.iter().find(|(id, _, _, _)| id == &target)
+        .ok_or(ProductionMapError::PaddonNotFound)?.3;
+    if actor.role == "aparatchi" && locked.iter().any(|(_, _, _, id)| id != target_apparatus) {
+        return Err(ProductionMapError::PaddonTransferForbidden);
     }
     let mut changed = BTreeSet::new();
     let mut batch_ids = batch_ids.to_vec();
@@ -64,6 +72,11 @@ pub(super) async fn move_items(
     batch_ids.dedup();
     for batch in batch_ids {
         lock_movable_roll(tx, &batch).await?;
+        if actor.role == "aparatchi" && !target_apparatus.is_empty() {
+            let origin = sqlx::query_scalar::<_, Option<String>>("SELECT canonical_apparatus_id FROM mini_progress_batches WHERE batch_id=$1")
+                .bind(&batch).fetch_one(&mut **tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
+            if origin.as_deref() != Some(target_apparatus.as_str()) { return Err(ProductionMapError::PaddonInvalidInput); }
+        }
         let source = sqlx::query_as::<_, (String, String)>("SELECT id, paddon_id FROM mini_paddon_items WHERE progress_batch_id=$1 AND removed_at IS NULL FOR UPDATE")
             .bind(&batch).fetch_optional(&mut **tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
         if let Some((item_id, source)) = source {

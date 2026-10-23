@@ -50,10 +50,14 @@ pub struct PaddonsQuery {
     limit: Option<usize>,
     #[serde(default)]
     selectable_only: bool,
+    #[serde(default)]
+    apparatus: Option<String>,
 }
 
 #[derive(Default, serde::Deserialize)]
 struct PaddonCreateRequest {
+    #[serde(default)]
+    apparatus: Option<String>,
     #[serde(default)]
     location: String,
     #[serde(default)]
@@ -114,8 +118,15 @@ pub async fn production_map_paddons(
     if method != Method::GET {
         return Err(method_not_allowed());
     }
-    let paddons = state.production_maps.visible_paddons(
-        query.limit.unwrap_or(50), query.selectable_only, &queue_action_actor(&principal),
+    if principal.role == PrincipalRole::Aparatchi && query.apparatus.as_deref().is_none_or(|id| id.trim().is_empty()) {
+        return Err(bad_request("apparatus is required"));
+    }
+    let apparatus = match query.apparatus.as_deref() {
+        Some(id) => Some(resolve_paddon_apparatus(&state, &principal, id).await?),
+        None => None,
+    };
+    let paddons = state.production_maps.visible_paddons_for_apparatus(
+        query.limit.unwrap_or(50), query.selectable_only, apparatus.as_deref(), &queue_action_actor(&principal),
     ).await.map_err(production_map_error)?;
     Ok(json_response(serde_json::json!({
         "ok": true,
@@ -148,7 +159,7 @@ pub async fn production_map_paddon_detail(
         .paddon_snapshot(&query.code)
         .await
         .map_err(production_map_error)?;
-    state.production_maps.ensure_paddon_visible(&snapshot.paddon, &queue_action_actor(&principal)).await.map_err(production_map_error)?;
+    ensure_paddon_access(&state, &principal, &snapshot.paddon).await?;
     let can_unlock = super::paddon_print_lock::can_unlock_snapshot(&state, &principal, &snapshot).await?;
     Ok(json_response(serde_json::json!({
         "ok": true,
@@ -186,7 +197,7 @@ pub async fn production_map_paddon_qr_report(
         .paddon_scan_snapshot(&query.code)
         .await
         .map_err(production_map_error)?;
-    state.production_maps.ensure_paddon_visible(&snapshot.paddon, &queue_action_actor(&principal)).await.map_err(production_map_error)?;
+    ensure_paddon_access(&state, &principal, &snapshot.paddon).await?;
     let can_unlock = super::paddon_print_lock::can_unlock_snapshot(&state, &principal, &snapshot).await?;
     Ok(json_response(serde_json::json!({
         "ok": true,
@@ -216,7 +227,7 @@ pub async fn production_map_paddon_qr_print(
         .paddon_scan_snapshot(&input.code)
         .await
         .map_err(production_map_error)?;
-    state.production_maps.ensure_paddon_visible(&snapshot.paddon, &queue_action_actor(&principal)).await.map_err(production_map_error)?;
+    ensure_paddon_access(&state, &principal, &snapshot.paddon).await?;
     let paddon = snapshot.paddon;
     let can_close_after_print = paddon.locked_at_unix.is_none()
         && state
@@ -280,10 +291,30 @@ fn paddon_print_error(error: GscaleServiceError) -> AdminError {
     }
 }
 
+async fn resolve_paddon_apparatus(state: &AppState, principal: &Principal, id: &str) -> Result<String, AdminError> {
+    let apparatus = super::queue_actions::resolve_queue_apparatus(state, id).await?;
+    if !apparatus.is_rezka() { return Err(bad_request("paddon_apparatus_must_be_cut")); }
+    let id = apparatus.id.to_string();
+    if !state.admin.principal_has_capability(principal, Capability::AdminAccess).await {
+        let assigned = state.admin.principal_assigned_apparatus(principal).await;
+        if !queue_state::apparatus_matches_assigned(&id, &assigned) { return Err(bad_request("apparatus_not_assigned")); }
+    }
+    Ok(id)
+}
+
+async fn ensure_paddon_access(state: &AppState, principal: &Principal, paddon: &crate::core::production_map::PaddonSummary) -> Result<(), AdminError> {
+    state.production_maps.ensure_paddon_visible(paddon, &queue_action_actor(principal)).await.map_err(production_map_error)?;
+    if principal.role == PrincipalRole::Aparatchi {
+        if paddon.apparatus_id.is_empty() { return Err(bad_request("paddon_apparatus_unresolved")); }
+        resolve_paddon_apparatus(state, principal, &paddon.apparatus_id).await?;
+    }
+    Ok(())
+}
+
 pub(super) async fn require_paddon_visible(state: &AppState, principal: &Principal, code: &str) -> Result<(), AdminError> {
     if principal.role == PrincipalRole::Aparatchi {
         let snapshot = state.production_maps.paddon_scan_snapshot(code).await.map_err(production_map_error)?;
-        state.production_maps.ensure_paddon_visible(&snapshot.paddon, &queue_action_actor(principal)).await.map_err(production_map_error)?;
+        ensure_paddon_access(state, principal, &snapshot.paddon).await?;
     }
     Ok(())
 }
@@ -314,9 +345,17 @@ pub async fn production_map_paddon_create(
         return Err(method_not_allowed());
     }
     let input: PaddonCreateRequest = parse_json(&body)?;
+    if principal.role == PrincipalRole::Aparatchi && input.apparatus.as_deref().is_none_or(|id| id.trim().is_empty()) {
+        return Err(bad_request("apparatus is required"));
+    }
+    let apparatus = match input.apparatus.as_deref() {
+        Some(id) => Some(resolve_paddon_apparatus(&state, &principal, id).await?),
+        None => None,
+    };
     let paddon = state
         .production_maps
-        .create_paddon(
+        .create_paddon_for_apparatus(
+            apparatus.as_deref(),
             &input.location,
             &input.note,
             &queue_action_actor(&principal),

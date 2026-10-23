@@ -45,8 +45,8 @@ async fn rezka_outputs_and_paddon_membership_commit_atomically() {
         ref_: "rezka-paddon-worker".into(),
         display_name: "Rezka".into(),
     };
-    let paddon_a = service.create_paddon("", "A", &actor).await.unwrap();
-    let paddon_b = service.create_paddon("", "B", &actor).await.unwrap();
+    let paddon_a = service.create_paddon_for_apparatus(Some(apparatus), "", "A", &actor).await.unwrap();
+    let paddon_b = service.create_paddon_for_apparatus(Some(apparatus), "", "B", &actor).await.unwrap();
 
     for intermediate in [false, true] {
         let order = if intermediate {

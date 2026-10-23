@@ -42,7 +42,7 @@ async fn paddon_visibility_defaults_to_owner_and_admin_can_enable_and_revoke_sha
                 "POST",
                 &format!("{BASE}/create"),
                 token,
-                "{}",
+                &serde_json::json!({"apparatus":CUT}).to_string(),
             ))
             .await
             .unwrap();
@@ -63,7 +63,7 @@ async fn paddon_visibility_defaults_to_owner_and_admin_can_enable_and_revoke_sha
         ] {
             let response = router
                 .clone()
-                .oneshot(request("GET", &format!("{BASE}?{query}"), token))
+                .oneshot(request("GET", &format!("{BASE}?apparatus={CUT}&{query}"), token))
                 .await
                 .unwrap();
             assert_eq!(response.status(), StatusCode::OK);
@@ -206,7 +206,7 @@ async fn paddon_visibility_defaults_to_owner_and_admin_can_enable_and_revoke_sha
         for token in [&a, &b] {
             let response = router
                 .clone()
-                .oneshot(request("GET", BASE, token))
+                .oneshot(request("GET", &format!("{BASE}?apparatus={CUT}"), token))
                 .await
                 .unwrap();
             assert_eq!(

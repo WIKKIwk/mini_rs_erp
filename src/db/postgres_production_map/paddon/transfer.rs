@@ -6,6 +6,7 @@ use crate::core::production_map::{PaddonTransferInput, ProductionMapError, Queue
 struct TransferPaddon {
     id: String,
     code: String,
+    apparatus_id: String,
     created_by_ref: String,
     locked: bool,
     received: bool,
@@ -30,7 +31,7 @@ pub(super) async fn transfer(
     // All membership writes/print/receipt operations lock pallets before rolls.
     // Stable ordering also makes simultaneous transfers in either direction safe.
     let paddons = sqlx::query_as::<_, TransferPaddon>(
-        "SELECT id, code, created_by_ref, locked_at IS NOT NULL AS locked,
+        "SELECT id, code, apparatus_id, created_by_ref, locked_at IS NOT NULL AS locked,
                 receipt_json IS NOT NULL AS received
          FROM mini_paddons WHERE code=ANY($1) ORDER BY id FOR UPDATE",
     )
@@ -68,6 +69,9 @@ pub(super) async fn transfer(
         .iter()
         .find(|p| p.code == input.target_code)
         .ok_or(ProductionMapError::PaddonNotFound)?;
+    if actor.role == "aparatchi" && source.apparatus_id != target.apparatus_id {
+        return Err(ProductionMapError::PaddonTransferForbidden);
+    }
     let mut batch_ids = input.progress_batch_ids.clone();
     batch_ids.sort();
     let mut memberships = Vec::with_capacity(batch_ids.len());

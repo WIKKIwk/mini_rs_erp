@@ -72,11 +72,16 @@ impl ProductionMapService {
     }
 
     pub async fn visible_paddons(&self, limit: usize, selectable_only: bool, actor: &QueueActionActor) -> Result<Vec<PaddonSummary>, ProductionMapError> {
+        self.visible_paddons_for_apparatus(limit, selectable_only, None, actor).await
+    }
+
+    pub async fn visible_paddons_for_apparatus(&self, limit: usize, selectable_only: bool, apparatus: Option<&str>, actor: &QueueActionActor) -> Result<Vec<PaddonSummary>, ProductionMapError> {
+        if let Some(apparatus) = apparatus { self.validate_active_paddon_scope(apparatus, actor).await?; }
         let creator_ref = if actor.role == "aparatchi" && !self.store.paddon_management_settings().await?.worker_visibility_enabled {
             if actor.ref_.trim().is_empty() { return Err(ProductionMapError::PaddonInvalidInput); }
             Some(actor.ref_.trim())
         } else { None };
-        self.store.paddons_for_creator(limit.clamp(1, 200), selectable_only, creator_ref).await
+        self.store.paddons_for_apparatus(limit.clamp(1, 200), selectable_only, creator_ref, apparatus).await
     }
 
     pub(crate) async fn ensure_paddon_visible(&self, paddon: &PaddonSummary, actor: &QueueActionActor) -> Result<(), ProductionMapError> {
@@ -84,14 +89,6 @@ impl ProductionMapService {
             && (actor.ref_.trim().is_empty() || paddon.created_by_ref.trim() != actor.ref_.trim())
             && !self.store.paddon_management_settings().await?.worker_visibility_enabled {
             return Err(ProductionMapError::PaddonNotFound);
-        }
-        Ok(())
-    }
-
-    pub(crate) async fn require_paddon_visible(&self, code: &str, actor: &QueueActionActor) -> Result<(), ProductionMapError> {
-        if actor.role == "aparatchi" {
-            let paddon = self.paddon_summary(code).await?;
-            self.ensure_paddon_visible(&paddon, actor).await?;
         }
         Ok(())
     }
@@ -117,7 +114,11 @@ impl ProductionMapService {
         let code = code.trim();
         if code.len() > 128 { return Err(ProductionMapError::PaddonInvalidInput); }
         let code = (!code.is_empty()).then_some(code);
-        if let Some(code) = code { self.require_paddon_visible(code, actor).await?; }
+        if let Some(code) = code {
+            let paddon = self.paddon_summary(code).await?;
+            self.ensure_paddon_visible(&paddon, actor).await?;
+            if paddon.apparatus_id != apparatus.trim() { return Err(ProductionMapError::PaddonInvalidInput); }
+        }
         self.store.set_active_rezka_paddon(apparatus.trim(), actor, code).await?;
         // Actor-scoped selection is absent from production snapshots/controls.
         // Its GET reads the store; output assignment re-reads it in its transaction.
@@ -149,12 +150,20 @@ impl ProductionMapService {
         note: &str,
         actor: &QueueActionActor,
     ) -> Result<PaddonSummary, ProductionMapError> {
+        self.create_paddon_for_apparatus(None, location, note, actor).await
+    }
+
+    pub async fn create_paddon_for_apparatus(
+        &self, apparatus: Option<&str>, location: &str, note: &str, actor: &QueueActionActor,
+    ) -> Result<PaddonSummary, ProductionMapError> {
+        if let Some(apparatus) = apparatus { self.validate_active_paddon_scope(apparatus, actor).await?; }
         let location = location.trim();
         let note = note.trim();
         if location.len() > 160 || note.len() > 500 {
             return Err(ProductionMapError::PaddonInvalidInput);
         }
         let input = PaddonCreateInput {
+            apparatus_id: apparatus.unwrap_or_default().trim().to_string(),
             location: location.to_string(),
             note: note.to_string(),
             actor_ref: actor.ref_.trim().to_string(),

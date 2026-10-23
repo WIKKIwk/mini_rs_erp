@@ -29,7 +29,7 @@ pub(super) async fn load(
     actor: &QueueActionActor,
 ) -> Result<Option<String>, ProductionMapError> {
     sqlx::query_scalar::<_, Option<String>>(
-        "SELECT a.paddon_code FROM mini_active_rezka_paddons a JOIN mini_paddons p ON p.code=a.paddon_code WHERE a.actor_role=$1 AND a.actor_ref=$2 AND a.apparatus_id=$3 AND p.locked_at IS NULL AND p.receipt_json IS NULL AND ($1 <> 'aparatchi' OR p.created_by_ref=$2 OR (SELECT worker_visibility_enabled FROM mini_paddon_management_settings WHERE singleton))"
+        "SELECT a.paddon_code FROM mini_active_rezka_paddons a JOIN mini_paddons p ON p.code=a.paddon_code WHERE a.actor_role=$1 AND a.actor_ref=$2 AND a.apparatus_id=$3 AND p.apparatus_id=$3 AND p.locked_at IS NULL AND p.receipt_json IS NULL AND ($1 <> 'aparatchi' OR p.created_by_ref=$2 OR (SELECT worker_visibility_enabled FROM mini_paddon_management_settings WHERE singleton))"
     ).bind(actor.role.trim()).bind(actor.ref_.trim()).bind(apparatus.trim())
         .fetch_optional(pool).await.map(Option::flatten).map_err(|_| ProductionMapError::StoreFailed)
 }
@@ -41,7 +41,7 @@ pub(super) async fn load_for_output(
 ) -> Result<Option<String>, ProductionMapError> {
     lock_scope(tx, apparatus, actor).await?;
     sqlx::query_scalar::<_, Option<String>>(
-        "SELECT a.paddon_code FROM mini_active_rezka_paddons a JOIN mini_paddons p ON p.code=a.paddon_code WHERE a.actor_role=$1 AND a.actor_ref=$2 AND a.apparatus_id=$3 AND p.locked_at IS NULL AND p.receipt_json IS NULL AND ($1 <> 'aparatchi' OR p.created_by_ref=$2 OR (SELECT worker_visibility_enabled FROM mini_paddon_management_settings WHERE singleton))"
+        "SELECT a.paddon_code FROM mini_active_rezka_paddons a JOIN mini_paddons p ON p.code=a.paddon_code WHERE a.actor_role=$1 AND a.actor_ref=$2 AND a.apparatus_id=$3 AND p.apparatus_id=$3 AND p.locked_at IS NULL AND p.receipt_json IS NULL AND ($1 <> 'aparatchi' OR p.created_by_ref=$2 OR (SELECT worker_visibility_enabled FROM mini_paddon_management_settings WHERE singleton))"
     ).bind(actor.role.trim()).bind(actor.ref_.trim()).bind(apparatus.trim())
         .fetch_optional(&mut **tx).await.map(Option::flatten).map_err(|_| ProductionMapError::StoreFailed)
 }
@@ -58,8 +58,8 @@ pub(super) async fn save(
         .map_err(|_| ProductionMapError::StoreFailed)?;
     lock_scope(&mut tx, apparatus, actor).await?;
     if let Some(code) = code {
-        let (receipt, locked) = sqlx::query_as::<_, (Option<serde_json::Value>, bool)>(
-            "SELECT to_jsonb(p)->'receipt_json', p.locked_at IS NOT NULL FROM mini_paddons p WHERE code=$1 FOR UPDATE",
+        let (receipt, locked, paddon_apparatus) = sqlx::query_as::<_, (Option<serde_json::Value>, bool, String)>(
+            "SELECT to_jsonb(p)->'receipt_json', p.locked_at IS NOT NULL, p.apparatus_id FROM mini_paddons p WHERE code=$1 FOR UPDATE",
         )
         .bind(code)
         .fetch_optional(&mut *tx)
@@ -67,6 +67,7 @@ pub(super) async fn save(
         .map_err(|_| ProductionMapError::StoreFailed)?
         .ok_or(ProductionMapError::PaddonNotFound)?;
         if locked { return Err(ProductionMapError::PaddonLocked); }
+        if paddon_apparatus != apparatus.trim() { return Err(ProductionMapError::PaddonInvalidInput); }
         if receipt.is_some_and(|v| !v.is_null()) {
             return Err(ProductionMapError::PaddonInvalidInput);
         }
@@ -117,7 +118,7 @@ mod tests {
             .connect(&url)
             .await
             .unwrap();
-        sqlx::raw_sql("CREATE TABLE mini_paddons(id TEXT PRIMARY KEY, code TEXT UNIQUE, receipt_json JSONB, locked_at TIMESTAMPTZ, created_by_ref TEXT);
+        sqlx::raw_sql("CREATE TABLE mini_paddons(id TEXT PRIMARY KEY, code TEXT UNIQUE, receipt_json JSONB, locked_at TIMESTAMPTZ, created_by_ref TEXT, apparatus_id TEXT NOT NULL DEFAULT 'apparatus:default:asset-010');
             CREATE TABLE mini_paddon_management_settings(singleton BOOLEAN, worker_visibility_enabled BOOLEAN);
             INSERT INTO mini_paddon_management_settings VALUES (TRUE,FALSE);
             INSERT INTO mini_paddons(id,code,receipt_json,created_by_ref) VALUES ('a','00001',NULL,'worker-a'),('b','00002',NULL,'worker-a'),('c','00003','{}','worker-a');")

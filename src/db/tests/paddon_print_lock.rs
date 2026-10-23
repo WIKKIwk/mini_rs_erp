@@ -55,7 +55,7 @@ async fn printed_paddon_is_sealed_and_successor_receives_subsequent_outputs() {
     service.update_paddon_settings(None, Some(true), &QueueActionActor {
         role: "admin".into(), ref_: "admin".into(), display_name: "Admin".into(),
     }).await.unwrap();
-    let old = service.create_paddon("", "", &actor).await.unwrap();
+    let old = service.create_paddon_for_apparatus(Some(apparatus), "", "", &actor).await.unwrap();
     service
         .set_active_rezka_paddon(apparatus, &actor, &old.code)
         .await

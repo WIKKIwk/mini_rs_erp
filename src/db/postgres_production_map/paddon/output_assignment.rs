@@ -23,8 +23,8 @@ pub(super) async fn lock_for_output(
         return Ok(None);
     };
     // Printing seals membership before the independent warehouse receipt.
-    let (id, receipt, locked, creator_ref) = sqlx::query_as::<_, (String, Option<serde_json::Value>, bool, String)>(
-        "SELECT p.id, to_jsonb(p)->'receipt_json', p.locked_at IS NOT NULL, p.created_by_ref FROM mini_paddons p WHERE p.code = $1 FOR UPDATE",
+    let (id, receipt, locked, creator_ref, paddon_apparatus) = sqlx::query_as::<_, (String, Option<serde_json::Value>, bool, String, String)>(
+        "SELECT p.id, to_jsonb(p)->'receipt_json', p.locked_at IS NOT NULL, p.created_by_ref, p.apparatus_id FROM mini_paddons p WHERE p.code = $1 FOR UPDATE",
     )
     .bind(code.trim())
     .fetch_optional(&mut **tx)
@@ -37,6 +37,7 @@ pub(super) async fn lock_for_output(
         if !visible { return Err(ProductionMapError::PaddonNotFound); }
     }
     if locked { return Err(ProductionMapError::PaddonLocked); }
+    if paddon_apparatus != write.apparatus.trim() { return Err(ProductionMapError::PaddonInvalidInput); }
     if receipt.is_some_and(|value| !value.is_null()) {
         return Err(ProductionMapError::PaddonInvalidInput);
     }

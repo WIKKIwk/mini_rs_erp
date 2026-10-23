@@ -778,6 +778,10 @@ pub trait ProductionMapStorePort: Send + Sync {
         let paddons = if selectable_only { self.selectable_rezka_paddons(200).await? } else { self.paddons(200).await? };
         Ok(paddons.into_iter().filter(|p| creator_ref.is_none_or(|creator| p.created_by_ref.trim() == creator)).take(limit).collect())
     }
+    async fn paddons_for_apparatus(&self, limit: usize, selectable_only: bool, creator_ref: Option<&str>, apparatus: Option<&str>) -> StoreResult<Vec<PaddonSummary>> {
+        Ok(self.paddons_for_creator(200, selectable_only, creator_ref).await?.into_iter()
+            .filter(|p| apparatus.is_none_or(|id| p.apparatus_id == id)).take(limit).collect())
+    }
     async fn paddon_management_settings(&self) -> StoreResult<PaddonManagementSettings> {
         Ok(PaddonManagementSettings::default())
     }

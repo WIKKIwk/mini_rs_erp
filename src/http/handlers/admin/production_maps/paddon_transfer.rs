@@ -25,6 +25,8 @@ pub async fn production_map_paddon_items_transfer(
         return Err(forbidden());
     }
     let input: PaddonTransferInput = parse_json(&body)?;
+    super::paddons::require_paddon_visible(&state, &principal, &input.source_code).await?;
+    super::paddons::require_paddon_visible(&state, &principal, &input.target_code).await?;
     let result = state
         .production_maps
         .transfer_paddon_items(input, &queue_action_actor(&principal))

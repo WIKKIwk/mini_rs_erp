@@ -106,6 +106,7 @@ fn print_state(
         inner: MemoryProductionMapStore::new(),
         snapshot: PaddonSnapshot {
             paddon: PaddonSummary {
+                apparatus_id: "apparatus:default:asset-010".into(),
                 id: "paddon-other-worker".into(),
                 code: CODE.into(),
                 location: "Cut".into(),
@@ -151,6 +152,11 @@ fn print_body(code: &str, transport: &str) -> String {
 #[tokio::test]
 async fn paddon_qr_reprint_allows_every_authenticated_role_without_changing_the_paddon() {
     let (state, store, requests) = print_state(true);
+    state.admin.upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+        principal_role: PrincipalRole::Aparatchi, principal_ref: "reprinting-user".into(),
+        role_id: "aparatchi".into(), assigned_apparatus: vec!["apparatus:default:asset-010".into()],
+        assigned_item_groups: vec![],
+    }).await.unwrap();
     let router = build_router(state.clone());
     let roles = [
         PrincipalRole::Supplier,
@@ -165,7 +171,7 @@ async fn paddon_qr_reprint_allows_every_authenticated_role_without_changing_the_
         PrincipalRole::HomashyoRezkachi,
     ];
     for role in roles {
-        // No apparatus or warehouse assignment, and a different original creator.
+        // Physical reprints retain every role; operators use their assigned producing apparatus.
         let token = session_for(&state, role, "reprinting-user").await;
         for transport in ["offline", "wifi"] {
             let response = router
@@ -333,6 +339,10 @@ async fn paddon_qr_first_print_only_offers_closing_to_an_authorized_cut_worker()
             ))
             .await
             .unwrap();
+        if !can_close {
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{worker}");
+            continue;
+        }
         assert_eq!(response.status(), StatusCode::OK);
         let value = json_body(response).await;
         assert_eq!(value["can_close_after_print"], can_close, "{worker}");

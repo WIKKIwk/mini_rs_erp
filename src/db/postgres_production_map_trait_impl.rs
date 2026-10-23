@@ -694,10 +694,13 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         PostgresProductionMapStore::paddons(self, limit).await
     }
     async fn selectable_rezka_paddons(&self, limit: usize) -> Result<Vec<PaddonSummary>, ProductionMapError> {
-        load_paddons(&self.pool, limit, true, None).await
+        load_paddons(&self.pool, limit, true, None, None).await
     }
     async fn paddons_for_creator(&self, limit: usize, selectable_only: bool, creator_ref: Option<&str>) -> Result<Vec<PaddonSummary>, ProductionMapError> {
-        load_paddons(&self.pool, limit, selectable_only, creator_ref).await
+        load_paddons(&self.pool, limit, selectable_only, creator_ref, None).await
+    }
+    async fn paddons_for_apparatus(&self, limit: usize, selectable_only: bool, creator_ref: Option<&str>, apparatus: Option<&str>) -> Result<Vec<PaddonSummary>, ProductionMapError> {
+        load_paddons(&self.pool, limit, selectable_only, creator_ref, apparatus).await
     }
     async fn active_rezka_paddon(&self, apparatus: &str, actor: &QueueActionActor) -> Result<Option<String>, ProductionMapError> {
         active_paddon::load(&self.pool, apparatus, actor).await

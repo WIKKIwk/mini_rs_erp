@@ -29,7 +29,7 @@ async fn paddon_unlock_permissions_follow_lock_owner_and_the_admin_setting() {
     };
     let paddon = state
         .production_maps
-        .create_paddon("", "", &owner)
+        .create_paddon_for_apparatus(Some("apparatus:default:asset-010"), "", "", &owner)
         .await
         .unwrap();
     state

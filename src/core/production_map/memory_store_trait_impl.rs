@@ -18,6 +18,15 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         paddons.truncate(limit);
         Ok(paddons)
     }
+    async fn paddons_for_apparatus(&self, limit: usize, selectable_only: bool, creator_ref: Option<&str>, apparatus: Option<&str>) -> Result<Vec<PaddonSummary>, ProductionMapError> {
+        let mut paddons: Vec<_> = self.paddons.read().await.values()
+            .filter(|p| creator_ref.is_none_or(|creator| p.created_by_ref.trim() == creator)
+                && apparatus.is_none_or(|id| p.apparatus_id == id)
+                && (!selectable_only || p.locked_at_unix.is_none())).cloned().collect();
+        paddons.sort_by(|a, b| b.updated_at_unix.cmp(&a.updated_at_unix).then_with(|| a.code.cmp(&b.code)));
+        paddons.truncate(limit);
+        Ok(paddons)
+    }
     async fn move_apparatus_sequence(
         &self,
         canonical: &crate::core::apparatus_standard::RuntimeApparatusConfiguration,
@@ -51,6 +60,9 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
     }
     async fn active_rezka_paddon(&self, apparatus: &str, actor: &QueueActionActor) -> Result<Option<String>, ProductionMapError> {
         let code = self.active_paddons.read().await.get(&(actor.role.clone(), actor.ref_.clone(), apparatus.to_string())).cloned();
+        if let Some(code) = code.as_deref() {
+            if !self.paddons.read().await.get(code).is_some_and(|p| p.apparatus_id == apparatus && p.locked_at_unix.is_none()) { return Ok(None); }
+        }
         if let Some(code) = code.as_deref().filter(|_| actor.role == "aparatchi") {
             let owned = self.paddons.read().await.get(code).is_some_and(|p| p.created_by_ref.trim() == actor.ref_.trim());
             if !owned && !self.paddon_management_settings.read().await.worker_visibility_enabled { return Ok(None); }
@@ -62,6 +74,7 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
             let paddons = self.paddons.read().await;
             let paddon = paddons.get(code).ok_or(ProductionMapError::PaddonNotFound)?;
             if paddon.locked_at_unix.is_some() { return Err(ProductionMapError::PaddonLocked); }
+            if paddon.apparatus_id != apparatus { return Err(ProductionMapError::PaddonInvalidInput); }
         }
         let key = (actor.role.clone(), actor.ref_.clone(), apparatus.to_string());
         let mut selections = self.active_paddons.write().await;
@@ -72,7 +85,7 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         let mut paddons = self.paddons.write().await;
         let code = format!("{:05}", paddons.len() + 1);
         let paddon = PaddonSummary {
-            id: code.clone(), code: code.clone(), location: input.location, note: input.note,
+            id: code.clone(), code: code.clone(), apparatus_id: input.apparatus_id, location: input.location, note: input.note,
             created_by_ref: input.actor_ref, created_by_display_name: input.actor_display_name,
             created_at_unix: 0, updated_at_unix: 0, item_count: 0,
             total_gross_kg: Some(0.0), total_net_kg: Some(0.0), locked_at_unix: None,
@@ -141,10 +154,11 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
             self.set_active_rezka_paddon(apparatus, actor, Some(next)).await?;
             return self.paddons.read().await.get(next).cloned().ok_or(ProductionMapError::PaddonNotFound);
         }
-        if self.paddons.read().await.get(code).ok_or(ProductionMapError::PaddonNotFound)?.locked_at_unix.is_none() {
+        let source = self.paddons.read().await.get(code).cloned().ok_or(ProductionMapError::PaddonNotFound)?;
+        if source.locked_at_unix.is_none() || source.apparatus_id != apparatus {
             return Err(ProductionMapError::PaddonInvalidInput);
         }
-        let paddon = self.create_paddon(PaddonCreateInput { location: apparatus.to_string(), note: String::new(),
+        let paddon = self.create_paddon(PaddonCreateInput { apparatus_id: apparatus.to_string(), location: apparatus.to_string(), note: String::new(),
             actor_ref: actor.ref_.clone(), actor_display_name: actor.display_name.clone() }).await?;
         self.set_active_rezka_paddon(apparatus, actor, Some(&paddon.code)).await?;
         successors.insert(key, paddon.code.clone());

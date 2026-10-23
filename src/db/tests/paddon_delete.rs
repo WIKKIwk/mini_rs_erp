@@ -31,7 +31,7 @@ async fn paddon_delete_only_unused_and_serializes_with_roll_assignment() {
     };
     let apparatus = "apparatus:default:asset-010";
 
-    let empty = service.create_paddon("", "", &actor).await.unwrap();
+    let empty = service.create_paddon_for_apparatus(Some(apparatus), "", "", &actor).await.unwrap();
     service
         .set_active_rezka_paddon(apparatus, &actor, &empty.code)
         .await

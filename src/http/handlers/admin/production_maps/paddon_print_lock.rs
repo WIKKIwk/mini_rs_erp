@@ -112,7 +112,7 @@ pub async fn production_map_paddon_print_confirm(
     }
     let principal =
         authorize_any_capability(&state, &headers, &[Capability::ApparatusQueueManage]).await?;
-    let options = assigned_cut_apparatuses(&state, &principal).await?;
+    let mut options = assigned_cut_apparatuses(&state, &principal).await?;
     if options.is_empty() {
         return Err(forbidden());
     }
@@ -123,6 +123,10 @@ pub async fn production_map_paddon_print_confirm(
         .confirm_paddon_print(&input.code, &queue_action_actor(&principal))
         .await
         .map_err(production_map_error)?;
+    // The producing apparatus is durable even after printing clears the selection.
+    if !result.paddon.apparatus_id.is_empty() {
+        options.retain(|(id, _)| id == &result.paddon.apparatus_id);
+    }
     let selected: Vec<_> = options
         .iter()
         .filter(|(id, _)| result.apparatuses.contains(id))

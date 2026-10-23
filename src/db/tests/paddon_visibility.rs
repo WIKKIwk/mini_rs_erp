@@ -58,7 +58,7 @@ async fn postgres_paddon_visibility_filters_before_limit_and_persists_independen
         .confirm_paddon_print(&locked.code, &worker)
         .await
         .unwrap();
-    sqlx::query("INSERT INTO mini_paddons(id,code,created_by_ref,created_by_display_name,updated_at) SELECT 'visibility-other-'||n, (80000+n)::text, 'other-worker', 'Worker', now()+interval '1 hour' FROM generate_series(1,205) n")
+    sqlx::query("INSERT INTO mini_paddons(id,code,created_by_ref,created_by_display_name,updated_at,apparatus_id) SELECT 'visibility-other-'||n, (80000+n)::text, 'other-worker', 'Worker', now()+interval '1 hour', 'apparatus:default:asset-010' FROM generate_series(1,205) n")
         .execute(&pool).await.unwrap();
     let own_page = service.visible_paddons(200, false, &worker).await.unwrap();
     assert_eq!(own_page.len(), 2);

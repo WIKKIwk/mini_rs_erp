@@ -72,7 +72,7 @@ async fn prepare_devices(pool: &PgPool, service: &ProductionMapService) -> Vec<D
             display_name: format!("Stress worker {index}"),
         };
         let paddon = service
-            .create_paddon("", "Isolated service stress fixture", &actor)
+            .create_paddon_for_apparatus(Some(&apparatus), "", "Isolated service stress fixture", &actor)
             .await
             .unwrap();
         service

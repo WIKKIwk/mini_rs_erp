@@ -58,12 +58,13 @@ async fn paddon_unlock_checks_owner_setting_receipt_and_resets_print_successors(
         ..owner.clone()
     };
     service.update_paddon_settings(None, Some(true), &manager).await.unwrap();
-    let paddon = service.create_paddon("", "", &creator).await.unwrap();
+    let paddon = service.create_paddon_for_apparatus(Some("apparatus:default:asset-010"), "", "", &creator).await.unwrap();
     let apparatus = "apparatus:default:asset-010";
     let mut map = test_map("paddon-unlock-order", "9583", "PRODUCT-1");
     map.nodes[1].apparatus_id = apparatus.into();
     service.upsert_map(map).await.unwrap();
     let mut batch = wip_batch(apparatus);
+    batch.apparatus = apparatus.into();
     batch.order_id = "paddon-unlock-order".into();
     batch.batch_id = "unlock-roll".into();
     batch.qr_payload = "PROGRESS:unlock-roll".into();
