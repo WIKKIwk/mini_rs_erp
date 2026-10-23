@@ -11,6 +11,7 @@ pub(crate) struct WorkerQueueWindow {
     pub limit: Option<usize>,
     search: String,
     positions: bool,
+    pub worker_list: bool,
 }
 
 impl WorkerQueueWindow {
@@ -27,7 +28,20 @@ impl WorkerQueueWindow {
             limit,
             search,
             positions: false,
+            worker_list: false,
         })
+    }
+
+    pub fn with_projection(
+        mut self,
+        projection: &str,
+        worker_scope: bool,
+    ) -> Result<Self, AdminError> {
+        if !projection.is_empty() && (projection != "worker_list_v1" || !worker_scope) {
+            return Err(bad_request("invalid_worker_list_projection"));
+        }
+        self.worker_list = projection == "worker_list_v1";
+        Ok(self)
     }
 
     pub fn with_positions(mut self, positions: bool) -> Self {
@@ -50,16 +64,34 @@ impl WorkerQueueWindow {
     pub fn scope(&self, assignment_scope: &str) -> String {
         use sha2::{Digest, Sha256};
         let Some(limit) = self.limit else {
+            if self.worker_list {
+                return format!(
+                    "{:x}",
+                    Sha256::digest(format!("{assignment_scope}\0worker_list_v1"))
+                )[..16]
+                    .to_string();
+            }
             return assignment_scope.to_string();
         };
         let mut digest = Sha256::new();
         digest.update(format!("{assignment_scope}\0{limit}\0{}", self.search));
+        if self.worker_list {
+            digest.update(b"\0worker_list_v1");
+        }
         if self.positions {
             // Old clients reject unknown delta keys. Opt-in ranks have their
             // own cursor scope, which also invalidates pre-rank disk baselines.
             digest.update(b"\0queue_positions_v1");
         }
         format!("{:x}", digest.finalize())[..16].to_string()
+    }
+
+    /// Wire schemas have distinct cursors, but their canonical candidate
+    /// window is identical. Reuse that private projection across encodings.
+    pub fn domain_cache_scope(&self, scope: &str) -> String {
+        let mut canonical = self.clone();
+        canonical.worker_list = false;
+        canonical.scope(scope)
     }
 
     pub fn project(
@@ -119,7 +151,8 @@ impl WorkerQueueWindow {
                 .filter(|id| visible.contains(id.as_str()))
                 .filter(|id| {
                     maps.contains_key(id.as_str())
-                        && !snapshot.worker_queue_order_hidden_at_apparatus(apparatus, id, free_pick)
+                        && !snapshot
+                            .worker_queue_order_hidden_at_apparatus(apparatus, id, free_pick)
                 });
             let mut positions = BTreeMap::new();
             let mut ids = eligible
@@ -228,7 +261,12 @@ impl WorkerQueueWindow {
             stage_states: keep(&snapshot.stage_states, &selected),
             order_statuses: keep(&snapshot.order_statuses, &selected),
             order_controls: keep(&snapshot.order_controls, &selected),
-            stage_order_controls: snapshot.stage_order_controls.iter().filter(|c| selected.contains(&c.order_id)).cloned().collect(),
+            stage_order_controls: snapshot
+                .stage_order_controls
+                .iter()
+                .filter(|c| selected.contains(&c.order_id))
+                .cloned()
+                .collect(),
             queue_policies: snapshot.queue_policies.clone(),
             frozen_orders_by_apparatus: BTreeMap::new(),
         }

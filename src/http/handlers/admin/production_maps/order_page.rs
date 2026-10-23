@@ -18,6 +18,14 @@ pub(super) fn valid_list_projection(view: &str, projection: &str) -> bool {
         ("sequence", SEQUENCE_LIST_PROJECTION) | ("orders", ORDERS_LIST_PROJECTION))
 }
 
+pub(super) fn worker_list_fields(snapshot: &ProductionMapLiveSnapshot, customers: &BTreeMap<String, String>) -> serde_json::Value {
+    list::project_worker(snapshot, customers)
+}
+
+pub(super) fn worker_pending_report_ids(snapshot: &ProductionMapLiveSnapshot, completed: &[crate::core::production_map::CompletedQueueOrder]) -> BTreeMap<String, Vec<String>> {
+    list::worker_pending_report_ids(snapshot, completed)
+}
+
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct OrderPageQuery {
     #[serde(default)]
@@ -477,7 +485,7 @@ pub(super) async fn read_page(
     Ok(Some(payload))
 }
 
-async fn page_calculation_templates(
+pub(super) async fn page_calculation_templates(
     state: &AppState,
     maps: &[ProductionMapSaved],
 ) -> BTreeMap<String, CalculateOrderTemplate> {

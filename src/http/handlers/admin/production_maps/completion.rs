@@ -53,7 +53,8 @@ pub async fn production_map_live(
         &query.queue_search,
         query.worker_scope && state_delta_enabled,
     )?
-    .with_positions(query.queue_positions);
+    .with_positions(query.queue_positions)
+    .with_projection(&query.projection, query.worker_scope && compact_state_delta)?;
     Ok(ws
         .on_upgrade(move |socket| {
             if let Some(windows) = page_windows {
@@ -122,6 +123,8 @@ pub struct ProductionMapLiveQuery {
     paged: bool,
     #[serde(default)]
     pages: String,
+    #[serde(default)]
+    projection: String,
 }
 
 async fn authenticated_principal_for_live(

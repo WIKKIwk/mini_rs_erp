@@ -55,6 +55,111 @@ pub(super) fn project(
     })
 }
 
+pub(super) fn project_worker(
+    snapshot: &ProductionMapLiveSnapshot,
+    customers: &BTreeMap<String, String>,
+) -> serde_json::Value {
+    let rows = snapshot.maps.iter().map(|saved| {
+        let id = &saved.map.id;
+        (id.clone(), serde_json::json!({"id":id,"code":display_code(&saved.map),"title":display_title(&saved.map),
+            "customer_name":display_subtitle(&saved.map,customers.get(id).map(String::as_str)),"image_id":saved.map.image_id}))
+    }).collect::<BTreeMap<_,_>>();
+    let states = snapshot
+        .queue_states
+        .iter()
+        .map(|(apparatus, states)| {
+            (
+                apparatus.clone(),
+                states
+                    .iter()
+                    .map(|(id, raw)| {
+                        let state = ApparatusQueueOrderState::parse(raw)
+                            .unwrap_or(ApparatusQueueOrderState::Pending);
+                        (id.clone(), display_state(snapshot, id, apparatus, state))
+                    })
+                    .collect::<BTreeMap<_, _>>(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let prompts = snapshot.queue_action_controls.iter().map(|(apparatus,controls)| {
+        let values = controls.iter().filter_map(|(id,control)| {
+            let work = control.stage_work.as_ref()?;
+            if !work.upstream_closed || !work.astatka_available || !work.astatka_required || work.report_session_id.is_empty()
+                || snapshot.order_controls.get(id).is_some_and(|control| control.state == OrderControlState::Frozen)
+                || snapshot.order_statuses.get(id).is_some_and(|status| status.order_status.trim().eq_ignore_ascii_case("frozen"))
+                || control.state == ApparatusQueueOrderState::Frozen { return None; }
+            Some((id.clone(),serde_json::json!({"report_session_id":work.report_session_id,"upstream_title":work.upstream_title})))
+        }).collect::<BTreeMap<_,_>>();
+        (apparatus.clone(),values)
+    }).collect::<BTreeMap<_,_>>();
+    let mut order_controls = snapshot
+        .order_controls
+        .iter()
+        .map(|(id, control)| (id.clone(), serde_json::json!({"state":control.state})))
+        .collect::<BTreeMap<_, _>>();
+    // The legacy worker frozen guard also reads the global operational status.
+    // Encode that one presentation bit without sending its entire status record.
+    for (id, status) in &snapshot.order_statuses {
+        if status.order_status.trim().eq_ignore_ascii_case("frozen") {
+            order_controls.insert(id.clone(), serde_json::json!({"state":"frozen"}));
+        }
+    }
+    serde_json::json!({"worker_list_rows":rows,"worker_display_states":states,"worker_report_prompts":prompts,"order_controls":order_controls})
+}
+
+pub(super) fn worker_pending_report_ids(
+    snapshot: &ProductionMapLiveSnapshot,
+    completed: &[crate::core::production_map::CompletedQueueOrder],
+) -> BTreeMap<String, Vec<String>> {
+    use crate::core::production_map::ApparatusQueueInteractionMode;
+    let mut history = completed.iter().collect::<Vec<_>>();
+    history.sort_by_key(|entry| std::cmp::Reverse(entry.completed_at_unix));
+    let available = snapshot
+        .maps
+        .iter()
+        .map(|saved| saved.map.id.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut pending = BTreeMap::<String, Vec<String>>::new();
+    for entry in history {
+        let id = &entry.order_id;
+        if !available.contains(id.as_str())
+            || snapshot
+                .order_controls
+                .get(id)
+                .is_some_and(|control| control.state == OrderControlState::Frozen)
+            || snapshot
+                .order_statuses
+                .get(id)
+                .is_some_and(|status| status.order_status.trim().eq_ignore_ascii_case("frozen"))
+        {
+            continue;
+        }
+        let Some(control) = snapshot
+            .queue_action_controls
+            .get(&entry.apparatus)
+            .and_then(|controls| controls.get(id))
+        else {
+            continue;
+        };
+        if !control
+            .stage_work
+            .as_ref()
+            .is_some_and(|work| work.astatka_required)
+            || !matches!(
+                control.interaction.mode,
+                ApparatusQueueInteractionMode::Paused | ApparatusQueueInteractionMode::Completed
+            )
+        {
+            continue;
+        }
+        let ids = pending.entry(entry.apparatus.clone()).or_default();
+        if !ids.contains(id) {
+            ids.push(id.clone());
+        }
+    }
+    pending
+}
+
 fn display_code(map: &ProductionMapDefinition) -> &str {
     if !map.code.trim().is_empty() {
         return map.code.trim();
@@ -477,6 +582,136 @@ mod tests {
                 "edges":[{"from":"start","to":"first"},{"from":"first","to":"second"},{"from":"second","to":"end"}]},
             "program":{"map_id":ID,"product_code":"item","operations":[]}
         })).unwrap()
+    }
+
+    #[test]
+    fn worker_pending_report_handoff_keeps_upstream_open_reports_in_newest_history_order() {
+        use crate::core::production_map::{
+            ApparatusQueueInteractionMode, CompletedQueueOrder, CompletedQueueOrderStatus,
+        };
+        let mut snapshot = ProductionMapLiveSnapshot::default();
+        let mut completed = Vec::new();
+        for (id, time) in [("old", 1), ("latest", 3), ("middle", 2), ("frozen", 4)] {
+            let mut saved = map();
+            saved.map.id = id.into();
+            snapshot.maps.push(saved);
+            let mut value = control(ApparatusQueueOrderState::Paused);
+            value.interaction.mode = ApparatusQueueInteractionMode::Paused;
+            value.stage_work = Some(crate::core::production_map::StageWorkControl {
+                astatka_required: true,
+                upstream_closed: false,
+                astatka_available: false,
+                report_session_id: format!("s-{id}"),
+                ..Default::default()
+            });
+            snapshot
+                .queue_action_controls
+                .entry(APPARATUS.into())
+                .or_default()
+                .insert(id.into(), value);
+            completed.push(CompletedQueueOrder {
+                apparatus: APPARATUS.into(),
+                order_id: id.into(),
+                completed_at_unix: time,
+                status: CompletedQueueOrderStatus::InProgress,
+                issue_note: String::new(),
+            });
+        }
+        snapshot.order_statuses.insert(
+            "frozen".into(),
+            ProductionOrderStatusDetail {
+                order_status: "frozen".into(),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            worker_pending_report_ids(&snapshot, &completed)[APPARATUS],
+            vec!["latest", "middle", "old"]
+        );
+        // Current-order/QR handoff is broader than automatic upstream-closed
+        // prompting. It must not accidentally create an unsolicited dialog.
+        assert_eq!(
+            project_worker(&snapshot, &BTreeMap::new())["worker_report_prompts"][APPARATUS],
+            serde_json::json!({})
+        );
+    }
+
+    #[test]
+    fn worker_list_keeps_report_prompts_and_freeze_guard_without_full_control_records() {
+        let mut snapshot = ProductionMapLiveSnapshot::default();
+        snapshot.maps.push(map());
+        let mut value = control(ApparatusQueueOrderState::InProgress);
+        value.stage_work = Some(crate::core::production_map::StageWorkControl {
+            upstream_closed: true,
+            astatka_available: true,
+            astatka_required: true,
+            report_session_id: "session".into(),
+            upstream_title: "Upstream".into(),
+            ..Default::default()
+        });
+        snapshot
+            .queue_action_controls
+            .insert(APPARATUS.into(), BTreeMap::from([(ID.into(), value)]));
+        snapshot.queue_states.insert(
+            APPARATUS.into(),
+            BTreeMap::from([(ID.into(), "in_progress".into())]),
+        );
+        let row = project_worker(&snapshot, &BTreeMap::new());
+        assert_eq!(
+            row["worker_report_prompts"][APPARATUS][ID],
+            serde_json::json!({"report_session_id":"session","upstream_title":"Upstream"})
+        );
+        assert_eq!(row["worker_display_states"][APPARATUS][ID], "in_progress");
+        assert!(row.get("queue_action_controls").is_none());
+        assert!(row.get("maps").is_none());
+        snapshot.order_statuses.insert(
+            ID.into(),
+            ProductionOrderStatusDetail {
+                order_status: "frozen".into(),
+                ..Default::default()
+            },
+        );
+        let row = project_worker(&snapshot, &BTreeMap::new());
+        assert_eq!(
+            row["worker_report_prompts"][APPARATUS],
+            serde_json::json!({})
+        );
+        assert_eq!(
+            row["order_controls"][ID],
+            serde_json::json!({"state":"frozen"})
+        );
+    }
+
+    #[test]
+    fn worker_list_preflight_colours_preserve_passed_current_hold_and_global_issue_precedence() {
+        let mut snapshot = ProductionMapLiveSnapshot::default();
+        snapshot.maps.push(map());
+        snapshot.queue_states.insert(
+            APPARATUS.into(),
+            BTreeMap::from([(ID.into(), "print_preflight".into())]),
+        );
+        let mut value = control(ApparatusQueueOrderState::PrintPreflight);
+        value.print_preflight=Some(serde_json::from_value(serde_json::json!({"hold_id":"h","idempotency_key":"k","order_id":ID,"apparatus":APPARATUS,"status":"passed","actor":{"role":"admin"},"created_at_unix":0,"updated_at_unix":0,"expires_at_unix":0})).unwrap());
+        snapshot
+            .queue_action_controls
+            .insert(APPARATUS.into(), BTreeMap::from([(ID.into(), value)]));
+        let fields = project_worker(&snapshot, &BTreeMap::new());
+        assert_eq!(
+            fields["worker_display_states"][APPARATUS][ID],
+            "print_preflight_passed"
+        );
+        assert!(!fields.to_string().contains("hold_id"));
+        snapshot.order_statuses.insert(
+            ID.into(),
+            ProductionOrderStatusDetail {
+                completed_with_issue_count: 1,
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            project_worker(&snapshot, &BTreeMap::new())["worker_display_states"][APPARATUS][ID],
+            "issue"
+        );
     }
 
     #[test]

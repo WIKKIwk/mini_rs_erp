@@ -420,7 +420,7 @@ async fn admin_detail_is_explicit_single_order_canonical_and_legacy_scoped_get_s
         f.get_as(&token, &format!("{base}&detail=true&worker_scope=true"))
             .await
             .0,
-        StatusCode::BAD_REQUEST
+        StatusCode::FORBIDDEN // Explicit worker detail requires a worker assignment.
     );
     assert_eq!(
         f.get_as(

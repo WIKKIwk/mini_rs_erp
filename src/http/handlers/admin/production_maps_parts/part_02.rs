@@ -26,6 +26,8 @@ pub struct ProductionMapSequenceQuery {
     detail: bool,
     #[serde(default)]
     compression: String,
+    #[serde(default)]
+    projection: String,
 }
 
 pub async fn production_map_sequence(
@@ -49,7 +51,8 @@ pub async fn production_map_sequence(
     )
     .await?;
     let window = worker_snapshot::WorkerQueueWindow::new(query.queue_limit, &query.queue_search, query.worker_scope)?
-        .with_positions(query.queue_positions);
+        .with_positions(query.queue_positions)
+        .with_projection(&query.projection, query.worker_scope && !query.detail && query.apparatus.trim().is_empty() && query.order_id.trim().is_empty())?;
     match method {
         Method::GET => {
             let apparatus = query.apparatus.trim();
@@ -60,7 +63,13 @@ pub async fn production_map_sequence(
                 return Err(bad_request("canonical apparatus and order_id are required together"));
             }
             if query.detail {
-                if order_id.is_empty() || order_id.len() > 256 || query.worker_scope {
+                if query.worker_scope {
+                    if apparatus.is_empty() || order_id.is_empty() || order_id.len() > 256 { return Err(bad_request("worker detail requires apparatus and order_id")); }
+                    return tokio::time::timeout(std::time::Duration::from_secs(15),
+                        worker_snapshot::read_detail(&state, &principal, apparatus, order_id))
+                        .await.map_err(|_| conflict("production_state_read_timeout"))?;
+                }
+                if order_id.is_empty() || order_id.len() > 256 {
                     return Err(bad_request("order detail requires order_id"));
                 }
                 if !query.compression.is_empty() && query.compression != "identity" {
@@ -102,6 +111,9 @@ pub async fn production_map_sequence(
                         None,
                         &window,
                     ).await?;
+                    if window.worker_list {
+                        return Ok(json_response(live_delta::worker_list_payload(&view, state.worker_show_all_apparatus_tabs)));
+                    }
                     (view.snapshot, view.revision, view.scope, view.completed,
                         view.requests, view.decisions, Some(view.customers))
                 } else {

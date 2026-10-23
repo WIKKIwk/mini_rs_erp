@@ -6,6 +6,9 @@ mod sequence_list;
 #[path = "orders_list.rs"]
 mod orders_list;
 
+#[path = "worker_list.rs"]
+mod worker_list;
+
 #[path = "http_compression.rs"]
 mod http_compression;
 

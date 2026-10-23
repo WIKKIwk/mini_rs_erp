@@ -10,6 +10,12 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::time::{Duration, timeout};
 
+#[path = "worker_list.rs"]
+mod worker_list;
+pub(super) fn worker_list_payload(view: &LiveView, show_all: bool) -> Value {
+    worker_list::payload(view, show_all)
+}
+
 // A slow client gets a compressed HTTP resync, never an unbounded WS frame.
 const MAX_STATE_DELTA_BYTES: usize = 64 * 1024;
 
@@ -470,12 +476,12 @@ async fn refresh_feed(
         if before.scope != next.scope || before.epoch != next.epoch {
             return None;
         }
-        let common = state.production_state_live.snapshot_patch_for_protocol(
-            &before.snapshot,
-            &next.snapshot,
-            data.compact,
-        );
-        let patch = super::live_hub::join_patch(&common, &personal_patch(before, &next));
+        let patch = if window.worker_list {
+            serde_json::to_string(&worker_list::patch(before, &next)).expect("worker list patch serialization").into()
+        } else {
+            let common = state.production_state_live.snapshot_patch_for_protocol(&before.snapshot, &next.snapshot, data.compact);
+            super::live_hub::join_patch(&common, &personal_patch(before, &next))
+        };
         (patch.len() <= MAX_STATE_DELTA_BYTES.saturating_sub(512)).then_some(patch)
     });
     data.replace(next, patch);
