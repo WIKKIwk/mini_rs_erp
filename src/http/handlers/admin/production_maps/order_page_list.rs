@@ -201,6 +201,235 @@ fn display_state(
     state.as_str()
 }
 
+/// Only the fields actually displayed by the all-orders list, including its
+/// localized activity watermarks. Maps, programs and action authority remain
+/// demand-loaded detail even for pending Telegram intake.
+pub(super) fn project_orders(
+    snapshot: &ProductionMapLiveSnapshot,
+    ids: &[String],
+    pending: &[&crate::core::pending_orders::PendingOrder],
+    customers: &BTreeMap<String, String>,
+) -> serde_json::Value {
+    let rows = snapshot.maps.iter().filter(|saved| ids.contains(&saved.map.id)).map(|saved| {
+        let id = &saved.map.id;
+        let state = order_display_state(snapshot, id);
+        (id.clone(), serde_json::json!({
+            "id":id, "code":display_code(&saved.map), "title":display_title(&saved.map),
+            "customer_name":display_subtitle(&saved.map, customers.get(id).map(String::as_str)),
+            "image_id":saved.map.image_id, "display_state":state,
+            "watermarks":order_watermarks(snapshot, &saved.map, state),
+        }))
+    }).collect::<BTreeMap<_, _>>();
+    let pending_rows = pending
+        .iter()
+        .map(|order| {
+            let template = &order.template;
+            (
+                order.id.clone(),
+                serde_json::json!({
+                    "id":order.id,"code":template.order_number,"title":template.product,
+                    "customer_name":template.customer,"image_id":template.image_id,"kg":template.kg,
+                }),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    serde_json::json!({"projection":ORDERS_LIST_PROJECTION,"rows":rows,
+        "pending_rows":pending_rows,"pending_ids":pending.iter().map(|order| &order.id).collect::<Vec<_>>()})
+}
+
+fn queue_state<'a>(snapshot: &'a ProductionMapLiveSnapshot, apparatus: &str, id: &str) -> &'a str {
+    snapshot
+        .queue_states
+        .get(apparatus)
+        .and_then(|states| states.get(id))
+        .map(String::as_str)
+        .unwrap_or("pending")
+}
+
+fn order_display_state(snapshot: &ProductionMapLiveSnapshot, id: &str) -> &'static str {
+    let status = snapshot.order_statuses.get(id);
+    let raw = status
+        .map(|status| status.order_status.trim().to_ascii_lowercase())
+        .unwrap_or_default();
+    if raw == "completed_with_issue"
+        || status.is_some_and(|status| status.completed_with_issue_count > 0)
+    {
+        return "issue";
+    }
+    if raw == "frozen"
+        || snapshot
+            .order_controls
+            .get(id)
+            .is_some_and(|control| control.state != OrderControlState::Active)
+    {
+        return "frozen";
+    }
+    let preflight = || {
+        let stages = snapshot
+            .queue_states
+            .iter()
+            .filter(|(_, states)| {
+                states
+                    .get(id)
+                    .is_some_and(|value| value.trim() == "print_preflight")
+            })
+            .map(|(apparatus, _)| apparatus)
+            .collect::<Vec<_>>();
+        let passed = !stages.is_empty()
+            && stages.iter().all(|apparatus| {
+                snapshot
+                    .queue_action_controls
+                    .get(*apparatus)
+                    .and_then(|controls| controls.get(id))
+                    .is_some_and(|control| {
+                        control.state == ApparatusQueueOrderState::PrintPreflight
+                            && control.print_preflight.as_ref().is_some_and(|hold| {
+                                hold.status == PrintPreflightStatus::Passed
+                                    && hold.order_id.trim() == id
+                                    && hold.apparatus.trim() == apparatus.as_str()
+                            })
+                    })
+            });
+        if passed {
+            "print_preflight_passed"
+        } else {
+            "print_preflight"
+        }
+    };
+    match raw.as_str() {
+        "print_preflight" => return preflight(),
+        "paused" => return "paused",
+        "in_progress" => return "in_progress",
+        "waiting_next_stage" | "partially_completed" => return "waiting_next_stage",
+        "completed" => return "completed",
+        _ => {}
+    }
+    if status.is_some_and(|status| {
+        matches!(
+            status.lifecycle_status.as_str(),
+            "production_completed" | "closed"
+        )
+    }) {
+        return "completed";
+    }
+    // Mirror the legacy list's aggregate queue activity fallback, including a
+    // visible-but-unstated queue member being treated as pending.
+    let states = snapshot
+        .queue_states
+        .iter()
+        .filter_map(|(_, states)| states.get(id).map(String::as_str))
+        .collect::<Vec<_>>();
+    let pending = states.contains(&"pending")
+        || snapshot.visible_order_ids.iter().any(|(apparatus, ids)| {
+            ids.iter().any(|member| member == id)
+                && snapshot
+                    .queue_states
+                    .get(apparatus)
+                    .is_none_or(|states| !states.contains_key(id))
+        });
+    if states.contains(&"frozen") {
+        "frozen"
+    } else if states.contains(&"print_preflight") {
+        preflight()
+    } else if states.contains(&"paused") {
+        "paused"
+    } else if states.contains(&"in_progress") {
+        "in_progress"
+    } else if states.contains(&"completed") && pending {
+        "waiting_next_stage"
+    } else if states.contains(&"completed") {
+        "completed"
+    } else {
+        "pending"
+    }
+}
+
+fn order_watermarks(
+    snapshot: &ProductionMapLiveSnapshot,
+    map: &ProductionMapDefinition,
+    state: &str,
+) -> Vec<serde_json::Value> {
+    use crate::core::production_map::chain::linear_work_stages;
+    let id = &map.id;
+    let descriptor =
+        |apparatus: &str, kind: &str| serde_json::json!({"apparatus_id":apparatus,"kind":kind});
+    if matches!(
+        state,
+        "pending" | "completed" | "print_preflight" | "print_preflight_passed"
+    ) {
+        return Vec::new();
+    }
+    let stages = linear_work_stages(map);
+    if state == "waiting_next_stage" {
+        let mut completed_seen = false;
+        for stage in &stages {
+            let Some(apparatus) = stage.apparatus_id.as_deref() else {
+                continue;
+            };
+            let Some(node) = map.nodes.iter().find(|node| node.id == stage.node_id) else {
+                continue;
+            };
+            let station = if !node.alternative_group_id.trim().is_empty()
+                || node.alternative_assigned_apparatus_id.trim().is_empty()
+            {
+                node.apparatus_id.trim()
+            } else {
+                node.alternative_assigned_apparatus_id.trim()
+            };
+            let current = snapshot
+                .stage_states
+                .get(id)
+                .and_then(|states| states.get(&stage.node_id))
+                .filter(|state| !state.trim().is_empty())
+                .map(String::as_str)
+                .unwrap_or_else(|| queue_state(snapshot, station, id));
+            if current == "completed" {
+                completed_seen = true;
+            } else if completed_seen && current == "pending" {
+                return vec![descriptor(apparatus, "waiting")];
+            }
+        }
+        return vec![descriptor("", "waiting")];
+    }
+    let mut seen = BTreeSet::new();
+    let apparatuses = stages
+        .iter()
+        .filter_map(|stage| stage.apparatus_id.as_deref())
+        .filter(|apparatus| seen.insert(*apparatus))
+        .collect::<Vec<_>>();
+    if state == "in_progress" {
+        return apparatuses
+            .into_iter()
+            .filter(|apparatus| queue_state(snapshot, apparatus, id) == "in_progress")
+            .map(|apparatus| descriptor(apparatus, "active"))
+            .collect();
+    }
+    let (target, kind) = match state {
+        "paused" => ("paused", "paused"),
+        "frozen" => ("frozen", "frozen"),
+        "issue" => ("frozen", "issue"),
+        _ => return Vec::new(),
+    };
+    let matching = apparatuses
+        .iter()
+        .copied()
+        .filter(|apparatus| queue_state(snapshot, apparatus, id) == target)
+        .collect::<Vec<_>>();
+    if !matching.is_empty() {
+        return matching
+            .into_iter()
+            .map(|apparatus| descriptor(apparatus, kind))
+            .collect();
+    }
+    let fallback = apparatuses
+        .iter()
+        .copied()
+        .find(|apparatus| queue_state(snapshot, apparatus, id) != "completed")
+        .or_else(|| apparatuses.first().copied())
+        .unwrap_or("");
+    vec![descriptor(fallback, kind)]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -248,6 +477,102 @@ mod tests {
                 "edges":[{"from":"start","to":"first"},{"from":"first","to":"second"},{"from":"second","to":"end"}]},
             "program":{"map_id":ID,"product_code":"item","operations":[]}
         })).unwrap()
+    }
+
+    #[test]
+    fn all_order_colour_precedence_matches_legacy_global_and_queue_fallbacks() {
+        let mut snapshot = ProductionMapLiveSnapshot::default();
+        snapshot.maps.push(map());
+        snapshot.queue_states.insert(
+            APPARATUS.into(),
+            BTreeMap::from([(ID.into(), "in_progress".into())]),
+        );
+        snapshot.queue_states.insert(
+            "apparatus:default:other".into(),
+            BTreeMap::from([(ID.into(), "paused".into())]),
+        );
+        assert_eq!(order_display_state(&snapshot, ID), "paused");
+        snapshot.order_statuses.insert(
+            ID.into(),
+            ProductionOrderStatusDetail {
+                order_status: "in_progress".into(),
+                ..Default::default()
+            },
+        );
+        assert_eq!(order_display_state(&snapshot, ID), "in_progress");
+        snapshot.order_controls.insert(ID.into(), serde_json::from_value(serde_json::json!({
+            "order_id":ID,"state":"freeze_requested","actor":{"role":"admin"},"requested_at_unix":1
+        })).unwrap());
+        assert_eq!(order_display_state(&snapshot, ID), "frozen");
+        snapshot
+            .order_statuses
+            .get_mut(ID)
+            .unwrap()
+            .completed_with_issue_count = 1;
+        assert_eq!(order_display_state(&snapshot, ID), "issue");
+        snapshot.order_statuses.clear();
+        snapshot.order_controls.clear();
+        snapshot.queue_states.clear();
+        snapshot.queue_states.insert(
+            APPARATUS.into(),
+            BTreeMap::from([(ID.into(), "completed".into())]),
+        );
+        snapshot
+            .visible_order_ids
+            .insert("apparatus:default:next".into(), vec![ID.into()]);
+        assert_eq!(order_display_state(&snapshot, ID), "waiting_next_stage");
+    }
+
+    #[test]
+    fn all_order_watermarks_preserve_occurrences_and_status_fallbacks_without_graph_on_wire() {
+        let saved = map();
+        let mut snapshot = ProductionMapLiveSnapshot::default();
+        snapshot.queue_states.insert(
+            APPARATUS.into(),
+            BTreeMap::from([(ID.into(), "in_progress".into())]),
+        );
+        assert_eq!(
+            order_watermarks(&snapshot, &saved.map, "in_progress"),
+            vec![serde_json::json!({"apparatus_id":APPARATUS,"kind":"active"})]
+        );
+        snapshot.stage_states.insert(
+            ID.into(),
+            BTreeMap::from([
+                ("first".into(), "completed".into()),
+                ("second".into(), "pending".into()),
+            ]),
+        );
+        // A prior completed occurrence must not hide the second pending use
+        // of the same physical machine.
+        assert_eq!(
+            order_watermarks(&snapshot, &saved.map, "waiting_next_stage"),
+            vec![serde_json::json!({"apparatus_id":APPARATUS,"kind":"waiting"})]
+        );
+        for kind in ["paused", "frozen", "issue"] {
+            assert_eq!(
+                order_watermarks(&snapshot, &saved.map, kind),
+                vec![serde_json::json!({"apparatus_id":APPARATUS,"kind":kind})]
+            );
+        }
+        for kind in [
+            "pending",
+            "completed",
+            "print_preflight",
+            "print_preflight_passed",
+        ] {
+            assert!(order_watermarks(&snapshot, &saved.map, kind).is_empty());
+        }
+        let mut empty = saved.map;
+        empty.nodes.clear();
+        empty.edges.clear();
+        assert_eq!(
+            order_watermarks(&snapshot, &empty, "waiting_next_stage"),
+            vec![serde_json::json!({"apparatus_id":"","kind":"waiting"})]
+        );
+        assert_eq!(
+            order_watermarks(&snapshot, &empty, "issue"),
+            vec![serde_json::json!({"apparatus_id":"","kind":"issue"})]
+        );
     }
 
     #[test]

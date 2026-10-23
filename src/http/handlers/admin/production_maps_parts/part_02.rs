@@ -54,14 +54,14 @@ pub async fn production_map_sequence(
         Method::GET => {
             let apparatus = query.apparatus.trim();
             let order_id = query.order_id.trim();
-            if apparatus.is_empty() != order_id.is_empty()
+            if (!query.detail && apparatus.is_empty() != order_id.is_empty())
                 || (!apparatus.is_empty() && !queue_state::is_canonical_apparatus_id(apparatus))
             {
                 return Err(bad_request("canonical apparatus and order_id are required together"));
             }
             if query.detail {
-                if apparatus.is_empty() || query.worker_scope {
-                    return Err(bad_request("order detail requires apparatus and order_id"));
+                if order_id.is_empty() || order_id.len() > 256 || query.worker_scope {
+                    return Err(bad_request("order detail requires order_id"));
                 }
                 if !query.compression.is_empty() && query.compression != "identity" {
                     return Err(bad_request("invalid_detail_compression"));

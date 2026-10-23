@@ -11,6 +11,12 @@ use std::collections::{BTreeMap, BTreeSet};
 #[path = "order_page_list.rs"]
 mod list;
 pub(super) const SEQUENCE_LIST_PROJECTION: &str = "sequence_list_v1";
+pub(super) const ORDERS_LIST_PROJECTION: &str = "orders_list_v1";
+
+pub(super) fn valid_list_projection(view: &str, projection: &str) -> bool {
+    projection.is_empty() || matches!((view, projection),
+        ("sequence", SEQUENCE_LIST_PROJECTION) | ("orders", ORDERS_LIST_PROJECTION))
+}
 
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct OrderPageQuery {
@@ -121,10 +127,9 @@ pub(super) async fn read_page(
             "sequence" | "orders" | "move" | "closed" | "audit"
         )
         || (query.view == "sequence" && !queue_state::is_canonical_apparatus_id(&query.apparatus))
-        || (!query.projection.is_empty()
-            && (query.projection != SEQUENCE_LIST_PROJECTION || query.view != "sequence"))
+        || !valid_list_projection(&query.view, &query.projection)
         || (!query.compression.is_empty()
-            && (query.compression != "identity" || query.view != "sequence"))
+            && (query.compression != "identity" || !matches!(query.view.as_str(), "sequence" | "orders")))
         || (query.view == "move"
             && (!valid_move_apparatus(&query.apparatus)
                 || !valid_move_apparatus(&query.target)
@@ -277,13 +282,14 @@ pub(super) async fn read_page(
             .admin_order_catalog((query.view == "move").then_some(apparatus.as_str()))
             .await
             .map_err(production_map_error)?;
-        let customers =
-            production_map_definition_customers(&state, &catalog.iter().collect::<Vec<_>>()).await;
-        let configurations = state
-            .production_maps
-            .admin_move_page_configurations()
-            .await
-            .map_err(production_map_error)?;
+        let customers = if query.projection == ORDERS_LIST_PROJECTION && query.search.is_empty() {
+            BTreeMap::new()
+        } else {
+            production_map_definition_customers(&state, &catalog.iter().collect::<Vec<_>>()).await
+        };
+        let configurations = if query.view == "move" {
+            state.production_maps.admin_move_page_configurations().await.map_err(production_map_error)?
+        } else { Vec::new() };
         let ids = catalog
             .iter()
             .filter(|map| {
@@ -434,6 +440,11 @@ pub(super) async fn read_page(
                 .map(|saved| &saved.map).collect::<Vec<_>>()).await;
         }
         list::project(&snapshot, &selected, apparatus, &query.search, &customers)
+    } else if query.projection == ORDERS_LIST_PROJECTION {
+        if query.search.is_empty() {
+            customers = production_map_order_customers(state, &snapshot.maps).await;
+        }
+        list::project_orders(&snapshot, &selected, &selected_pending, &customers)
     } else {
         let projected = project(&snapshot, &selected);
         let calculation_templates = page_calculation_templates(&state, &projected.maps).await;
@@ -546,6 +557,7 @@ pub(super) async fn read_detail(
         let projected = project(&snapshot, &[order_id.to_string()]);
         if projected.maps.len() != 1 { return Err(not_found("order_not_available")); }
         let customers = production_map_order_customers(state, &projected.maps).await;
+        let templates = page_calculation_templates(state, &projected.maps).await;
         if state.production_maps.snapshot_revision() != revision { continue; }
         let mut payload = serde_json::to_value(projected).unwrap();
         payload["ok"] = true.into();
@@ -558,6 +570,7 @@ pub(super) async fn read_detail(
             principal.role, principal.ref_, "order_detail_v1", apparatus, order_id,
         ]).to_string().into();
         payload["order_customers"] = serde_json::json!(customers);
+        payload["calculation_templates"] = serde_json::json!(templates);
         return Ok(json_response(payload));
     }
     Err(conflict("order_page_changed"))

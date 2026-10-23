@@ -68,9 +68,7 @@ pub(super) fn requests(raw: &str) -> Result<Vec<WindowRequest>, AdminError> {
             )
             || window.apparatus.len() > 160
             || window.target.len() > 160
-            || (!window.projection.is_empty()
-                && (window.projection != super::order_page::SEQUENCE_LIST_PROJECTION
-                    || window.view != "sequence"))
+            || !super::order_page::valid_list_projection(&window.view, &window.projection)
         {
             return Err(bad_request("invalid_page_live_windows"));
         }
