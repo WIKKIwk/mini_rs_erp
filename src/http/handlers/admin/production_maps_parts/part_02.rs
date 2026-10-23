@@ -20,6 +20,8 @@ pub struct ProductionMapSequenceQuery {
     queue_limit: Option<usize>,
     #[serde(default)]
     queue_search: String,
+    #[serde(default)]
+    queue_positions: bool,
 }
 
 pub async fn production_map_sequence(
@@ -42,7 +44,8 @@ pub async fn production_map_sequence(
         ],
     )
     .await?;
-    let window = worker_snapshot::WorkerQueueWindow::new(query.queue_limit, &query.queue_search, query.worker_scope)?;
+    let window = worker_snapshot::WorkerQueueWindow::new(query.queue_limit, &query.queue_search, query.worker_scope)?
+        .with_positions(query.queue_positions);
     match method {
         Method::GET => {
             let apparatus = query.apparatus.trim();
@@ -138,6 +141,10 @@ pub async fn production_map_sequence(
                 "frozen_orders_by_apparatus": &snapshot.frozen_orders_by_apparatus,
                 "order_customers": order_customers,
             });
+            if !snapshot.sequence_positions_by_apparatus.is_empty() {
+                payload["sequence_positions_by_apparatus"] =
+                    serde_json::json!(&snapshot.sequence_positions_by_apparatus);
+            }
             payload["completed_orders"] = serde_json::json!(completed);
             payload["completion_requests"] = serde_json::json!(requests);
             payload["completion_request_decisions"] = serde_json::json!(decisions);

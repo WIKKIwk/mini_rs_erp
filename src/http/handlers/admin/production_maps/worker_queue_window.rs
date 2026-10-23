@@ -10,6 +10,7 @@ pub(crate) struct WorkerQueueWindow {
     /// None preserves the legacy view; Some(0) explicitly selects all orders.
     pub limit: Option<usize>,
     search: String,
+    positions: bool,
 }
 
 impl WorkerQueueWindow {
@@ -22,7 +23,16 @@ impl WorkerQueueWindow {
         {
             return Err(bad_request("invalid worker queue window"));
         }
-        Ok(Self { limit, search })
+        Ok(Self {
+            limit,
+            search,
+            positions: false,
+        })
+    }
+
+    pub fn with_positions(mut self, positions: bool) -> Self {
+        self.positions = positions && self.limit.is_some();
+        self
     }
 
     pub fn history_limit(&self) -> usize {
@@ -44,6 +54,11 @@ impl WorkerQueueWindow {
         };
         let mut digest = Sha256::new();
         digest.update(format!("{assignment_scope}\0{limit}\0{}", self.search));
+        if self.positions {
+            // Old clients reject unknown delta keys. Opt-in ranks have their
+            // own cursor scope, which also invalidates pre-rank disk baselines.
+            digest.update(b"\0queue_positions_v1");
+        }
         format!("{:x}", digest.finalize())[..16].to_string()
     }
 
@@ -65,6 +80,7 @@ impl WorkerQueueWindow {
             .collect::<BTreeMap<_, _>>();
         let mut selected = history.iter().cloned().collect::<BTreeSet<_>>();
         let mut windows = BTreeMap::new();
+        let mut sequence_positions_by_apparatus = BTreeMap::new();
         for (apparatus, visible_order_ids) in &snapshot.visible_order_ids {
             if !apparatus_scope.contains(apparatus) {
                 continue;
@@ -96,18 +112,21 @@ impl WorkerQueueWindow {
                 .iter()
                 .map(String::as_str)
                 .collect::<BTreeSet<_>>();
-            let mut ids = sequence
+            // Eligibility is authoritative; number that full display queue
+            // before applying search, limit or active-order pinning.
+            let eligible = sequence
                 .iter()
                 .filter(|id| visible.contains(id.as_str()))
                 .filter(|id| {
-                    maps.get(id.as_str()).is_some_and(|saved| {
-                        if snapshot.worker_queue_order_hidden(id, free_pick) {
-                            return false;
-                        }
-                        if self.search.is_empty() {
-                            return true;
-                        }
-                        let map = &saved.map;
+                    maps.contains_key(id.as_str())
+                        && !snapshot.worker_queue_order_hidden(id, free_pick)
+                });
+            let mut positions = BTreeMap::new();
+            let mut ids = eligible
+                .enumerate()
+                .filter_map(|(index, id)| {
+                    if !self.search.is_empty() {
+                        let map = &maps[id.as_str()].map;
                         let haystack = [
                             map.id.as_str(),
                             map.code.as_str(),
@@ -122,10 +141,15 @@ impl WorkerQueueWindow {
                         .collect::<Vec<_>>()
                         .join(" ")
                         .to_lowercase();
-                        haystack.contains(&self.search)
-                    })
+                        if !haystack.contains(&self.search) {
+                            return None;
+                        }
+                    }
+                    if self.positions {
+                        positions.insert(id.clone(), index + 1);
+                    }
+                    Some(id.clone())
                 })
-                .cloned()
                 .collect::<Vec<_>>();
             // A strict queue keeps its stored order, but an already running
             // job must remain reachable even if its position is outside N.
@@ -152,6 +176,10 @@ impl WorkerQueueWindow {
                 }
             }
             ids.retain(|id| included.contains(id));
+            positions.retain(|id, _| included.contains(id));
+            if self.positions {
+                sequence_positions_by_apparatus.insert(apparatus.clone(), positions);
+            }
             selected.extend(ids.iter().cloned());
             windows.insert(apparatus.clone(), ids);
         }
@@ -174,6 +202,7 @@ impl WorkerQueueWindow {
                 .collect(),
             sequences: windows.clone(),
             visible_order_ids: windows,
+            sequence_positions_by_apparatus,
             sequence_versions: snapshot
                 .sequence_versions
                 .iter()

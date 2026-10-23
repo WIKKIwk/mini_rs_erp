@@ -668,6 +668,7 @@ fn project(snapshot: &ProductionMapLiveSnapshot, ids: &[String]) -> ProductionMa
             .collect(),
         sequence_versions: snapshot.sequence_versions.clone(),
         sequence_revisions: snapshot.sequence_revisions.clone(),
+        sequence_positions_by_apparatus: BTreeMap::new(),
         queue_states: snapshot
             .queue_states
             .iter()

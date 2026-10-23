@@ -226,6 +226,7 @@ pub(super) fn snapshot_patch_for_protocol(
     field!(order_statuses);
     field!(order_controls);
     field!(frozen_orders_by_apparatus);
+    nested!(sequence_positions_by_apparatus);
     nested!(queue_states);
     nested!(stage_states);
     nested!(queue_action_controls);
@@ -981,6 +982,7 @@ mod tests {
             sequence_versions: BTreeMap::new(),
             sequence_revisions: BTreeMap::new(),
             visible_order_ids: BTreeMap::new(),
+            sequence_positions_by_apparatus: BTreeMap::new(),
             queue_states: BTreeMap::new(),
             stage_states: BTreeMap::new(),
             queue_policies: vec![],

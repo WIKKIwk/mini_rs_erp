@@ -146,6 +146,7 @@ pub(super) fn project(
         sequence_versions: apparatus_field!(sequence_versions),
         sequence_revisions: apparatus_field!(sequence_revisions),
         visible_order_ids: apparatus_field!(visible_order_ids),
+        sequence_positions_by_apparatus: apparatus_field!(sequence_positions_by_apparatus),
         frozen_orders_by_apparatus: apparatus_field!(frozen_orders_by_apparatus),
         // Preserve cross-machine state for these orders: the sheet displays
         // the whole route, and upstream/downstream changes affect permission.
@@ -290,6 +291,7 @@ mod tests {
             sequence_versions: BTreeMap::new(),
             sequence_revisions: BTreeMap::new(),
             visible_order_ids: BTreeMap::new(),
+            sequence_positions_by_apparatus: BTreeMap::new(),
             queue_policies: vec![],
             queue_action_controls: BTreeMap::new(),
             order_statuses: BTreeMap::new(),

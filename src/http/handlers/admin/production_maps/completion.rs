@@ -52,7 +52,8 @@ pub async fn production_map_live(
         query.queue_limit,
         &query.queue_search,
         query.worker_scope && state_delta_enabled,
-    )?;
+    )?
+    .with_positions(query.queue_positions);
     Ok(ws
         .on_upgrade(move |socket| {
             if let Some(windows) = page_windows {
@@ -115,6 +116,8 @@ pub struct ProductionMapLiveQuery {
     queue_limit: Option<usize>,
     #[serde(default)]
     queue_search: String,
+    #[serde(default)]
+    queue_positions: bool,
     #[serde(default)]
     paged: bool,
     #[serde(default)]

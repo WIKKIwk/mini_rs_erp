@@ -17,7 +17,17 @@ with the next eligible job in the same revisioned delta.
 
 `queue_search` searches the apparatus's complete eligible queue before applying
 the limit, including order code/number, product, title, customer and node titles.
-It requires a limit, is case-insensitive and is capped at 120 characters. QR
+Clients opt into ranks with `queue_positions=true` on both HTTP and WebSocket
+requests. Only opted-in snapshots and streams include
+`sequence_positions_by_apparatus`, a map from apparatus ID to returned order ID and its positive one-based position in that full eligible
+display queue. Search and active-job window pinning preserve these positions;
+free-pick positions use the shared display order. Only window rows carry this
+metadata. Both `state_delta_v1` and `state_delta_v2` send changes through the
+existing nested `scopes`/`upsert`/`remove` format, including rank-only changes
+when the matching order list is unchanged. Cursor scope/epoch and replay checks
+also apply to position updates.
+
+Search requires a limit, is case-insensitive and is capped at 120 characters. QR
 bootstrap and individual order controls continue to use authoritative point
 reads, so an order outside the list can still be opened.
 

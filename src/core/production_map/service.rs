@@ -98,6 +98,10 @@ pub struct ProductionMapLiveSnapshot {
     pub maps: Vec<ProductionMapSaved>,
     pub sequences: BTreeMap<String, Vec<String>>,
     pub visible_order_ids: BTreeMap<String, Vec<String>>,
+    /// One-based worker display positions before queue search/windowing,
+    /// scoped by apparatus and restricted to returned window rows.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub sequence_positions_by_apparatus: BTreeMap<String, BTreeMap<String, usize>>,
     pub queue_states: BTreeMap<String, BTreeMap<String, String>>,
     pub stage_states: BTreeMap<String, BTreeMap<String, String>>,
     pub queue_policies: Vec<ApparatusQueuePolicyRecord>,
@@ -842,6 +846,7 @@ impl ProductionMapService {
             maps,
             sequences,
             visible_order_ids,
+            sequence_positions_by_apparatus: BTreeMap::new(),
             queue_states,
             stage_states,
             queue_policies,

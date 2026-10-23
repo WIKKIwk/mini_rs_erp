@@ -119,6 +119,7 @@ mod tests {
             maps: vec![],
             sequence_versions: BTreeMap::new(),
             sequence_revisions: BTreeMap::new(),
+            sequence_positions_by_apparatus: BTreeMap::new(),
             stage_states: BTreeMap::new(),
             frozen_orders_by_apparatus: BTreeMap::new(),
             sequences: BTreeMap::from([(apparatus.into(), sequence.clone())]),
