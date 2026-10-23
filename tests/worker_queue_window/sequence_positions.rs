@@ -113,6 +113,117 @@ async fn worker_search_positions_only_delta_is_sparse_replayable_and_epoch_scope
 }
 
 #[tokio::test]
+async fn free_pick_search_keeps_display_rank_through_activity_deltas_and_reconnects() {
+    let _guard = FIXTURE_LOCK.lock().await;
+    let f = Fixture::new().await;
+    f.free_pick().await;
+    let paused_session = |id: &str, time| OrderRunSession {
+        session_id: id.into(),
+        apparatus: CUT.into(),
+        order_id: id.into(),
+        stage_node_id: "work".into(),
+        status: OrderRunStatus::Paused,
+        worker_role: "aparatchi".into(),
+        worker_ref: "window-worker".into(),
+        worker_display_name: "Worker".into(),
+        started_at_unix: time,
+        updated_at_unix: time,
+        payload_json: json!({}),
+    };
+    for (id, time) in [("zakaz-058", 300), ("zakaz-057", 200), ("zakaz-003", 100)] {
+        f.store
+            .put_order_run_session(paused_session(id, time))
+            .await
+            .unwrap();
+    }
+    f.store
+        .put_apparatus_queue_states(
+            CUT,
+            ["zakaz-058", "zakaz-057", "zakaz-003"]
+                .into_iter()
+                .map(|id| (id.into(), "paused".into()))
+                .collect(),
+        )
+        .await
+        .unwrap();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let router = f.router.clone();
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    for protocol in ["state_delta_v1", "state_delta_v2"] {
+        f.store
+            .put_order_run_session(paused_session("zakaz-057", 200))
+            .await
+            .unwrap();
+        f.state.production_maps.notify_live();
+        let (_, full) = f
+            .get("worker_scope=true&queue_limit=5&queue_positions=true")
+            .await;
+        assert_eq!(
+            &full["visible_order_ids"][CUT].as_array().unwrap()[..3],
+            &[json!("zakaz-058"), json!("zakaz-057"), json!("zakaz-003")]
+        );
+        let (_, before) = f
+            .get("worker_scope=true&queue_limit=5&queue_positions=true&queue_search=zakaz-003")
+            .await;
+        assert_eq!(
+            before["sequence_positions_by_apparatus"],
+            json!({CUT:{"zakaz-003":3}}),
+            "search preserves the free-pick display rank instead of numbering the result as one"
+        );
+        let epoch = before["epoch"].as_str().unwrap();
+        let mut socket = connect(address, &f, &before, protocol, epoch).await;
+        let ready = ws_json(&mut socket).await;
+        assert_eq!(ready["type"], "state_ready", "{ready}");
+        assert_eq!(ready["resync"], false);
+
+        // Only another order's activity changes. The searched order's map,
+        // controls and one-item search window stay unchanged as its rank moves.
+        f.store
+            .put_order_run_session(paused_session("zakaz-057", 50))
+            .await
+            .unwrap();
+        f.state.production_maps.notify_live();
+        let delta = ws_json(&mut socket).await;
+        assert_eq!(delta["type"], "state_delta", "{delta}");
+        assert_eq!(delta["base_rev"], before["rev"]);
+        assert_eq!(delta["epoch"], before["epoch"]);
+        assert_eq!(delta["scope"], before["scope"]);
+        assert!(delta["rev"].as_u64().unwrap() > before["rev"].as_u64().unwrap());
+        assert_eq!(
+            delta["patch"]["sequence_positions_by_apparatus"],
+            json!({"scopes":{CUT:{"upsert":{"zakaz-003":2},"remove":[]}},"remove":[]})
+        );
+        for field in ["maps", "map_order", "sequences", "visible_order_ids"] {
+            assert!(
+                delta["patch"].get(field).is_none(),
+                "free-pick rank-only change repeats {field}: {delta}"
+            );
+        }
+        assert!(serde_json::to_vec(&delta).unwrap().len() < 1024, "{delta}");
+        let (_, after) = f
+            .get("worker_scope=true&queue_limit=5&queue_positions=true&queue_search=zakaz-003")
+            .await;
+        assert_eq!(after["sequence_positions_by_apparatus"], json!({CUT:{"zakaz-003":2}}));
+        assert_eq!(after["visible_order_ids"], before["visible_order_ids"]);
+        assert_eq!(after["maps"], before["maps"]);
+        assert_eq!(after["rev"], delta["rev"]);
+        drop(socket);
+
+        let mut resumed = connect(address, &f, &before, protocol, epoch).await;
+        assert_eq!(ws_json(&mut resumed).await, delta);
+        let ready = ws_json(&mut resumed).await;
+        assert_eq!(ready["type"], "state_ready");
+        assert_eq!(ready["resync"], false);
+        assert_eq!(ready["rev"], after["rev"]);
+        drop(resumed);
+    }
+    server.abort();
+    let _ = server.await;
+}
+
+#[tokio::test]
 async fn worker_search_positions_are_independent_per_apparatus_and_assignment_scoped() {
     let _guard = FIXTURE_LOCK.lock().await;
     let f = Fixture::new().await;
