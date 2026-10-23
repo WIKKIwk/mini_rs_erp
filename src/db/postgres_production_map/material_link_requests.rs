@@ -212,6 +212,7 @@ impl MaterialLinkStore {
         .execute(&mut *tx)
         .await?;
         reconcile_tx(&mut tx, &mut request).await?;
+        notify_live_tx(&mut tx).await?;
         tx.commit().await?;
         Ok(request)
     }
@@ -431,6 +432,16 @@ async fn save_tx(
     sqlx::query("UPDATE mini_material_link_requests SET status=$2,revision=$3,payload_json=$4,retry_at=now() WHERE id=$1")
         .bind(&request.request_id).bind(&request.status).bind(request.event_sequence)
         .bind(serde_json::to_value(request)?).execute(&mut **tx).await?;
+    notify_live_tx(tx).await?;
+    Ok(())
+}
+
+async fn notify_live_tx(tx: &mut Transaction<'_, Postgres>) -> Result<(), sqlx::Error> {
+    // Delivered only on commit, including worker-driven expiry/reconciliation.
+    // Every backend listener wakes its authorized WebSocket readers.
+    sqlx::query("SELECT pg_notify('mini_production_live', 'state')")
+        .execute(&mut **tx)
+        .await?;
     Ok(())
 }
 
