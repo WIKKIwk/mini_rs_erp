@@ -1,0 +1,547 @@
+{
+  "date": "2026-10-23",
+  "timezone": "Asia/Tashkent",
+  "baseline_commit": "57ef1e81508eacf18bed80f287615d9e21181e0e",
+  "comparison": "B,A,A,B,B,A; sequential runs without compiler or Flutter tests; unoptimized debug test executables; median of three per-mode run summaries, not pooled percentiles",
+  "latency_summary": {
+    "p50": {
+      "baseline_median_of_run_values_ms": 151.564875,
+      "after_median_of_run_values_ms": 152.699417,
+      "after_to_baseline_ratio": 1.0074855206392643
+    },
+    "p95": {
+      "baseline_median_of_run_values_ms": 153.690667,
+      "after_median_of_run_values_ms": 155.168792,
+      "after_to_baseline_ratio": 1.0096175325987753
+    },
+    "max": {
+      "baseline_median_of_run_values_ms": 170.809917,
+      "after_median_of_run_values_ms": 204.97925,
+      "after_to_baseline_ratio": 1.2000430279466736
+    }
+  },
+  "paired_ratios": [
+    {
+      "baseline_round": 1,
+      "after_round": 2,
+      "p50_ratio": 1.152622131466834,
+      "p95_ratio": 1.3911732793343488
+    },
+    {
+      "baseline_round": 4,
+      "after_round": 3,
+      "p50_ratio": 1.0074855206392643,
+      "p95_ratio": 1.0096175325987753
+    },
+    {
+      "baseline_round": 5,
+      "after_round": 6,
+      "p50_ratio": 1.0107112879468023,
+      "p95_ratio": 1.013796031097572
+    }
+  ],
+  "runs": [
+    {
+      "round": 1,
+      "mode": "baseline",
+      "metrics": {
+        "absolute_rank_assertions": false,
+        "all_window_frame_bytes": {
+          "max": 1925.0,
+          "n": 122,
+          "p50": 1925.0,
+          "p95": 1925.0
+        },
+        "bootstrap_json_bytes": [
+          41078,
+          3782
+        ],
+        "burst_catchup_ms": 212.061917,
+        "burst_frames": 2,
+        "burst_write_ms": 6800.214666000001,
+        "burst_writes": 513,
+        "checkpoints": 0,
+        "coalesced_revision_steps_across_windows": 1024,
+        "deltas": 244,
+        "filtered_window_frame_bytes": {
+          "max": 615.0,
+          "n": 122,
+          "p50": 615.0,
+          "p95": 615.0
+        },
+        "final_state_mismatches": 0,
+        "first_20_write_ms": {
+          "max": 167.39670800000002,
+          "n": 20,
+          "p50": 153.888416,
+          "p95": 160.9395
+        },
+        "fixture_orders": 1000,
+        "forced_disconnects": 1,
+        "illegal_baseline_gaps": 0,
+        "last_20_write_ms": {
+          "max": 165.64175,
+          "n": 20,
+          "p50": 152.336666,
+          "p95": 155.636875
+        },
+        "loaded_rows": [
+          20,
+          1
+        ],
+        "positions_enabled": false,
+        "reconnect_ms": 191.24979100000002,
+        "recovery_write_to_both_windows_ms": {
+          "max": 362.125917,
+          "n": 20,
+          "p50": 187.64362500000001,
+          "p95": 235.390541
+        },
+        "recovery_writes": 20,
+        "scope": "synthetic in-memory store, real loopback HTTP/WebSocket; not a production PostgreSQL/mobile-network soak",
+        "sequential_duration_s": 17.14975525,
+        "sequential_frames": 200,
+        "sequential_writes": 100,
+        "source_ring_lag_witness": true,
+        "stream_wire_bytes": 310702,
+        "unexpected_disconnects": 0,
+        "write_to_both_windows_ms": {
+          "max": 169.687958,
+          "n": 100,
+          "p50": 152.424375,
+          "p95": 158.5215
+        }
+      }
+    },
+    {
+      "round": 2,
+      "mode": "after",
+      "metrics": {
+        "absolute_rank_assertions": true,
+        "all_window_frame_bytes": {
+          "max": 2067.0,
+          "n": 122,
+          "p50": 2067.0,
+          "p95": 2067.0
+        },
+        "bootstrap_json_bytes": [
+          41512,
+          3825
+        ],
+        "burst_catchup_ms": 212.360542,
+        "burst_frames": 2,
+        "burst_write_ms": 7520.813875,
+        "burst_writes": 513,
+        "checkpoints": 0,
+        "coalesced_revision_steps_across_windows": 1024,
+        "deltas": 244,
+        "filtered_window_frame_bytes": {
+          "max": 686.0,
+          "n": 122,
+          "p50": 686.0,
+          "p95": 686.0
+        },
+        "final_state_mismatches": 0,
+        "first_20_write_ms": {
+          "max": 194.470458,
+          "n": 20,
+          "p50": 177.078292,
+          "p95": 188.43591600000002
+        },
+        "fixture_orders": 1000,
+        "forced_disconnects": 1,
+        "illegal_baseline_gaps": 0,
+        "last_20_write_ms": {
+          "max": 333.688208,
+          "n": 20,
+          "p50": 187.85674999999998,
+          "p95": 299.739
+        },
+        "loaded_rows": [
+          20,
+          1
+        ],
+        "positions_enabled": true,
+        "reconnect_ms": 143.27920899999998,
+        "recovery_write_to_both_windows_ms": {
+          "max": 255.23624999999998,
+          "n": 20,
+          "p50": 153.94987500000002,
+          "p95": 172.47225
+        },
+        "recovery_writes": 20,
+        "scope": "synthetic in-memory store, real loopback HTTP/WebSocket; not a production PostgreSQL/mobile-network soak",
+        "sequential_duration_s": 20.815127,
+        "sequential_frames": 200,
+        "sequential_writes": 100,
+        "source_ring_lag_witness": true,
+        "stream_wire_bytes": 336688,
+        "unexpected_disconnects": 0,
+        "write_to_both_windows_ms": {
+          "max": 427.192209,
+          "n": 100,
+          "p50": 175.687708,
+          "p95": 220.53087499999998
+        }
+      }
+    },
+    {
+      "round": 3,
+      "mode": "after",
+      "metrics": {
+        "absolute_rank_assertions": true,
+        "all_window_frame_bytes": {
+          "max": 2067.0,
+          "n": 122,
+          "p50": 2067.0,
+          "p95": 2067.0
+        },
+        "bootstrap_json_bytes": [
+          41512,
+          3825
+        ],
+        "burst_catchup_ms": 209.64891599999999,
+        "burst_frames": 2,
+        "burst_write_ms": 6514.342250000001,
+        "burst_writes": 513,
+        "checkpoints": 0,
+        "coalesced_revision_steps_across_windows": 1024,
+        "deltas": 244,
+        "filtered_window_frame_bytes": {
+          "max": 686.0,
+          "n": 122,
+          "p50": 686.0,
+          "p95": 686.0
+        },
+        "final_state_mismatches": 0,
+        "first_20_write_ms": {
+          "max": 183.150667,
+          "n": 20,
+          "p50": 152.350125,
+          "p95": 154.115416
+        },
+        "fixture_orders": 1000,
+        "forced_disconnects": 1,
+        "illegal_baseline_gaps": 0,
+        "last_20_write_ms": {
+          "max": 204.97925,
+          "n": 20,
+          "p50": 152.982125,
+          "p95": 154.696958
+        },
+        "loaded_rows": [
+          20,
+          1
+        ],
+        "positions_enabled": true,
+        "reconnect_ms": 140.769542,
+        "recovery_write_to_both_windows_ms": {
+          "max": 154.42604200000002,
+          "n": 20,
+          "p50": 152.466834,
+          "p95": 154.315667
+        },
+        "recovery_writes": 20,
+        "scope": "synthetic in-memory store, real loopback HTTP/WebSocket; not a production PostgreSQL/mobile-network soak",
+        "sequential_duration_s": 17.213041708,
+        "sequential_frames": 200,
+        "sequential_writes": 100,
+        "source_ring_lag_witness": true,
+        "stream_wire_bytes": 336688,
+        "unexpected_disconnects": 0,
+        "write_to_both_windows_ms": {
+          "max": 204.97925,
+          "n": 100,
+          "p50": 152.699417,
+          "p95": 155.168792
+        }
+      }
+    },
+    {
+      "round": 4,
+      "mode": "baseline",
+      "metrics": {
+        "absolute_rank_assertions": false,
+        "all_window_frame_bytes": {
+          "max": 1925.0,
+          "n": 122,
+          "p50": 1925.0,
+          "p95": 1925.0
+        },
+        "bootstrap_json_bytes": [
+          41078,
+          3782
+        ],
+        "burst_catchup_ms": 204.910208,
+        "burst_frames": 2,
+        "burst_write_ms": 6494.527333999999,
+        "burst_writes": 513,
+        "checkpoints": 0,
+        "coalesced_revision_steps_across_windows": 1024,
+        "deltas": 244,
+        "filtered_window_frame_bytes": {
+          "max": 615.0,
+          "n": 122,
+          "p50": 615.0,
+          "p95": 615.0
+        },
+        "final_state_mismatches": 0,
+        "first_20_write_ms": {
+          "max": 170.809917,
+          "n": 20,
+          "p50": 151.476167,
+          "p95": 155.869041
+        },
+        "fixture_orders": 1000,
+        "forced_disconnects": 1,
+        "illegal_baseline_gaps": 0,
+        "last_20_write_ms": {
+          "max": 153.690667,
+          "n": 20,
+          "p50": 151.51049999999998,
+          "p95": 153.306583
+        },
+        "loaded_rows": [
+          20,
+          1
+        ],
+        "positions_enabled": false,
+        "reconnect_ms": 141.602916,
+        "recovery_write_to_both_windows_ms": {
+          "max": 154.587709,
+          "n": 20,
+          "p50": 151.7225,
+          "p95": 153.505625
+        },
+        "recovery_writes": 20,
+        "scope": "synthetic in-memory store, real loopback HTTP/WebSocket; not a production PostgreSQL/mobile-network soak",
+        "sequential_duration_s": 16.96274375,
+        "sequential_frames": 200,
+        "sequential_writes": 100,
+        "source_ring_lag_witness": true,
+        "stream_wire_bytes": 310702,
+        "unexpected_disconnects": 0,
+        "write_to_both_windows_ms": {
+          "max": 170.809917,
+          "n": 100,
+          "p50": 151.564875,
+          "p95": 153.690667
+        }
+      }
+    },
+    {
+      "round": 5,
+      "mode": "baseline",
+      "metrics": {
+        "absolute_rank_assertions": false,
+        "all_window_frame_bytes": {
+          "max": 1925.0,
+          "n": 122,
+          "p50": 1925.0,
+          "p95": 1925.0
+        },
+        "bootstrap_json_bytes": [
+          41078,
+          3782
+        ],
+        "burst_catchup_ms": 204.026625,
+        "burst_frames": 2,
+        "burst_write_ms": 6450.582208,
+        "burst_writes": 513,
+        "checkpoints": 0,
+        "coalesced_revision_steps_across_windows": 1024,
+        "deltas": 244,
+        "filtered_window_frame_bytes": {
+          "max": 615.0,
+          "n": 122,
+          "p50": 615.0,
+          "p95": 615.0
+        },
+        "final_state_mismatches": 0,
+        "first_20_write_ms": {
+          "max": 151.488541,
+          "n": 20,
+          "p50": 149.82175,
+          "p95": 151.07804099999998
+        },
+        "fixture_orders": 1000,
+        "forced_disconnects": 1,
+        "illegal_baseline_gaps": 0,
+        "last_20_write_ms": {
+          "max": 153.81029199999998,
+          "n": 20,
+          "p50": 150.32958399999998,
+          "p95": 151.73725
+        },
+        "loaded_rows": [
+          20,
+          1
+        ],
+        "positions_enabled": false,
+        "reconnect_ms": 139.58295800000002,
+        "recovery_write_to_both_windows_ms": {
+          "max": 155.82299999999998,
+          "n": 20,
+          "p50": 150.834208,
+          "p95": 152.046083
+        },
+        "recovery_writes": 20,
+        "scope": "synthetic in-memory store, real loopback HTTP/WebSocket; not a production PostgreSQL/mobile-network soak",
+        "sequential_duration_s": 16.833910709,
+        "sequential_frames": 200,
+        "sequential_writes": 100,
+        "source_ring_lag_witness": true,
+        "stream_wire_bytes": 310702,
+        "unexpected_disconnects": 0,
+        "write_to_both_windows_ms": {
+          "max": 201.952875,
+          "n": 100,
+          "p50": 149.95087500000002,
+          "p95": 152.06975
+        }
+      }
+    },
+    {
+      "round": 6,
+      "mode": "after",
+      "metrics": {
+        "absolute_rank_assertions": true,
+        "all_window_frame_bytes": {
+          "max": 2067.0,
+          "n": 122,
+          "p50": 2067.0,
+          "p95": 2067.0
+        },
+        "bootstrap_json_bytes": [
+          41512,
+          3825
+        ],
+        "burst_catchup_ms": 212.408125,
+        "burst_frames": 2,
+        "burst_write_ms": 6708.2315,
+        "burst_writes": 513,
+        "checkpoints": 0,
+        "coalesced_revision_steps_across_windows": 1024,
+        "deltas": 244,
+        "filtered_window_frame_bytes": {
+          "max": 686.0,
+          "n": 122,
+          "p50": 686.0,
+          "p95": 686.0
+        },
+        "final_state_mismatches": 0,
+        "first_20_write_ms": {
+          "max": 155.0085,
+          "n": 20,
+          "p50": 150.658125,
+          "p95": 152.769667
+        },
+        "fixture_orders": 1000,
+        "forced_disconnects": 1,
+        "illegal_baseline_gaps": 0,
+        "last_20_write_ms": {
+          "max": 158.616541,
+          "n": 20,
+          "p50": 151.79612500000002,
+          "p95": 153.89841700000002
+        },
+        "loaded_rows": [
+          20,
+          1
+        ],
+        "positions_enabled": true,
+        "reconnect_ms": 147.90208299999998,
+        "recovery_write_to_both_windows_ms": {
+          "max": 159.83308399999999,
+          "n": 20,
+          "p50": 152.340583,
+          "p95": 159.345541
+        },
+        "recovery_writes": 20,
+        "scope": "synthetic in-memory store, real loopback HTTP/WebSocket; not a production PostgreSQL/mobile-network soak",
+        "sequential_duration_s": 17.045030458,
+        "sequential_frames": 200,
+        "sequential_writes": 100,
+        "source_ring_lag_witness": true,
+        "stream_wire_bytes": 336688,
+        "unexpected_disconnects": 0,
+        "write_to_both_windows_ms": {
+          "max": 180.257417,
+          "n": 100,
+          "p50": 151.557042,
+          "p95": 154.167709
+        }
+      }
+    }
+  ],
+  "after_backend_source_commit": "a5db5d3c1dcd2d8cfb382a3ddffd4d0f33cc349e",
+  "rank_backend_commit": "5a055b47db368538228e4cd2a75e112f13f55dd8",
+  "mobile_commit": "40529538871371995abfbb2429b0a604e63ee3c8",
+  "runtime": {
+    "profile": "unoptimized debug",
+    "tokio_threads": 1,
+    "transport": "actual loopback HTTP and WebSocket; no negotiated WebSocket compression",
+    "fixture_store": "in-memory production map; other fixture stores use temporary paths",
+    "new_source_writes_per_after_run": 634
+  },
+  "correctness_after_runs": {
+    "runs": 3,
+    "source_writes": 1902,
+    "received_delta_frames": 732,
+    "illegal_baseline_gaps": 0,
+    "final_state_mismatches": 0,
+    "unexpected_disconnects": 0,
+    "forced_reconnects": 3,
+    "absolute_rank_assertions_passed": true,
+    "filtered_delta_resends_maps": false,
+    "burst_revision_coalescing_legal": true
+  },
+  "exploratory_diagnostics": {
+    "first_attempt": {
+      "status": "failed",
+      "duration_s": 49.68,
+      "observed": "JSON frame without window field",
+      "exact_error": "not recorded by initial harness",
+      "source": "before scoped pending-read retry",
+      "conditions": "compilation/testing CPU load present"
+    },
+    "diagnostic_repeats": {
+      "status": "all passed",
+      "count": 3,
+      "duration_s": [
+        45.32,
+        36.37,
+        35.37
+      ],
+      "conditions": "concurrent baseline compilation; excluded from performance comparison"
+    },
+    "independent_deterministic_regression": {
+      "before": "three invalidated reads produced first frame {error: order_page_changed} and closed the socket",
+      "after": "exact HTTP409 order_page_changed is retried after100ms while retaining sent baselines; initial/established two-window streams recover without a later event",
+      "scope": "fatal500 and unrelated409 still close",
+      "relationship_to_first_attempt": "same failure class is plausible; exact cause of initial exploratory failure is unproven"
+    }
+  },
+  "focused_backend_checks": {
+    "passed": 20,
+    "order_page_route": 11,
+    "page_live_unit": 6,
+    "persistent_admin": 3
+  },
+  "mobile_checks": {
+    "focused_tests_passed": 97,
+    "focused_widget_tests_passed": 63,
+    "decoder_benchmark": {
+      "frames": 5000,
+      "dropped": 0,
+      "maps_redecoded": 0,
+      "total_ms": 113,
+      "p50_us": 9,
+      "p95_us": 36,
+      "p99_us": 92,
+      "scope": "synthetic client reducer microbenchmark; no network"
+    },
+    "preexisting_broader_widget_failures": 12,
+    "preexisting_failures_baseline_reproduced": true
+  }
+}
