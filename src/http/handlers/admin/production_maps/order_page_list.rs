@@ -32,11 +32,16 @@ pub(super) fn project(
             ApparatusQueueOrderState::InProgress | ApparatusQueueOrderState::PrintPreflight |
             ApparatusQueueOrderState::Paused | ApparatusQueueOrderState::Frozen)
             && order_control != OrderControlState::Frozen;
+        // These are resolved row labels, not a replacement domain map. In
+        // particular customer_name is the visible subtitle and may fall back
+        // to product/end-node text when no customer is known. Detail loading
+        // always replaces it with the complete canonical map/customer lookup.
         Some((id.clone(), serde_json::json!({
-            "id":id, "code":saved.map.code, "title":saved.map.title,
-            "customer_name":customers.get(id).map(String::as_str).unwrap_or(&saved.map.customer_name),
+            "id":id, "code":display_code(&saved.map), "title":display_title(&saved.map),
+            "customer_name":display_subtitle(&saved.map, customers.get(id).map(String::as_str)),
             "image_id":saved.map.image_id, "queue_state":state.as_str(),
             "display_state":display_state(snapshot, id, apparatus, state),
+            "frozen":order_control == OrderControlState::Frozen || state == ApparatusQueueOrderState::Frozen,
             "can_reorder":can_reorder,
         })))
     }).collect::<BTreeMap<_, _>>();
@@ -48,6 +53,50 @@ pub(super) fn project(
         "queue_policies":snapshot.queue_policies.iter()
             .filter(|p| p.apparatus_id.as_str() == apparatus).collect::<Vec<_>>(),
     })
+}
+
+fn display_code(map: &ProductionMapDefinition) -> &str {
+    if !map.code.trim().is_empty() {
+        return map.code.trim();
+    }
+    if !map.order_number.trim().is_empty() {
+        return map.order_number.trim();
+    }
+    map.id
+        .trim()
+        .strip_prefix("zakaz-")
+        .map(str::trim)
+        .unwrap_or("")
+}
+
+fn product_title(map: &ProductionMapDefinition) -> &str {
+    map.nodes
+        .iter()
+        .filter(|node| node.kind == ProductionMapNodeKind::End)
+        .map(|node| node.title.trim())
+        .find(|title| !title.is_empty() && *title != map.title.trim())
+        .unwrap_or("")
+}
+
+fn display_title(map: &ProductionMapDefinition) -> &str {
+    if !map.title.trim().is_empty() {
+        map.title.trim()
+    } else {
+        product_title(map)
+    }
+}
+
+fn display_subtitle<'a>(map: &'a ProductionMapDefinition, customer: Option<&'a str>) -> &'a str {
+    if let Some(customer) = customer.map(str::trim).filter(|value| !value.is_empty()) {
+        return customer;
+    }
+    if !map.customer_name.trim().is_empty() {
+        return map.customer_name.trim();
+    }
+    if !map.product_code.trim().is_empty() {
+        return map.product_code.trim();
+    }
+    product_title(map)
 }
 
 fn card_state(
@@ -199,6 +248,89 @@ mod tests {
                 "edges":[{"from":"start","to":"first"},{"from":"first","to":"second"},{"from":"second","to":"end"}]},
             "program":{"map_id":ID,"product_code":"item","operations":[]}
         })).unwrap()
+    }
+
+    #[test]
+    fn legacy_row_labels_preserve_trimmed_code_title_and_subtitle_fallbacks() {
+        let mut value = map().map;
+        value.code = "  code-1  ".into();
+        value.order_number = "  number-2  ".into();
+        assert_eq!(display_code(&value), "code-1");
+        value.code = "  ".into();
+        assert_eq!(display_code(&value), "number-2");
+        value.order_number.clear();
+        value.id = " zakaz-  003  ".into();
+        assert_eq!(display_code(&value), "003");
+        value.id = "training-zakaz-004".into();
+        assert_eq!(display_code(&value), "");
+
+        value.title = "  Root title  ".into();
+        value.nodes.last_mut().unwrap().title = "  Finished product  ".into();
+        assert_eq!(display_title(&value), "Root title");
+        value.title = "  ".into();
+        assert_eq!(display_title(&value), "Finished product");
+        value.customer_name = "  Map customer  ".into();
+        value.product_code = "  Product code  ".into();
+        assert_eq!(
+            display_subtitle(&value, Some("  Snapshot customer  ")),
+            "Snapshot customer"
+        );
+        assert_eq!(display_subtitle(&value, Some("  ")), "Map customer");
+        value.customer_name.clear();
+        assert_eq!(display_subtitle(&value, None), "Product code");
+        value.product_code.clear();
+        assert_eq!(display_subtitle(&value, None), "Finished product");
+        value.title = " Finished product ".into();
+        assert_eq!(product_title(&value), "");
+        value.title.clear();
+        value.nodes.clear();
+        assert_eq!(display_title(&value), ""); // The client localizes its default.
+        assert_eq!(display_subtitle(&value, None), "");
+    }
+
+    #[test]
+    fn frozen_membership_survives_issue_colour_and_freeze_requested_stays_distinct() {
+        let mut snapshot = ProductionMapLiveSnapshot::default();
+        snapshot.maps.push(map());
+        snapshot.queue_states.insert(
+            APPARATUS.into(),
+            BTreeMap::from([(ID.into(), "pending".into())]),
+        );
+        snapshot.order_controls.insert(
+            ID.into(),
+            serde_json::from_value(serde_json::json!({
+                "order_id":ID,"state":"frozen","actor":{"role":"admin"},"requested_at_unix":1
+            }))
+            .unwrap(),
+        );
+        snapshot.order_statuses.insert(
+            ID.into(),
+            ProductionOrderStatusDetail {
+                completed_with_issue_count: 1,
+                ..Default::default()
+            },
+        );
+        let rows = |snapshot: &ProductionMapLiveSnapshot| {
+            project(snapshot, &[ID.into()], APPARATUS, "", &BTreeMap::new())
+        };
+        let row = rows(&snapshot)["rows"][ID].clone();
+        assert_eq!(row["queue_state"], "pending");
+        assert_eq!(row["display_state"], "issue");
+        assert_eq!(row["frozen"], true);
+        assert_eq!(row["can_reorder"], false);
+        snapshot.order_controls.get_mut(ID).unwrap().state = OrderControlState::FreezeRequested;
+        let row = rows(&snapshot)["rows"][ID].clone();
+        assert_eq!(row["frozen"], false);
+        assert_eq!(row["can_reorder"], true); // Exact pre-existing .isFrozen guard.
+        snapshot.order_controls.get_mut(ID).unwrap().state = OrderControlState::Active;
+        snapshot
+            .queue_states
+            .get_mut(APPARATUS)
+            .unwrap()
+            .insert(ID.into(), "frozen".into());
+        let row = rows(&snapshot)["rows"][ID].clone();
+        assert_eq!(row["frozen"], true);
+        assert_eq!(row["can_reorder"], false);
     }
 
     #[test]
