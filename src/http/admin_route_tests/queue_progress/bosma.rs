@@ -418,8 +418,10 @@ async fn bosma_worker_issue_freezes_order_without_paint_report_or_completion_met
     let issue_body = json_body(issue).await;
     assert_eq!(issue_status, StatusCode::OK, "{issue_body:?}");
     assert_eq!(issue_body["states"]["zakaz-bosma-freeze-issue"], "frozen");
-    assert_eq!(issue_body["order_status"]["order_status"], "frozen");
+    assert_eq!(issue_body["order_status"]["order_status"], "paused");
     assert_eq!(issue_body["order_control"]["state"], "frozen");
+    assert_eq!(issue_body["order_control"]["freeze_request"]["scope"], "stage");
+    assert_eq!(issue_body["order_control"]["stage_node_id"], issue_body["session"]["stage_node_id"]);
     assert_eq!(
         issue_body["order_control"]["freeze_request"]["status"],
         "frozen"
@@ -483,10 +485,13 @@ async fn bosma_worker_issue_freezes_order_without_paint_report_or_completion_met
             "POST",
             "/v1/mobile/admin/production-maps/order-control",
             &admin_token,
-            r#"{
+            &serde_json::json!({
                 "order_id":"zakaz-bosma-freeze-issue",
-                "action":"unfreeze"
-            }"#,
+                "action":"unfreeze",
+                "scope":"stage",
+                "apparatus":"apparatus:default:bosma_7",
+                "stage_node_id":issue_body["order_control"]["stage_node_id"],
+            }).to_string(),
         ))
         .await
         .expect("unfreeze");

@@ -162,14 +162,28 @@ pub(crate) async fn refresh_production_order_lifecycles(
             }
         }
         let has_roll_detached = roll_detached_orders.contains(order_id);
-        let operational_status = super::super::progress::derive_production_order_operational_status(
+        let global = store.order_controls.read().await.get(order_id).map(|c| c.state);
+        let locals = store.stage_order_controls.read().await;
+        let mut operational_states = queue_states.clone();
+        for (apparatus, states) in &mut operational_states {
+            if states.get(order_id).is_some_and(|s| s == "frozen")
+                && (global == Some(OrderControlState::FreezeRequested)
+                    || locals.values().any(|c| c.order_id == order_id && c.state == OrderControlState::Frozen
+                        && c.freeze_request.as_ref().is_some_and(|r| r.target_apparatus == *apparatus))) {
+                states.insert(order_id.to_string(), "paused".to_string());
+            }
+        }
+        let mut operational_status = super::super::progress::derive_production_order_operational_status(
             record.status,
-            &queue_states,
+            &operational_states,
             order_id,
             completed_with_issue_count,
             has_roll_detached,
             waiting_next_stage_count,
         );
+        if global == Some(OrderControlState::Frozen) {
+            operational_status = ProductionOrderOperationalStatus::Frozen;
+        }
         if record.operational_status != operational_status {
             record.operational_status = operational_status;
             record.operational_status_changed_at_unix += 1;

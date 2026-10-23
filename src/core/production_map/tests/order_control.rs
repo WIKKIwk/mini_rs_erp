@@ -23,8 +23,6 @@ async fn early_close_unstarted_order_is_immediate_archived_and_not_deletable() {
     }
     assert_eq!(service.production_order_lifecycle(id).await.unwrap().status,
         ProductionOrderLifecycleStatus::Released);
-    assert_eq!(service.request_order_freeze(id, actor("admin")).await,
-        Err(ProductionMapError::OrderNotStarted), "ordinary freeze keeps its existing rule");
     for comment in [" ".to_string(), "x".repeat(2001)] {
         assert_eq!(service.request_order_early_close(id, actor("admin"), &comment).await,
             Err(ProductionMapError::ProgressInputInvalid));
@@ -698,7 +696,9 @@ async fn worker_issue_freezes_bosma_without_completion_metrics_and_unfreeze_rest
         .await
         .expect("worker issue");
     assert_eq!(issue.states[order_id], "frozen");
-    assert_eq!(issue.order_status.order_status, "frozen");
+    assert_eq!(issue.order_status.order_status, "paused");
+    assert_eq!(service.order_control_state(order_id).await.unwrap().state, OrderControlState::Active);
+    assert!(!issue.order_control.as_ref().unwrap().stage_node_id.is_empty());
     assert_eq!(
         issue
             .order_control
@@ -782,7 +782,7 @@ async fn worker_issue_freezes_bosma_without_completion_metrics_and_unfreeze_rest
     );
 
     service
-        .unfreeze_order(order_id, actor("admin"))
+        .unfreeze_stage(order_id, apparatus, &issue.order_control.as_ref().unwrap().stage_node_id, actor("admin"))
         .await
         .expect("unfreeze");
     let unfrozen_snapshot = service.live_snapshot().await.expect("unfrozen snapshot");
@@ -1299,6 +1299,7 @@ async fn unfreeze_recovers_control_only_refreeze_after_order_was_requeued() {
     stuck_request.transitioned_at_unix += 1;
     store
         .put_order_control_state(OrderControlRecord {
+            stage_node_id: String::new(),
             order_id: order_id.to_string(),
             state: OrderControlState::Frozen,
             actor: actor("admin"),
@@ -2137,7 +2138,7 @@ async fn fully_frozen_molds_release_on_every_stop_path_and_resume_requires_reacq
         }
         assert_eq!(
             service.order_control_state(id).await.unwrap().state,
-            OrderControlState::Frozen
+            if stop_path == "worker_issue" { OrderControlState::Active } else { OrderControlState::Frozen }
         );
         assert!(
             store
@@ -2159,7 +2160,11 @@ async fn fully_frozen_molds_release_on_every_stop_path_and_resume_requires_reacq
         assert_eq!(resources.raw_materials, mounted_materials);
         assert!(resources.qolip_codes.is_empty());
         assert!(!resources.qolip_available);
-        service.unfreeze_order(id, actor("admin")).await.unwrap();
+        if stop_path == "worker_issue" {
+            service.unfreeze_stage(id, PECHAT_ID, &frozen.stage_node_id, actor("admin")).await.unwrap();
+        } else {
+            service.unfreeze_order(id, actor("admin")).await.unwrap();
+        }
         let snapshot = service.live_snapshot().await.unwrap();
         let control = &snapshot.queue_action_controls[PECHAT_ID][id];
         assert_eq!(
@@ -2245,4 +2250,104 @@ async fn fully_frozen_molds_release_on_every_stop_path_and_resume_requires_reacq
                 .unwrap()
         );
     }
+}
+
+#[tokio::test]
+async fn global_freeze_stops_mixed_production_and_colour_trials() {
+    for (colour_passed, production_active) in [(false, true), (true, true), (true, false)] {
+        let store = std::sync::Arc::new(MemoryProductionMapStore::new());
+        let service = service_with_default_apparatus(store.clone()).await;
+        let id = "zakaz-global-mixed-preflight";
+        service.upsert_map(super::fixtures::canonical_two_stage_map(
+            id, PECHAT_ID, "Bosma", LAMINATION_ID, "Laminatsiya",
+        )).await.unwrap();
+        let hold = service.begin_print_preflight(
+            PECHAT_ID, id, "mixed-colour", "mixed-colour", actor("aparatchi"),
+        ).await.unwrap();
+        if colour_passed {
+            service.advance_print_preflight(
+                PECHAT_ID, id, &hold.hold_id, "passed", actor("aparatchi"),
+            ).await.unwrap();
+        }
+        store.put_order_run_session(OrderRunSession {
+            session_id: "mixed-lam-session".into(), apparatus: LAMINATION_ID.into(), order_id: id.into(),
+            stage_node_id: "second".into(), status: if production_active { OrderRunStatus::Active } else { OrderRunStatus::Paused },
+            worker_role: "aparatchi".into(), worker_ref: "aparatchi-1".into(),
+            worker_display_name: "Worker".into(), started_at_unix: 1, updated_at_unix: 1,
+            payload_json: serde_json::json!({}),
+        }).await.unwrap();
+        store.put_apparatus_queue_states(LAMINATION_ID,
+            BTreeMap::from([(id.into(), if production_active { "in_progress" } else { "paused" }.into())])).await.unwrap();
+        let requested = service.request_order_freeze(id, actor("admin")).await.unwrap();
+        if !production_active {
+            assert_eq!(requested.state, OrderControlState::Frozen);
+            let stopped = service.order_run_sessions_for_order(id).await.unwrap();
+            assert_eq!(stopped[0].status, OrderRunStatus::Frozen);
+            service.unfreeze_order(id, actor("admin")).await.unwrap();
+            assert_eq!(service.order_control_state(id).await.unwrap().state, OrderControlState::Active);
+            continue;
+        }
+        assert_eq!(requested.state, OrderControlState::FreezeRequested);
+        let request = requested.freeze_request.unwrap();
+        assert!(request.target_apparatus.is_empty(), "mixed targets use one global request");
+        assert_eq!(store.print_preflight_hold_by_id(&hold.hold_id).await.unwrap().unwrap().status,
+            if colour_passed { PrintPreflightStatus::Cancelled } else { PrintPreflightStatus::Running });
+        let stopped = service.apply_apparatus_queue_action_with_progress(
+            LAMINATION_ID, id, queue_state::ApparatusQueueAction::Freeze,
+            &[LAMINATION_ID.into()], actor("aparatchi"), QueueProgressInput {
+                freeze_request_id: request.request_id.clone(), description: "Safe stop".into(), ..Default::default()
+            },
+        ).await.unwrap();
+        assert_eq!(stopped.order_control.unwrap().state,
+            if colour_passed { OrderControlState::Frozen } else { OrderControlState::FreezeRequested });
+        if !colour_passed {
+            let visible = service.live_snapshot().await.unwrap();
+            assert!(!visible.worker_queue_order_hidden_at_apparatus(PECHAT_ID, id, true));
+            service.apply_apparatus_queue_action_with_progress(
+                PECHAT_ID, id, queue_state::ApparatusQueueAction::Freeze,
+                &[PECHAT_ID.into()], actor("aparatchi"), QueueProgressInput {
+                    freeze_request_id: request.request_id, description: "Colour stopped".into(), ..Default::default()
+                },
+            ).await.unwrap();
+        }
+        assert_eq!(service.order_control_state(id).await.unwrap().state, OrderControlState::Frozen);
+        service.unfreeze_order(id, actor("admin")).await.unwrap();
+        assert_eq!(service.order_control_state(id).await.unwrap().state, OrderControlState::Active);
+        assert!(service.order_run_sessions_for_order(id).await.unwrap().iter().all(|s| s.status != OrderRunStatus::Frozen));
+    }
+}
+
+#[tokio::test]
+async fn global_freeze_of_unstarted_order_never_creates_production_work() {
+    let store = std::sync::Arc::new(MemoryProductionMapStore::new());
+    let service = service_with_default_apparatus(store.clone()).await;
+    let id = "zakaz-queued-global-freeze";
+    service.upsert_map(canonical_apparatus_stage_map(id, PECHAT_ID, "Bosma")).await.unwrap();
+    let held = service.request_order_freeze(id, actor("admin")).await.unwrap();
+    assert_eq!(held.state, OrderControlState::Frozen);
+    assert!(held.freeze_request.as_ref().unwrap().target_apparatus.is_empty());
+    assert!(store.order_run_sessions_for_order(id).await.unwrap().is_empty());
+    service.unfreeze_order(id, actor("admin")).await.unwrap();
+    assert_eq!(service.order_control_state(id).await.unwrap().state, OrderControlState::Active);
+    assert_eq!(service.production_order_lifecycle(id).await.unwrap().status, ProductionOrderLifecycleStatus::Released);
+}
+
+#[tokio::test]
+async fn legacy_queue_only_unfreeze_has_no_fictional_worker_recipient() {
+    let store = std::sync::Arc::new(MemoryProductionMapStore::new());
+    let service = service_with_default_apparatus(store.clone()).await;
+    let id = "zakaz-legacy-queue-freeze";
+    service.upsert_map(canonical_apparatus_stage_map(id, PECHAT_ID, "Bosma")).await.unwrap();
+    store.put_apparatus_queue_states(PECHAT_ID, BTreeMap::from([(id.into(), "frozen".into())])).await.unwrap();
+    let mut legacy = OrderControlRecord::active(id);
+    legacy.state = OrderControlState::Frozen;
+    legacy.frozen_at_unix = Some(1);
+    legacy.actor = actor("system");
+    store.put_order_control_state(legacy).await.unwrap();
+    let released = service.unfreeze_order(id, actor("admin")).await.unwrap();
+    let request = released.freeze_request.unwrap();
+    assert!(request.target_apparatus.is_empty());
+    assert!(request.target_worker_role.is_empty());
+    assert!(request.target_worker_ref.is_empty());
+    assert_eq!(service.apparatus_queue_states().await.unwrap()[PECHAT_ID][id], "pending");
 }

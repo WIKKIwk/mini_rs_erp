@@ -163,6 +163,7 @@ pub(super) fn project(
         stage_states: select_orders(&snapshot.stage_states, &orders),
         order_statuses: select_orders(&snapshot.order_statuses, &orders),
         order_controls: select_orders(&snapshot.order_controls, &orders),
+        stage_order_controls: snapshot.stage_order_controls.iter().filter(|c| orders.contains(&c.order_id)).cloned().collect(),
         queue_policies: snapshot.queue_policies.clone(),
     }
 }
@@ -283,6 +284,7 @@ mod tests {
         let apparatus = "apparatus:default:bosma_9";
         let next = "apparatus:default:asset-008";
         let snapshot = ProductionMapLiveSnapshot {
+            stage_order_controls: Vec::new(),
             maps: vec![],
             sequences: BTreeMap::from([
                 (apparatus.into(), vec!["own".into()]),

@@ -249,7 +249,7 @@ async fn wip_times_preserve_partial_roll_through_freeze_and_new_roll_starts_on_r
         },
     )
     .await;
-    service.unfreeze_order(ORDER, actor()).await.unwrap();
+    service.unfreeze_stage(ORDER, CUT, "cut", actor()).await.unwrap();
     timed_action(&service, Action::Resume, QueueProgressInput::default()).await;
     let first = timed_action(&service, Action::DetachRoll, output())
         .await
@@ -351,7 +351,7 @@ async fn wip_times_seed_legacy_resume_clock_before_freeze_discards_checkpoint() 
         },
     )
     .await;
-    service.unfreeze_order(ORDER, actor()).await.unwrap();
+    service.unfreeze_stage(ORDER, CUT, "cut", actor()).await.unwrap();
     timed_action(&service, Action::Resume, QueueProgressInput::default()).await;
     let output = timed_action(&service, Action::DetachRoll, output())
         .await

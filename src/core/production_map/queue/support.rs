@@ -4,7 +4,6 @@ use super::*;
 
 use super::apparatus::visible_order_ids_by_apparatus;
 use super::progress::queue_action_event_id;
-use super::store_port::ApparatusQueueStateMap;
 
 pub(super) fn validate_queue_action_request(
     apparatus: &str,
@@ -81,20 +80,6 @@ pub(super) fn waiting_reentry_stage_node_id(
             .any(|id| id == apparatus)
             .then_some(route.stage_node_id)
     })
-}
-
-pub(super) fn order_has_frozen_queue_state(
-    states: &ApparatusQueueStateMap,
-    order_id: &str,
-) -> bool {
-    let order_id = order_id.trim();
-    !order_id.is_empty()
-        && states.values().any(|apparatus_states| {
-            apparatus_states
-                .get(order_id)
-                .and_then(|raw| queue_state::ApparatusQueueOrderState::parse(raw))
-                == Some(queue_state::ApparatusQueueOrderState::Frozen)
-        })
 }
 
 pub(super) fn sequence_updates_for_frozen_transition(

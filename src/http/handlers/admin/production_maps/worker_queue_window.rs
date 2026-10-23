@@ -119,7 +119,7 @@ impl WorkerQueueWindow {
                 .filter(|id| visible.contains(id.as_str()))
                 .filter(|id| {
                     maps.contains_key(id.as_str())
-                        && !snapshot.worker_queue_order_hidden(id, free_pick)
+                        && !snapshot.worker_queue_order_hidden_at_apparatus(apparatus, id, free_pick)
                 });
             let mut positions = BTreeMap::new();
             let mut ids = eligible
@@ -228,6 +228,7 @@ impl WorkerQueueWindow {
             stage_states: keep(&snapshot.stage_states, &selected),
             order_statuses: keep(&snapshot.order_statuses, &selected),
             order_controls: keep(&snapshot.order_controls, &selected),
+            stage_order_controls: snapshot.stage_order_controls.iter().filter(|c| selected.contains(&c.order_id)).cloned().collect(),
             queue_policies: snapshot.queue_policies.clone(),
             frozen_orders_by_apparatus: BTreeMap::new(),
         }

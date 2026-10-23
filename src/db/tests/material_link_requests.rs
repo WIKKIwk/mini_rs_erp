@@ -347,6 +347,7 @@ async fn postgres_material_link_selection_shared_cards_and_stale_recovery() {
 
     // The shared SQL helper must retain the existing freeze-card type and update contract.
     let freeze = OrderFreezeChatEvent {
+        stage_node_id: String::new(),
         event_sequence: 1,
         event_id: "freeze-event".into(),
         request_id: "freeze-regression".into(),
@@ -374,6 +375,7 @@ async fn postgres_material_link_selection_shared_cards_and_stale_recovery() {
         .unwrap();
     assert_eq!(inserted.message.message_type, "order_freeze_request");
     let terminal = OrderFreezeChatEvent {
+        stage_node_id: String::new(),
         event_sequence: 2,
         status: "cancelled".into(),
         ..freeze.clone()

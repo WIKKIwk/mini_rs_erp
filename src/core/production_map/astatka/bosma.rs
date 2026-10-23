@@ -53,12 +53,7 @@ impl ProductionMapService {
             .ok_or(ProductionMapError::MapNotFound)?;
         let _guard = self.queue_action_guard().await;
         let anchor = self.astatka_execution_anchor(&report.order_id, &report.apparatus).await?;
-        if self
-            .store
-            .order_control_states()
-            .await?
-            .get(&report.order_id)
-            .is_some_and(|control| control.state == OrderControlState::Frozen)
+        if self.effective_order_control_for_apparatus(&report.order_id, &report.apparatus).await?.state == OrderControlState::Frozen
         {
             return Err(ProductionMapError::OrderFrozen);
         }

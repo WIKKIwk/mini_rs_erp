@@ -398,6 +398,7 @@ async fn send_production_map_live_snapshot(
                 "queue_action_controls": &snapshot.queue_action_controls,
                 "order_statuses": &snapshot.order_statuses,
                 "order_controls": &snapshot.order_controls,
+                "stage_order_controls": &snapshot.stage_order_controls,
                 "frozen_orders_by_apparatus": &snapshot.frozen_orders_by_apparatus,
                 "order_customers": order_customers,
                 "completed_orders": completed_orders,

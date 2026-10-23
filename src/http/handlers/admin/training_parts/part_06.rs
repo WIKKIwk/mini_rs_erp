@@ -165,6 +165,7 @@ fn training_queue_action_controls(
             (
                 order_id.clone(),
                 ApparatusQueueOrderActionControl {
+                    stage_control_state: String::new(),
                     re_pause: None,
                     reclose: None,
                     stage_work: None,

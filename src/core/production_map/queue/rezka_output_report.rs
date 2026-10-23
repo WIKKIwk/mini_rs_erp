@@ -59,6 +59,9 @@ impl ProductionMapService {
         {
             return Err(ProductionMapError::RezkaOutputCycleConflict);
         }
+        if self.effective_order_control_for_stage(order_id, apparatus, &session.stage_node_id).await?.state != OrderControlState::Active {
+            return Err(ProductionMapError::RezkaOutputCycleConflict);
+        }
         let stage = chain::work_stage_for_station(&map, apparatus, session.stage_node_id.trim())
             .ok_or(ProductionMapError::RezkaOutputCycleConflict)?;
         let (_, partial_rolls) =

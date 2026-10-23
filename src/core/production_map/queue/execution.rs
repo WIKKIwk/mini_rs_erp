@@ -11,7 +11,30 @@ impl ProductionMapService {
         let apparatus = apparatus.trim();
         let order_id = order_id.trim();
         validate_queue_action_request(apparatus, order_id, assigned_apparatus)?;
-        let control = self.order_control_state(order_id).await?;
+        // Resolve the occurrence before applying its hold. A scanned WIP can
+        // target a later occurrence of the same physical apparatus.
+        let initial_session = self.store.active_order_run_session(apparatus, order_id).await?;
+        let mut hold_stage = initial_session.as_ref().map(|s| s.stage_node_id.clone()).unwrap_or_default();
+        if requested_action == queue_state::ApparatusQueueAction::Start {
+            let input = if !progress.progress_batch_id.trim().is_empty() {
+                self.store.progress_batch(progress.progress_batch_id.trim()).await?
+            } else if !progress.qr_payload.trim().is_empty() {
+                self.store.progress_batch_by_qr(progress.qr_payload.trim()).await?
+            } else { None };
+            if let Some(batch) = input {
+                let map = self.store.map_by_id(order_id).await?.ok_or(ProductionMapError::MapNotFound)?;
+                if let Ok(route) = self.projection_map(&map).route(&batch) {
+                    hold_stage = chain::work_stage_for_station(&map, apparatus, &route.stage_node_id)
+                        .map(|stage| stage.node_id).ok_or(ProductionMapError::ProgressBatchNotAccepted)?;
+                }
+            }
+        }
+        if hold_stage.is_empty() {
+            let map = self.store.map_by_id(order_id).await?.ok_or(ProductionMapError::MapNotFound)?;
+            hold_stage = chain::work_stage_for_station(&map, apparatus, "")
+                .map(|s| s.node_id.clone()).ok_or(ProductionMapError::OrderFreezeTargetNotFound)?;
+        }
+        let control = self.effective_order_control_for_stage(order_id, apparatus, &hold_stage).await?;
         let resume_pause_allowed = self.store.supports_resume_pause()
             && control.state == OrderControlState::Active && control.early_close.is_none();
         let freeze_request_finalization = control.state == OrderControlState::FreezeRequested
@@ -91,12 +114,6 @@ impl ProductionMapService {
                 }
             },
         )?;
-        if queue_action == queue_state::ApparatusQueueAction::Freeze
-            && control.state == OrderControlState::Active
-            && order_has_frozen_queue_state(&all_states, order_id)
-        {
-            return Err(ProductionMapError::OrderFrozen);
-        }
         let storage_key = apparatus.to_string();
         let canonical = self.resolve_canonical_apparatus_text(&storage_key).await?;
         if progress.rezka_record_frame_index.is_some()
@@ -127,10 +144,16 @@ impl ProductionMapService {
         if !sequence.iter().any(|id| id.trim() == order_id) {
             return Err(ProductionMapError::QueueActionNotAllowed);
         }
-        let stored_states = all_states.get(&storage_key);
-        if let Some(stored_states) = stored_states {
-            validate_requested_queue_state(stored_states, order_id)?;
+        let mut occurrence_states = all_states.get(&storage_key).cloned().unwrap_or_default();
+        if occurrence_states.get(order_id).is_some_and(|s| s == "frozen")
+            && control.state == OrderControlState::Active
+            && self.store.stage_order_control_states().await?.iter().any(|c| c.order_id == order_id
+                && c.stage_node_id != hold_stage && c.state == OrderControlState::Frozen
+                && c.freeze_request.as_ref().is_some_and(|r| r.target_apparatus == storage_key)) {
+            occurrence_states.insert(order_id.to_string(), "pending".to_string());
         }
+        let stored_states = Some(&occurrence_states);
+        validate_requested_queue_state(&occurrence_states, order_id)?;
         let order_map = all_maps
             .iter()
             .find(|map| map.id.trim() == order_id)
@@ -539,8 +562,12 @@ impl ProductionMapService {
                 .session
                 .as_ref()
                 .ok_or(ProductionMapError::OrderFreezeTargetNotFound)?;
+            if session.stage_node_id.trim().is_empty() {
+                return Err(ProductionMapError::OrderFreezeTargetNotFound);
+            }
             let now = progress::unix_seconds();
             Some(OrderControlRecord {
+                stage_node_id: session.stage_node_id.clone(),
                 order_id: order_id.to_string(),
                 state: OrderControlState::Frozen,
                 actor: actor.clone(),
@@ -548,6 +575,8 @@ impl ProductionMapService {
                 frozen_at_unix: Some(now),
                 early_close: None,
                 freeze_request: Some(OrderFreezeRequest {
+                    scope: "stage".to_string(),
+                    stage_node_id: session.stage_node_id.clone(),
                     request_id: format!("order-freeze-issue:{}", event.event_id),
                     status: OrderFreezeRequestStatus::Frozen,
                     target_session_id: session.session_id.clone(),
@@ -566,16 +595,24 @@ impl ProductionMapService {
             let mut freeze_request = control
                 .freeze_request
                 .ok_or(ProductionMapError::OrderFreezeRequestMismatch)?;
-            freeze_request.status = OrderFreezeRequestStatus::Frozen;
+            let wildcard = control.stage_node_id.is_empty() && freeze_request.target_apparatus.is_empty();
+            let others_running = wildcard && (
+                self.store.order_run_sessions_for_order(order_id).await?.iter()
+                    .any(|s| s.status == OrderRunStatus::Active && s.apparatus != storage_key)
+                || self.store.active_print_preflight_holds().await?.iter().any(|h|
+                    h.order_id == order_id && h.apparatus != storage_key
+                    && matches!(h.status, PrintPreflightStatus::Held | PrintPreflightStatus::Running)));
+            freeze_request.status = if others_running { OrderFreezeRequestStatus::Pending } else { OrderFreezeRequestStatus::Frozen };
             freeze_request.transitioned_at_unix = now;
             Some(OrderControlRecord {
+                stage_node_id: control.stage_node_id.clone(),
                 order_id: order_id.to_string(),
-                state: OrderControlState::Frozen,
+                state: if others_running { OrderControlState::FreezeRequested } else { OrderControlState::Frozen },
                 actor: control.actor,
                 requested_at_unix: control.requested_at_unix,
-                frozen_at_unix: Some(now),
+                frozen_at_unix: (!others_running).then_some(now),
                 early_close: control.early_close.map(|mut close| {
-                    close.closed_at_unix = Some(now);
+                    close.closed_at_unix = (!others_running).then_some(now);
                     close
                 }),
                 freeze_request: Some(freeze_request),
@@ -586,7 +623,11 @@ impl ProductionMapService {
         let sequence_updates = if queue_action == queue_state::ApparatusQueueAction::Freeze {
             let mut excluded_order_ids = frozen_order_ids;
             excluded_order_ids.insert(order_id.to_string());
-            sequence_updates_for_frozen_transition(&all_maps, &sequences, &excluded_order_ids, None)
+            let mut updates = sequence_updates_for_frozen_transition(&all_maps, &sequences, &excluded_order_ids, None);
+            if order_control_update.as_ref().is_some_and(|c| !c.stage_node_id.is_empty()) {
+                updates.retain(|apparatus, _| apparatus == &storage_key);
+            }
+            updates
         } else {
             BTreeMap::new()
         };
@@ -618,6 +659,15 @@ impl ProductionMapService {
                 }
             }
             super::super::re_pause::attach_checkpoint(previous, &mut prepared);
+        }
+        if let Some(session) = &prepared.session {
+            if session.stage_node_id != hold_stage {
+                match self.effective_order_control_for_stage(order_id, apparatus, &session.stage_node_id).await?.state {
+                    OrderControlState::Active => {},
+                    OrderControlState::FreezeRequested => return Err(ProductionMapError::OrderFreezeRequested),
+                    OrderControlState::Frozen => return Err(ProductionMapError::OrderFrozen),
+                }
+            }
         }
         Ok(prepared)
     }
@@ -1116,8 +1166,8 @@ fn validate_freeze_request_pause(
     // target_worker_ref remains audit context, not an exclusive permission.
     let worker_role_matches = request.target_worker_role.trim() == actor.role.trim()
         && !actor.ref_.trim().is_empty();
-    let apparatus_matches =
-        super::super::types::apparatus_ids_match(&request.target_apparatus, apparatus);
+    let apparatus_matches = (control.stage_node_id.is_empty() && request.target_apparatus.is_empty())
+        || super::super::types::apparatus_ids_match(&request.target_apparatus, apparatus);
     if !request_id_matches || !worker_role_matches || !apparatus_matches {
         return Err(ProductionMapError::OrderFreezeRequestMismatch);
     }
@@ -1133,8 +1183,9 @@ fn validate_freeze_request_target_session(
         .as_ref()
         .ok_or(ProductionMapError::OrderFreezeRequestMismatch)?;
     let session = active_session.ok_or(ProductionMapError::OrderFreezeTargetNotFound)?;
-    if request.target_session_id.trim().is_empty()
-        || request.target_session_id.trim() != session.session_id.trim()
+    if !(control.stage_node_id.is_empty() && request.target_apparatus.is_empty())
+        && (request.target_session_id.trim().is_empty()
+        || request.target_session_id.trim() != session.session_id.trim())
     {
         return Err(ProductionMapError::OrderFreezeRequestMismatch);
     }

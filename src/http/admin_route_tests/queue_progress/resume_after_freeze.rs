@@ -138,7 +138,11 @@ async fn unfrozen_order_resumes_saved_resources_without_scans_in_both_queue_mode
                         "POST",
                         "/v1/mobile/admin/production-maps/order-control",
                         &admin,
-                        &serde_json::json!({"order_id": ORDER, "action": "unfreeze"}).to_string(),
+                        &serde_json::json!({
+                            "order_id": ORDER, "action": "unfreeze", "scope":"stage",
+                            "apparatus": STATION,
+                            "stage_node_id": frozen["session"]["stage_node_id"],
+                        }).to_string(),
                     ))
                     .await
                     .unwrap();

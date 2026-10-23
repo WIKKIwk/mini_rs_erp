@@ -1,9 +1,12 @@
+#[path = "scoped.rs"]
+mod scoped;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::apparatus::visible_order_ids_for_apparatus;
 use super::progress::{effective_apparatus_queue_policy, queue_action_event_id, unix_seconds};
 use super::service_queue_support::{
-    QueueActionEventInput, order_has_frozen_queue_state,
+    QueueActionEventInput,
     parsed_queue_states, queue_action_event, sequence_updates_for_frozen_transition,
     serialized_queue_states,
 };
@@ -85,7 +88,14 @@ impl ProductionMapService {
             return Err(ProductionMapError::OrderControlActionNotAllowed);
         }
         let queue_states = self.store.apparatus_queue_states().await?;
-        if order_has_frozen_queue_state(&queue_states, &order_id) {
+        let stage_controls = self.store.stage_order_control_states().await?;
+        if queue_states.iter().any(|(apparatus, states)|
+            states.get(&order_id).is_some_and(|state| state == "frozen")
+                && !stage_controls.iter().any(|control| control.order_id == order_id
+                    && control.state == OrderControlState::Frozen
+                    && control.freeze_request.as_ref().is_some_and(|request| request.target_apparatus == *apparatus))) {
+            // Queue-only records from before order controls existed retain
+            // their original whole-order hold meaning.
             return Err(ProductionMapError::OrderFrozen);
         }
 
@@ -93,14 +103,11 @@ impl ProductionMapService {
         if evidence.completed {
             return Err(ProductionMapError::OrderAlreadyCompleted);
         }
-        // Freezing requires started work; early closure also applies to an
-        // untouched queued order, which has no worker/roll to wait for.
-        if !evidence.started && comment.is_none() {
-            return Err(ProductionMapError::OrderNotStarted);
-        }
+        // An untouched order has no running roll to wait for and can be held
+        // immediately. Started operations retain the safe-stop protocol.
 
         let now = unix_seconds();
-        let state = if evidence.has_active_work {
+        let mut state = if evidence.has_active_work {
             OrderControlState::FreezeRequested
         } else {
             OrderControlState::Frozen
@@ -120,12 +127,18 @@ impl ProductionMapService {
                 })
             })
             .collect::<Vec<_>>();
+        let passed_preflights = print_preflight_targets.iter().copied()
+            .filter(|hold| hold.status == PrintPreflightStatus::Passed).collect::<Vec<_>>();
+        if !passed_preflights.is_empty()
+            && (print_preflight_targets.len() > 1 || !evidence.paused_sessions.is_empty()) {
+            state = OrderControlState::FreezeRequested;
+        }
         let target_session = if state == OrderControlState::FreezeRequested {
             match (evidence.active_sessions.as_slice(), print_preflight_targets.as_slice()) {
                 ([session], []) => Some(session),
                 ([], [_]) => None,
                 ([], []) => return Err(ProductionMapError::OrderFreezeTargetNotFound),
-                _ => return Err(ProductionMapError::OrderFreezeTargetAmbiguous),
+                _ => None, // One global request safely stops every active occurrence.
             }
         } else {
             match evidence.paused_sessions.as_slice() {
@@ -133,11 +146,12 @@ impl ProductionMapService {
                 _ => None,
             }
         };
-        let target_preflight = if target_session.is_none() {
+        let target_preflight = if target_session.is_none()
+            && (state != OrderControlState::FreezeRequested || evidence.active_sessions.is_empty()) {
             match print_preflight_targets.as_slice() {
                 [hold] => Some(*hold),
                 [] => None,
-                _ => return Err(ProductionMapError::OrderFreezeTargetAmbiguous),
+                _ => None,
             }
         } else {
             None
@@ -155,6 +169,8 @@ impl ProductionMapService {
             OrderFreezeRequestStatus::Frozen
         };
         let freeze_request = OrderFreezeRequest {
+            scope: "order".to_string(),
+            stage_node_id: String::new(),
             request_id: new_freeze_request_id(),
             status: request_status,
             target_session_id: target_session
@@ -169,7 +185,7 @@ impl ProductionMapService {
             target_worker_role: target_worker
                 .as_ref()
                 .map(|worker| worker.role.trim().to_string())
-                .unwrap_or_default(),
+                .unwrap_or_else(|| if state == OrderControlState::FreezeRequested { "aparatchi".to_string() } else { String::new() }),
             target_worker_ref: target_worker
                 .as_ref()
                 .map(|worker| worker.ref_.trim().to_string())
@@ -181,7 +197,9 @@ impl ProductionMapService {
             requested_at_unix: now,
             transitioned_at_unix: now,
         };
-        let record = OrderControlRecord {
+        let early_close_without_work = comment.is_some() && !evidence.started;
+        let mut record = OrderControlRecord {
+            stage_node_id: String::new(),
             order_id,
             state,
             early_close: comment.map(|comment| OrderEarlyClose {
@@ -191,8 +209,42 @@ impl ProductionMapService {
             actor,
             requested_at_unix: now,
             frozen_at_unix: (state == OrderControlState::Frozen).then_some(now),
-            freeze_request: (!freeze_request.target_apparatus.is_empty()).then_some(freeze_request),
+            freeze_request: (!early_close_without_work).then_some(freeze_request),
         };
+        if state == OrderControlState::FreezeRequested && !passed_preflights.is_empty() {
+            // Passed colour trials have no running roll to acknowledge. Stop
+            // them directly while the global request blocks every new start.
+            self.store.put_order_control_state(record.clone()).await?;
+            for hold in passed_preflights {
+                let write = prepare_direct_freeze_queue_write(self, &record, None, Some(hold)).await?
+                    .ok_or(ProductionMapError::OrderFreezeTargetNotFound)?;
+                self.store.put_apparatus_queue_states_with_event_and_progress(&write).await?;
+            }
+            let durable = current_order_control(self, &record.order_id).await?;
+            if durable.state == OrderControlState::Frozen {
+                // PostgreSQL may finalize the wildcard request atomically with
+                // its last preflight cancellation. Preserve that close time and
+                // leave already-paused work safely behind the frozen overlay.
+                self.notify_live();
+                return Ok(durable);
+            }
+            for session in &evidence.paused_sessions {
+                if let Some(write) = prepare_direct_freeze_queue_write(self, &record, Some(session), None).await? {
+                    self.store.put_apparatus_queue_states_with_event_and_progress(&write).await?;
+                }
+            }
+            if !evidence.has_active_work {
+                record.state = OrderControlState::Frozen;
+                record.frozen_at_unix = Some(now);
+                if let Some(request) = record.freeze_request.as_mut() {
+                    request.status = OrderFreezeRequestStatus::Frozen;
+                }
+                if let Some(close) = record.early_close.as_mut() { close.closed_at_unix = Some(now); }
+                self.store.put_order_control_state(record.clone()).await?;
+            }
+            self.notify_live();
+            return current_order_control(self, &record.order_id).await;
+        }
         if let Some(write) =
             prepare_direct_freeze_queue_write(self, &record, target_session, target_preflight)
                 .await?
@@ -202,7 +254,7 @@ impl ProductionMapService {
                 .await?;
         } else if state == OrderControlState::FreezeRequested {
             self.store.put_order_control_state(record.clone()).await?;
-        } else if record.early_close.is_some() && !evidence.has_active_work {
+        } else if !evidence.has_active_work {
             self.store.put_order_control_state(record.clone()).await?;
         } else {
             return Err(ProductionMapError::OrderFreezeTargetNotFound);
@@ -271,6 +323,7 @@ impl ProductionMapService {
         };
         freeze_request.transitioned_at_unix = now;
         let record = OrderControlRecord {
+            stage_node_id: String::new(),
             order_id,
             state: next,
             actor,
@@ -279,7 +332,9 @@ impl ProductionMapService {
             freeze_request: Some(freeze_request),
             early_close: None,
         };
-        if expected == OrderControlState::Frozen && next == OrderControlState::Active {
+        // A multi-stage request may already have safely stopped some machines
+        // when it is cancelled. Restore those without releasing local holds.
+        if next == OrderControlState::Active {
             restore_frozen_queue_after_unfreeze(self, &record).await?;
         } else {
             self.store.put_order_control_state(record.clone()).await?;
@@ -473,7 +528,7 @@ async fn recovery_freeze_request(
     let session = sessions
         .iter()
         .find(|session| session.status == OrderRunStatus::Frozen);
-    let target_apparatus = session
+    let mut target_apparatus = session
         .map(|session| session.apparatus.trim().to_string())
         .or_else(|| {
             queue_states.iter().find_map(|(apparatus, states)| {
@@ -492,8 +547,15 @@ async fn recovery_freeze_request(
             ref_: session.worker_ref.clone(),
             display_name: session.worker_display_name.clone(),
         })
-        .unwrap_or_else(|| current.actor.clone());
+        .unwrap_or_else(|| QueueActionActor { role: String::new(), ref_: String::new(), display_name: String::new() });
+    if session.is_none() {
+        // A legacy queue-only stop has no worker recipient. The restore
+        // wrapper recovers every frozen queue under a global wildcard.
+        target_apparatus.clear();
+    }
     Ok(OrderFreezeRequest {
+        scope: "order".to_string(),
+        stage_node_id: String::new(),
         request_id: format!("order-freeze-recovery:{order_id}"),
         status: OrderFreezeRequestStatus::Unfrozen,
         target_session_id: session
@@ -621,6 +683,9 @@ async fn prepare_direct_freeze_queue_write(
     let target_apparatus = target_session
         .map(|session| session.apparatus.trim().to_string())
         .or_else(|| target_preflight.map(|hold| hold.apparatus.trim().to_string()))
+        .or_else(|| if record.stage_node_id.is_empty() { None } else {
+            record.freeze_request.as_ref().map(|r| r.target_apparatus.clone())
+        })
         .or_else(|| {
             all_states.iter().find_map(|(apparatus, states)| {
                 (states
@@ -665,6 +730,7 @@ async fn prepare_direct_freeze_queue_write(
             | queue_state::ApparatusQueueOrderState::Frozen
             | queue_state::ApparatusQueueOrderState::PrintPreflight
     ) && !requeued_paused_session
+        && !(from_state == queue_state::ApparatusQueueOrderState::Pending && !record.stage_node_id.is_empty())
     {
         return Ok(None);
     }
@@ -689,8 +755,11 @@ async fn prepare_direct_freeze_queue_write(
         &visible_order_ids,
         &excluded_order_ids,
     );
-    let sequence_updates =
+    let mut sequence_updates =
         sequence_updates_for_frozen_transition(&maps, &sequences, &excluded_order_ids, None);
+    if !record.stage_node_id.is_empty() {
+        sequence_updates.retain(|apparatus, _| queue_state::apparatus_ids_match(apparatus, &target_apparatus));
+    }
     let policy = effective_apparatus_queue_policy(canonical.as_ref());
     let actor = record.actor.clone();
     let mut event = queue_action_event(QueueActionEventInput {
@@ -699,7 +768,8 @@ async fn prepare_direct_freeze_queue_write(
         order_id: &record.order_id,
         stage_node_id: target_session
             .map(|session| session.stage_node_id.trim())
-            .unwrap_or_default(),
+            .or_else(|| target_preflight.map(|hold| hold.stage_node_id.trim()))
+            .unwrap_or(&record.stage_node_id),
         action: queue_state::ApparatusQueueAction::Freeze,
         from_state,
         to_state: queue_state::ApparatusQueueOrderState::Frozen,
@@ -761,6 +831,46 @@ async fn prepare_direct_freeze_queue_write(
 async fn restore_frozen_queue_after_unfreeze(
     service: &ProductionMapService,
     record: &OrderControlRecord,
+) -> Result<(), ProductionMapError> {
+    if !record.stage_node_id.is_empty() {
+        return restore_one_frozen_queue(service, record, true).await;
+    }
+    let locals = service.store.stage_order_control_states().await?;
+    let sessions = service.store.order_run_sessions_for_order(&record.order_id).await?;
+    let states = service.store.apparatus_queue_states().await?;
+    let mut targets = BTreeMap::<String, Option<&OrderRunSession>>::new();
+    for session in &sessions {
+        if session.status == OrderRunStatus::Frozen
+            && !locals.iter().any(|c| c.order_id == record.order_id
+                && c.stage_node_id == session.stage_node_id && c.state != OrderControlState::Active
+                && c.freeze_request.as_ref().is_some_and(|r| r.target_apparatus == session.apparatus)) {
+            targets.insert(session.apparatus.clone(), Some(session));
+        }
+    }
+    for (apparatus, entries) in states {
+        if entries.get(&record.order_id).is_some_and(|s| s == "frozen")
+            && !locals.iter().any(|c| c.order_id == record.order_id && c.state != OrderControlState::Active
+                && c.freeze_request.as_ref().is_some_and(|r| r.target_apparatus == apparatus)) {
+            targets.entry(apparatus).or_insert(None);
+        }
+    }
+    // Keep the global overlay until every physical queue has been restored.
+    // Retrying after a partial failure simply restores the remaining targets.
+    for (apparatus, session) in targets {
+        let mut target = record.clone();
+        let request = target.freeze_request.as_mut().ok_or(ProductionMapError::OrderFreezeRequestMismatch)?;
+        request.target_apparatus = apparatus;
+        request.target_session_id = session.map(|s| s.session_id.clone()).unwrap_or_default();
+        restore_one_frozen_queue(service, &target, false).await?;
+    }
+    service.store.put_order_control_state(record.clone()).await?;
+    Ok(())
+}
+
+async fn restore_one_frozen_queue(
+    service: &ProductionMapService,
+    record: &OrderControlRecord,
+    persist_control: bool,
 ) -> Result<(), ProductionMapError> {
     let all_states = service.store.apparatus_queue_states().await?;
     let sequences = service.store.apparatus_sequences().await?;
@@ -840,12 +950,12 @@ async fn restore_frozen_queue_after_unfreeze(
         &visible_order_ids,
         &frozen_order_ids,
     );
-    let sequence_updates = sequence_updates_for_frozen_transition(
-        &maps,
-        &sequences,
-        &frozen_order_ids,
-        Some(&record.order_id),
+    let mut sequence_updates = sequence_updates_for_frozen_transition(
+        &maps, &sequences, &frozen_order_ids, Some(&record.order_id),
     );
+    if !record.stage_node_id.is_empty() {
+        sequence_updates.retain(|apparatus, _| queue_state::apparatus_ids_match(apparatus, &target_apparatus));
+    }
     let policy = effective_apparatus_queue_policy(canonical.as_ref());
     let actor = record.actor.clone();
     let mut event = queue_action_event(QueueActionEventInput {
@@ -854,7 +964,7 @@ async fn restore_frozen_queue_after_unfreeze(
         order_id: &record.order_id,
         stage_node_id: requested_session
             .map(|session| session.stage_node_id.trim())
-            .unwrap_or_default(),
+            .unwrap_or(&record.stage_node_id),
         action: queue_state::ApparatusQueueAction::Pause,
         from_state,
         to_state: restored_state,
@@ -903,7 +1013,7 @@ async fn restore_frozen_queue_after_unfreeze(
         raw_material_stock_transitions: Vec::new(),
         qolip_checkouts: Vec::new(),
         returned_paint_report: None,
-        order_control_update: Some(record.clone()),
+        order_control_update: persist_control.then(|| record.clone()),
         schedule_reservation_status: Some(ApparatusScheduleStatus::Paused),
         print_preflight_hold_id: None,
         print_preflight_cancel_hold_id: None,

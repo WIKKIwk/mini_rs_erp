@@ -284,6 +284,7 @@ async fn rezka_output_report_rejects_paused_frozen_missing_and_changed_cycles_as
         ProductionMapStorePort::put_order_control_state(
             store.inner.as_ref(),
             OrderControlRecord {
+                stage_node_id: String::new(),
                 order_id: ORDER.into(),
                 state: status,
                 actor: QueueActionActor::default(),

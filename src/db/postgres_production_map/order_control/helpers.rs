@@ -38,6 +38,7 @@ struct OrderControlRow {
 #[derive(sqlx::FromRow)]
 struct OrderFreezeAuditRow {
     order_id: String,
+    stage_node_id: String,
     request_id: String,
     status: String,
     requester_role: String,
@@ -59,6 +60,147 @@ pub(super) async fn load_order_control_states(
     pool: &PgPool,
 ) -> Result<BTreeMap<String, OrderControlRecord>, ProductionMapError> {
     load_order_control_states_scoped(pool, None).await
+}
+
+pub(super) async fn load_stage_controls(pool: &PgPool) -> Result<Vec<OrderControlRecord>, ProductionMapError> {
+    let rows = sqlx::query_scalar::<_, serde_json::Value>(
+        "SELECT record_json FROM mini_stage_order_controls ORDER BY order_id, canonical_apparatus_id, stage_node_id",
+    ).fetch_all(pool).await.map_err(|_| ProductionMapError::StoreFailed)?;
+    rows.into_iter().map(|row| serde_json::from_value(row)
+        .map_err(|_| ProductionMapError::StoreFailed)).collect()
+}
+
+/// Recheck stops under the same order lock as WIP ownership and output writes.
+/// A request prepared before a stop must not commit production afterwards.
+pub(super) async fn validate_execution_controls_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    write: &crate::core::production_map::QueueActionProgressWrite,
+) -> Result<(), ProductionMapError> {
+    let event = &write.event;
+    let release = event.payload_json.get("admin_unfreeze").and_then(serde_json::Value::as_bool) == Some(true)
+        && write.progress_batch.is_none() && write.progress_batches.is_empty();
+    if release { return Ok(()); }
+    let global = sqlx::query_scalar::<_, String>(
+        "SELECT state FROM mini_order_control_states WHERE order_id=$1 FOR UPDATE",
+    ).bind(&event.order_id).fetch_optional(&mut **tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
+    let stopping = event.action == crate::core::production_map::queue_state::ApparatusQueueAction::Freeze;
+    match global.as_deref() {
+        Some("frozen") => return Err(ProductionMapError::OrderFrozen),
+        Some("freeze_requested") if !stopping => return Err(ProductionMapError::OrderFreezeRequested),
+        _ => {}
+    }
+    let local = sqlx::query_scalar::<_, String>(
+        "SELECT record_json->>'state' FROM mini_stage_order_controls WHERE order_id=$1 AND canonical_apparatus_id=$2 AND ($3='' OR stage_node_id=$3) AND record_json->>'state'<>'active' FOR UPDATE",
+    ).bind(&event.order_id).bind(&event.apparatus).bind(&event.stage_node_id)
+        .fetch_all(&mut **tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
+    if local.iter().any(|s| s == "frozen") { return Err(ProductionMapError::OrderFrozen); }
+    if !stopping && local.iter().any(|s| s == "freeze_requested") {
+        return Err(ProductionMapError::OrderFreezeRequested);
+    }
+    Ok(())
+}
+
+pub(super) async fn finalize_global_stop_tx(
+    tx: &mut Transaction<'_, Postgres>, order_id: &str,
+) -> Result<(), ProductionMapError> {
+    // A global stop may acknowledge an already-pending local stop as well.
+    // Settle that local request independently before releasing the overlay.
+    let stopped = sqlx::query_scalar::<_, serde_json::Value>(
+        "UPDATE mini_stage_order_controls c SET record_json=
+           jsonb_set(jsonb_set(jsonb_set(jsonb_set(c.record_json,'{state}','\"frozen\"'),
+             '{frozen_at_unix}',to_jsonb(EXTRACT(EPOCH FROM now())::bigint)),
+             '{freeze_request,status}','\"frozen\"'),
+             '{freeze_request,transitioned_at_unix}',to_jsonb(EXTRACT(EPOCH FROM now())::bigint)),updated_at=now()
+         WHERE c.order_id=$1 AND c.record_json->>'state'='freeze_requested'
+           AND (EXISTS(SELECT 1 FROM mini_order_run_sessions s WHERE s.session_id=c.record_json#>>'{freeze_request,target_session_id}' AND s.order_id=c.order_id AND s.canonical_apparatus_id=c.canonical_apparatus_id AND s.status='frozen')
+             OR (COALESCE(c.record_json#>>'{freeze_request,target_session_id}','')=''
+               AND EXISTS(SELECT 1 FROM mini_queue_states q WHERE q.order_id=c.order_id AND q.canonical_apparatus_id=c.canonical_apparatus_id AND q.state='frozen')
+               AND NOT EXISTS(SELECT 1 FROM mini_print_preflight_holds h WHERE h.order_id=c.order_id AND h.canonical_apparatus_id=c.canonical_apparatus_id AND h.stage_node_id=c.stage_node_id AND h.status IN ('held','running'))))
+         RETURNING c.record_json",
+    ).bind(order_id).fetch_all(&mut **tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
+    for value in stopped {
+        let record: OrderControlRecord = serde_json::from_value(value).map_err(|_| ProductionMapError::StoreFailed)?;
+        let request = record.freeze_request.as_ref().ok_or(ProductionMapError::StoreFailed)?;
+        save_freeze_request_tx(tx, &record, request).await?;
+    }
+    let request = sqlx::query_as::<_, (String, Option<serde_json::Value>)>(
+        "UPDATE mini_order_control_states c SET early_close=CASE WHEN early_close IS NULL THEN NULL ELSE jsonb_set(early_close,'{closed_at_unix}',to_jsonb(EXTRACT(EPOCH FROM now())::bigint)) END, state='frozen', frozen_at_unix=EXTRACT(EPOCH FROM now())::bigint, updated_at=now()
+         WHERE c.order_id=$1 AND c.state='freeze_requested'
+           AND EXISTS(SELECT 1 FROM mini_order_freeze_requests r WHERE r.request_id=c.freeze_request_id AND r.stage_node_id='' AND COALESCE(r.canonical_target_apparatus_id,'')='')
+           AND NOT EXISTS(SELECT 1 FROM mini_order_run_sessions WHERE order_id=$1 AND status='active')
+           AND NOT EXISTS(SELECT 1 FROM mini_queue_states WHERE order_id=$1 AND state IN ('in_progress','print_preflight'))
+           AND NOT EXISTS(SELECT 1 FROM mini_print_preflight_holds WHERE order_id=$1 AND status IN ('held','running'))
+         RETURNING c.freeze_request_id,c.early_close",
+    ).bind(order_id).fetch_optional(&mut **tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
+    if let Some((request, close)) = request {
+        sqlx::query("UPDATE mini_order_freeze_requests SET status='frozen', transitioned_at_unix=EXTRACT(EPOCH FROM now())::bigint,updated_at=now() WHERE request_id=$1")
+            .bind(request).execute(&mut **tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
+        if let Some(close) = close {
+            let mut record = OrderControlRecord::active(order_id);
+            record.early_close = Some(serde_json::from_value(close).map_err(|_| ProductionMapError::StoreFailed)?);
+            apply_early_close_tx(tx, &record).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn save_stage_control_tx(
+    tx: &mut Transaction<'_, Postgres>, record: &OrderControlRecord,
+) -> Result<(), ProductionMapError> {
+    let request = record.freeze_request.as_ref().ok_or(ProductionMapError::OrderControlActionNotAllowed)?;
+    let apparatus = ApparatusId::new(request.target_apparatus.trim().to_owned())
+        .map_err(|_| ProductionMapError::OrderControlActionNotAllowed)?;
+    if record.early_close.is_some() || record.stage_node_id.trim().is_empty() {
+        return Err(ProductionMapError::OrderControlActionNotAllowed);
+    }
+    // The service read can race another process freezing or closing the order.
+    // Keep scope decisions under the same order lock as the actual write.
+    let global = sqlx::query_as::<_, (String, Option<serde_json::Value>)>(
+        "SELECT state,early_close FROM mini_order_control_states WHERE order_id=$1 FOR UPDATE",
+    ).bind(&record.order_id).fetch_optional(&mut **tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
+    if global.as_ref().is_some_and(|(state, close)| state != "active" || close.is_some()) {
+        return Err(ProductionMapError::OrderControlActionNotAllowed);
+    }
+    let lifecycle = sqlx::query_scalar::<_, String>(
+        "SELECT lifecycle_status FROM mini_production_maps WHERE id=$1 FOR UPDATE",
+    ).bind(&record.order_id).fetch_optional(&mut **tx).await
+        .map_err(|_| ProductionMapError::StoreFailed)?.ok_or(ProductionMapError::MapNotFound)?;
+    if matches!(lifecycle.as_str(), "production_completed" | "closed" | "cancelled") {
+        return Err(ProductionMapError::OrderAlreadyCompleted);
+    }
+    if record.state == OrderControlState::Frozen {
+        let running = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM mini_order_run_sessions WHERE order_id=$1 AND canonical_apparatus_id=$2 AND stage_node_id=$3 AND status='active')
+                OR EXISTS(SELECT 1 FROM mini_print_preflight_holds WHERE order_id=$1 AND canonical_apparatus_id=$2 AND stage_node_id=$3 AND status IN ('held','running'))",
+        ).bind(&record.order_id).bind(apparatus.as_str()).bind(&record.stage_node_id)
+            .fetch_one(&mut **tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
+        if running { return Err(ProductionMapError::OrderControlActionNotAllowed); }
+    }
+    let map = sqlx::query_scalar::<_, serde_json::Value>(
+        "SELECT map_json FROM mini_production_maps WHERE id=$1 FOR UPDATE",
+    ).bind(&record.order_id).fetch_optional(&mut **tx).await
+        .map_err(|_| ProductionMapError::StoreFailed)?.ok_or(ProductionMapError::MapNotFound)?;
+    let map: crate::core::production_map::ProductionMapDefinition = serde_json::from_value(map)
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    if !map.nodes.iter().any(|n| n.id.trim() == record.stage_node_id.trim()
+        && n.apparatus_id.trim() == apparatus.as_str()) {
+        return Err(ProductionMapError::OrderControlActionNotAllowed);
+    }
+    let current = sqlx::query_scalar::<_, serde_json::Value>(
+        "SELECT record_json FROM mini_stage_order_controls WHERE order_id=$1 AND canonical_apparatus_id=$2 AND stage_node_id=$3 FOR UPDATE",
+    ).bind(&record.order_id).bind(apparatus.as_str()).bind(&record.stage_node_id)
+        .fetch_optional(&mut **tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
+    let current = current.map(serde_json::from_value::<OrderControlRecord>).transpose()
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    let previous = current.as_ref().map(|r| (r.state.as_str().to_owned(),
+        r.freeze_request.as_ref().map(|r| r.request_id.clone())));
+    validate_freeze_transition(previous.as_ref(), record.state, request)?;
+    save_freeze_request_tx(tx, record, request).await?;
+    sqlx::query("INSERT INTO mini_stage_order_controls(order_id,canonical_apparatus_id,stage_node_id,record_json) VALUES($1,$2,$3,$4) ON CONFLICT(order_id,canonical_apparatus_id,stage_node_id) DO UPDATE SET record_json=excluded.record_json,updated_at=now()")
+        .bind(&record.order_id).bind(apparatus.as_str()).bind(&record.stage_node_id)
+        .bind(serde_json::to_value(record).map_err(|_| ProductionMapError::StoreFailed)?)
+        .execute(&mut **tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
+    Ok(())
 }
 
 pub(super) async fn load_order_control_by_id(
@@ -109,6 +251,8 @@ async fn load_order_control_states_scoped(
                 OrderControlState::parse(&row.state).ok_or(ProductionMapError::StoreFailed)?;
             let freeze_request = match (row.request_id, row.request_status) {
                 (Some(request_id), Some(status)) => Some(OrderFreezeRequest {
+                    scope: "order".to_string(),
+                    stage_node_id: String::new(),
                     request_id,
                     status: OrderFreezeRequestStatus::parse(&status)
                         .ok_or(ProductionMapError::StoreFailed)?,
@@ -130,6 +274,7 @@ async fn load_order_control_states_scoped(
                 row.order_id.clone(),
                 OrderControlRecord {
                     order_id: row.order_id,
+                    stage_node_id: String::new(),
                     state,
                     actor: QueueActionActor {
                         role: row.actor_role,
@@ -153,6 +298,7 @@ pub(super) async fn load_order_freeze_requests_for_audit(
     let rows = sqlx::query_as::<_, OrderFreezeAuditRow>(
         r#"SELECT
              request.order_id,
+             request.stage_node_id,
              request.request_id,
              request.status,
              request.requester_role,
@@ -205,6 +351,8 @@ pub(super) async fn load_order_freeze_requests_for_audit(
                     display_name: row.requester_display_name,
                 },
                 request: OrderFreezeRequest {
+                    scope: if row.stage_node_id.is_empty() { "order".into() } else { "stage".into() },
+                    stage_node_id: row.stage_node_id,
                     request_id: row.request_id,
                     status,
                     target_session_id: row.target_session_id,
@@ -233,6 +381,14 @@ pub(super) async fn save_order_control_state(
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
     save_order_control_state_tx(&mut tx, record).await?;
+    super::lifecycle::refresh_production_order_lifecycle_tx(
+        &mut tx,
+        &record.order_id,
+        &record.actor,
+        "",
+        "order_control_changed",
+    )
+    .await?;
     tx.commit()
         .await
         .map_err(|_| ProductionMapError::StoreFailed)
@@ -243,6 +399,19 @@ pub(super) async fn save_order_control_state_tx(
     record: &OrderControlRecord,
 ) -> Result<(), ProductionMapError> {
     lock_order_tx(tx, &record.order_id).await?;
+    if !record.stage_node_id.is_empty() {
+        return save_stage_control_tx(tx, record).await;
+    }
+    if record.state == OrderControlState::Frozen {
+        // Immediate stops and safe-stop finalization share this writer. Safe
+        // stops have already frozen their session and queue in this transaction.
+        let running = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM mini_order_run_sessions WHERE order_id=$1 AND status='active')
+                OR EXISTS(SELECT 1 FROM mini_queue_states WHERE order_id=$1 AND state IN ('in_progress','print_preflight'))
+                OR EXISTS(SELECT 1 FROM mini_print_preflight_holds WHERE order_id=$1 AND status IN ('held','running'))",
+        ).bind(&record.order_id).fetch_one(&mut **tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
+        if running { return Err(ProductionMapError::OrderControlActionNotAllowed); }
+    }
     if record.early_close.is_some() {
         let lifecycle = sqlx::query_scalar::<_, String>(
             "SELECT lifecycle_status FROM mini_production_maps WHERE id = $1 FOR UPDATE")
@@ -323,6 +492,11 @@ pub(super) async fn save_order_control_state_tx(
     .execute(&mut **tx)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
+    apply_early_close_tx(tx, record).await?;
+    Ok(())
+}
+
+async fn apply_early_close_tx(tx: &mut Transaction<'_ , Postgres>, record: &OrderControlRecord) -> Result<(), ProductionMapError> {
     if let Some(close) = &record.early_close {
         if let Some(closed_at) = close.closed_at_unix {
             // Cancel only the remaining work, never manufacture completion/output.
@@ -443,10 +617,10 @@ async fn save_freeze_request_tx(
               target_session_id, target_apparatus, canonical_target_apparatus_id,
               target_worker_role,
               target_worker_ref, target_worker_display_name,
-              requested_at_unix, transitioned_at_unix, updated_at)
+              requested_at_unix, transitioned_at_unix, stage_node_id, updated_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7,
                    COALESCE((SELECT name FROM mini_apparatus WHERE id = $8), $8),
-                   NULLIF($8, ''), $9, $10, $11, $12, $13, now())
+                   NULLIF($8, ''), $9, $10, $11, $12, $13, $14, now())
            ON CONFLICT (request_id) DO UPDATE SET
               status = excluded.status,
               transitioned_at_unix = excluded.transitioned_at_unix,
@@ -470,6 +644,7 @@ async fn save_freeze_request_tx(
     .bind(request.target_worker_display_name.trim())
     .bind(request.requested_at_unix)
     .bind(request.transitioned_at_unix)
+    .bind(&control.stage_node_id)
     .execute(&mut **tx)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
@@ -515,6 +690,8 @@ mod tests {
 
     fn request(status: OrderFreezeRequestStatus) -> OrderFreezeRequest {
         OrderFreezeRequest {
+            scope: "order".into(),
+            stage_node_id: String::new(),
             request_id: "freeze-1".to_string(),
             status,
             target_session_id: "session-1".to_string(),

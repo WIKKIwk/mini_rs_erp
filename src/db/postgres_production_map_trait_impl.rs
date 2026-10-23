@@ -117,6 +117,10 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         opening_wip_helpers::load_opening_wip_records_for_orders(&self.pool, order_ids).await
     }
 
+    async fn stage_order_control_states(&self) -> Result<Vec<OrderControlRecord>, ProductionMapError> {
+        order_control_helpers::load_stage_controls(&self.pool).await
+    }
+
     async fn order_control_by_id(&self, order_id: &str) -> Result<Option<OrderControlRecord>, ProductionMapError> {
         #[cfg(test)]
         if self.legacy_queue_reads { return Ok(self.order_control_states().await?.remove(order_id.trim())); }

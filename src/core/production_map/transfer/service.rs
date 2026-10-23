@@ -62,6 +62,15 @@ impl ProductionMapService {
                 OrderControlState::Frozen => return Err(ProductionMapError::OrderFrozen),
             }
         }
+        // A transfer rewrites the source route nodes. Keep a held occurrence
+        // bound to its current apparatus until the hold is explicitly released.
+        if let Some(local) = self.store.stage_order_control_states().await?.into_iter().find(|c|
+            c.order_id == order_id && c.state != OrderControlState::Active
+                && c.freeze_request.as_ref().is_some_and(|r| r.target_apparatus == from_id)) {
+            return Err(if local.state == OrderControlState::Frozen {
+                ProductionMapError::OrderFrozen
+            } else { ProductionMapError::OrderFreezeRequested });
+        }
         let from_apparatus_id =
             ApparatusId::new(from_id.clone()).map_err(|_| ProductionMapError::MoveNotAllowed)?;
         let to_apparatus_id =

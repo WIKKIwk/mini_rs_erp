@@ -156,6 +156,7 @@ async fn worker_scoped_snapshot_invalidates_on_commit_and_supports_multiple_assi
     ProductionMapStorePort::put_order_control_state(
         store.as_ref(),
         OrderControlRecord {
+            stage_node_id: String::new(),
             order_id: "zakaz-own".into(),
             state: OrderControlState::Frozen,
             actor: QueueActionActor {

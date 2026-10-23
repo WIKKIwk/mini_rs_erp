@@ -293,13 +293,19 @@ impl ProductionMapService {
         qr_payload: &str,
     ) -> Result<OrderProgressBatch, ProductionMapError> {
         let map = self.raw_map(order_id).await?.ok_or(ProductionMapError::MapNotFound)?;
-        self.previous_stage_start_progress_batch(
+        let batch = self.previous_stage_start_progress_batch(
             order_id.trim(), &map, apparatus.trim(), &QueueProgressInput {
                 progress_batch_id: batch_id.trim().to_string(),
                 qr_payload: qr_payload.trim().to_string(),
                 ..Default::default()
             },
-        ).await?.ok_or(ProductionMapError::ProgressBatchNotAccepted)
+        ).await?.ok_or(ProductionMapError::ProgressBatchNotAccepted)?;
+        let route = super::wip_route::resolve_wip_input_route(&map, &batch)?;
+        match self.effective_order_control_for_stage(order_id, apparatus, &route.stage_node_id).await?.state {
+            OrderControlState::Active => Ok(batch),
+            OrderControlState::FreezeRequested => Err(ProductionMapError::OrderFreezeRequested),
+            OrderControlState::Frozen => Err(ProductionMapError::OrderFrozen),
+        }
     }
 
     /// Route metadata is a projection only; scans never repair stored batches.

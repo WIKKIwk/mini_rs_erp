@@ -1274,6 +1274,7 @@ pub(super) async fn apply_queue_progress_tx(
                 ..QueueActionProgressWriteResult::default()
             });
         }
+        order_control_helpers::validate_execution_controls_tx(tx, write).await?;
         if let Some(hold_id) = write.print_preflight_hold_id.as_deref() {
             consume_print_preflight_hold_tx(
                 tx,
@@ -1492,6 +1493,7 @@ pub(super) async fn apply_queue_progress_tx(
                 .await
                 .map_err(|_| ProductionMapError::StoreFailed)?;
         }
+        order_control_helpers::finalize_global_stop_tx(tx, &event.order_id).await?;
         if !lifecycle::refresh_recorded_rezka_output_tx(tx, write).await? {
             refresh_production_order_lifecycle_tx(
                 tx,

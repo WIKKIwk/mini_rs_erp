@@ -46,9 +46,12 @@ async fn postgres_early_close_is_atomic_durable_and_immutable() {
         .execute(&pool).await.unwrap();
     let actor = QueueActionActor { role: "admin".into(), ref_: "admin-1".into(), display_name: "Admin".into() };
     let mut record = OrderControlRecord {
+        stage_node_id: String::new(),
         order_id: "zakaz-close".into(), state: OrderControlState::FreezeRequested, actor: actor.clone(),
         requested_at_unix: 100, frozen_at_unix: None,
         freeze_request: Some(OrderFreezeRequest {
+            scope: "order".into(),
+            stage_node_id: String::new(),
             request_id: "freeze-close".into(), status: OrderFreezeRequestStatus::Pending,
             target_session_id: "session-1".into(), target_apparatus: "apparatus:test:one".into(),
             target_worker_role: "worker".into(), target_worker_ref: "worker-1".into(),

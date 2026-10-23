@@ -108,6 +108,7 @@ pub struct ProductionMapLiveSnapshot {
     pub queue_action_controls: BTreeMap<String, BTreeMap<String, ApparatusQueueOrderActionControl>>,
     pub order_statuses: BTreeMap<String, ProductionOrderStatusDetail>,
     pub order_controls: BTreeMap<String, OrderControlRecord>,
+    pub stage_order_controls: Vec<OrderControlRecord>,
     pub frozen_orders_by_apparatus: BTreeMap<String, Vec<FrozenOrderSnapshot>>,
 }
 
@@ -664,6 +665,7 @@ impl ProductionMapService {
             )?;
             (maps, sequences, states, controls, None)
         };
+        let stage_order_controls = self.store.stage_order_control_states().await?;
         let canonical_apparatuses = self.snapshot_canonical_apparatuses().await;
 
         let mut visible_order_ids = visible_order_ids_by_apparatus(&raw_maps);
@@ -779,16 +781,27 @@ impl ProductionMapService {
                 .cloned()
                 .collect::<Vec<_>>()
         });
-        let stage_states = stage_states_for_snapshot(
+        let mut stage_states = stage_states_for_snapshot(
             output_maps.as_deref().unwrap_or(&raw_maps),
             &queue_action_controls,
             &queue_logs_by_order,
             &queue_states,
         );
+        for stage in &stage_order_controls {
+            if stage.state == OrderControlState::Frozen {
+                stage_states.entry(stage.order_id.clone()).or_default()
+                    .insert(stage.stage_node_id.clone(), "frozen".to_string());
+            }
+        }
         for (apparatus, controls) in &queue_action_controls {
             let states = queue_states.entry(apparatus.clone()).or_default();
             for (order_id, control) in controls {
                 states.insert(order_id.clone(), control.state.as_str().to_string());
+                if control.state == queue_state::ApparatusQueueOrderState::Frozen {
+                    if let Some(sequence) = sequences.get_mut(apparatus) {
+                        sequence.retain(|id| id != order_id);
+                    }
+                }
             }
         }
         let order_statuses =
@@ -834,8 +847,19 @@ impl ProductionMapService {
                     })
             });
         }
-        let frozen_orders_by_apparatus =
+        let mut frozen_orders_by_apparatus =
             Self::frozen_orders_by_apparatus(&order_controls, &queue_logs_by_order);
+        for stage in &stage_order_controls {
+            if stage.state == OrderControlState::Frozen {
+                let records = BTreeMap::from([(stage.order_id.clone(), stage.clone())]);
+                for (apparatus, frozen) in Self::frozen_orders_by_apparatus(&records, &queue_logs_by_order) {
+                    let target = frozen_orders_by_apparatus.entry(apparatus).or_default();
+                    for record in frozen {
+                        if !target.iter().any(|c| c.order_id == record.order_id) { target.push(record); }
+                    }
+                }
+            }
+        }
         let maps = compile_saved_maps_reusing_programs(
             output_maps.unwrap_or(raw_maps),
             previous.map(|snapshot| snapshot.maps.as_slice()),
@@ -853,6 +877,7 @@ impl ProductionMapService {
             queue_action_controls,
             order_statuses,
             order_controls,
+            stage_order_controls,
             frozen_orders_by_apparatus,
         };
         if let Some((ids, apparatus_ids)) = output_scope {
@@ -862,6 +887,7 @@ impl ProductionMapService {
                 values.retain(|order_id, _| ids.contains(order_id));
             }
             snapshot.order_controls.retain(|id, _| ids.contains(id));
+            snapshot.stage_order_controls.retain(|c| ids.contains(&c.order_id));
             for values in snapshot.frozen_orders_by_apparatus.values_mut() {
                 values.retain(|order| ids.contains(&order.order_id));
             }
@@ -900,6 +926,7 @@ impl ProductionMapService {
                 .find(|log| {
                     log.action == queue_state::ApparatusQueueAction::Freeze
                         && log.to_state == queue_state::ApparatusQueueOrderState::Frozen
+                        && (control.stage_node_id.is_empty() || log.stage_node_id == control.stage_node_id)
                 });
             let apparatus = control
                 .freeze_request

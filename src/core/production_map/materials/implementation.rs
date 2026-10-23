@@ -257,12 +257,7 @@ impl ProductionMapService {
         if !intake_allowed {
             return Ok(false);
         }
-        Ok(!self
-            .store
-            .order_control_states()
-            .await?
-            .get(order_id.trim())
-            .is_some_and(|control| control.state != OrderControlState::Active))
+        Ok(self.effective_order_control_for_apparatus(order_id.trim(), apparatus_id.as_str()).await?.state == OrderControlState::Active)
     }
 
     pub async fn raw_material_matches_apparatus_rule(
@@ -430,12 +425,8 @@ impl ProductionMapService {
         if !intake_allowed {
             return Err(ProductionMapError::RawMaterialOrderNotActive);
         }
-        if let Some(control) = self
-            .store
-            .order_control_states()
-            .await?
-            .get(&assignment.order_id)
         {
+            let control = self.effective_order_control_for_apparatus(&assignment.order_id, assignment.apparatus_id.as_str()).await?;
             match control.state {
                 OrderControlState::Active => {}
                 OrderControlState::FreezeRequested => {

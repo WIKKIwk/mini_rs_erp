@@ -333,6 +333,23 @@ pub trait ProductionMapStorePort: Send + Sync {
     async fn order_control_by_id(&self, order_id: &str) -> StoreResult<Option<OrderControlRecord>> {
         Ok(self.order_control_states().await?.remove(order_id.trim()))
     }
+    /// Stage holds are independent from the whole-order control overlay.
+    async fn stage_order_control_states(&self) -> StoreResult<Vec<OrderControlRecord>> {
+        Ok(Vec::new())
+    }
+    async fn stage_order_control_by_id(
+        &self, order_id: &str, apparatus: &str, stage_node_id: &str,
+    ) -> StoreResult<Option<OrderControlRecord>> {
+        let mut matches = self.stage_order_control_states().await?.into_iter().filter(|record| {
+            record.order_id.trim() == order_id.trim()
+                && record.stage_node_id.trim() == stage_node_id.trim()
+                && record.freeze_request.as_ref().is_some_and(|request|
+                    super::queue_state::apparatus_ids_match(&request.target_apparatus, apparatus))
+        });
+        let record = matches.next();
+        if matches.next().is_some() { return Err(ProductionMapError::OrderFreezeTargetAmbiguous); }
+        Ok(record)
+    }
     async fn order_freeze_requests_for_audit(&self) -> StoreResult<Vec<OrderFreezeAuditRecord>> {
         Ok(Vec::new())
     }

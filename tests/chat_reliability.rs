@@ -436,6 +436,7 @@ async fn freeze_cards_are_persisted(pool: &sqlx::PgPool) {
         .await
         .expect("freeze conversation");
     let event = OrderFreezeChatEvent {
+        stage_node_id: String::new(),
         event_sequence: 1,
         event_id: "freeze-test-event-1".into(),
         request_id: "freeze-test-request".into(),

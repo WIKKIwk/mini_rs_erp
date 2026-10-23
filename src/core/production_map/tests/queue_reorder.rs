@@ -221,6 +221,7 @@ async fn reorder_frozen_control_does_not_block_other_orders_or_reenter_persisted
     let (service, store) = fixture(PRINT).await;
     store
         .put_order_control_state(OrderControlRecord {
+            stage_node_id: String::new(),
             order_id: "c".into(),
             state: OrderControlState::Frozen,
             actor: actor(),

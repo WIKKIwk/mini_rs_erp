@@ -99,6 +99,11 @@ impl ProductionMapService {
             return Err(ProductionMapError::PrintPreflightNotReady);
         }
 
+        match self.effective_order_control_for_apparatus(order_id, apparatus).await?.state {
+            OrderControlState::Active => {},
+            OrderControlState::FreezeRequested => return Err(ProductionMapError::OrderFreezeRequested),
+            OrderControlState::Frozen => return Err(ProductionMapError::OrderFrozen),
+        }
         if let Some(existing) = self
             .store
             .print_preflight_hold_by_idempotency_key(idempotency_key)
@@ -270,8 +275,10 @@ impl ProductionMapService {
         if !hold.is_live_at(now) {
             return Err(ProductionMapError::PrintPreflightNotReady);
         }
-        if self.order_control_state(order_id).await?.state == OrderControlState::FreezeRequested {
-            return Err(ProductionMapError::OrderFreezeRequested);
+        match self.effective_order_control_for_apparatus(order_id, apparatus).await?.state {
+            OrderControlState::Active => {},
+            OrderControlState::FreezeRequested => return Err(ProductionMapError::OrderFreezeRequested),
+            OrderControlState::Frozen => return Err(ProductionMapError::OrderFrozen),
         }
         let next_status = match (action.as_str(), hold.status) {
             ("start", PrintPreflightStatus::Held) => PrintPreflightStatus::Running,

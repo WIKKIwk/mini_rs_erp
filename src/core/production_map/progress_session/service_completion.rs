@@ -29,7 +29,7 @@ impl ProductionMapService {
         if !queue_state::apparatus_matches_assigned(apparatus, assigned_apparatus) {
             return Err(ProductionMapError::ApparatusNotAssigned);
         }
-        match self.order_control_state(order_id).await?.state {
+        match self.effective_order_control_for_apparatus(order_id, apparatus).await?.state {
             OrderControlState::Active => {}
             OrderControlState::FreezeRequested => {
                 return Err(ProductionMapError::OrderFreezeRequested);
@@ -157,7 +157,7 @@ impl ProductionMapService {
             .ok_or(ProductionMapError::QueueActionNotAllowed)?;
         let _guard = self.apparatus_action_guard(&request.apparatus).await;
         if decision == CompletionRequestDecision::Approved {
-            match self.order_control_state(&request.order_id).await?.state {
+            match self.effective_order_control_for_apparatus(&request.order_id, &request.apparatus).await?.state {
                 OrderControlState::Active => {}
                 OrderControlState::FreezeRequested => {
                     return Err(ProductionMapError::OrderFreezeRequested);

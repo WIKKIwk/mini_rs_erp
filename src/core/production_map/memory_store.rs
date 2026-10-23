@@ -71,6 +71,25 @@ impl MemoryProductionMapStore {
         &self,
         record: OrderControlRecord,
     ) -> Result<(), ProductionMapError> {
+        let control_order_id = record.order_id.clone();
+        if !record.stage_node_id.trim().is_empty() {
+            let apparatus = record.freeze_request.as_ref().map(|r| r.target_apparatus.trim())
+                .filter(|id| !id.is_empty()).ok_or(ProductionMapError::OrderFreezeTargetNotFound)?;
+            if record.early_close.is_some() { return Err(ProductionMapError::OrderControlActionNotAllowed); }
+            self.stage_order_controls.write().await.insert(
+                (record.order_id.clone(), apparatus.to_string(), record.stage_node_id.clone()), record.clone());
+            if let Some(request) = &record.freeze_request {
+                let occurred_at_unix = if request.status == OrderFreezeRequestStatus::Pending {
+                    request.requested_at_unix
+                } else { request.transitioned_at_unix };
+                self.order_freeze_requests.write().await.insert(
+                    format!("{}:{}", request.request_id, request.status.as_str()),
+                    OrderFreezeAuditRecord { order_id: record.order_id.clone(), request: request.clone(),
+                        actor: record.actor.clone(), occurred_at_unix });
+            }
+            queue::refresh_production_order_lifecycles(self, &[control_order_id]).await?;
+            return Ok(());
+        }
         if let Some(previous) = self.order_controls.read().await.get(record.order_id.trim()) {
             if let Some(close) = &previous.early_close {
                 let Some(next) = &record.early_close else {
@@ -125,6 +144,7 @@ impl MemoryProductionMapStore {
                 );
             }
         }
+        queue::refresh_production_order_lifecycles(self, &[control_order_id]).await?;
         Ok(())
     }
 
@@ -881,6 +901,8 @@ impl MemoryProductionMapStore {
         for (apparatus, order_ids) in sequence_updates {
             self.put_apparatus_sequence(&apparatus, order_ids).await?;
         }
+        let frozen_event_stage = (write.event.to_state == queue_state::ApparatusQueueOrderState::Frozen)
+            .then(|| write.event.stage_node_id.clone());
         self.put_apparatus_queue_states_with_event(&write.apparatus, write.states, write.event)
             .await?;
         if !write.opening_wip_batch_updates.is_empty() {
@@ -915,6 +937,21 @@ impl MemoryProductionMapStore {
             }
         }
         if let Some(record) = write.order_control_update {
+            if record.stage_node_id.is_empty() && frozen_event_stage.is_some() {
+                let now = super::progress::unix_seconds();
+                for local in self.stage_order_controls.write().await.values_mut() {
+                    if local.order_id == record.order_id && Some(&local.stage_node_id) == frozen_event_stage.as_ref()
+                        && local.state == OrderControlState::FreezeRequested
+                        && local.freeze_request.as_ref().is_some_and(|r| r.target_apparatus == write.apparatus) {
+                        local.state = OrderControlState::Frozen;
+                        local.frozen_at_unix = Some(now);
+                        if let Some(request) = local.freeze_request.as_mut() {
+                            request.status = OrderFreezeRequestStatus::Frozen;
+                            request.transitioned_at_unix = now;
+                        }
+                    }
+                }
+            }
             self.put_order_control_state(record).await?;
         }
         if let Some(status) = schedule_reservation_status {

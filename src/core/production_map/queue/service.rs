@@ -596,6 +596,7 @@ impl ProductionMapService {
         BTreeMap<String, BTreeMap<String, ApparatusQueueOrderActionControl>>,
         ProductionMapError,
     > {
+        let stage_controls = self.store.stage_order_control_states().await?;
         let scoped_order_ids = only_apparatus.map(|apparatus| {
             queue_order_ids_by_apparatus(maps)
                 .remove(apparatus)
@@ -955,7 +956,13 @@ impl ProductionMapService {
                         .map(Vec::as_slice)
                         .unwrap_or_default(),
                 );
-                let order_control = order_controls.get(order_id.trim());
+                let stage_control = stage_controls.iter().find(|c| c.order_id == order_id.trim()
+                    && c.stage_node_id == stage_node_id
+                    && c.freeze_request.as_ref().is_some_and(|r| r.target_apparatus == storage_key));
+                let order_control = order_controls.get(order_id.trim())
+                    .filter(|c| c.state != OrderControlState::Active || c.early_close.is_some())
+                    .or(stage_control.filter(|c| c.state != OrderControlState::Active))
+                    .or_else(|| order_controls.get(order_id.trim()));
                 let control = order_control
                     .map(|control| control.state)
                     .unwrap_or(OrderControlState::Active);
@@ -1403,8 +1410,12 @@ impl ProductionMapService {
                         complete_requires_full_report,
                         closing_output_batch_id,
                         complete_requires_rezka_total_waste_only,
-                        freeze_request: order_control
-                            .and_then(|control| control.freeze_request.clone()),
+                        freeze_request: order_control.and_then(|control| control.freeze_request.clone().map(|mut request| {
+                            request.scope = if control.stage_node_id.is_empty() { "order" } else { "stage" }.to_string();
+                            request.stage_node_id = control.stage_node_id.clone();
+                            request
+                        })),
+                        stage_control_state: stage_control.map(|c| c.state.as_str().to_string()).unwrap_or_default(),
                         print_preflight_allowed: is_bosma
                             && state == queue_state::ApparatusQueueOrderState::Pending
                             && pending_actionable

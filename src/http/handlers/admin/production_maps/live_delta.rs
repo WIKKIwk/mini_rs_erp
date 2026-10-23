@@ -225,6 +225,9 @@ pub(super) fn snapshot_patch_for_protocol(
     field!(sequence_revisions);
     field!(order_statuses);
     field!(order_controls);
+    if old.stage_order_controls != new.stage_order_controls {
+        patch.insert("stage_order_controls".into(), serde_json::to_value(&new.stage_order_controls).expect("serializable controls"));
+    }
     field!(frozen_orders_by_apparatus);
     nested!(sequence_positions_by_apparatus);
     nested!(queue_states);
@@ -989,6 +992,7 @@ mod tests {
             queue_action_controls: BTreeMap::new(),
             order_statuses: BTreeMap::new(),
             order_controls: BTreeMap::new(),
+            stage_order_controls: vec![],
             frozen_orders_by_apparatus: BTreeMap::new(),
         };
         let full_bytes = serde_json::to_vec(&snapshot).unwrap().len();

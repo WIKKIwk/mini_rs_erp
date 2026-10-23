@@ -62,6 +62,17 @@ impl ProductionMapLiveSnapshot {
         self.visible_order_ids.extend(ordered);
     }
 
+    pub(crate) fn worker_queue_order_hidden_at_apparatus(&self, apparatus: &str, id: &str, hide_issues: bool) -> bool {
+        let global = self.order_controls.get(id);
+        if global.is_some_and(|c| c.state == OrderControlState::Frozen) { return true; }
+        if self.order_statuses.get(id).is_some_and(|s| s.order_status == "frozen" || (hide_issues && s.order_status == "completed_with_issue")) { return true; }
+        let stage = self.queue_action_controls.get(apparatus).and_then(|c| c.get(id));
+        let state = stage.map(|c| c.state.as_str())
+            .or_else(|| self.queue_states.get(apparatus).and_then(|s| s.get(id)).map(String::as_str));
+        state == Some("frozen")
+    }
+
+    #[cfg(test)]
     pub(crate) fn worker_queue_order_hidden(&self, id: &str, hide_issues: bool) -> bool {
         // The operator must still be able to acknowledge a requested stop.
         let freeze_requested = self
@@ -146,6 +157,7 @@ mod tests {
             }],
             queue_action_controls: BTreeMap::new(),
             order_controls: BTreeMap::from([("stop".into(), stop)]),
+            stage_order_controls: Vec::new(),
             order_statuses: BTreeMap::from([
                 (
                     "issue".into(),

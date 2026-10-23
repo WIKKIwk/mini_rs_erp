@@ -364,6 +364,7 @@ fn queue_context(
         "queue_action_controls": { apparatus: snapshot.queue_action_controls.get(apparatus).map(|controls| controls.iter().filter(|(id, _)| selected.contains(*id)).collect::<std::collections::BTreeMap<_, _>>()).unwrap_or_default() },
         "stage_states": snapshot.stage_states.iter().filter(|(id, _)| selected.contains(*id)).collect::<std::collections::BTreeMap<_, _>>(),
         "order_controls": &snapshot.order_controls,
+                "stage_order_controls": &snapshot.stage_order_controls,
         "order_statuses": snapshot.order_statuses.iter().filter(|(id, _)| selected.contains(*id)).collect::<std::collections::BTreeMap<_, _>>(),
         "frozen_orders_by_apparatus": { apparatus: snapshot.frozen_orders_by_apparatus.get(apparatus).cloned().unwrap_or_default() },
         "order_customers": {},

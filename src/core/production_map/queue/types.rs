@@ -163,6 +163,8 @@ pub struct ApparatusQueueOrderActionControl {
     pub rezka_total_waste_only: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub freeze_request: Option<OrderFreezeRequest>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub stage_control_state: String,
     /// Colour matching does not require production materials or tooling.
     #[serde(default)]
     pub print_preflight_allowed: bool,

@@ -247,6 +247,10 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         MemoryProductionMapStore::order_control_states(self).await
     }
 
+    async fn stage_order_control_states(&self) -> Result<Vec<OrderControlRecord>, ProductionMapError> {
+        Ok(self.stage_order_controls.read().await.values().cloned().collect())
+    }
+
     async fn order_freeze_requests_for_audit(
         &self,
     ) -> Result<Vec<OrderFreezeAuditRecord>, ProductionMapError> {

@@ -682,6 +682,7 @@ fn project(snapshot: &ProductionMapLiveSnapshot, ids: &[String]) -> ProductionMa
         stage_states: keep(&snapshot.stage_states, &selected),
         order_statuses: keep(&snapshot.order_statuses, &selected),
         order_controls: keep(&snapshot.order_controls, &selected),
+        stage_order_controls: snapshot.stage_order_controls.iter().filter(|c| selected.contains(&c.order_id)).cloned().collect(),
         queue_policies: snapshot.queue_policies.clone(),
         frozen_orders_by_apparatus: snapshot
             .frozen_orders_by_apparatus

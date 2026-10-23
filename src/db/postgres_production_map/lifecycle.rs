@@ -358,14 +358,44 @@ pub(crate) async fn refresh_production_order_lifecycle_tx(
     let in_use_wip_usize = usize::try_from(in_use_wip_count).unwrap_or(0);
     let accepted_wip_usize = usize::try_from(accepted_wip_count).unwrap_or(0);
 
-    let next_operational_status = derive_production_order_operational_status(
-        next_status,
-        &queue_states,
-        order_id,
-        completed_with_issue_count_usize,
-        has_roll_detached,
-        waiting_next_stage_usize,
-    );
+    let global_control = sqlx::query_scalar::<_, String>(
+        "SELECT state FROM mini_order_control_states WHERE order_id=$1",
+    )
+    .bind(order_id)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    let local_frozen_apparatus = sqlx::query_scalar::<_, String>(
+        "SELECT canonical_apparatus_id FROM mini_stage_order_controls
+         WHERE order_id=$1 AND record_json->>'state'='frozen'",
+    )
+    .bind(order_id)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    // Local stops remain physical stage states. They cannot turn the whole
+    // order into a global stop or hide healthy work at another apparatus.
+    let mut operational_queue_states = queue_states.clone();
+    for (apparatus, states) in &mut operational_queue_states {
+        if states.get(order_id).is_some_and(|state| state == "frozen")
+            && (global_control.as_deref() == Some("freeze_requested")
+                || local_frozen_apparatus.contains(apparatus))
+        {
+            states.insert(order_id.to_string(), "paused".to_string());
+        }
+    }
+    let next_operational_status = if global_control.as_deref() == Some("frozen") {
+        ProductionOrderOperationalStatus::Frozen
+    } else {
+        derive_production_order_operational_status(
+            next_status,
+            &operational_queue_states,
+            order_id,
+            completed_with_issue_count_usize,
+            has_roll_detached,
+            waiting_next_stage_usize,
+        )
+    };
     let (next_flow_status, next_stock_status) =
         crate::core::production_map::derive_order_flow_and_stock_status(
             next_operational_status.as_str(),

@@ -70,6 +70,10 @@ impl OrderFreezeRequestStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OrderFreezeRequest {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub scope: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub stage_node_id: String,
     pub request_id: String,
     pub status: OrderFreezeRequestStatus,
     pub target_session_id: String,
@@ -92,6 +96,9 @@ pub struct OrderEarlyClose {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OrderControlRecord {
     pub order_id: String,
+    /// Empty for a whole-order hold; otherwise the exact route occurrence.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub stage_node_id: String,
     pub state: OrderControlState,
     pub actor: QueueActionActor,
     pub requested_at_unix: i64,
@@ -126,6 +133,7 @@ impl OrderControlRecord {
     pub fn active(order_id: &str) -> Self {
         Self {
             order_id: order_id.trim().to_string(),
+            stage_node_id: String::new(),
             state: OrderControlState::Active,
             actor: QueueActionActor {
                 role: String::new(),

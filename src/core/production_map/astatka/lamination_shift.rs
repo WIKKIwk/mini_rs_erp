@@ -237,7 +237,7 @@ impl ProductionMapService {
         {
             return Err(ProductionMapError::ProgressInputInvalid);
         }
-        let control = self.order_control_state(&order_id).await?;
+        let control = self.effective_order_control_for_stage(&order_id, &input.apparatus, &session.stage_node_id).await?;
         match control.state {
             OrderControlState::Active => {}
             OrderControlState::FreezeRequested => {

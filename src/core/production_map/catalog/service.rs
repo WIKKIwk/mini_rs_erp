@@ -334,6 +334,14 @@ impl ProductionMapService {
             return Ok(());
         };
         let order_id = previous.id.trim();
+        for control in self.store.stage_order_control_states().await? {
+            if control.order_id != order_id || control.state == OrderControlState::Active { continue; }
+            let apparatus = control.freeze_request.as_ref().map(|r| r.target_apparatus.as_str()).unwrap_or_default();
+            if !chain::linear_work_stages(next).iter().any(|stage|
+                stage.node_id == control.stage_node_id && stage.apparatus_id.as_deref() == Some(apparatus)) {
+                return Err(ProductionMapError::StartedProductionMapStageLocked);
+            }
+        }
         let mut started_apparatus = BTreeSet::<ApparatusId>::new();
 
         for (apparatus, states) in self.store.apparatus_queue_states().await? {

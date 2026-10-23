@@ -162,6 +162,7 @@ const CLAIM_ORDER_FREEZE_CHAT_EVENTS_SQL: &str = r#"WITH candidates AS (
      request.requester_role,
      request.requester_ref,
      request.requester_display_name,
+     request.stage_node_id,
      request.target_session_id,
      request.canonical_target_apparatus_id AS target_apparatus,
      request.target_worker_role,

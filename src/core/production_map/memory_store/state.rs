@@ -17,6 +17,7 @@ pub struct MemoryProductionMapStore {
     pub(super) apparatus_schedule_reservations:
         RwLock<BTreeMap<String, ApparatusScheduleReservation>>,
     pub(super) queue_states: RwLock<BTreeMap<String, BTreeMap<String, String>>>,
+    pub(super) stage_order_controls: RwLock<BTreeMap<(String, String, String), OrderControlRecord>>,
     pub(super) order_controls: RwLock<BTreeMap<String, OrderControlRecord>>,
     pub(super) order_freeze_requests: RwLock<BTreeMap<String, OrderFreezeAuditRecord>>,
     pub(super) queue_events: RwLock<Vec<ApparatusQueueActionEvent>>,
@@ -54,6 +55,7 @@ impl MemoryProductionMapStore {
             apparatus_downtimes: RwLock::new(BTreeMap::new()),
             apparatus_schedule_reservations: RwLock::new(BTreeMap::new()),
             queue_states: RwLock::new(BTreeMap::new()),
+            stage_order_controls: RwLock::new(BTreeMap::new()),
             order_controls: RwLock::new(BTreeMap::new()),
             order_freeze_requests: RwLock::new(BTreeMap::new()),
             queue_events: RwLock::new(Vec::new()),
