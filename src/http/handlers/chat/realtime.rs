@@ -94,12 +94,21 @@ pub async fn live(
         .consume_socket_ticket(&query.ticket)
         .await
         .map_err(|_| http_error(axum::http::StatusCode::UNAUTHORIZED, "chat_ticket_invalid"))?;
+    if !matches!(state.admin.principal_is_active(&principal).await, Ok(true)) {
+        return Err(http_error(
+            axum::http::StatusCode::UNAUTHORIZED,
+            "chat_ticket_invalid",
+        ));
+    }
     Ok(ws
         .on_upgrade(move |socket| chat_socket(state, socket, principal))
         .into_response())
 }
 
 async fn chat_socket(state: AppState, mut socket: WebSocket, principal: Principal) {
+    if !matches!(state.admin.principal_is_active(&principal).await, Ok(true)) {
+        return;
+    }
     let mut receiver = state.chat.hub().subscribe(&principal).await;
     if !send_json(&mut socket, serde_json::json!({"event": "chat.ready"})).await {
         return;
@@ -120,6 +129,9 @@ async fn chat_socket(state: AppState, mut socket: WebSocket, principal: Principa
                 }
             }
             event = receiver.recv() => {
+                if !matches!(state.admin.principal_is_active(&principal).await, Ok(true)) {
+                    break;
+                }
                 match event {
                     Ok(event) => {
                         let Ok(value) = serde_json::to_value(event) else { continue; };
@@ -135,7 +147,9 @@ async fn chat_socket(state: AppState, mut socket: WebSocket, principal: Principa
                 }
             }
             _ = heartbeat.tick() => {
-                if last_inbound.elapsed() > CHAT_HEARTBEAT_INTERVAL * 3 {
+                if last_inbound.elapsed() > CHAT_HEARTBEAT_INTERVAL * 3
+                    || !matches!(state.admin.principal_is_active(&principal).await, Ok(true))
+                {
                     break;
                 }
             }

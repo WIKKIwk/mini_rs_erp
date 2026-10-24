@@ -16,7 +16,7 @@ pub async fn warehouse_live(
     let principal = authenticated_principal_for_live(&state, &headers, &query.token).await?;
     require_capability(&state, &principal, Capability::CatalogItemRead).await?;
     Ok(ws
-        .on_upgrade(move |socket| warehouse_live_socket(state, socket))
+        .on_upgrade(move |socket| warehouse_live_socket(state, socket, principal))
         .into_response())
 }
 
@@ -34,8 +34,13 @@ async fn authenticated_principal_for_live(
     state.sessions.get(&token).await.map_err(|_| unauthorized())
 }
 
-async fn warehouse_live_socket(state: AppState, mut socket: WebSocket) {
+async fn warehouse_live_socket(
+    state: AppState,
+    mut socket: WebSocket,
+    principal: crate::core::auth::models::Principal,
+) {
     let mut rx = state.warehouse_events.subscribe();
+    let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(20));
     loop {
         tokio::select! {
             inbound = socket.recv() => {
@@ -45,6 +50,9 @@ async fn warehouse_live_socket(state: AppState, mut socket: WebSocket) {
                 }
             }
             received = rx.recv() => {
+                if require_capability(&state, &principal, Capability::CatalogItemRead).await.is_err() {
+                    break;
+                }
                 match received {
                     Ok(event) => match serde_json::to_string(&event) {
                         Ok(payload) => {
@@ -58,6 +66,11 @@ async fn warehouse_live_socket(state: AppState, mut socket: WebSocket) {
                     },
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+            _ = heartbeat.tick() => {
+                if require_capability(&state, &principal, Capability::CatalogItemRead).await.is_err() {
+                    break;
                 }
             }
         }

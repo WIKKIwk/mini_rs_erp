@@ -485,7 +485,7 @@ pub(super) async fn read_page(
     Ok(Some(payload))
 }
 
-pub(super) async fn page_calculation_templates(
+pub(crate) async fn page_calculation_templates(
     state: &AppState,
     maps: &[ProductionMapSaved],
 ) -> BTreeMap<String, CalculateOrderTemplate> {
@@ -664,7 +664,7 @@ fn closed_search_text(
     values.join(" ").to_lowercase()
 }
 
-pub(super) fn ordered_ids(snapshot: &ProductionMapLiveSnapshot, apparatus: &str) -> Vec<String> {
+pub(crate) fn ordered_ids(snapshot: &ProductionMapLiveSnapshot, apparatus: &str) -> Vec<String> {
     let visible = snapshot
         .visible_order_ids
         .get(apparatus)

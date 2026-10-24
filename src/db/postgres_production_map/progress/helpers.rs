@@ -83,6 +83,7 @@ pub(super) async fn put_order_run_session_tx(
     lock_order_and_apparatuses_tx(tx, &session.order_id, &[&session.apparatus]).await?;
     let mut session = session.clone();
     super::reactivation::release_reservations_tx(tx, &mut session).await?;
+    crate::db::postgres_qolip::mileage::capture_session_cycles_tx(tx, &mut session).await?;
     if session.status == OrderRunStatus::Frozen {
         let previous = sqlx::query_scalar::<_, serde_json::Value>(
             "SELECT payload_json FROM mini_order_run_sessions WHERE session_id = $1 FOR UPDATE",
@@ -335,7 +336,7 @@ pub(super) async fn put_order_progress_batch_tx(
             require_live_apparatus_id(apparatus)?;
         }
     }
-    let result = sqlx::query(
+    let result = sqlx::query_scalar::<_, bool>(
         "INSERT INTO mini_progress_batches (
             batch_id, session_id, apparatus, canonical_apparatus_id, order_id, action, status,
             produced_qty, uom, qr_payload, label_item_code, label_item_name,
@@ -417,7 +418,8 @@ pub(super) async fn put_order_progress_batch_tx(
             description = excluded.description,
             payload_json = excluded.payload_json,
             updated_at = now()
-         WHERE mini_progress_batches.revision = excluded.revision",
+         WHERE mini_progress_batches.revision = excluded.revision
+         RETURNING (xmax = 0)",
     )
     .bind(batch.batch_id.trim())
     .bind(batch.session_id.trim())
@@ -461,7 +463,7 @@ pub(super) async fn put_order_progress_batch_tx(
     // work must never change the production interval of an existing QR.
     .bind(batch.started_at_unix as f64)
     .bind(batch.completed_at_unix as f64)
-    .execute(&mut **tx)
+    .fetch_optional(&mut **tx)
     .await
     .map_err(|error| {
         tracing::error!(
@@ -475,8 +477,9 @@ pub(super) async fn put_order_progress_batch_tx(
         );
         ProductionMapError::StoreFailed
     })?;
-    if result.rows_affected() != 1 {
-        return Err(ProductionMapError::ProgressBatchCorrectionConflict);
+    let inserted = result.ok_or(ProductionMapError::ProgressBatchCorrectionConflict)?;
+    if inserted {
+        crate::db::postgres_qolip::mileage::record_new_output_tx(tx, batch).await?;
     }
     Ok(())
 }
@@ -518,6 +521,9 @@ pub(super) async fn correct_progress_batch(
         .begin()
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
+    // Start and dispatch lock molds before WIP rows. Keep correction in that
+    // same order so its batch CAS cannot deadlock an input claim.
+    crate::db::postgres_qolip::mileage::lock_output_sources_tx(&mut tx, &current.batch_id).await?;
     let result = sqlx::query(
         "UPDATE mini_progress_batches SET
             produced_qty = ($1::double precision)::numeric(18,6),
@@ -661,6 +667,7 @@ pub(super) async fn correct_progress_batch(
         );
         ProductionMapError::StoreFailed
     })?;
+    crate::db::postgres_qolip::mileage::correct_output_tx(&mut tx, &corrected).await?;
     tx.commit()
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
@@ -820,3 +827,7 @@ fn require_live_apparatus_id(value: &str) -> Result<(), ProductionMapError> {
 }
 
 include!("progress_rows.rs");
+
+#[cfg(test)]
+#[path = "mileage_tests.rs"]
+mod mileage_integration_tests;

@@ -17,7 +17,7 @@ pub(super) async fn update_product_locations_tx(
     .bind(previous)
     .fetch_all(&mut **tx)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
     let location_updates = locations
         .into_iter()
         .map(|(old_id, block, row_letter, column_number, mut item_code, mut item_name)| {
@@ -45,7 +45,7 @@ pub(super) async fn update_product_locations_tx(
             .bind(old_id)
             .fetch_one(&mut **tx)
             .await
-            .map_err(|_| QolipError::StoreFailed)?;
+            .map_err(super::reworks::storage_error)?;
             if id_conflict {
                 return Err(QolipError::QolipCodeConflict);
             }
@@ -81,7 +81,7 @@ pub(super) async fn update_product_locations_tx(
         .bind(spec.size)
         .execute(&mut **tx)
         .await
-        .map_err(|_| QolipError::StoreFailed)?;
+        .map_err(super::reworks::storage_error)?;
     }
     Ok(())
 }

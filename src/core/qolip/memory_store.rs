@@ -16,6 +16,8 @@ use super::ports::QolipStorePort;
 
 #[derive(Default)]
 pub struct MemoryQolipStore {
+    reworks: RwLock<super::reworks::MemoryQolipReworkState>,
+    mileage: RwLock<super::mileage::MemoryQolipMileageState>,
     blocks: RwLock<Vec<QolipBlock>>,
     products: RwLock<Vec<QolipProduct>>,
     product_specs: RwLock<BTreeMap<String, QolipProductSpec>>,
@@ -101,6 +103,8 @@ include!("memory_store_trait_impl.rs");
 include!("memory_product_transfer.rs");
 include!("memory_shared_sets.rs");
 include!("memory_management.rs");
+include!("memory_reworks.rs");
+include!("memory_mileage.rs");
 
 fn apply_memory_location_move(
     locations: &mut Vec<QolipLocation>,

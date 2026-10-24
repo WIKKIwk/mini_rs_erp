@@ -18,7 +18,7 @@ pub(super) async fn load_assigned_warehouses(
     .bind(role_code(&principal.role))
     .fetch_all(pool)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
 
     Ok(rows)
 }
@@ -51,7 +51,7 @@ pub(super) async fn load_assigned_blocks(
     .bind(role_code(&principal.role))
     .fetch_all(pool)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
 
     Ok(rows
         .into_iter()
@@ -74,7 +74,7 @@ pub(super) async fn load_all_blocks(pool: &PgPool) -> Result<Vec<QolipBlock>, Qo
     )
     .fetch_all(pool)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
 
     Ok(rows
         .into_iter()
@@ -94,7 +94,7 @@ pub(super) async fn rename_block(
     let block = block.trim();
     let new_block = new_block.trim();
     let warehouse = warehouse.trim();
-    let mut tx = pool.begin().await.map_err(|_| QolipError::StoreFailed)?;
+    let mut tx = pool.begin().await.map_err(super::reworks::storage_error)?;
     let block_key = block.to_lowercase();
     let new_block_key = new_block.to_lowercase();
     sqlx::query(
@@ -109,7 +109,7 @@ pub(super) async fn rename_block(
     .bind(&new_block_key)
     .execute(&mut *tx)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
 
     let current = sqlx::query_as::<_, QolipBlockRow>(
         "SELECT name AS block, parent_warehouse AS warehouse
@@ -122,7 +122,7 @@ pub(super) async fn rename_block(
     .bind(warehouse)
     .fetch_optional(&mut *tx)
     .await
-    .map_err(|_| QolipError::StoreFailed)?
+    .map_err(super::reworks::storage_error)?
     .ok_or(QolipError::MissingBlock)?;
 
     let conflict = sqlx::query_scalar::<_, bool>(
@@ -137,7 +137,7 @@ pub(super) async fn rename_block(
     .bind(block)
     .fetch_one(&mut *tx)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
     if conflict {
         return Err(QolipError::StoreFailed);
     }
@@ -159,7 +159,7 @@ pub(super) async fn rename_block(
     .bind(new_block)
     .fetch_one(&mut *tx)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
 
     sqlx::query(
         "UPDATE mini_warehouses
@@ -177,7 +177,7 @@ pub(super) async fn rename_block(
     .bind(new_block)
     .execute(&mut *tx)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
 
     sqlx::query(
         "UPDATE mini_warehouse_assignments
@@ -197,7 +197,7 @@ pub(super) async fn rename_block(
     .bind(new_block)
     .execute(&mut *tx)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
 
     for table in [
         "mini_qolip_locations",
@@ -220,10 +220,10 @@ pub(super) async fn rename_block(
         .bind(new_block)
         .execute(&mut *tx)
         .await
-        .map_err(|_| QolipError::StoreFailed)?;
+        .map_err(super::reworks::storage_error)?;
     }
 
-    tx.commit().await.map_err(|_| QolipError::StoreFailed)?;
+    tx.commit().await.map_err(super::reworks::storage_error)?;
     Ok(QolipBlock {
         name: renamed.block,
         warehouse: renamed.warehouse,

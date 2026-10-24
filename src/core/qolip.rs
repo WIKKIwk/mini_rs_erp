@@ -8,8 +8,12 @@ mod service;
 mod shared_sets;
 mod set_ids;
 mod management;
+mod reworks;
+pub(crate) mod mileage;
 #[cfg(test)]
 mod service_tests;
+#[cfg(test)]
+mod rework_tests;
 
 pub use memory_store::MemoryQolipStore;
 pub use catalog::{QolipCatalogEntry, QolipCatalogPosition};
@@ -27,3 +31,5 @@ pub use service::{QolipService, selected_product_specs};
 pub use shared_sets::{QolipSetProduct, QolipSetReuse, QolipSetSnapshot};
 pub use management::{QolipManagedSet, QolipMoldDraft, QolipSetCreate, QolipSetEdit, QolipProductMoldEdit, QolipProductMoldEdits};
 pub(crate) use shared_sets::candidate_codes;
+pub use reworks::{QolipRework, QolipReworkSend, QolipReworkReturn};
+pub use mileage::{QolipMileage, QolipMileageCycle};

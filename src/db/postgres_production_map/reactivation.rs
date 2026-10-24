@@ -606,6 +606,9 @@ pub(super) async fn execute(
         receipt_matches(&receipt, target, actor)?;
         return Ok(());
     }
+    super::qolip_rework_availability::require_order_qolips_available_tx(
+        &mut tx, &target.order_id,
+    ).await?;
     let prepared = prepare(
         &mut tx,
         &ReactivationSelector {

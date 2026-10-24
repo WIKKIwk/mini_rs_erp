@@ -31,7 +31,7 @@ pub use layer_remainders::{production_map_layer_remainders, production_map_layer
 mod lamination_settings;
 pub use lamination_settings::production_map_lamination_settings;
 mod completion;
-mod order_page;
+pub(crate) mod order_page;
 pub use order_page::{production_map_order_page, production_map_closed_order_detail};
 mod supply_tasks;
 pub use supply_tasks::{production_tasks_window, production_tasks_live};

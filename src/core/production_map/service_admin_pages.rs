@@ -3,6 +3,20 @@ use crate::core::apparatus_standard::{ExecutionOperation, RuntimeApparatusConfig
 use std::sync::Arc;
 
 impl ProductionMapService {
+    /// Lightweight list readers pass metadata and stripped topology, never a
+    /// compiled map or a production snapshot. Keep candidate/sequence semantics
+    /// in the same helpers as canonical queue reads.
+    pub(crate) fn preparation_catalog_sequence(
+        maps: &[ProductionMapDefinition],
+        stored: &[String],
+        apparatus: &RuntimeApparatusConfiguration,
+        frozen: &BTreeSet<String>,
+    ) -> Vec<String> {
+        let visible = super::super::apparatus::selected_order_ids_for_apparatus(maps, apparatus);
+        let scheduled = queue_state::effective_apparatus_sequence_excluding(stored, &visible, frozen);
+        queue_state::effective_apparatus_sequence(&scheduled, &visible)
+    }
+
     /// Preserve the catalogue's ordering without building every order's live
     /// controls, WIP or compiled program just to select a page.
     pub async fn admin_order_catalog(

@@ -17,6 +17,8 @@ mod product_by_code;
 mod product_transfer;
 mod shared_sets;
 mod management;
+pub(crate) mod reworks;
+pub(crate) mod mileage;
 mod catalog_locations;
 mod rows;
 
@@ -50,6 +52,12 @@ impl PostgresQolipStore {
 
 #[async_trait]
 impl QolipStorePort for PostgresQolipStore {
+    async fn active_rework_codes(&self, codes: &[String]) -> Result<Vec<String>, QolipError> { reworks::active_codes(&self.pool, codes).await }
+    async fn reworks(&self, status: &str, allowed: Option<&[String]>) -> Result<Vec<crate::core::qolip::QolipRework>, QolipError> { reworks::list(&self.pool, status, allowed).await }
+    async fn send_reworks(&self, input: &crate::core::qolip::QolipReworkSend, principal: &Principal, allowed: Option<&[String]>) -> Result<Vec<crate::core::qolip::QolipRework>, QolipError> { reworks::send(&self.pool, input, principal, allowed).await }
+    async fn return_reworks(&self, input: &crate::core::qolip::QolipReworkReturn, principal: &Principal, allowed: Option<&[String]>) -> Result<Vec<crate::core::qolip::QolipRework>, QolipError> { reworks::receive(&self.pool, input, principal, allowed).await }
+    async fn mileage(&self, code: &str) -> Result<crate::core::qolip::QolipMileage, QolipError> { mileage::read(&self.pool, code).await }
+
     async fn catalog_codes_for_molds(&self, codes: &[String]) -> Result<Vec<String>, QolipError> {
         let codes = codes.iter().map(|code| code.trim().to_lowercase()).collect::<Vec<_>>();
         sqlx::query_scalar::<_, String>(r#"

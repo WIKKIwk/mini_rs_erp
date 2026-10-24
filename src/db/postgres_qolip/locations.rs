@@ -16,12 +16,15 @@ pub(super) async fn load_locations(
          FROM mini_qolip_locations
          WHERE lower(block) = lower($1)
            AND btrim(inventory_transfer_id) = ''
+           AND NOT EXISTS (SELECT 1 FROM mini_qolip_reworks away
+               WHERE away.qolip_code_key = lower(btrim(mini_qolip_locations.qolip_code))
+                 AND away.returned_at IS NULL)
          ORDER BY lower(row_letter), column_number NULLS LAST, lower(item_name), lower(qolip_code)",
     )
     .bind(block.trim())
     .fetch_all(pool)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
 
     Ok(rows.into_iter().map(row_to_location).collect())
 }
@@ -30,13 +33,13 @@ pub(super) async fn save_location(
     pool: &PgPool,
     location: QolipLocation,
 ) -> Result<QolipLocation, QolipError> {
-    let mut tx = pool.begin().await.map_err(|_| QolipError::StoreFailed)?;
+    let mut tx = pool.begin().await.map_err(super::reworks::storage_error)?;
 
     sqlx::query("SELECT pg_advisory_xact_lock(hashtext(lower($1))::bigint)")
         .bind(location.qolip_code.trim())
         .execute(&mut *tx)
         .await
-        .map_err(|_| QolipError::StoreFailed)?;
+        .map_err(super::reworks::storage_error)?;
 
     // Legacy clients can receive a mold directly into a cell. Persist its receipt
     // ownership too, so subsequent moves never become the ownership source.
@@ -53,7 +56,7 @@ pub(super) async fn save_location(
     .bind(&location.item_code).bind(&location.item_name).bind(&location.qolip_code)
     .bind(location.size).bind(&location.created_by_role).bind(&location.created_by_ref)
     .bind(&location.created_by_name).bind(&location.warehouse)
-    .execute(&mut *tx).await.map_err(|_| QolipError::StoreFailed)?;
+    .execute(&mut *tx).await.map_err(super::reworks::storage_error)?;
 
     sqlx::query(
         "DELETE FROM mini_qolip_locations
@@ -64,7 +67,7 @@ pub(super) async fn save_location(
     .bind(location.id.trim())
     .execute(&mut *tx)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
 
     let row = sqlx::query_as::<_, QolipLocationRow>(
         "INSERT INTO mini_qolip_locations (
@@ -110,9 +113,9 @@ pub(super) async fn save_location(
     .bind(serde_json::to_value(&location).map_err(|_| QolipError::StoreFailed)?)
     .fetch_one(&mut *tx)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
 
-    tx.commit().await.map_err(|_| QolipError::StoreFailed)?;
+    tx.commit().await.map_err(super::reworks::storage_error)?;
     Ok(row_to_location(row))
 }
 
@@ -126,12 +129,15 @@ pub(super) async fn load_location_by_id(
                 created_by_role, created_by_ref, created_by_name
          FROM mini_qolip_locations
          WHERE id = $1
-           AND btrim(inventory_transfer_id) = ''",
+           AND btrim(inventory_transfer_id) = ''
+           AND NOT EXISTS (SELECT 1 FROM mini_qolip_reworks away
+               WHERE away.qolip_code_key = lower(btrim(mini_qolip_locations.qolip_code))
+                 AND away.returned_at IS NULL)",
     )
     .bind(location_id.trim())
     .fetch_optional(pool)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
 
     Ok(row.map(row_to_location))
 }
@@ -147,13 +153,16 @@ pub(super) async fn load_location_by_qolip_code(
          FROM mini_qolip_locations
          WHERE lower(qolip_code) = lower($1)
            AND btrim(inventory_transfer_id) = ''
+           AND NOT EXISTS (SELECT 1 FROM mini_qolip_reworks away
+               WHERE away.qolip_code_key = lower(btrim(mini_qolip_locations.qolip_code))
+                 AND away.returned_at IS NULL)
          ORDER BY updated_at DESC, created_at DESC
          LIMIT 1",
     )
     .bind(qolip_code.trim())
     .fetch_optional(pool)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
 
     Ok(row.map(row_to_location))
 }
@@ -183,14 +192,14 @@ pub(super) async fn move_locations_to_cells(
     pool: &PgPool,
     moves: &[QolipLocationMove],
 ) -> Result<Vec<QolipLocation>, QolipError> {
-    let mut tx = pool.begin().await.map_err(|_| QolipError::StoreFailed)?;
+    let mut tx = pool.begin().await.map_err(super::reworks::storage_error)?;
 
     let mut saved = Vec::with_capacity(moves.len());
     for input in moves {
         saved.push(move_location_to_cell_in_transaction(&mut tx, input).await?);
     }
 
-    tx.commit().await.map_err(|_| QolipError::StoreFailed)?;
+    tx.commit().await.map_err(super::reworks::storage_error)?;
     Ok(saved)
 }
 
@@ -211,7 +220,7 @@ async fn move_location_to_cell_in_transaction(
     .bind(location_id)
     .fetch_optional(&mut **tx)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
 
     let Some(source_row) = source_row else {
         return Err(QolipError::LocationNotFound);
@@ -234,7 +243,7 @@ async fn move_location_to_cell_in_transaction(
             .bind(lock_id.trim())
             .fetch_optional(&mut **tx)
             .await
-            .map_err(|_| QolipError::StoreFailed)?;
+            .map_err(super::reworks::storage_error)?;
     }
 
     let source_row = sqlx::query_as::<_, QolipLocationRow>(
@@ -247,7 +256,7 @@ async fn move_location_to_cell_in_transaction(
     .bind(location_id)
     .fetch_optional(&mut **tx)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
     let Some(source_row) = source_row else {
         return Err(QolipError::LocationNotFound);
     };
@@ -271,7 +280,7 @@ async fn move_location_to_cell_in_transaction(
     .bind(target.id.trim())
     .fetch_optional(&mut **tx)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
     if let Some(existing_row) = &target_row {
         let existing = row_to_location(existing_row.clone());
         if !location_identity_matches(&existing, &target) {
@@ -290,13 +299,13 @@ async fn move_location_to_cell_in_transaction(
         .bind(remaining)
         .execute(&mut **tx)
         .await
-        .map_err(|_| QolipError::StoreFailed)?;
+        .map_err(super::reworks::storage_error)?;
     } else {
         sqlx::query("DELETE FROM mini_qolip_locations WHERE id = $1")
             .bind(source.id.trim())
             .execute(&mut **tx)
             .await
-            .map_err(|_| QolipError::StoreFailed)?;
+            .map_err(super::reworks::storage_error)?;
     }
 
     let saved = if let Some(existing_row) = target_row {
@@ -313,7 +322,7 @@ async fn move_location_to_cell_in_transaction(
         .bind(merged_qty)
         .fetch_one(&mut **tx)
         .await
-        .map_err(|_| QolipError::StoreFailed)?;
+        .map_err(super::reworks::storage_error)?;
         row_to_location(row)
     } else {
         let row = sqlx::query_as::<_, QolipLocationRow>(
@@ -344,7 +353,7 @@ async fn move_location_to_cell_in_transaction(
         .bind(serde_json::to_value(&target).map_err(|_| QolipError::StoreFailed)?)
         .fetch_one(&mut **tx)
         .await
-        .map_err(|_| QolipError::StoreFailed)?;
+        .map_err(super::reworks::storage_error)?;
         row_to_location(row)
     };
 

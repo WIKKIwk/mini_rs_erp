@@ -4,6 +4,15 @@ use super::*;
 
 #[async_trait]
 impl AdminStatePort for JsonAdminStore {
+    async fn state(&self, ref_: &str) -> Result<AdminState, AdminPortError> {
+        let data = self.data.lock().await;
+        Ok(data
+            .states
+            .get(ref_.trim())
+            .map(AdminState::from)
+            .unwrap_or_default())
+    }
+
     async fn states(&self) -> Result<BTreeMap<String, AdminState>, AdminPortError> {
         let data = self.data.lock().await;
         Ok(data

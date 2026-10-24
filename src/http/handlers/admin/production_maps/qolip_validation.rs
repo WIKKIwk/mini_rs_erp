@@ -128,6 +128,9 @@ pub async fn production_map_qolip_validate(
     else {
         return Err(production_map_error(ProductionMapError::MapNotFound));
     };
+    state.qolip.require_qolips_available_for_layout(
+        &map.products, &map.product_code, &map.title,
+    ).await.map_err(qolip_queue_error)?;
     let required_qolips = state
         .qolip
         .required_qolips_for_layout(&map.products, &map.product_code, &map.title)

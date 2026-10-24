@@ -79,6 +79,8 @@ mod progress_helpers;
 mod output_paddon_assignment;
 #[path = "postgres_production_map/qolip/session_helpers.rs"]
 mod qolip_session_helpers;
+#[path = "postgres_production_map/qolip/rework_availability.rs"]
+mod qolip_rework_availability;
 #[path = "postgres_production_map/queue/helpers.rs"]
 mod queue_helpers;
 #[path = "postgres_production_map/materials/stock.rs"]
@@ -1177,6 +1179,7 @@ fn production_map_qolip_checkout_error(error: QolipError) -> ProductionMapError 
         QolipError::InsufficientStock => ProductionMapError::QolipInsufficientStock,
         QolipError::LocationIdentityMismatch => ProductionMapError::QolipLocationIdentityMismatch,
         QolipError::QolipInUse => ProductionMapError::QolipAlreadyInUse,
+        QolipError::QolipInRework => ProductionMapError::QolipInRework,
         _ => ProductionMapError::StoreFailed,
     }
 }
@@ -1278,6 +1281,14 @@ pub(super) async fn apply_queue_progress_tx(
             });
         }
         order_control_helpers::validate_execution_controls_tx(tx, write).await?;
+        if matches!(write.event.action,
+            crate::core::production_map::queue_state::ApparatusQueueAction::Start
+                | crate::core::production_map::queue_state::ApparatusQueueAction::Resume)
+        {
+            qolip_rework_availability::require_order_qolips_available_tx(
+                tx, &write.event.order_id,
+            ).await?;
+        }
         if let Some(hold_id) = write.print_preflight_hold_id.as_deref() {
             consume_print_preflight_hold_tx(
                 tx,

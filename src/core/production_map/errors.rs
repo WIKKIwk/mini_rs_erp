@@ -158,6 +158,8 @@ pub enum ProductionMapError {
     QolipCodeMismatch,
     #[error("qolip is already in use by another apparatus")]
     QolipAlreadyInUse,
+    #[error("an order mold is in peredelka")]
+    QolipInRework,
     #[error("qolip stock is insufficient")]
     QolipInsufficientStock,
     #[error("qolip location identity does not match")]

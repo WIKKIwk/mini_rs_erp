@@ -273,6 +273,14 @@ pub enum QolipError {
     QolipCodeConflict,
     #[error("all 100 Panton colors are already assigned")]
     PantonLimitExceeded,
+    #[error("qolip history prevents changing its identity")]
+    QolipHistoryLocked,
+    #[error("qolip is in peredelka")]
+    QolipInRework,
+    #[error("qolip peredelka transition conflicts with current state")]
+    ReworkConflict,
+    #[error("qolip peredelka request id was reused with different input")]
+    ReworkRequestConflict,
     #[error("qolip is in use")]
     QolipInUse,
     #[error("qolip must be checked out to a worker before order start")]

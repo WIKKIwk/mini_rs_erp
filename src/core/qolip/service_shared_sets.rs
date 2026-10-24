@@ -1,4 +1,47 @@
 impl QolipService {
+    /// Peredelka belongs to a physical mold code. Every order containing that
+    /// code is incomplete, including when another alternative set is intact.
+    pub async fn require_qolips_available_for_layout(
+        &self,
+        products: &[crate::core::order_layout::OrderProduct],
+        item_code: &str,
+        item_name: &str,
+    ) -> Result<(), QolipError> {
+        let mut identities = products
+            .iter()
+            .map(|product| (product.item_code.as_str(), product.product.as_str()))
+            .collect::<Vec<_>>();
+        if !item_code.trim().is_empty() || !item_name.trim().is_empty() {
+            identities.push((item_code, item_name));
+        }
+        let mut checked = std::collections::BTreeSet::new();
+        let mut codes = std::collections::BTreeSet::new();
+        for (code, name) in identities {
+            let Some(product) = self.order_product(code, name).await? else {
+                continue;
+            };
+            if !checked.insert(product.code.trim().to_lowercase()) {
+                continue;
+            }
+            codes.extend(
+                self.compatible_specs_for_product(&product)
+                    .await?
+                    .into_iter()
+                    .map(|spec| spec.qolip_code),
+            );
+        }
+        self.require_qolip_codes_available(&codes.into_iter().collect::<Vec<_>>())
+            .await
+    }
+
+    async fn require_qolip_codes_available(&self, codes: &[String]) -> Result<(), QolipError> {
+        if self.store.active_rework_codes(codes).await?.is_empty() {
+            Ok(())
+        } else {
+            Err(QolipError::QolipInRework)
+        }
+    }
+
     /// A common production run may use only complete plate sets shared by all
     /// its products, including any required product-local extensions.
     pub async fn required_qolips_for_layout(

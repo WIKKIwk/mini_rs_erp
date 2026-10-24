@@ -351,6 +351,9 @@ impl QolipService {
             .await?
             .ok_or(QolipError::QolipCodeMismatch)?;
         let compatible = self.compatible_specs_for_product(&expected_product).await?;
+        self.require_qolip_codes_available(
+            &compatible.iter().map(|spec| spec.qolip_code.clone()).collect::<Vec<_>>(),
+        ).await?;
         let candidate = compatible.iter().find(|candidate| candidate.set_id() == spec.set_id()
             && candidate.qolip_code.eq_ignore_ascii_case(&spec.qolip_code))
             .ok_or(QolipError::QolipCodeMismatch)?;

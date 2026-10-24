@@ -192,9 +192,18 @@ pub trait AdminReadPort: Send + Sync {
 }
 
 #[async_trait]
+pub trait AdminSessionRevoker: Send + Sync {
+    async fn revoke_principal_sessions(&self, principal_ref: &str) -> Result<(), AdminPortError>;
+}
+
+#[async_trait]
 pub trait AdminStatePort: Send + Sync {
     async fn states(&self) -> Result<BTreeMap<String, AdminState>, AdminPortError>;
     async fn put_state(&self, ref_: &str, state: AdminState) -> Result<(), AdminPortError>;
+
+    async fn state(&self, ref_: &str) -> Result<AdminState, AdminPortError> {
+        Ok(self.states().await?.remove(ref_.trim()).unwrap_or_default())
+    }
 
     async fn access_code(&self, ref_: &str) -> Result<String, AdminPortError> {
         let states = self.states().await?;

@@ -10,7 +10,7 @@ pub(super) async fn transfer(
     principal: &Principal,
     allowed: &[String],
 ) -> Result<Vec<QolipProductSpec>, QolipError> {
-    let mut tx = pool.begin().await.map_err(|_| QolipError::StoreFailed)?;
+    let mut tx = pool.begin().await.map_err(super::reworks::storage_error)?;
     lock_composition(&mut tx).await?;
     let actor = format!("qolipchi:{}", principal.ref_.trim());
     let event_id = format!("qolip-product-transfer:{actor}:{}", input.request_id);
@@ -18,14 +18,14 @@ pub(super) async fn transfer(
         .bind(&event_id)
         .execute(&mut *tx)
         .await
-        .map_err(|_| QolipError::StoreFailed)?;
+        .map_err(super::reworks::storage_error)?;
     if let Some(payload) = sqlx::query_scalar::<_, serde_json::Value>(
         "SELECT payload_json FROM mini_engine_events WHERE event_id = $1",
     )
     .bind(&event_id)
     .fetch_optional(&mut *tx)
     .await
-    .map_err(|_| QolipError::StoreFailed)?
+    .map_err(super::reworks::storage_error)?
     {
         let previous: QolipProductTransfer = serde_json::from_value(payload["request"].clone())
             .map_err(|_| QolipError::StoreFailed)?;
@@ -46,14 +46,14 @@ pub(super) async fn transfer(
             .bind(format!("qolip:{}", code.to_ascii_lowercase()))
             .execute(&mut *tx)
             .await
-            .map_err(|_| QolipError::StoreFailed)?;
+            .map_err(super::reworks::storage_error)?;
     }
     for code in &input.qolip_codes {
         sqlx::query("SELECT pg_advisory_xact_lock(hashtext(lower($1))::bigint)")
             .bind(code)
             .execute(&mut *tx)
             .await
-            .map_err(|_| QolipError::StoreFailed)?;
+            .map_err(super::reworks::storage_error)?;
     }
     let products = sqlx::query_as::<_, (String, String, String)>(
         "SELECT code, name, item_group FROM mini_items
@@ -61,7 +61,7 @@ pub(super) async fn transfer(
     ).bind(vec![input.from_item_code.to_lowercase(), input.to_item_code.to_lowercase()])
     .fetch_all(&mut *tx)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
     let source = products.iter().find(|product| product.0.eq_ignore_ascii_case(&input.from_item_code))
         .ok_or(QolipError::MissingItem)?;
     let target = products.iter().find(|product| product.0.eq_ignore_ascii_case(&input.to_item_code))
@@ -86,19 +86,19 @@ pub(super) async fn transfer(
             "SELECT EXISTS (SELECT 1 FROM mini_qolip_effective_product_molds
              WHERE qolip_code_key = $1 AND item_code_key = lower(btrim($2)))"
         ).bind(code).bind(&source.0).fetch_one(&mut *tx).await
-            .map_err(|_| QolipError::StoreFailed)?;
+            .map_err(super::reworks::storage_error)?;
         if !linked { return Err(QolipError::ProductTransferConflict); }
         let already_linked = sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS (SELECT 1 FROM mini_qolip_effective_product_molds
              WHERE qolip_code_key = $1 AND item_code_key = lower(btrim($2)))"
         ).bind(code).bind(&target.0).fetch_one(&mut *tx).await
-            .map_err(|_| QolipError::StoreFailed)?;
+            .map_err(super::reworks::storage_error)?;
         if already_linked { return Err(QolipError::ProductTransferConflict); }
         let target_base = sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS (SELECT 1 FROM mini_qolip_set_products
              WHERE set_id = $1 AND item_code_key = lower(btrim($2)))"
         ).bind(old.set_id()).bind(&target.0).fetch_one(&mut *tx).await
-            .map_err(|_| QolipError::StoreFailed)?;
+            .map_err(super::reworks::storage_error)?;
         let mut projected = old.clone();
         projected.is_extension = !target_base;
         projected.item_code = target.0.clone();
@@ -110,7 +110,7 @@ pub(super) async fn transfer(
         if target_base {
             sqlx::query("DELETE FROM mini_qolip_product_overrides
                 WHERE item_code_key = lower(btrim($1)) AND qolip_code_key = $2")
-                .bind(&target.0).bind(code).execute(&mut *tx).await.map_err(|_| QolipError::StoreFailed)?;
+                .bind(&target.0).bind(code).execute(&mut *tx).await.map_err(super::reworks::storage_error)?;
         } else {
             write_override(&mut tx, &target.0, &old.qolip_code, "include", principal).await?;
         }
@@ -134,15 +134,15 @@ pub(super) async fn transfer(
     }))
     .execute(&mut *tx)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
-    tx.commit().await.map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
+    tx.commit().await.map_err(super::reworks::storage_error)?;
     Ok(specs)
 }
 
 pub(super) async fn lock_composition(tx: &mut Transaction<'_, Postgres>) -> Result<(), QolipError> {
     // Taken before physical mold locks, matching the session writer's shared lock.
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('qolip:product-composition', 0))")
-        .execute(&mut **tx).await.map_err(|_| QolipError::StoreFailed)?;
+        .execute(&mut **tx).await.map_err(super::reworks::storage_error)?;
     Ok(())
 }
 
@@ -160,7 +160,7 @@ pub(super) async fn reject_product_in_use(tx: &mut Transaction<'_, Postgres>, it
              ))
            AND session.status IN ('active','paused','frozen','roll_detached')
            AND session.payload_json->>'qolip_lock_owner' = 'true')"
-    ).bind(item_code).fetch_one(&mut **tx).await.map_err(|_| QolipError::StoreFailed)?;
+    ).bind(item_code).fetch_one(&mut **tx).await.map_err(super::reworks::storage_error)?;
     if busy { return Err(QolipError::QolipInUse); }
     Ok(())
 }
@@ -173,7 +173,7 @@ pub(super) async fn write_override(tx: &mut Transaction<'_, Postgres>, item: &st
         SET mode = EXCLUDED.mode, created_by_role = EXCLUDED.created_by_role,
             created_by_ref = EXCLUDED.created_by_ref, created_by_name = EXCLUDED.created_by_name, updated_at = now()")
         .bind(item).bind(code).bind(mode).bind(crate::core::qolip::role_code(&principal.role))
-        .bind(&principal.ref_).bind(&principal.display_name).execute(&mut **tx).await.map_err(|_| QolipError::StoreFailed)?;
+        .bind(&principal.ref_).bind(&principal.display_name).execute(&mut **tx).await.map_err(super::reworks::storage_error)?;
     Ok(())
 }
 
@@ -203,7 +203,7 @@ pub(super) async fn load_spec(
     .bind(code)
     .fetch_optional(&mut **tx)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
     if let Some(row) = row {
         return Ok(row_to_product_spec(row));
     }
@@ -217,7 +217,7 @@ pub(super) async fn load_spec(
             l.created_by_role, l.created_by_ref, l.created_by_name
          FROM mini_qolip_locations l LEFT JOIN mini_items i ON lower(i.code) = lower(l.item_code)
          WHERE lower(l.qolip_code) = $1 ORDER BY l.updated_at DESC LIMIT 1 FOR UPDATE OF l",
-    ).bind(code).fetch_optional(&mut **tx).await.map_err(|_| QolipError::StoreFailed)?
+    ).bind(code).fetch_optional(&mut **tx).await.map_err(super::reworks::storage_error)?
         .ok_or(QolipError::QolipCodeNotFound)?;
     Ok(row_to_product_spec(row))
 }
@@ -241,7 +241,7 @@ pub(super) async fn reject_in_use(tx: &mut Transaction<'_, Postgres>, code: &str
     .bind(code)
     .fetch_one(&mut **tx)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
     if blocked {
         return Err(QolipError::QolipInUse);
     }

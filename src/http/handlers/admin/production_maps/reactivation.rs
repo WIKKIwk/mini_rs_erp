@@ -81,13 +81,16 @@ pub async fn production_map_reactivation(
             .into_iter()
             .find(|s| s.session_id == target.session_id)
             .ok_or_else(|| production_map_error(ProductionMapError::QueueActionNotAllowed))?;
+        let map = state
+            .production_maps
+            .raw_map(&target.order_id)
+            .await
+            .map_err(production_map_error)?
+            .ok_or_else(|| production_map_error(ProductionMapError::MapNotFound))?;
+        state.qolip.require_qolips_available_for_layout(
+            &map.products, &map.product_code, &map.title,
+        ).await.map_err(qolip_queue_error)?;
         if target.batch_id.is_empty() {
-            let map = state
-                .production_maps
-                .raw_map(&target.order_id)
-                .await
-                .map_err(production_map_error)?
-                .ok_or_else(|| production_map_error(ProductionMapError::MapNotFound))?;
             let mut codes = session
                 .payload_json
                 .get("qolip_codes")

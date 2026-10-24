@@ -246,6 +246,29 @@ async fn encode_state(
 
 #[async_trait]
 impl AdminStatePort for PostgresAuthStore {
+    async fn state(&self, ref_: &str) -> Result<AdminState, AdminPortError> {
+        let row = sqlx::query(
+            "SELECT credential_hash, access_state FROM mini_auth_accounts WHERE principal_ref = $1",
+        )
+        .bind(ref_.trim())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|_| AdminPortError::LookupFailed)?;
+        let Some(row) = row else {
+            return Ok(AdminState::default());
+        };
+        let data: serde_json::Value = row
+            .try_get("access_state")
+            .map_err(|_| AdminPortError::LookupFailed)?;
+        let mut state: AdminState =
+            serde_json::from_value(data).map_err(|_| AdminPortError::LookupFailed)?;
+        state.custom_code = row
+            .try_get::<Option<String>, _>("credential_hash")
+            .map_err(|_| AdminPortError::LookupFailed)?
+            .unwrap_or_default();
+        Ok(state)
+    }
+
     async fn states(&self) -> Result<BTreeMap<String, AdminState>, AdminPortError> {
         let rows = sqlx::query(
             "SELECT principal_ref, credential_hash, access_state FROM mini_auth_accounts",

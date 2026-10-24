@@ -19,6 +19,8 @@ use std::collections::BTreeMap;
 type ApiError = (StatusCode, Json<Value>);
 
 mod order_estimates;
+mod orders;
+pub use orders::{order_detail, order_list, order_list_live};
 
 async fn authorize(state: &AppState, headers: &HeaderMap) -> Result<Principal, ApiError> {
     let token = super::auth::bearer_token(headers).unwrap_or_default();

@@ -63,6 +63,7 @@ mod admin_catalog_overlay;
 mod builders;
 mod order_sheets;
 mod postgres_pool;
+mod session_security;
 
 use self::admin_catalog_overlay::build_admin_catalog_ports;
 use self::builders::*;
@@ -307,7 +308,7 @@ impl AppState {
         let returned_paint = build_returned_paint_service();
         let werka = build_werka_service(&config, werka_pool);
         let worker_groups = build_worker_group_service();
-        let sessions = build_session_manager(&config);
+        let sessions = session_security::protect_sessions(&mut admin, build_session_manager(&config));
         let telegram = build_telegram_service()
             .with_order_catalog(
                 admin.clone(),

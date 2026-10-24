@@ -254,7 +254,7 @@ pub(super) async fn load_products_inner(
     .bind(item_code.map(|code| code.trim().to_lowercase()))
     .fetch_all(pool)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
 
     Ok(rows
         .into_iter()
@@ -309,7 +309,7 @@ pub(super) async fn load_order_image_order_ids(
     .bind(item_codes)
     .fetch_all(pool)
     .await
-    .map_err(|_| QolipError::StoreFailed)
+    .map_err(super::reworks::storage_error)
 }
 
 pub(super) async fn load_product_spec(
@@ -409,7 +409,7 @@ pub(super) async fn load_product_specs(
     .bind(item_code.trim())
     .fetch_all(pool)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
 
     Ok(rows.into_iter().map(row_to_product_spec).collect())
 }
@@ -537,7 +537,7 @@ async fn load_product_spec_by_qolip_code_inner(
     .bind(active_product)
     .fetch_optional(pool)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
 
     Ok(row.map(row_to_product_spec))
 }
@@ -546,10 +546,10 @@ pub(super) async fn save_product_spec(
     pool: &PgPool,
     spec: QolipProductSpec,
 ) -> Result<QolipProductSpec, QolipError> {
-    let mut tx = pool.begin().await.map_err(|_| QolipError::StoreFailed)?;
+    let mut tx = pool.begin().await.map_err(super::reworks::storage_error)?;
     super::product_transfer::lock_composition(&mut tx).await?;
     let saved = save_product_spec_tx(&mut tx, spec).await?;
-    tx.commit().await.map_err(|_| QolipError::StoreFailed)?;
+    tx.commit().await.map_err(super::reworks::storage_error)?;
     Ok(saved)
 }
 
@@ -560,12 +560,12 @@ pub(super) async fn save_product_specs(
     if specs.is_empty() {
         return Err(QolipError::MissingQolipCode);
     }
-    let mut tx = pool.begin().await.map_err(|_| QolipError::StoreFailed)?;
+    let mut tx = pool.begin().await.map_err(super::reworks::storage_error)?;
     super::product_transfer::lock_composition(&mut tx).await?;
     let mut saved = Vec::with_capacity(specs.len());
     for spec in specs {
         saved.push(save_product_spec_tx(&mut tx, spec).await?);
     }
-    tx.commit().await.map_err(|_| QolipError::StoreFailed)?;
+    tx.commit().await.map_err(super::reworks::storage_error)?;
     Ok(saved)
 }

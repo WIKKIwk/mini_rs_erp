@@ -9,6 +9,12 @@ use super::models::{
 
 #[async_trait]
 pub trait QolipStorePort: Send + Sync {
+    async fn active_rework_codes(&self, _codes: &[String]) -> Result<Vec<String>, QolipError> { Ok(Vec::new()) }
+    async fn reworks(&self, _status: &str, _allowed: Option<&[String]>) -> Result<Vec<super::QolipRework>, QolipError> { Err(QolipError::StoreFailed) }
+    async fn send_reworks(&self, _input: &super::QolipReworkSend, _principal: &Principal, _allowed: Option<&[String]>) -> Result<Vec<super::QolipRework>, QolipError> { Err(QolipError::StoreFailed) }
+    async fn return_reworks(&self, _input: &super::QolipReworkReturn, _principal: &Principal, _allowed: Option<&[String]>) -> Result<Vec<super::QolipRework>, QolipError> { Err(QolipError::StoreFailed) }
+    async fn mileage(&self, _qolip_code: &str) -> Result<super::QolipMileage, QolipError> { Err(QolipError::StoreFailed) }
+
     async fn catalog_codes_for_molds(&self, codes: &[String]) -> Result<Vec<String>, QolipError> {
         let codes = codes.iter().map(|code| code.trim().to_lowercase()).collect::<std::collections::BTreeSet<_>>();
         Ok(self.products("", usize::MAX, true, None).await?.into_iter()

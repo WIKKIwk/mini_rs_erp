@@ -2,6 +2,7 @@ mod helpers;
 mod mutations;
 mod read;
 mod roles;
+mod session_security;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -18,8 +19,8 @@ use crate::core::admin::models::{
     AdminWorkerDetail,
 };
 use crate::core::admin::ports::{
-    AdminAuthConfigSink, AdminEnvPersister, AdminPortError, AdminReadPort, AdminStatePort,
-    AdminWritePort,
+    AdminAuthConfigSink, AdminEnvPersister, AdminPortError, AdminReadPort, AdminSessionRevoker,
+    AdminStatePort, AdminWritePort,
 };
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::auth::service::normalize_phone;
@@ -46,6 +47,7 @@ pub struct AdminService {
     read_port: Option<Arc<dyn AdminReadPort>>,
     write_port: Option<Arc<dyn AdminWritePort>>,
     state_port: Option<Arc<dyn AdminStatePort>>,
+    session_revoker: Option<Arc<dyn AdminSessionRevoker>>,
     env_persister: Option<Arc<dyn AdminEnvPersister>>,
     auth_config_sink: Option<Arc<dyn AdminAuthConfigSink>>,
     role_store: Arc<dyn RoleDefinitionStorePort>,
@@ -87,6 +89,7 @@ impl AdminService {
             read_port: None,
             write_port: None,
             state_port: None,
+            session_revoker: None,
             env_persister: None,
             auth_config_sink: None,
             role_store: Arc::new(MemoryRoleDefinitionStore::new()),
@@ -107,6 +110,11 @@ impl AdminService {
 
     pub fn with_state_port(mut self, state_port: Arc<dyn AdminStatePort>) -> Self {
         self.state_port = Some(state_port);
+        self
+    }
+
+    pub fn with_session_revoker(mut self, revoker: Arc<dyn AdminSessionRevoker>) -> Self {
+        self.session_revoker = Some(revoker);
         self
     }
 
@@ -285,12 +293,10 @@ impl AdminService {
     }
 
     async fn state_for(&self, ref_: &str) -> Result<AdminState, AdminPortError> {
-        Ok(self
-            .states()
-            .await?
-            .get(ref_.trim())
-            .cloned()
-            .unwrap_or_default())
+        match &self.state_port {
+            Some(port) => port.state(ref_.trim()).await,
+            None => Ok(AdminState::default()),
+        }
     }
 
     async fn access_code(&self, ref_: &str) -> Result<String, AdminPortError> {
@@ -353,11 +359,7 @@ impl AdminService {
     }
 
     async fn put_state(&self, ref_: &str, state: AdminState) -> Result<(), AdminPortError> {
-        self.state_port
-            .as_ref()
-            .ok_or(AdminPortError::LookupFailed)?
-            .put_state(ref_, state)
-            .await
+        self.persist_access_state(ref_, state).await
     }
 
     async fn existing_state_codes(&self) -> Result<BTreeMap<String, ()>, AdminPortError> {

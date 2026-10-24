@@ -10,6 +10,14 @@ async fn execute_queue_action(
     material_start_required: bool,
     returned_paint_report: Option<crate::core::returned_paint::ReturnedPaintRequest>,
 ) -> Result<Response, AdminError> {
+    if matches!(input.action, queue_state::ApparatusQueueAction::Start | queue_state::ApparatusQueueAction::Resume) {
+        let map = state.production_maps.raw_map(&input.order_id).await
+            .map_err(production_map_error)?
+            .ok_or_else(|| production_map_error(ProductionMapError::MapNotFound))?;
+        state.qolip.require_qolips_available_for_layout(
+            &map.products, &map.product_code, &map.title,
+        ).await.map_err(qolip_queue_error)?;
+    }
     let qolip_preparations = if state.production_maps.qolip_validation_required_for_action(
         &input.apparatus, &input.order_id, input.action,
     ).await.map_err(production_map_error)? {

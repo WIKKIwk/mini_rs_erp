@@ -91,6 +91,9 @@ impl AdminService {
         principal: &Principal,
         capability: Capability,
     ) -> bool {
+        if !matches!(self.principal_is_active(principal).await, Ok(true)) {
+            return false;
+        }
         match self.principal_assigned_role(principal).await {
             Ok(Some(role)) => capability_code(capability)
                 .map(|code| role.capability_codes.iter().any(|item| item == code))
@@ -110,6 +113,9 @@ impl AdminService {
     }
 
     pub async fn principal_capability_codes(&self, principal: &Principal) -> Vec<String> {
+        if !matches!(self.principal_is_active(principal).await, Ok(true)) {
+            return Vec::new();
+        }
         match self.principal_assigned_role(principal).await {
             Ok(Some(role)) => role.capability_codes,
             Ok(None) => capability_codes_for_role(principal.role),

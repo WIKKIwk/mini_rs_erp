@@ -43,7 +43,7 @@ async fn read_sets(
          WHERE NOT sets.is_product_local AND ($1::text[] IS NULL OR sets.warehouse_key = ANY($1))
            AND ($2::text IS NULL OR sets.set_id = $2)
          ORDER BY sets.set_id",
-    ).bind(warehouses).bind(id).fetch_all(&mut **tx).await.map_err(|_| QolipError::StoreFailed)?;
+    ).bind(warehouses).bind(id).fetch_all(&mut **tx).await.map_err(super::reworks::storage_error)?;
     if rows.is_empty() {
         return Ok(Vec::new());
     }
@@ -56,7 +56,7 @@ async fn read_sets(
     .bind(&ids)
     .fetch_all(&mut **tx)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
     let mut by_set = BTreeMap::<String, Vec<_>>::new();
     for row in members {
         let spec = row_to_product_spec(row);
@@ -71,7 +71,7 @@ async fn read_sets(
     .bind(&ids)
     .fetch_all(&mut **tx)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
     let mut links = BTreeMap::<String, Vec<_>>::new();
     for (id, code, name) in products {
         links
@@ -107,17 +107,17 @@ pub(super) async fn list(
     pool: &PgPool,
     allowed: Option<&[String]>,
 ) -> Result<Vec<QolipManagedSet>, QolipError> {
-    let mut tx = pool.begin().await.map_err(|_| QolipError::StoreFailed)?;
+    let mut tx = pool.begin().await.map_err(super::reworks::storage_error)?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
         .execute(&mut *tx)
         .await
-        .map_err(|_| QolipError::StoreFailed)?;
+        .map_err(super::reworks::storage_error)?;
     let result = read_sets(&mut tx, allowed, None)
         .await?
         .into_iter()
         .filter(|set| !set.snapshot.members.is_empty())
         .collect();
-    tx.commit().await.map_err(|_| QolipError::StoreFailed)?;
+    tx.commit().await.map_err(super::reworks::storage_error)?;
     Ok(result)
 }
 
@@ -136,14 +136,14 @@ async fn lock_codes(
             .bind(format!("qolip:{code}"))
             .execute(&mut **tx)
             .await
-            .map_err(|_| QolipError::StoreFailed)?;
+            .map_err(super::reworks::storage_error)?;
     }
     for code in &codes {
         sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)")
             .bind(code)
             .execute(&mut **tx)
             .await
-            .map_err(|_| QolipError::StoreFailed)?;
+            .map_err(super::reworks::storage_error)?;
         reject_in_use(tx, code).await?;
     }
     Ok(())
@@ -169,7 +169,7 @@ async fn audit(
     .bind(payload)
     .execute(&mut **tx)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
     Ok(())
 }
 
@@ -180,7 +180,7 @@ pub(super) async fn create_set(
     allowed: &[String],
 ) -> Result<QolipManagedSet, QolipError> {
     owner(&input.warehouse, Some(allowed))?;
-    let mut tx = pool.begin().await.map_err(|_| QolipError::StoreFailed)?;
+    let mut tx = pool.begin().await.map_err(super::reworks::storage_error)?;
     lock_composition(&mut tx).await?;
     let codes = input.members.iter().map(|draft| draft.qolip_code.clone()).collect::<Vec<_>>();
     lock_codes(&mut tx, &codes).await?;
@@ -190,13 +190,13 @@ pub(super) async fn create_set(
             UNION ALL SELECT 1 FROM mini_qolip_checkouts WHERE lower(qolip_code) = ANY($1)
         )"
     ).bind(codes.iter().map(|code| code.trim().to_lowercase()).collect::<Vec<_>>())
-        .fetch_one(&mut *tx).await.map_err(|_| QolipError::StoreFailed)?;
+        .fetch_one(&mut *tx).await.map_err(super::reworks::storage_error)?;
     if existing_receipt {
         return Err(QolipError::QolipCodeConflict);
     }
     let set_id: String = loop {
         let candidate: String = sqlx::query_scalar("SELECT public.mini_qolip_next_set_id()")
-            .fetch_one(&mut *tx).await.map_err(|_| QolipError::StoreFailed)?;
+            .fetch_one(&mut *tx).await.map_err(super::reworks::storage_error)?;
         if !codes.iter().any(|code| code.trim() == candidate) { break candidate; }
     };
     for draft in &input.members {
@@ -207,7 +207,7 @@ pub(super) async fn create_set(
         .pop().ok_or(QolipError::StoreFailed)?;
     audit(&mut tx, principal, "set_create", &set_id,
         serde_json::json!({"set": created, "actor_name": principal.display_name})).await?;
-    tx.commit().await.map_err(|_| QolipError::StoreFailed)?;
+    tx.commit().await.map_err(super::reworks::storage_error)?;
     Ok(created)
 }
 
@@ -217,7 +217,7 @@ pub(super) async fn edit_set(
     principal: &Principal,
     allowed: Option<&[String]>,
 ) -> Result<QolipManagedSet, QolipError> {
-    let mut tx = pool.begin().await.map_err(|_| QolipError::StoreFailed)?;
+    let mut tx = pool.begin().await.map_err(super::reworks::storage_error)?;
     lock_composition(&mut tx).await?;
     let current = read_sets(&mut tx, allowed, Some(&input.set_id))
         .await?
@@ -279,7 +279,7 @@ pub(super) async fn edit_set(
         }),
     )
     .await?;
-    tx.commit().await.map_err(|_| QolipError::StoreFailed)?;
+    tx.commit().await.map_err(super::reworks::storage_error)?;
     Ok(updated)
 }
 
@@ -289,7 +289,7 @@ pub(super) async fn edit_products(
     principal: &Principal,
     allowed: Option<&[String]>,
 ) -> Result<(), QolipError> {
-    let mut tx = pool.begin().await.map_err(|_| QolipError::StoreFailed)?;
+    let mut tx = pool.begin().await.map_err(super::reworks::storage_error)?;
     lock_composition(&mut tx).await?;
     let codes = input
         .changes
@@ -305,14 +305,14 @@ pub(super) async fn edit_products(
     for change in &input.changes {
         let item = sqlx::query_as::<_, (String, String, String)>(
             "SELECT code, name, item_group FROM mini_items WHERE lower(btrim(code)) = lower(btrim($1)) FOR UPDATE",
-        ).bind(&change.item_code).fetch_optional(&mut *tx).await.map_err(|_| QolipError::StoreFailed)?
+        ).bind(&change.item_code).fetch_optional(&mut *tx).await.map_err(super::reworks::storage_error)?
             .ok_or(QolipError::MissingItem)?;
         reject_product_in_use(&mut tx, &item.0).await?;
         for draft in &change.add {
             let code = draft.qolip_code.trim().to_lowercase();
             let existing = sqlx::query_scalar::<_, bool>(
                 "SELECT EXISTS (SELECT 1 FROM mini_qolip_product_specs WHERE lower(qolip_code) = $1)"
-            ).bind(&code).fetch_one(&mut *tx).await.map_err(|_| QolipError::StoreFailed)?;
+            ).bind(&code).fetch_one(&mut *tx).await.map_err(super::reworks::storage_error)?;
             let spec = if existing {
                 if !draft.existing_only {
                     return Err(QolipError::QolipCodeConflict);
@@ -324,7 +324,7 @@ pub(super) async fn edit_products(
                 }
                 owner(&change.warehouse, allowed)?;
                 let set_id: String = sqlx::query_scalar("SELECT public.mini_qolip_next_set_id()")
-                    .fetch_one(&mut *tx).await.map_err(|_| QolipError::StoreFailed)?;
+                    .fetch_one(&mut *tx).await.map_err(super::reworks::storage_error)?;
                 let spec = draft.spec(
                     (&item.0, &item.1, &item.2),
                     &change.warehouse,
@@ -341,7 +341,7 @@ pub(super) async fn edit_products(
                 .bind(&change.warehouse)
                 .execute(&mut *tx)
                 .await
-                .map_err(|_| QolipError::StoreFailed)?;
+                .map_err(super::reworks::storage_error)?;
                 super::catalog::save_product_spec_tx(&mut tx, spec).await?
             };
             owner(&spec.warehouse, allowed)?;
@@ -370,6 +370,6 @@ pub(super) async fn edit_products(
         )
         .await?;
     }
-    tx.commit().await.map_err(|_| QolipError::StoreFailed)?;
+    tx.commit().await.map_err(super::reworks::storage_error)?;
     Ok(())
 }

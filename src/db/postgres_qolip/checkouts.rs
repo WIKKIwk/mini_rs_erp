@@ -14,9 +14,9 @@ pub(super) async fn save_checkout(
     pool: &PgPool,
     checkout: QolipCheckout,
 ) -> Result<QolipCheckout, QolipError> {
-    let mut tx = pool.begin().await.map_err(|_| QolipError::StoreFailed)?;
+    let mut tx = pool.begin().await.map_err(super::reworks::storage_error)?;
     let saved = save_checkout_tx(&mut tx, &checkout, None).await?;
-    tx.commit().await.map_err(|_| QolipError::StoreFailed)?;
+    tx.commit().await.map_err(super::reworks::storage_error)?;
     Ok(saved)
 }
 
@@ -29,7 +29,7 @@ pub(crate) async fn save_checkout_tx(
         .bind(format!("qolip:{}", checkout.qolip_code.trim().to_ascii_lowercase()))
         .execute(&mut **tx)
         .await
-        .map_err(|_| QolipError::StoreFailed)?;
+        .map_err(super::reworks::storage_error)?;
 
     let attached_to_active_order = sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS (
@@ -62,7 +62,7 @@ pub(crate) async fn save_checkout_tx(
     )
     .fetch_one(&mut **tx)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
     if attached_to_active_order {
         return Err(QolipError::QolipInUse);
     }
@@ -77,7 +77,7 @@ pub(crate) async fn save_checkout_tx(
         .bind(checkout.item_code.trim())
         .fetch_optional(&mut **tx)
         .await
-        .map_err(|_| QolipError::StoreFailed)?
+        .map_err(super::reworks::storage_error)?
         .ok_or(QolipError::QolipCodeMismatch)?;
         if !product_group
             .trim()
@@ -94,7 +94,7 @@ pub(crate) async fn save_checkout_tx(
         .bind(checkout.qolip_code.trim())
         .fetch_optional(&mut **tx)
         .await
-        .map_err(|_| QolipError::StoreFailed)?;
+        .map_err(super::reworks::storage_error)?;
         let Some((item_code, item_name, item_group, qolip_code, size)) = spec else {
             return Err(QolipError::QolipCodeNotFound);
         };
@@ -122,7 +122,7 @@ pub(crate) async fn save_checkout_tx(
     .bind(checkout.location_id.trim())
     .fetch_optional(&mut **tx)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
 
     let Some(current_row) = current_row else {
         return Err(QolipError::LocationNotFound);
@@ -148,13 +148,13 @@ pub(crate) async fn save_checkout_tx(
         .bind(remaining)
         .execute(&mut **tx)
         .await
-        .map_err(|_| QolipError::StoreFailed)?;
+        .map_err(super::reworks::storage_error)?;
     } else {
         sqlx::query("DELETE FROM mini_qolip_locations WHERE id = $1")
             .bind(checkout.location_id.trim())
             .execute(&mut **tx)
             .await
-            .map_err(|_| QolipError::StoreFailed)?;
+            .map_err(super::reworks::storage_error)?;
     }
 
     let row = sqlx::query_as::<_, QolipCheckoutRow>(
@@ -192,7 +192,7 @@ pub(crate) async fn save_checkout_tx(
     .bind(serde_json::to_value(checkout).map_err(|_| QolipError::StoreFailed)?)
     .fetch_one(&mut **tx)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
 
     Ok(row_to_checkout(row))
 }
@@ -269,7 +269,7 @@ pub(super) async fn load_checkouts(
         .fetch_all(pool)
         .await
     }
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
 
     Ok(rows.into_iter().map(row_to_checkout).collect())
 }
@@ -293,7 +293,7 @@ pub(super) async fn load_open_checkout_by_qolip_code(
     .bind(qolip_code.trim())
     .fetch_optional(pool)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
 
     Ok(row.map(row_to_checkout))
 }
@@ -340,7 +340,7 @@ pub(super) async fn load_open_checkouts_for_worker(
     .bind(limit.max(1) as i64)
     .fetch_all(pool)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
     Ok(rows.into_iter().map(row_to_checkout).collect())
 }
 
@@ -360,7 +360,7 @@ pub(super) async fn load_checkout_by_id(
     .bind(checkout_id.trim())
     .fetch_optional(pool)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
 
     Ok(row.map(row_to_checkout))
 }
@@ -401,7 +401,7 @@ pub(crate) async fn return_stopped_session_checkouts_tx(
             .bind(format!("qolip:{code}"))
             .execute(&mut **tx)
             .await
-            .map_err(|_| QolipError::StoreFailed)?;
+            .map_err(super::reworks::storage_error)?;
     }
 
     let rows = sqlx::query_as::<_, QolipCheckoutRow>(
@@ -421,7 +421,7 @@ pub(crate) async fn return_stopped_session_checkouts_tx(
     .bind(&code_keys)
     .fetch_all(&mut **tx)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
 
     let mut returned = 0;
     for row in rows {
@@ -434,7 +434,7 @@ pub(crate) async fn return_stopped_session_checkouts_tx(
         .bind(checkout.id.trim())
         .execute(&mut **tx)
         .await
-        .map_err(|_| QolipError::StoreFailed)?;
+        .map_err(super::reworks::storage_error)?;
         let restore = location_from_checkout(&checkout);
         restore_checkout_location_tx(tx, &restore).await?;
         returned += 1;
@@ -457,7 +457,7 @@ async fn restore_checkout_location_tx(
     .bind(restore.id.trim())
     .fetch_optional(&mut **tx)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
 
     if let Some(existing_row) = existing_row {
         let existing = row_to_location(existing_row);
@@ -473,7 +473,7 @@ async fn restore_checkout_location_tx(
         .bind(existing.quantity + restore.quantity)
         .execute(&mut **tx)
         .await
-        .map_err(|_| QolipError::StoreFailed)?;
+        .map_err(super::reworks::storage_error)?;
     } else {
         sqlx::query(
             "INSERT INTO mini_qolip_locations (
@@ -500,7 +500,7 @@ async fn restore_checkout_location_tx(
         .bind(serde_json::to_value(restore).map_err(|_| QolipError::StoreFailed)?)
         .execute(&mut **tx)
         .await
-        .map_err(|_| QolipError::StoreFailed)?;
+        .map_err(super::reworks::storage_error)?;
     }
     Ok(())
 }
@@ -512,15 +512,15 @@ pub(super) async fn return_checkout_to_location(
     column_number: Option<i32>,
 ) -> Result<QolipCheckout, QolipError> {
     let checkout_id = checkout_id.trim();
-    let mut tx = pool.begin().await.map_err(|_| QolipError::StoreFailed)?;
+    let mut tx = pool.begin().await.map_err(super::reworks::storage_error)?;
 
     let code = sqlx::query_scalar::<_, String>(
         "SELECT qolip_code FROM mini_qolip_checkouts WHERE id = $1",
     ).bind(checkout_id).fetch_optional(&mut *tx).await
-        .map_err(|_| QolipError::StoreFailed)?.ok_or(QolipError::CheckoutNotFound)?;
+        .map_err(super::reworks::storage_error)?.ok_or(QolipError::CheckoutNotFound)?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
         .bind(format!("qolip:{}", code.trim().to_ascii_lowercase()))
-        .execute(&mut *tx).await.map_err(|_| QolipError::StoreFailed)?;
+        .execute(&mut *tx).await.map_err(super::reworks::storage_error)?;
 
     let row = sqlx::query_as::<_, QolipCheckoutRow>(
         "UPDATE mini_qolip_checkouts
@@ -535,7 +535,7 @@ pub(super) async fn return_checkout_to_location(
     .bind(checkout_id)
     .fetch_optional(&mut *tx)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
 
     let Some(row) = row else {
         let exists = sqlx::query_scalar::<_, bool>(
@@ -544,7 +544,7 @@ pub(super) async fn return_checkout_to_location(
         .bind(checkout_id)
         .fetch_one(&mut *tx)
         .await
-        .map_err(|_| QolipError::StoreFailed)?;
+        .map_err(super::reworks::storage_error)?;
         return Err(if exists {
             QolipError::CheckoutNotReturnable
         } else {
@@ -578,13 +578,13 @@ pub(super) async fn return_checkout_to_location(
     .bind(checkout.qolip_code.trim())
     .fetch_one(&mut *tx)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
     if attached_to_active_order {
         return Err(QolipError::QolipInUse);
     }
     let restore = location_from_checkout_target(&checkout, row_letter, column_number)?;
     restore_checkout_location_tx(&mut tx, &restore).await?;
 
-    tx.commit().await.map_err(|_| QolipError::StoreFailed)?;
+    tx.commit().await.map_err(super::reworks::storage_error)?;
     Ok(checkout)
 }

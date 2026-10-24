@@ -16,7 +16,7 @@ pub(super) async fn save_product_spec_tx(
     .bind(&normalized_qolip_code)
     .fetch_one(&mut **tx)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
     if exists {
         return Err(QolipError::QolipCodeConflict);
     }
@@ -45,7 +45,7 @@ pub(super) async fn save_product_spec_tx(
     .bind(spec.qolip_code.trim())
     .execute(&mut **tx)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
     spec.color = spec.color.trim().to_string();
     let row = sqlx::query_as::<_, QolipProductSpecRow>(
         "INSERT INTO mini_qolip_product_specs (
@@ -71,7 +71,7 @@ pub(super) async fn save_product_spec_tx(
     .bind(serde_json::to_value(&spec).map_err(|_| QolipError::StoreFailed)?)
     .fetch_optional(&mut **tx)
     .await
-    .map_err(|_| QolipError::StoreFailed)?
+    .map_err(super::reworks::storage_error)?
     .ok_or(QolipError::QolipCodeConflict)?;
     Ok(row_to_product_spec(row))
 }
@@ -86,7 +86,7 @@ pub(super) async fn rename_product_spec(
     if previous.is_empty() || next.is_empty() {
         return Err(QolipError::MissingQolipCode);
     }
-    let mut tx = pool.begin().await.map_err(|_| QolipError::StoreFailed)?;
+    let mut tx = pool.begin().await.map_err(super::reworks::storage_error)?;
     super::product_transfer::lock_composition(&mut tx).await?;
     let mut codes = vec![previous.clone(), next.clone()];
     codes.sort();
@@ -94,7 +94,12 @@ pub(super) async fn rename_product_spec(
     for code in codes {
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
             .bind(format!("qolip:{code}")).execute(&mut *tx).await
-            .map_err(|_| QolipError::StoreFailed)?;
+            .map_err(super::reworks::storage_error)?;
+    }
+    if previous != next {
+        let tracked: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM mini_qolip_mileage_cycles WHERE qolip_code_key = $1)")
+            .bind(&previous).fetch_one(&mut *tx).await.map_err(super::reworks::storage_error)?;
+        if tracked { return Err(QolipError::QolipHistoryLocked); }
     }
     spec.color = spec.color.trim().to_string();
     sqlx::query(
@@ -109,7 +114,7 @@ pub(super) async fn rename_product_spec(
     .bind(&next)
     .execute(&mut *tx)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
     if previous != next {
         let exists = sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS (
@@ -145,7 +150,7 @@ pub(super) async fn rename_product_spec(
         .bind(&next)
         .fetch_one(&mut *tx)
         .await
-        .map_err(|_| QolipError::StoreFailed)?;
+        .map_err(super::reworks::storage_error)?;
         if exists {
             return Err(QolipError::QolipCodeConflict);
         }
@@ -177,7 +182,7 @@ pub(super) async fn rename_product_spec(
     .bind(&previous)
     .fetch_one(&mut *tx)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
     if blocked {
         return Err(QolipError::QolipInUse);
     }
@@ -206,17 +211,17 @@ pub(super) async fn rename_product_spec(
     .bind(serde_json::to_value(&spec).map_err(|_| QolipError::StoreFailed)?)
     .fetch_optional(&mut *tx)
     .await
-    .map_err(|_| QolipError::StoreFailed)?
+    .map_err(super::reworks::storage_error)?
     .ok_or(QolipError::QolipCodeNotFound)?;
-    tx.commit().await.map_err(|_| QolipError::StoreFailed)?;
+    tx.commit().await.map_err(super::reworks::storage_error)?;
     Ok(row_to_product_spec(row))
 }
 
 pub(super) async fn delete_product_specs(pool: &PgPool, qolip_codes: &[String]) -> Result<usize, QolipError> {
-    let mut tx = pool.begin().await.map_err(|_| QolipError::StoreFailed)?;
+    let mut tx = pool.begin().await.map_err(super::reworks::storage_error)?;
     super::product_transfer::lock_composition(&mut tx).await?;
     let deleted = delete_product_specs_tx(&mut tx, qolip_codes).await?;
-    tx.commit().await.map_err(|_| QolipError::StoreFailed)?;
+    tx.commit().await.map_err(super::reworks::storage_error)?;
     Ok(deleted)
 }
 
@@ -238,8 +243,11 @@ pub(super) async fn delete_product_specs_tx(
     for code in &normalized {
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
             .bind(format!("qolip:{code}")).execute(&mut **tx).await
-            .map_err(|_| QolipError::StoreFailed)?;
+            .map_err(super::reworks::storage_error)?;
     }
+    let tracked: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM mini_qolip_mileage_cycles WHERE qolip_code_key = ANY($1))")
+        .bind(&normalized).fetch_one(&mut **tx).await.map_err(super::reworks::storage_error)?;
+    if tracked { return Err(QolipError::QolipHistoryLocked); }
     sqlx::query(
         "SELECT pg_advisory_xact_lock(hashtext(lock_key)::bigint)
          FROM (
@@ -251,7 +259,7 @@ pub(super) async fn delete_product_specs_tx(
     .bind(&normalized)
     .execute(&mut **tx)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
 
     let _locked_specs = sqlx::query_scalar::<_, String>(
         "SELECT qolip_code
@@ -263,7 +271,7 @@ pub(super) async fn delete_product_specs_tx(
     .bind(&normalized)
     .fetch_all(&mut **tx)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
     let _locked_locations = sqlx::query_scalar::<_, String>(
         "SELECT qolip_code
          FROM mini_qolip_locations
@@ -274,7 +282,7 @@ pub(super) async fn delete_product_specs_tx(
     .bind(&normalized)
     .fetch_all(&mut **tx)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
 
     let in_use = sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS (
@@ -306,7 +314,7 @@ pub(super) async fn delete_product_specs_tx(
     .bind(&normalized)
     .fetch_one(&mut **tx)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(super::reworks::storage_error)?;
     if in_use {
         return Err(QolipError::QolipInUse);
     }
@@ -326,17 +334,17 @@ pub(super) async fn delete_product_specs_tx(
     .bind(&normalized)
     .fetch_one(&mut **tx)
     .await
-    .map_err(|_| QolipError::StoreFailed)? as usize;
+    .map_err(super::reworks::storage_error)? as usize;
 
     sqlx::query("DELETE FROM mini_qolip_locations WHERE lower(qolip_code) = ANY($1)")
         .bind(&normalized)
         .execute(&mut **tx)
         .await
-        .map_err(|_| QolipError::StoreFailed)?;
+        .map_err(super::reworks::storage_error)?;
     sqlx::query("DELETE FROM mini_qolip_product_specs WHERE lower(qolip_code) = ANY($1)")
         .bind(&normalized)
         .execute(&mut **tx)
         .await
-        .map_err(|_| QolipError::StoreFailed)?;
+        .map_err(super::reworks::storage_error)?;
     Ok(deleted)
 }

@@ -8,6 +8,7 @@ use rand::RngCore;
 use tokio::sync::RwLock;
 
 use crate::core::auth::models::{Principal, PrincipalRole};
+use crate::core::session::access::SessionAccessValidator;
 use crate::core::session::models::SessionRecord;
 use crate::core::session::store::{JsonSessionStore, LmdbSessionStore, SessionStore};
 use crate::error::AppError;
@@ -17,6 +18,8 @@ pub struct SessionManager {
     store: Arc<dyn SessionStore>,
     ttl_seconds: Option<u64>,
     cache: Arc<RwLock<HashMap<String, SessionRecord>>>,
+    operations: Arc<RwLock<()>>,
+    access_validator: Option<Arc<dyn SessionAccessValidator>>,
 }
 
 impl SessionManager {
@@ -45,11 +48,31 @@ impl SessionManager {
             store,
             ttl_seconds,
             cache: Arc::new(RwLock::new(HashMap::new())),
+            operations: Arc::new(RwLock::new(())),
+            access_validator: None,
         }
+    }
+
+    pub fn with_access_validator(mut self, validator: Arc<dyn SessionAccessValidator>) -> Self {
+        self.access_validator = Some(validator);
+        self
+    }
+
+    async fn require_active(&self, principal: &Principal) -> Result<(), AppError> {
+        if let Some(validator) = &self.access_validator {
+            if !validator.is_active(principal).await? {
+                self.delete_principal_records(&principal.role, &principal.ref_)
+                    .await?;
+                return Err(AppError::Unauthorized);
+            }
+        }
+        Ok(())
     }
 
     #[allow(dead_code)]
     pub async fn create(&self, principal: Principal) -> Result<String, AppError> {
+        let _operation = self.operations.read().await;
+        self.require_active(&principal).await?;
         let token = generate_token();
         let now = time::OffsetDateTime::now_utc();
         let record = SessionRecord::new(principal, now, None, self.ttl_seconds);
@@ -59,11 +82,14 @@ impl SessionManager {
     }
 
     pub async fn get(&self, token: &str) -> Result<Principal, AppError> {
-        if let Some(record) = self.cache.read().await.get(token).cloned() {
+        let _operation = self.operations.read().await;
+        let cached = self.cache.read().await.get(token).cloned();
+        if let Some(record) = cached {
             if record.is_expired(time::OffsetDateTime::now_utc()) {
-                self.delete(token).await?;
+                self.delete_record(token).await?;
                 return Err(AppError::Unauthorized);
             }
+            self.require_active(&record.principal).await?;
             return Ok(record.principal);
         }
 
@@ -77,17 +103,33 @@ impl SessionManager {
         }
 
         let principal = record.principal.clone();
+        self.require_active(&principal).await?;
         self.cache.write().await.insert(token.to_string(), record);
         Ok(principal)
     }
 
     pub async fn delete(&self, token: &str) -> Result<(), AppError> {
+        let _operation = self.operations.write().await;
+        self.delete_record(token).await
+    }
+
+    async fn delete_record(&self, token: &str) -> Result<(), AppError> {
         self.store.delete(token).await?;
         self.cache.write().await.remove(token);
         Ok(())
     }
 
     pub async fn delete_for_principal(
+        &self,
+        role: &PrincipalRole,
+        principal_ref: &str,
+    ) -> Result<usize, AppError> {
+        // Do not let an in-flight read/update restore a revoked token afterward.
+        let _operation = self.operations.write().await;
+        self.delete_principal_records(role, principal_ref).await
+    }
+
+    async fn delete_principal_records(
         &self,
         role: &PrincipalRole,
         principal_ref: &str,
@@ -104,7 +146,10 @@ impl SessionManager {
     }
 
     pub async fn update(&self, token: &str, principal: Principal) -> Result<(), AppError> {
-        let existing = if let Some(record) = self.cache.read().await.get(token).cloned() {
+        let _operation = self.operations.read().await;
+        self.require_active(&principal).await?;
+        let cached = self.cache.read().await.get(token).cloned();
+        let existing = if let Some(record) = cached {
             Some(record)
         } else {
             self.store.get(token).await?
@@ -114,7 +159,7 @@ impl SessionManager {
         };
 
         if existing.is_expired(time::OffsetDateTime::now_utc()) {
-            self.delete(token).await?;
+            self.delete_record(token).await?;
             return Err(AppError::Unauthorized);
         }
 
@@ -131,6 +176,10 @@ fn generate_token() -> String {
     rand::rng().fill_bytes(&mut bytes);
     URL_SAFE_NO_PAD.encode(bytes)
 }
+
+#[cfg(test)]
+#[path = "revocation_tests.rs"]
+mod revocation_tests;
 
 #[cfg(test)]
 mod tests {
