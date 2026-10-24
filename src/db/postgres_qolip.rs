@@ -8,6 +8,7 @@ use crate::core::qolip::{
 };
 
 mod catalog;
+mod catalog_page;
 mod cell_qr;
 mod checkouts;
 mod locations;
@@ -49,6 +50,19 @@ impl PostgresQolipStore {
 
 #[async_trait]
 impl QolipStorePort for PostgresQolipStore {
+    async fn catalog_page(
+        &self, query: &str, limit: usize,
+        after: Option<&crate::core::qolip::QolipCatalogPosition>,
+        allowed: Option<&[String]>,
+    ) -> Result<Vec<crate::core::qolip::QolipCatalogEntry>, QolipError> {
+        catalog_page::load(&self.pool, query, limit, after, allowed).await
+    }
+
+    async fn catalog_detail(
+        &self, item_code: &str, allowed: Option<&[String]>,
+    ) -> Result<Vec<QolipProduct>, QolipError> {
+        catalog::load_products_inner(&self.pool, "", None, true, allowed, Some(item_code)).await
+    }
     async fn next_set_id(&self) -> Result<String, QolipError> {
         sqlx::query_scalar("SELECT public.mini_qolip_next_set_id()")
             .fetch_one(&self.pool)

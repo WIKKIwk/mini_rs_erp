@@ -9,6 +9,42 @@ use super::models::{
 
 #[async_trait]
 pub trait QolipStorePort: Send + Sync {
+    /// Distinct products, ordered by (lower(name), lower(code)). PostgreSQL
+    /// implements a names-only query, without materializing mold details.
+    async fn catalog_page(
+        &self,
+        query: &str,
+        limit: usize,
+        after: Option<&super::QolipCatalogPosition>,
+        allowed_warehouses: Option<&[String]>,
+    ) -> Result<Vec<super::QolipCatalogEntry>, QolipError> {
+        let mut grouped = std::collections::BTreeMap::new();
+        for product in self.products(query, usize::MAX, true, allowed_warehouses).await? {
+            if product.qolip_code.trim().is_empty() { continue; }
+            let key = product.code.trim().to_lowercase();
+            grouped.entry(key).or_insert(super::QolipCatalogEntry {
+                code: product.code,
+                name: product.name,
+            });
+        }
+        let mut entries = grouped.into_values().collect::<Vec<_>>();
+        entries.sort_by_key(|entry| (entry.name.to_lowercase(), entry.code.to_lowercase()));
+        if let Some(after) = after {
+            entries.retain(|entry| (entry.name.to_lowercase(), entry.code.to_lowercase())
+                > (after.name.clone(), after.code.clone()));
+        }
+        entries.truncate(limit);
+        Ok(entries)
+    }
+    async fn catalog_detail(
+        &self,
+        item_code: &str,
+        allowed_warehouses: Option<&[String]>,
+    ) -> Result<Vec<QolipProduct>, QolipError> {
+        Ok(self.products("", usize::MAX, true, allowed_warehouses).await?
+            .into_iter().filter(|product| product.code.trim().eq_ignore_ascii_case(item_code.trim()))
+            .collect())
+    }
     async fn next_set_id(&self) -> Result<String, QolipError> {
         super::set_ids::next_memory_set_id()
     }

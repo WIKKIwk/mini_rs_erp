@@ -1,5 +1,6 @@
 mod memory_store;
 mod models;
+mod catalog;
 pub(crate) mod normalize;
 mod normalize_qr;
 mod ports;
@@ -11,6 +12,7 @@ mod management;
 mod service_tests;
 
 pub use memory_store::MemoryQolipStore;
+pub use catalog::{QolipCatalogEntry, QolipCatalogPosition};
 pub use models::{
     QolipBlock, QolipCellQr, QolipCellQrInput, QolipCheckout, QolipCheckoutCreate,
     QolipCheckoutReturn, QolipError, QolipLocation, QolipLocationMove, QolipLocationMoveBatch,

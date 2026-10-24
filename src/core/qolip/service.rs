@@ -17,7 +17,7 @@ use crate::core::text::trim_owned;
 
 #[derive(Clone)]
 pub struct QolipService {
-    store: Arc<dyn QolipStorePort>,
+    pub(super) store: Arc<dyn QolipStorePort>,
 }
 
 impl QolipService {

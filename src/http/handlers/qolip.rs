@@ -19,11 +19,13 @@ mod order_products;
 mod product_transfer;
 mod shared_sets;
 mod management;
+mod catalog;
 
 pub use order_products::order_products;
 pub use product_transfer::product_transfer;
 pub use shared_sets::shared_sets;
 pub use management::{sets, create_set, product_molds};
+pub use catalog::{catalog_page, catalog_detail};
 
 use self::support::*;
 pub use self::support::{

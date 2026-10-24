@@ -5,6 +5,19 @@ pub(super) async fn load_products(
     with_qolip_only: bool,
     allowed_warehouses: Option<&[String]>,
 ) -> Result<Vec<QolipProduct>, QolipError> {
+    load_products_inner(
+        pool, query, Some(limit.max(1) as i64), with_qolip_only, allowed_warehouses, None,
+    ).await
+}
+
+pub(super) async fn load_products_inner(
+    pool: &PgPool,
+    query: &str,
+    limit: Option<i64>,
+    with_qolip_only: bool,
+    allowed_warehouses: Option<&[String]>,
+    item_code: Option<&str>,
+) -> Result<Vec<QolipProduct>, QolipError> {
     let query = query.trim().to_lowercase();
     let pattern = format!("%{query}%");
     // None = admin; otherwise even unplaced molds require a persisted owner.
@@ -43,6 +56,7 @@ pub(super) async fn load_products(
             FROM mini_items items
             LEFT JOIN group_kind ON lower(items.item_group) = group_kind.group_name
             WHERE COALESCE(group_kind.is_finished, false)
+              AND ($6::text IS NULL OR lower(btrim(items.code)) = $6)
         ),
         legacy_locations AS (
             SELECT DISTINCT ON (lower(location.qolip_code))
@@ -132,7 +146,8 @@ pub(super) async fn load_products(
         ),
         visible_sources AS (
             SELECT * FROM qolip_sources
-            WHERE $5::text[] IS NULL OR lower(btrim(warehouse)) = ANY($5)
+            WHERE ($5::text[] IS NULL OR lower(btrim(warehouse)) = ANY($5))
+              AND ($6::text IS NULL OR lower(btrim(item_code)) = $6)
         ),
         product_rows AS (
             SELECT
@@ -178,6 +193,7 @@ pub(super) async fn load_products(
                 bool_or(lower(customers.name) LIKE $2 OR lower(customers.ref) LIKE $2) AS matches_query
             FROM mini_customer_items assignments
             JOIN mini_customers customers ON customers.ref = assignments.customer_ref
+            WHERE $6::text IS NULL OR lower(btrim(assignments.item_code)) = $6
             GROUP BY lower(assignments.item_code)
         ),
         active_sessions AS MATERIALIZED (
@@ -232,9 +248,10 @@ pub(super) async fn load_products(
     )
     .bind(query)
     .bind(pattern)
-    .bind(limit.max(1) as i64)
+    .bind(limit)
     .bind(with_qolip_only)
     .bind(allowed)
+    .bind(item_code.map(|code| code.trim().to_lowercase()))
     .fetch_all(pool)
     .await
     .map_err(|_| QolipError::StoreFailed)?;
