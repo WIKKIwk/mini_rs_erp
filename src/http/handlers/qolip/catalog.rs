@@ -75,12 +75,26 @@ pub async fn catalog_page(
     } else {
         None
     };
+    let item_codes = entries
+        .iter()
+        .map(|entry| entry.code.clone())
+        .collect::<Vec<_>>();
+    let images = state
+        .qolip
+        .order_image_order_ids(&item_codes)
+        .await
+        .map_err(qolip_error)?
+        .into_iter()
+        .map(|(code, order_id)| (code.trim().to_lowercase(), order_id))
+        .collect::<std::collections::HashMap<_, _>>();
     let items = entries
         .into_iter()
         .map(|entry| {
             serde_json::json!({
                 "id": format!("qp1.{}", URL_SAFE_NO_PAD.encode(entry.code.as_bytes())),
                 "name": entry.name,
+                "order_image_order_id": images.get(&entry.code.trim().to_lowercase())
+                    .map(String::as_str).unwrap_or_default(),
             })
         })
         .collect::<Vec<_>>();

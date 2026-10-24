@@ -40,15 +40,20 @@ async fn verify_http_catalog(pool: &sqlx::PgPool) {
         for item in items {
             assert_eq!(
                 item.as_object().unwrap().len(),
-                2,
-                "only id and name belong in the list"
+                3,
+                "the list contains an identity, name and lightweight image reference"
             );
+            assert!(item["order_image_order_id"].is_string());
+            assert!(item.get("code").is_none());
+            assert!(item.get("qolip_code").is_none());
             assert!(seen.insert(item["id"].as_str().unwrap().to_owned()));
         }
         if first_id.is_empty() {
             first_id = items[0]["id"].as_str().unwrap().to_owned();
             assert_eq!(items[0]["name"], items[1]["name"]);
             assert_ne!(items[0]["id"], items[1]["id"]);
+            assert_eq!(items[0]["order_image_order_id"], "catalog-order-image");
+            assert_eq!(items[1]["order_image_order_id"], "");
             first_cursor = body["next_cursor"].as_str().unwrap().to_owned();
         }
         if let Some(cursor) = body["next_cursor"].as_str() {
@@ -68,6 +73,10 @@ async fn verify_http_catalog(pool: &sqlx::PgPool) {
     assert_eq!(response.status(), StatusCode::OK);
     let body = json_body(response).await;
     assert_eq!(body["products"].as_array().unwrap().len(), 205);
+    assert_eq!(
+        body["products"][0]["order_image_order_id"],
+        "catalog-order-image"
+    );
     assert!(
         body["products"]
             .as_array()
@@ -191,6 +200,10 @@ async fn qolip_catalog_postgres_pages_match_visible_inventory_and_details_are_un
             CASE WHEN n < 2 THEN 'Duplicate name' ELSE 'Product ' || lpad(n::text, 3, '0') END,
             'Tayyor mahsulot' FROM generate_series(0, 401) n;
         INSERT INTO mini_items (code, name, item_group) VALUES ('HIDDEN', 'Hidden product', 'Tayyor mahsulot');
+        INSERT INTO mini_production_maps (id, product_code, title, map_json, updated_at) VALUES
+            ('catalog-order-image', 'ITEM-000', 'Product image', '{"image_id":"catalog-image"}', now() - interval '1 day'),
+            ('catalog-order-no-image', 'ITEM-000', 'Newer order without image', '{}', now()),
+            ('hidden-order-image', 'HIDDEN', 'Hidden product image', '{"image_id":"hidden-image"}', now());
         INSERT INTO mini_warehouses (id, name, parent_warehouse) VALUES
             ('owner-a', 'Molds A', ''), ('owner-b', 'Molds B', '');
         INSERT INTO mini_warehouse_assignments

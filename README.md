@@ -38,9 +38,10 @@ schema is maintained in [PostgreSQL migrations](migrations/postgres).
 ### Qolip catalog paging
 
 `GET /v1/mobile/qolip/products/page?limit=200` returns distinct products as
-`items: [{id, name}]`, with `has_more` and `next_cursor`. Pass `cursor` for the
-next page and `q` to search the catalog on the server. A page contains at most
-200 products, regardless of how many molds each product has.
+`items: [{id, name, order_image_order_id}]`, with `has_more` and `next_cursor`.
+Pass `cursor` for the next page and `q` to search the catalog on the server. A page
+contains at most 200 products, regardless of how many molds each product has. Image references
+are looked up once per page; thumbnails load independently of mold details.
 
 `GET /v1/mobile/qolip/products/detail?id=...` returns the selected product's
 complete mold details, current use status, and image reference. Both reads
