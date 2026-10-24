@@ -63,6 +63,7 @@ pub struct LaminatsiyaAstatkaCommitResult {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct LaminatsiyaAstatkaSnapshot {
+    pub layer_remainders_required: bool,
     pub session: Option<OrderRunSession>,
     pub sources: Vec<LayerRemainderSource>,
     pub allow_empty_sources: bool,
@@ -80,6 +81,7 @@ impl ProductionMapService {
     ) -> Result<LaminatsiyaAstatkaSnapshot, ProductionMapError> {
         let apparatus = apparatus.trim();
         let order_id = order_id.trim();
+        let layer_remainders_required = self.lamination_settings().await?.layer_remainders_required;
         // A saved request is an immutable receipt. Do not make reconciliation
         // depend on stocks that were consumed by this request or a later shift.
         if !request_id.trim().is_empty()
@@ -92,11 +94,24 @@ impl ProductionMapService {
                 return Err(ProductionMapError::ProgressInputInvalid);
             }
             return Ok(LaminatsiyaAstatkaSnapshot {
+                layer_remainders_required,
                 session: Some(result.session.clone()),
                 sources: Vec::new(),
                 allow_empty_sources: false,
                 remainders: result.remainders.clone(),
                 request_result: Some(result),
+            });
+        }
+        // The legacy count/waste report does not need physical input rolls.
+        // In particular, missing historical roll metrics must not block it.
+        if !layer_remainders_required {
+            return Ok(LaminatsiyaAstatkaSnapshot {
+                layer_remainders_required,
+                session: None,
+                sources: Vec::new(),
+                allow_empty_sources: false,
+                remainders: Vec::new(),
+                request_result: None,
             });
         }
         let mut sources = self.layer_remainder_sources(apparatus, order_id).await?;
@@ -123,6 +138,7 @@ impl ProductionMapService {
                         != Some("opening_wip")
             });
         Ok(LaminatsiyaAstatkaSnapshot {
+            layer_remainders_required,
             session,
             sources,
             allow_empty_sources,
@@ -213,6 +229,9 @@ impl ProductionMapService {
             } else {
                 Err(ProductionMapError::ProgressInputInvalid)
             };
+        }
+        if !self.lamination_settings().await?.layer_remainders_required {
+            return Err(ProductionMapError::QueueActionNotAllowed);
         }
         let order_id = self.astatka_order_id(&input.order_id).await?;
         let session = self

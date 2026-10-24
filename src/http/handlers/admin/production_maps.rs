@@ -28,6 +28,8 @@ use crate::google_sheets::is_sheet_order_map;
 mod astatka;
 mod layer_remainders;
 pub use layer_remainders::{production_map_layer_remainders, production_map_layer_remainder_reprint};
+mod lamination_settings;
+pub use lamination_settings::production_map_lamination_settings;
 mod completion;
 mod order_page;
 pub use order_page::{production_map_order_page, production_map_closed_order_detail};

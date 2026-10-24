@@ -94,6 +94,7 @@ impl PostgresProductionMapStore {
             }
             return serde_json::from_value(response).map_err(|_| ProductionMapError::StoreFailed);
         }
+        lamination_settings::require_enabled_tx(&mut tx).await?;
         let frozen: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM mini_order_control_states WHERE order_id=$1
              AND state IN ('frozen','freeze_requested'))",

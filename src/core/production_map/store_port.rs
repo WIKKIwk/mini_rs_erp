@@ -10,6 +10,7 @@ use super::capacity::*;
 use super::materials::RawMaterialAssignment;
 use super::opening_wip::*;
 use super::types::*;
+use super::LaminationSettings;
 use super::BosmaAstatkaReport;
 use super::print_preflight::PrintPreflightHold;
 
@@ -190,6 +191,14 @@ fn is_warehouse_processing_marker(value: &str) -> bool {
 
 #[async_trait]
 pub trait ProductionMapStorePort: Send + Sync {
+    async fn lamination_settings(&self) -> StoreResult<LaminationSettings> {
+        Ok(LaminationSettings::default())
+    }
+    async fn update_lamination_settings(
+        &self, _required: bool, _actor: &QueueActionActor,
+    ) -> StoreResult<LaminationSettings> {
+        Err(ProductionMapError::StoreFailed)
+    }
     async fn rezka_astatka_commit_by_request_id(
         &self, _actor: &QueueActionActor, _request_id: &str,
     ) -> StoreResult<Option<(serde_json::Value, RezkaAstatkaReport)>> {

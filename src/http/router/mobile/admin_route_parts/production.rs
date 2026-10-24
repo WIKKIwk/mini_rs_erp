@@ -183,6 +183,10 @@ fn production_routes() -> Router<AppState> {
             any(admin::production_map_laminatsiya_astatka),
         )
         .route(
+            "/v1/mobile/admin/production-maps/lamination-settings",
+            any(admin::production_map_lamination_settings),
+        )
+        .route(
             "/v1/mobile/admin/production-maps/layer-remainders",
             any(admin::production_map_layer_remainders),
         )

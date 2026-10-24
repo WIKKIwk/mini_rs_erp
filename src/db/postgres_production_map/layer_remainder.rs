@@ -386,6 +386,7 @@ impl PostgresProductionMapStore {
             }
             return serde_json::from_value(response).map_err(|_| ProductionMapError::StoreFailed);
         }
+        lamination_settings::require_enabled_tx(&mut tx).await?;
         sqlx::query(
             "SELECT session_id FROM mini_order_run_sessions WHERE session_id=$1 FOR UPDATE",
         )

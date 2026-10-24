@@ -34,6 +34,7 @@ mod lifecycle;
 pub(crate) mod realtime;
 mod layer_remainder;
 mod lamination_astatka;
+mod lamination_settings;
 mod sequence_move;
 mod re_pause;
 mod reactivation;

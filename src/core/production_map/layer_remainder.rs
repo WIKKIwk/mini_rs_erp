@@ -4,6 +4,20 @@ use crate::core::quantity::{
 };
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LaminationSettings {
+    pub layer_remainders_required: bool,
+}
+
+impl Default for LaminationSettings {
+    fn default() -> Self {
+        Self {
+            layer_remainders_required: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LayerRemainderInput {
     pub apparatus: String,
@@ -134,6 +148,23 @@ pub(crate) fn json_number(value: &serde_json::Value) -> Option<f64> {
 }
 
 impl ProductionMapService {
+    pub async fn lamination_settings(&self) -> Result<LaminationSettings, ProductionMapError> {
+        self.store.lamination_settings().await
+    }
+
+    pub async fn update_lamination_settings(
+        &self,
+        required: bool,
+        actor: &QueueActionActor,
+    ) -> Result<LaminationSettings, ProductionMapError> {
+        if actor.role != "admin" || actor.ref_.trim().is_empty() {
+            return Err(ProductionMapError::QueueActionNotAllowed);
+        }
+        let settings = self.store.update_lamination_settings(required, actor).await?;
+        self.notify_live();
+        Ok(settings)
+    }
+
     async fn validate_layer_remainder_apparatus(
         &self,
         apparatus: &str,
@@ -203,6 +234,9 @@ impl ProductionMapService {
             || actor.ref_.trim().is_empty()
         {
             return Err(ProductionMapError::ProgressInputInvalid);
+        }
+        if !self.lamination_settings().await?.layer_remainders_required {
+            return Err(ProductionMapError::QueueActionNotAllowed);
         }
         let _guard = self.queue_action_guard().await;
         let record = self.store.record_layer_remainder(input, actor).await?;
