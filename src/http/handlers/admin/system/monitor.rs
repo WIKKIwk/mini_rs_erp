@@ -199,6 +199,7 @@ pub fn start_system_doctor(state: &AppState) {
 
     start_backup_catalog(state);
     let state = state.clone();
+    crate::core::system_doctor::domain::runtime::start(state.backup_doctor.system_doctor());
     crate::core::system_doctor::wifi::runtime::start(state.backup_doctor.system_doctor());
     let hub = state.system_monitor_hub.clone();
     handle.spawn(async move {

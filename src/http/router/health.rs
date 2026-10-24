@@ -45,6 +45,11 @@ fn is_ready(report: Option<&AdminServerMonitorResponse>, now: i64) -> bool {
                 .doctor
                 .checks
                 .iter()
+                .any(|check| check.id == "domain" && check.critical)
+            && !report
+                .doctor
+                .checks
+                .iter()
                 .any(|check| check.id == "database" && check.critical)
             && sampled_at > 0
             && now >= sampled_at
@@ -89,6 +94,17 @@ mod tests {
         report.doctor.protected = true;
         assert!(!is_ready(Some(&report), 100));
         report.doctor.protected = false;
+        report
+            .doctor
+            .checks
+            .push(crate::core::system_doctor::DoctorCheck {
+                id: "domain".to_string(),
+                status: "critical".to_string(),
+                critical: true,
+                ..Default::default()
+            });
+        assert!(!is_ready(Some(&report), 100));
+        report.doctor.checks.pop();
         report.database.reachable = false;
         assert!(!is_ready(Some(&report), 100));
     }

@@ -118,6 +118,7 @@ TUNNEL_NAME="${TUNNEL_NAME:-mini-rs-erp-$HOSTNAME_SLUG}"
 STATE_ROOT="${STATE_ROOT:-$REPO_ROOT/garbage/domain}"
 STATE_DIR="$STATE_ROOT/$PUBLIC_HOSTNAME"
 mkdir -p "$STATE_DIR"
+STATE_DIR="$(cd "$STATE_DIR" && pwd)"
 
 APP_PID="$STATE_DIR/mini_rs_erp.pid"
 APP_LOG="$STATE_DIR/mini_rs_erp.log"
@@ -125,6 +126,11 @@ TUNNEL_PID="$STATE_DIR/cloudflared.pid"
 TUNNEL_LOG="$STATE_DIR/cloudflared.log"
 TUNNEL_CONFIG="$STATE_DIR/cloudflared.yml"
 URL_FILE="$STATE_DIR/url"
+
+export MINI_ERP_DOCTOR_DOMAIN_URL="https://$PUBLIC_HOSTNAME"
+export MINI_ERP_DOCTOR_DOMAIN_LOCAL_URL="$CORE_URL"
+export MINI_ERP_DOCTOR_DOMAIN_STATE_DIR="$STATE_DIR"
+export MINI_ERP_DOCTOR_DOMAIN_TUNNEL_NAME="$TUNNEL_NAME"
 
 require_cmd() {
 	if ! command -v "$1" >/dev/null 2>&1; then

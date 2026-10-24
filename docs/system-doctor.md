@@ -43,10 +43,12 @@ scheduled backups and database imports. Manual requests return HTTP 503 with
 backup or consuming their retry budget. Previously admitted jobs retain their
 reservation. Admission resumes after confirmed resource recovery.
 
-This version controls backup/import admission. It does not kill processes,
-automatically restore a database, delete production files, or restart the ERP.
-Process crash/hang recovery requires an external supervisor. Host-wide memory
-is observed; per-process RSS and container-specific limits are not collected.
+This version controls backup/import admission and can restart a managed
+Cloudflare Tunnel after confirmed public-domain failures. It does not kill
+unrelated processes, automatically restore a database, delete production files,
+or restart the ERP process. ERP process crash recovery requires an external
+supervisor. Host-wide memory is observed; per-process RSS and container-specific
+limits are not collected.
 
 Automatic scheduled backups have at most three attempts per configured local
 calendar day. The second attempt waits at least one hour after the preceding
@@ -60,7 +62,8 @@ consume the automatic retry budget.
 
 - `GET /healthz` remains the lightweight process liveness response.
 - `GET /readyz` returns 200 only when a cached sample no older than 15 seconds
-  reports a reachable configured database and resource protection is inactive.
+  reports a reachable configured database, no resource pressure and no
+  confirmed public-domain outage.
   A confirmed database outage must also complete its two recovery observations.
   Startup, stale samples and unavailable database return 503. It exposes only
   `{"ok": true}` or `{"ok": false}` and uses `Cache-Control: no-store`.
@@ -73,6 +76,24 @@ consume the automatic retry budget.
 Use the backend's `/readyz` for application readiness: the gateway's own
 `/healthz` indicates gateway liveness. Existing mobile clients can continue to
 read the original monitoring fields and ignore the additive `doctor` object.
+
+## Public domain and tunnel recovery
+
+When `MINI_ERP_DOCTOR_DOMAIN_URL` or `PUBLIC_HOSTNAME` is configured, Doctor
+checks `https://<host>/healthz` every 30 seconds. Three consecutive failed
+checks mark the domain critical and appear in `doctor.checks` and
+`doctor.domain`. It confirms the local ERP endpoint is healthy before attempting
+recovery. If it is, Doctor restarts the `cloudflared` process using the existing
+`cloudflared.yml` and reconnects the named tunnel. It does not change DNS routes
+or create a new tunnel. Recovery attempts are at least one minute apart; two
+successful public checks clear the incident.
+
+`tools/runtime/up_domain.sh` passes its selected host, local endpoint, tunnel
+state directory and tunnel name to the ERP automatically. For other launch
+methods, configure the corresponding `MINI_ERP_DOCTOR_DOMAIN_*` values in
+`.env.example`. Restart the ERP after changing them. A stopped ERP process
+cannot run its own Doctor; configure the operating system's service manager to
+restart the ERP process.
 
 ## Open Wi-Fi Internet recovery
 

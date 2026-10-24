@@ -13,6 +13,7 @@ use crate::core::admin::models::{AdminServerMonitorDatabase, AdminServerMonitorR
 
 const MAX_EVENTS: usize = 32;
 
+pub mod domain;
 pub mod wifi;
 
 #[derive(Debug, Clone)]
@@ -100,6 +101,7 @@ pub struct DoctorReport {
     /// Recent transitions, oldest first. No raw database errors are retained.
     pub events: Vec<DoctorEvent>,
     pub wifi: wifi::WifiRecoveryReport,
+    pub domain: domain::DomainRecoveryReport,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -152,6 +154,60 @@ impl Default for SystemDoctor {
 }
 
 impl SystemDoctor {
+    pub(crate) fn publish_domain(&self, domain: domain::DomainRecoveryReport) {
+        let mut state = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+        let index = match state
+            .report
+            .checks
+            .iter()
+            .position(|check| check.id == "domain")
+        {
+            Some(index) => index,
+            None => {
+                state.report.checks.push(DoctorCheck {
+                    id: "domain".to_string(),
+                    unit: "reachable".to_string(),
+                    ..DoctorCheck::default()
+                });
+                state.report.checks.len() - 1
+            }
+        };
+        let check = &mut state.report.checks[index];
+        let previous_status = check.status.clone();
+        check.status = domain.status.clone();
+        check.critical = domain.critical;
+        check.consecutive_failures = domain.failures;
+        check.consecutive_successes = domain.successes;
+        check.value = Some(i64::from(domain.status == "healthy"));
+        check.message = match (&domain.host, &domain.last_error) {
+            (Some(host), Some(error)) => format!("Domain {host} is {} ({error}).", domain.status),
+            (Some(host), None) => format!("Domain {host} is {}.", domain.status),
+            (None, Some(error)) => format!("Domain check is {} ({error}).", domain.status),
+            (None, None) => format!("Domain check is {}.", domain.status),
+        };
+        if previous_status != check.status {
+            let event = DoctorEvent {
+                rule_id: "domain".to_string(),
+                from_status: previous_status,
+                to_status: check.status.clone(),
+                at_unix: domain.checked_at_unix,
+                message: check.message.clone(),
+            };
+            tracing::info!(
+                from_status = %event.from_status,
+                to_status = %event.to_status,
+                "system doctor domain health transition"
+            );
+            state.report.events.push(event);
+        }
+        if state.report.events.len() > MAX_EVENTS {
+            let excess = state.report.events.len() - MAX_EVENTS;
+            state.report.events.drain(..excess);
+        }
+        state.report.status = aggregate_status(&state.report.checks).to_string();
+        state.report.domain = domain;
+    }
+
     pub(crate) fn publish_wifi(&self, wifi: wifi::WifiRecoveryReport) {
         let mut state = self.inner.lock().unwrap_or_else(|error| error.into_inner());
         if state.report.wifi.status != wifi.status {
