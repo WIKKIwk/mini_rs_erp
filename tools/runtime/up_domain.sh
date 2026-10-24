@@ -321,8 +321,7 @@ ensure_tunnel() {
 	fi
 
 	if curl -fsS "https://$PUBLIC_HOSTNAME/healthz" >/dev/null 2>&1; then
-		printf 'https://%s\n' "$PUBLIC_HOSTNAME" >"$URL_FILE"
-		echo "public endpoint ready: https://$PUBLIC_HOSTNAME"
+		echo "public endpoint reachable: https://$PUBLIC_HOSTNAME"
 		return 0
 	fi
 
@@ -341,12 +340,10 @@ EOF
 	rm -f "$TUNNEL_LOG"
 	spawn_detached "$TUNNEL_PID" "$TUNNEL_LOG" "$REPO_ROOT" cloudflared tunnel --config "$TUNNEL_CONFIG" run "$TUNNEL_NAME"
 
-	if ! wait_for_health "https://$PUBLIC_HOSTNAME" "public endpoint"; then
+	if ! wait_for_health "https://$PUBLIC_HOSTNAME" "public endpoint liveness"; then
 		echo "cloudflared tunnel failed; see $TUNNEL_LOG" >&2
 		exit 1
 	fi
-
-	printf 'https://%s\n' "$PUBLIC_HOSTNAME" >"$URL_FILE"
 }
 
 require_cmd curl
@@ -358,4 +355,10 @@ fi
 ensure_backend
 ensure_tunnel
 
+if ! python3 "$SCRIPT_DIR/post_deploy_health.py" \
+	--local-url "$CORE_URL" --public-url "https://$PUBLIC_HOSTNAME"; then
+	rm -f "$URL_FILE"
+	exit 1
+fi
+printf 'https://%s\n' "$PUBLIC_HOSTNAME" >"$URL_FILE"
 cat "$URL_FILE"

@@ -95,6 +95,17 @@ methods, configure the corresponding `MINI_ERP_DOCTOR_DOMAIN_*` values in
 cannot run its own Doctor; configure the operating system's service manager to
 restart the ERP process.
 
+The first Doctor domain probe runs immediately at backend startup. At the end
+of `up_domain.sh`, an additional deployment check immediately probes both the
+local ERP and the public domain at `/healthz` and `/readyz`, including when the
+services were already running. Every endpoint must return HTTP 200 and JSON
+`{"ok": true}`; redirects and HTML responses fail. The deployment check allows
+up to 90 seconds for startup/recovery, with bounded requests, then exits with an
+error naming the failing endpoints. The public URL is marked ready only after
+all checks pass. Other deployment workflows can run
+`python3 tools/runtime/post_deploy_health.py --local-url http://127.0.0.1:18081 --public-url https://erp.example.com`
+as their final step.
+
 ## Open Wi-Fi Internet recovery
 
 An independent Doctor worker checks Internet access every 15 seconds. After
