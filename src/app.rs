@@ -82,6 +82,7 @@ pub struct AppState {
         Arc<crate::http::handlers::admin::production_maps::StateLiveHub>,
     pub(crate) production_page_live:
         Arc<crate::http::handlers::admin::production_maps::PageLiveHub>,
+    pub(crate) production_tasks_live: Arc<crate::http::handlers::admin::SupplyTasksHub>,
     pub apparatus: CanonicalApparatusService,
     pub apparatus_collections: ApparatusCollectionService,
     pub factory_locations: FactoryLocationService,
@@ -333,6 +334,7 @@ impl AppState {
             production_maps,
             production_state_live: Arc::new(Default::default()),
             production_page_live: Arc::new(Default::default()),
+            production_tasks_live: Arc::new(Default::default()),
             apparatus,
             apparatus_collections,
             factory_locations,

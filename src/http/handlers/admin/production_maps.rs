@@ -31,6 +31,9 @@ pub use layer_remainders::{production_map_layer_remainders, production_map_layer
 mod completion;
 mod order_page;
 pub use order_page::{production_map_order_page, production_map_closed_order_detail};
+mod supply_tasks;
+pub use supply_tasks::{production_tasks_window, production_tasks_live};
+pub(crate) use supply_tasks::SupplyTasksHub;
 mod page_live;
 pub(crate) use page_live::PageLiveHub;
 mod live_delta;

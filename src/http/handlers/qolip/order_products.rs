@@ -27,7 +27,7 @@ pub async fn order_products(
     }
     let (snapshot, _) = state
         .production_maps
-        .live_snapshot_shared_with_revision()
+        .order_snapshot_shared_with_revision(&request.order_ids)
         .await
         .map_err(|_| qolip_error(QolipError::StoreFailed))?;
     let maps = request
@@ -48,15 +48,12 @@ pub async fn order_products(
         .iter()
         .filter_map(|(_, code)| code.clone())
         .collect::<Vec<_>>();
-    let mut products = state
-        .qolip
-        .order_products(&codes)
-        .await
-        .map_err(qolip_error)?;
     let is_admin = state.admin.principal_has_capability(&principal, Capability::AdminAccess).await;
-    if !is_admin && principal.role != crate::core::auth::models::PrincipalRole::MaterialTaminotchi {
-        products = state.qolip.visible_order_products(&codes, &principal).await.map_err(qolip_error)?;
-    }
+    let products = if !is_admin && principal.role != crate::core::auth::models::PrincipalRole::MaterialTaminotchi {
+        state.qolip.visible_order_products(&codes, &principal).await.map_err(qolip_error)?
+    } else {
+        state.qolip.order_products(&codes).await.map_err(qolip_error)?
+    };
     let orders = maps
         .into_iter()
         .map(|(id, code)| {

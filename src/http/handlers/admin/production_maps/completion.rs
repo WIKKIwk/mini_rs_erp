@@ -127,7 +127,7 @@ pub struct ProductionMapLiveQuery {
     projection: String,
 }
 
-async fn authenticated_principal_for_live(
+pub(super) async fn authenticated_principal_for_live(
     state: &AppState,
     headers: &HeaderMap,
     query_token: &str,

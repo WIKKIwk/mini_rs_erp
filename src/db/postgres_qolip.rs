@@ -90,6 +90,9 @@ impl QolipStorePort for PostgresQolipStore {
     async fn order_products(&self, item_codes: &[String]) -> Result<Vec<QolipProduct>, QolipError> {
         order_products::load(&self.pool, item_codes).await
     }
+    async fn order_product_readiness(&self, item_codes: &[String], warehouses: &[String]) -> Result<std::collections::BTreeMap<String, bool>, QolipError> {
+        order_products::readiness(&self.pool, item_codes, warehouses).await
+    }
 
     async fn assigned_warehouses(&self, principal: &Principal) -> Result<Vec<String>, QolipError> {
         load_assigned_warehouses(&self.pool, principal).await

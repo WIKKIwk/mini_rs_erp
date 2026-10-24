@@ -1,4 +1,4 @@
-fn qolip_spec_matches_order(spec: &QolipProductSpec, expected: &QolipProduct) -> bool {
+pub(super) fn qolip_spec_matches_order(spec: &QolipProductSpec, expected: &QolipProduct) -> bool {
     let expected_group = expected.item_group.trim();
     if expected_group.is_empty() || !spec.item_group.trim().eq_ignore_ascii_case(expected_group) {
         return false;

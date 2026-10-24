@@ -97,6 +97,7 @@ mod order_alerts;
 mod order_alerts_chat;
 mod pending_orders;
 mod order_pages;
+mod supply_tasks;
 mod sequence_position_stream_benchmark;
 mod order_images;
 mod production_map_validation;

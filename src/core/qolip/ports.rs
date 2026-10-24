@@ -31,6 +31,28 @@ pub trait QolipStorePort: Send + Sync {
     async fn order_products(&self, _item_codes: &[String]) -> Result<Vec<QolipProduct>, QolipError> {
         Err(QolipError::StoreFailed)
     }
+    /// Bounded task eligibility only. PostgreSQL implements one batched EXISTS
+    /// query; the fallback preserves the service's compatibility semantics.
+    async fn order_product_readiness(
+        &self,
+        item_codes: &[String],
+        warehouses: &[String],
+    ) -> Result<std::collections::BTreeMap<String, bool>, QolipError> {
+        let mut readiness = std::collections::BTreeMap::new();
+        for product in self.order_products(item_codes).await? {
+            let mut specs = self.product_specs(&product.code).await?
+                .into_iter()
+                .filter(|spec| spec.qolip_set_id.is_empty()
+                    && super::service::qolip_spec_matches_order(spec, &product))
+                .collect::<Vec<_>>();
+            specs.extend(self.linked_product_specs(&product.code).await?);
+            let ready = specs.iter().any(|spec| !spec.qolip_code.trim().is_empty()
+                && !spec.warehouse.trim().is_empty()
+                && warehouses.iter().any(|warehouse| warehouse.trim().eq_ignore_ascii_case(spec.warehouse.trim())));
+            readiness.insert(product.code.trim().to_lowercase(), ready);
+        }
+        Ok(readiness)
+    }
     /// Resolve a catalog identity by code, independently of mold rows and search limits.
     async fn product_by_code(&self, _item_code: &str) -> Result<Option<QolipProduct>, QolipError> {
         Err(QolipError::StoreFailed)

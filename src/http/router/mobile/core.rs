@@ -11,6 +11,8 @@ use crate::http::handlers::{
 
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
+        .route("/v1/mobile/production-tasks/window", get(crate::http::handlers::admin::production_tasks_window))
+        .route("/v1/mobile/production-tasks/live", get(crate::http::handlers::admin::production_tasks_live))
         .route("/v1/mobile/raw-material-split/snapshot", get(crate::http::handlers::raw_material_split::snapshot))
         .route("/v1/mobile/raw-material-split/source", get(crate::http::handlers::raw_material_split::source))
         .route("/v1/mobile/raw-material-split/split", axum::routing::post(crate::http::handlers::raw_material_split::split))

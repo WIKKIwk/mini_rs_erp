@@ -664,7 +664,7 @@ fn closed_search_text(
     values.join(" ").to_lowercase()
 }
 
-fn ordered_ids(snapshot: &ProductionMapLiveSnapshot, apparatus: &str) -> Vec<String> {
+pub(super) fn ordered_ids(snapshot: &ProductionMapLiveSnapshot, apparatus: &str) -> Vec<String> {
     let visible = snapshot
         .visible_order_ids
         .get(apparatus)

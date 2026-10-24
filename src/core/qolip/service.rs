@@ -21,6 +21,11 @@ pub struct QolipService {
 }
 
 impl QolipService {
+    pub async fn order_product_readiness(
+        &self, item_codes: &[String], warehouses: &[String],
+    ) -> Result<std::collections::BTreeMap<String, bool>, QolipError> {
+        self.store.order_product_readiness(item_codes, warehouses).await
+    }
     pub async fn visible_order_products(
         &self, item_codes: &[String], principal: &Principal,
     ) -> Result<Vec<QolipProduct>, QolipError> {

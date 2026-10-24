@@ -7,6 +7,8 @@ mod pending_orders;
 pub use pending_orders::{pending_orders, pending_order_image};
 pub(crate) mod production_maps;
 pub use production_maps::{production_map_order_page, production_map_closed_order_detail};
+pub use production_maps::{production_tasks_window, production_tasks_live};
+pub(crate) use production_maps::SupplyTasksHub;
 pub(crate) use production_maps::validate_receipt_order_assignment;
 mod supplier_mutations;
 mod suppliers;

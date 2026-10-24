@@ -99,6 +99,14 @@ async fn qolip_exact_product_lookup_ignores_search_limit_and_preserves_access() 
         );
     }
     let service = QolipService::new(store.clone());
+    // The compact task path must agree with full compatibility while reading
+    // warehouse-scoped readiness in one bounded SQL batch.
+    for warehouses in [vec!["Molds A".into()], vec!["Molds B".into()], vec!["No access".into()], Vec::new()] {
+        let readiness = service.order_product_readiness(&[" zIzI ".into(), "EMPTY".into(), "missing".into()], &warehouses).await.unwrap();
+        assert_eq!(readiness.get("zizi"), Some(&warehouses.iter().any(|name| name == "Molds A" || name == "Molds B")));
+        assert_eq!(readiness.get("empty"), Some(&false));
+        assert!(!readiness.contains_key("missing"));
+    }
     assert_eq!(
         service
             .required_qolips_for_order(" zIzI ", "")
