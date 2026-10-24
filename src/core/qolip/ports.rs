@@ -9,6 +9,12 @@ use super::models::{
 
 #[async_trait]
 pub trait QolipStorePort: Send + Sync {
+    async fn catalog_codes_for_molds(&self, codes: &[String]) -> Result<Vec<String>, QolipError> {
+        let codes = codes.iter().map(|code| code.trim().to_lowercase()).collect::<std::collections::BTreeSet<_>>();
+        Ok(self.products("", usize::MAX, true, None).await?.into_iter()
+            .filter(|product| codes.contains(&product.qolip_code.trim().to_lowercase()))
+            .map(|product| product.code).collect())
+    }
     /// Distinct products, ordered by (lower(name), lower(code)). PostgreSQL
     /// implements a names-only query, without materializing mold details.
     async fn catalog_page(

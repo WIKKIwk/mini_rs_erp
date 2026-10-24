@@ -91,7 +91,7 @@ pub async fn catalog_page(
         .into_iter()
         .map(|entry| {
             serde_json::json!({
-                "id": format!("qp1.{}", URL_SAFE_NO_PAD.encode(entry.code.as_bytes())),
+                "id": format!("qp1.{}", URL_SAFE_NO_PAD.encode(entry.code.trim().to_lowercase().as_bytes())),
                 "name": entry.name,
                 "order_image_order_id": images.get(&entry.code.trim().to_lowercase())
                     .map(String::as_str).unwrap_or_default(),

@@ -20,6 +20,7 @@ mod product_transfer;
 mod shared_sets;
 mod management;
 mod catalog;
+mod catalog_delta;
 
 pub use order_products::order_products;
 pub use product_transfer::product_transfer;

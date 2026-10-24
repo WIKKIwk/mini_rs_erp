@@ -50,6 +50,16 @@ impl PostgresQolipStore {
 
 #[async_trait]
 impl QolipStorePort for PostgresQolipStore {
+    async fn catalog_codes_for_molds(&self, codes: &[String]) -> Result<Vec<String>, QolipError> {
+        let codes = codes.iter().map(|code| code.trim().to_lowercase()).collect::<Vec<_>>();
+        sqlx::query_scalar::<_, String>(r#"
+            SELECT DISTINCT item_code FROM (
+                SELECT item_code FROM mini_qolip_effective_product_molds WHERE lower(qolip_code) = ANY($1)
+                UNION SELECT item_code FROM mini_qolip_locations WHERE lower(qolip_code) = ANY($1)
+                UNION SELECT item_code FROM mini_qolip_checkouts WHERE lower(qolip_code) = ANY($1) AND lower(status) = 'open'
+            ) affected WHERE btrim(item_code) <> ''
+        "#).bind(codes).fetch_all(&self.pool).await.map_err(|_| QolipError::StoreFailed)
+    }
     async fn catalog_page(
         &self, query: &str, limit: usize,
         after: Option<&crate::core::qolip::QolipCatalogPosition>,

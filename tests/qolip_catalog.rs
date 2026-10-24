@@ -132,6 +132,71 @@ async fn verify_http_catalog(pool: &sqlx::PgPool) {
             "{path}"
         );
     }
+    // A local write returns exactly its authoritative catalog changes.
+    let mutation = |method: &str, path: &str, body: serde_json::Value| {
+        Request::builder()
+            .method(method)
+            .uri(path)
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    };
+    let response = app.clone().oneshot(mutation("POST", "/v1/mobile/qolip/product-molds",
+        serde_json::json!({"changes": [{"item_code": "ITEM-002", "remove": ["ITEM-002-MOLD-1"]}]})))
+        .await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    assert_eq!(
+        body["catalog_delta"]["upserts"].as_array().unwrap().len(),
+        0
+    );
+    assert_eq!(
+        body["catalog_delta"]["removed_ids"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let response = app
+        .clone()
+        .oneshot(mutation(
+            "POST",
+            "/v1/mobile/qolip/product-molds",
+            serde_json::json!({"changes": [{"item_code": "ITEM-002", "warehouse": "Molds A",
+            "add": [{"qolip_code": "ITEM-002-MOLD-1", "existing_only": true}]}]}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    let rows = body["catalog_delta"]["upserts"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["name"], "Product 002");
+    assert_eq!(rows[0]["products"].as_array().unwrap().len(), 1);
+    assert_eq!(rows[0]["products"][0]["qolip_code"], "ITEM-002-MOLD-1");
+
+    let response = app
+        .clone()
+        .oneshot(mutation(
+            "DELETE",
+            "/v1/mobile/qolip/product-specs",
+            serde_json::json!({"qolip_codes": ["ITEM-003-MOLD-1"]}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    assert_eq!(body["deleted_count"], 1);
+    assert_eq!(
+        body["catalog_delta"]["removed_ids"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
     sqlx::query("DELETE FROM mini_warehouse_assignments WHERE principal_ref = 'owner-a'")
         .execute(pool)
         .await

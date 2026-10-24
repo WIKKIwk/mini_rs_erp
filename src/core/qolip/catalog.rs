@@ -16,6 +16,9 @@ pub struct QolipCatalogPosition {
 }
 
 impl QolipService {
+    pub async fn catalog_codes_for_molds(&self, codes: &[String]) -> Result<Vec<String>, QolipError> {
+        self.store.catalog_codes_for_molds(codes).await
+    }
     pub async fn catalog_page(
         &self,
         principal: &Principal,

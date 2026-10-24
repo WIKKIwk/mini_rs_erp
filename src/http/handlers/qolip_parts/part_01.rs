@@ -283,13 +283,19 @@ pub async fn product_specs(
             let mut input: QolipProductSpecUpsert =
                 serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json"))?;
             resolve_qolip_spec_warehouse(&state, &principal, &mut input).await?;
+            let mut codes = catalog_delta::affected_codes(&state, &principal, &[
+                input.qolip_code.clone(), input.previous_qolip_code.clone(),
+            ]).await.map_err(qolip_error)?;
+            codes.push(input.item_code.clone());
             let spec = state
                 .qolip
                 .upsert_product_spec(input, &principal)
                 .await
                 .map_err(qolip_error)?;
+            let delta = catalog_delta::after_write(&state, &principal, codes).await;
             Ok(Json(serde_json::json!({
                 "ok": true,
+                "catalog_delta": delta,
                 "product": {
                     "code": spec.item_code,
                     "name": spec.item_name,
@@ -313,14 +319,17 @@ pub async fn product_specs(
                     .map_err(qolip_error)?.ok_or_else(forbidden)?;
                 ensure_qolip_owner_access(&state, &principal, &spec).await?;
             }
+            let codes = catalog_delta::affected_codes(&state, &principal, &input.qolip_codes).await.map_err(qolip_error)?;
             let deleted_count = state
                 .qolip
                 .delete_product_specs(input.qolip_codes)
                 .await
                 .map_err(qolip_error)?;
+            let delta = catalog_delta::after_write(&state, &principal, codes).await;
             Ok(Json(serde_json::json!({
                 "ok": true,
                 "deleted_count": deleted_count,
+                "catalog_delta": delta,
             })))
         }
         _ => Err(method_not_allowed()),
@@ -340,6 +349,7 @@ pub async fn product_specs_batch(
     ensure_qolip_access(&state, &principal).await?;
     let mut input: QolipProductSpecBatchUpsert =
         serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json"))?;
+    let codes = input.specs.iter().map(|spec| spec.item_code.clone()).collect();
     for spec in &mut input.specs {
         resolve_qolip_spec_warehouse(&state, &principal, spec).await?;
     }
@@ -365,9 +375,11 @@ pub async fn product_specs_batch(
             })
         })
         .collect::<Vec<_>>();
+    let delta = catalog_delta::after_write(&state, &principal, codes).await;
     Ok(Json(serde_json::json!({
         "ok": true,
         "products": products,
+        "catalog_delta": delta,
     })))
 }
 

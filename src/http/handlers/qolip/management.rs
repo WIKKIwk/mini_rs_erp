@@ -44,12 +44,17 @@ pub async fn sets(
         Method::POST => {
             let input: crate::core::qolip::QolipSetEdit =
                 serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json"))?;
+            let mut codes = state.qolip.resolve_shared_set(&input.set_id).await.map_err(qolip_error)?
+                .map(|set| set.products.into_iter().map(|product| product.code).collect::<Vec<_>>())
+                .unwrap_or_default();
             let set = state
                 .qolip
                 .edit_set(&input, &principal, is_admin)
                 .await
                 .map_err(qolip_error)?;
-            Ok(Json(serde_json::json!({"ok": true, "set": set})))
+            codes.extend(set.snapshot.products.iter().map(|product| product.code.clone()));
+            let delta = catalog_delta::after_write(&state, &principal, codes).await;
+            Ok(Json(serde_json::json!({"ok": true, "set": set, "catalog_delta": delta})))
         }
         _ => Err(method_not_allowed()),
     }
@@ -77,5 +82,7 @@ pub async fn product_molds(
         .edit_product_molds(&input, &principal, is_admin)
         .await
         .map_err(qolip_error)?;
-    Ok(Json(serde_json::json!({"ok": true})))
+    let codes = input.changes.iter().map(|change| change.item_code.clone()).collect();
+    let delta = catalog_delta::after_write(&state, &principal, codes).await;
+    Ok(Json(serde_json::json!({"ok": true, "catalog_delta": delta})))
 }

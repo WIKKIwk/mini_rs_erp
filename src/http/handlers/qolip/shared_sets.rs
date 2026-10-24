@@ -81,8 +81,9 @@ pub async fn shared_sets(
                 .cloned()
                 .map(product)
                 .collect::<Vec<_>>();
+            let delta = catalog_delta::after_write(&state, &principal, vec![input.item_code.clone()]).await;
             Ok(Json(
-                serde_json::json!({"ok": true, "set": snapshot, "products": products}),
+                serde_json::json!({"ok": true, "set": snapshot, "products": products, "catalog_delta": delta}),
             ))
         }
         Method::GET => Err(bad_request("qolip_code_required")),

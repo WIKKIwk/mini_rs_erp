@@ -47,6 +47,15 @@ are looked up once per page; thumbnails load independently of mold details.
 complete mold details, current use status, and image reference. Both reads
 enforce the current user's capabilities and warehouse assignments.
 
+Qolip product writes return `catalog_delta: {upserts, removed_ids}` scoped to
+the caller's visible inventory. Upserts include the affected product's current
+molds, so a successful local write updates cached names and opened details
+without a list refresh. An unavailable optional post-write read returns
+`catalog_delta: {reset: true}` rather than reporting the committed write as failed.
+The mobile client prepares the first 200 names after Qolipchi login and retains
+name pages, clicked details and scroll position for the current account and
+warehouse permissions. These catalog reads use no stream or polling loop.
+
 ### Paddon WIP transfers
 
 `POST /v1/mobile/admin/production-maps/paddons/items/transfer` accepts
