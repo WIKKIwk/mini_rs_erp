@@ -146,6 +146,7 @@ PostgreSQL behavior also have focused Rust test suites.
 - [Algorithmic System Doctor and resource protection](docs/system-doctor.md)
 - [WIP route continuity](docs/wip-route-continuity.md)
 - [Warehouse QR receiving](docs/warehouse-qr-preview.md)
+- [Production output chart API](docs/production-output-stats.md)
 
 ## License
 

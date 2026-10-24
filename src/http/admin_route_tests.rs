@@ -114,6 +114,7 @@ mod qolipchi_workers;
 mod queue_history;
 mod queue_progress;
 mod rezka_output_report;
+mod output_stats;
 mod raw_materials;
 mod material_start_receipt;
 mod run_capabilities;

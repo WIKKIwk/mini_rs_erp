@@ -18,6 +18,7 @@ mod materials_support;
 #[cfg(any(test, feature = "verification"))]
 mod memory_store;
 mod opening_wip;
+pub mod output_stats;
 pub(crate) mod layer_remainder;
 pub use layer_remainder::{LaminationSettings, LayerRemainderInput, LayerRemainderSource, LayerRemainderRecord, LayerRemainderRawStock};
 #[path = "pechat/implementation.rs"]

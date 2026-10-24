@@ -1,5 +1,13 @@
 #[async_trait]
 impl ProductionMapStorePort for PostgresProductionMapStore {
+    async fn output_stats(
+        &self,
+        request: &crate::core::production_map::output_stats::OutputStatsRequest,
+        scope: Option<&[String]>,
+    ) -> Result<crate::core::production_map::output_stats::OutputStatsReport, crate::core::production_map::output_stats::OutputStatsError> {
+        output_stats::load(&self.pool, request, scope).await
+    }
+
     async fn lamination_settings(&self) -> Result<crate::core::production_map::LaminationSettings, ProductionMapError> {
         lamination_settings::load(&self.pool).await
     }

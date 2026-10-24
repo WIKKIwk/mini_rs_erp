@@ -1,0 +1,52 @@
+{
+  "ok": true,
+  "from": "2026-10-18T19:00:00Z",
+  "to": "2026-10-19T19:00:00Z",
+  "timezone": "Asia/Tashkent",
+  "bucket": "day",
+  "as_of": "2026-10-24T07:00:00Z",
+  "quantity_basis": "latest_revision",
+  "coverage": {
+    "complete": true,
+    "approximate_timestamp_count": 0,
+    "excluded_unknown_timestamp_count": 0,
+    "warnings": []
+  },
+  "series": [
+    {
+      "apparatus_id": "apparatus:default:asset-010",
+      "apparatus_name": "Rezka",
+      "totals": {
+        "batch_count": 2,
+        "meters": {
+          "value": 12500,
+          "known_value": 12500,
+          "missing_count": 0
+        },
+        "net_kg": {
+          "value": 860.5,
+          "known_value": 860.5,
+          "missing_count": 0
+        }
+      },
+      "points": [
+        {
+          "start": "2026-10-19T00:00:00+05:00",
+          "end": "2026-10-20T00:00:00+05:00",
+          "is_partial": false,
+          "batch_count": 2,
+          "meters": {
+            "value": 12500,
+            "known_value": 12500,
+            "missing_count": 0
+          },
+          "net_kg": {
+            "value": 860.5,
+            "known_value": 860.5,
+            "missing_count": 0
+          }
+        }
+      ]
+    }
+  ]
+}

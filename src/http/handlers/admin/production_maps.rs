@@ -47,6 +47,8 @@ mod worker_snapshot;
 mod helpers;
 mod move_run;
 mod opening_wip;
+mod output_stats;
+pub use output_stats::production_map_output_stats;
 mod order_control;
 mod order_scan_bootstrap;
 mod rezka_output_report;

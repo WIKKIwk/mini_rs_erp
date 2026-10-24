@@ -191,6 +191,15 @@ fn is_warehouse_processing_marker(value: &str) -> bool {
 
 #[async_trait]
 pub trait ProductionMapStorePort: Send + Sync {
+    /// An independent, read-only reporting snapshot; unsupported stores fail closed.
+    async fn output_stats(
+        &self,
+        _request: &super::output_stats::OutputStatsRequest,
+        _scope: Option<&[String]>,
+    ) -> Result<super::output_stats::OutputStatsReport, super::output_stats::OutputStatsError> {
+        Err(super::output_stats::OutputStatsError::StoreFailed)
+    }
+
     async fn lamination_settings(&self) -> StoreResult<LaminationSettings> {
         Ok(LaminationSettings::default())
     }

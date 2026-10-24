@@ -3,6 +3,8 @@ use std::collections::BTreeMap;
 use async_trait::async_trait;
 use sqlx::PgPool;
 
+mod output_stats;
+
 use crate::core::apparatus_standard::ApparatusId;
 use crate::core::production_map::{
     ApparatusDowntime, ApparatusQueueActionEvent, ApparatusScheduleCancelRequest,
