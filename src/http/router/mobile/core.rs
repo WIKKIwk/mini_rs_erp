@@ -65,6 +65,10 @@ pub(super) fn routes() -> Router<AppState> {
             get(app_update::android_metadata),
         )
         .route(
+            "/v1/mobile/app-update/android/live",
+            get(app_update::android_live),
+        )
+        .route(
             "/v1/mobile/app-update/android/apk/{file_name}",
             get(app_update::android_apk),
         )

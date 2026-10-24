@@ -1,9 +1,10 @@
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
+use tokio::sync::watch;
 
 pub const ANDROID_MANIFEST_FILE: &str = "android.json";
 pub const ANDROID_APK_ROUTE_PREFIX: &str = "/v1/mobile/app-update/android/apk/";
@@ -18,6 +19,7 @@ pub struct MobileUpdateSettings {
 #[derive(Debug, Clone)]
 pub struct MobileReleaseStore {
     directory: Arc<PathBuf>,
+    live: Arc<OnceLock<watch::Receiver<Option<AndroidReleaseInfo>>>>,
 }
 
 impl MobileReleaseStore {
@@ -33,7 +35,42 @@ impl MobileReleaseStore {
     pub fn new(directory: impl Into<PathBuf>) -> Self {
         Self {
             directory: Arc::new(directory.into()),
+            live: Arc::new(OnceLock::new()),
         }
+    }
+
+    /// One sampler per release directory observes atomic APK publications and
+    /// policy changes. All connected clients share its last valid manifest.
+    pub fn subscribe_android_release(&self) -> watch::Receiver<Option<AndroidReleaseInfo>> {
+        self.live
+            .get_or_init(|| {
+                let store = Self::new(self.directory.as_ref().clone());
+                let (tx, rx) = watch::channel(None);
+                tokio::spawn(async move {
+                    let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+                    loop {
+                        tokio::select! {
+                            _ = tx.closed() => break,
+                            _ = interval.tick() => {
+                                let next = match store.android_release_info().await {
+                                    Ok(info) => Some(info),
+                                    Err(MobileReleaseError::NotPublished) => None,
+                                    // An incomplete publication must not replace a
+                                    // valid manifest or lift a mandatory policy.
+                                    Err(_) => continue,
+                                };
+                                tx.send_if_modified(|current| {
+                                    if *current == next { return false; }
+                                    *current = next;
+                                    true
+                                });
+                            }
+                        }
+                    }
+                });
+                rx
+            })
+            .clone()
     }
 
     async fn saved_update_settings(
@@ -233,7 +270,7 @@ fn is_safe_apk_file_name(value: &str) -> bool {
     is_safe_file_name(value) && value.ends_with(".apk")
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AndroidReleaseInfo {
     pub version_code: u64,
     pub version_name: String,
@@ -275,6 +312,78 @@ pub enum MobileReleaseError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn publish(directory: &Path, version: u64) {
+        tokio::fs::write(directory.join("accord.apk"), b"apk")
+            .await
+            .unwrap();
+        let manifest = serde_json::json!({
+            "version_code": version, "version_name": format!("1.0.{version}"),
+            "apk_file": "accord.apk", "sha256": "a".repeat(64), "size_bytes": 3,
+        });
+        tokio::fs::write(directory.join(".android.tmp"), manifest.to_string())
+            .await
+            .unwrap();
+        tokio::fs::rename(
+            directory.join(".android.tmp"),
+            directory.join(ANDROID_MANIFEST_FILE),
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn live_subscribers_receive_publications_and_admin_policy_changes() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = MobileReleaseStore::new(directory.path());
+        let mut first = store.subscribe_android_release();
+        let mut second = store.clone().subscribe_android_release();
+        publish(directory.path(), 6).await;
+        tokio::time::timeout(std::time::Duration::from_secs(3), first.changed())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.borrow_and_update().as_ref().unwrap().version_code, 6);
+        second.changed().await.unwrap();
+        assert_eq!(second.borrow_and_update().as_ref().unwrap().version_code, 6);
+
+        publish(directory.path(), 7).await;
+        tokio::time::timeout(std::time::Duration::from_secs(3), first.changed())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.borrow_and_update().as_ref().unwrap().version_code, 7);
+        store
+            .save_update_settings(MobileUpdateSettings {
+                mandatory_updates_enabled: true,
+            })
+            .await
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(3), first.changed())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(first.borrow_and_update().as_ref().unwrap().mandatory);
+    }
+
+    #[tokio::test]
+    async fn invalid_publication_does_not_replace_a_valid_live_release() {
+        let directory = tempfile::tempdir().unwrap();
+        publish(directory.path(), 6).await;
+        let store = MobileReleaseStore::new(directory.path());
+        let mut release = store.subscribe_android_release();
+        release.changed().await.unwrap();
+        release.borrow_and_update();
+        tokio::fs::write(directory.path().join(ANDROID_MANIFEST_FILE), b"incomplete")
+            .await
+            .unwrap();
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(1200), release.changed())
+                .await
+                .is_err()
+        );
+        assert_eq!(release.borrow().as_ref().unwrap().version_code, 6);
+    }
 
     #[test]
     fn rejects_apk_path_traversal() {
