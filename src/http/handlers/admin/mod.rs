@@ -82,6 +82,7 @@ pub use system::{
     system_monitor, system_monitor_live, warehouse_assignments, warehouse_items,
     warehouse_item_rolls, warehouse_summaries, warehouses, werka_code_regenerate,
 };
+pub use system::start_system_doctor;
 use system::{
     authorize_any_capability, authorize_any_capability_or_werka, authorize_capability,
     require_capability,

@@ -68,6 +68,7 @@ async fn system_monitor_hub_fans_out_latest_snapshot_to_all_subscribers() {
             ..Default::default()
         },
         runtime: AdminServerMonitorRuntime::default(),
+        doctor: Default::default(),
     };
 
     hub.publish(snapshot.clone());
@@ -76,4 +77,12 @@ async fn system_monitor_hub_fans_out_latest_snapshot_to_all_subscribers() {
     second.changed().await.expect("second subscriber update");
     assert_eq!(first.borrow().as_ref(), Some(&snapshot));
     assert_eq!(second.borrow().as_ref(), Some(&snapshot));
+}
+
+#[test]
+fn system_monitor_hub_retains_samples_without_an_open_admin_screen() {
+    let hub = SystemMonitorHub::new();
+    let snapshot = AdminServerMonitorResponse::default();
+    hub.publish(snapshot.clone());
+    assert_eq!(hub.subscribe().borrow().as_ref(), Some(&snapshot));
 }

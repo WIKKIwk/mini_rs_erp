@@ -12,12 +12,12 @@ use tokio::process::Command;
 use tokio::time::timeout;
 
 use crate::core::admin::models::{AdminServerMonitorBackupSnapshot, AdminServerMonitorBackups};
+use crate::core::system_doctor::{DoctorPolicy, SystemDoctor};
 
 const MANIFEST_NAME: &str = "backup-doctor.json";
 const DEFAULT_HEALTH_MAX_AGE_HOURS: i64 = 30;
 const DEFAULT_MAX_RUNTIME_MINUTES: u64 = 120;
 const DEFAULT_MIN_AVAILABLE_MB: u64 = 1024;
-const DEFAULT_AUTO_RETRY_MINUTES: i64 = 60;
 
 #[derive(Debug, Clone)]
 pub struct BackupDoctorConfig {
@@ -89,6 +89,7 @@ pub struct BackupDoctor {
 
 struct BackupDoctorInner {
     config: BackupDoctorConfig,
+    system_doctor: SystemDoctor,
     active_job: Mutex<Option<AdminServerMonitorBackupSnapshot>>,
     scheduler_started: AtomicBool,
 }
@@ -111,6 +112,8 @@ pub enum BackupDoctorError {
     RuntimeUnavailable,
     #[error("backup import is invalid")]
     InvalidImport,
+    #[error("system doctor temporarily paused new backups under resource pressure")]
+    ResourcePressure,
 }
 
 #[derive(Debug, Clone)]
@@ -173,6 +176,7 @@ impl Default for BackupDoctor {
     }
 }
 
+mod automatic_retry;
 mod catalog;
 mod retention;
 mod settings;

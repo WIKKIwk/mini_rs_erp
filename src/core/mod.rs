@@ -30,6 +30,8 @@ pub mod returned_paint;
 pub mod rezka;
 pub mod rps_batch;
 pub mod session;
+pub mod system_doctor;
+pub mod system_metrics;
 pub mod system_users;
 pub(crate) mod text;
 pub mod warehouse_events;

@@ -25,6 +25,8 @@ pub struct AdminServerMonitorResponse {
     pub database: AdminServerMonitorDatabase,
     pub backups: AdminServerMonitorBackups,
     pub runtime: AdminServerMonitorRuntime,
+    #[serde(default)]
+    pub doctor: crate::core::system_doctor::DoctorReport,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

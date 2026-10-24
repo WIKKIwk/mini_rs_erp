@@ -28,6 +28,7 @@ pub use inventory_movements::{
     inventory_returns_batch, inventory_transfer_action, inventory_transfers,
 };
 pub use monitor::{
+    start_system_doctor,
     system_backup_create, system_backup_download, system_backup_import, system_monitor,
     system_monitor_live,
 };

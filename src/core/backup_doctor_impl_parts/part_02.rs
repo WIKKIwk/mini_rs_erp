@@ -354,6 +354,9 @@ impl BackupDoctor {
     }
 
     fn maybe_start_scheduled_backup(&self) {
+        if self.inner.system_doctor.protected() {
+            return;
+        }
         let offset_seconds = self.inner.config.utc_offset_minutes.saturating_mul(60);
         let offset = UtcOffset::from_whole_seconds(offset_seconds).unwrap_or(UtcOffset::UTC);
         let now = OffsetDateTime::now_utc();
@@ -367,30 +370,18 @@ impl BackupDoctor {
             return;
         }
         let report = self.report(now);
-        let already_ready = report.snapshots.iter().any(|snapshot| {
-            snapshot.status == "ready"
-                && snapshot.recovery_ready
-                && snapshot.completed_at_unix > 0
-                && OffsetDateTime::from_unix_timestamp(snapshot.completed_at_unix)
-                    .ok()
-                    .is_some_and(|completed| completed.to_offset(offset).date() == local_now.date())
-        });
-        if already_ready {
-            return;
-        }
-        let recent_attempt = report.snapshots.iter().any(|snapshot| {
-            snapshot.source == "automatic"
-                && now
-                    .unix_timestamp()
-                    .saturating_sub(snapshot.created_at_unix)
-                    < DEFAULT_AUTO_RETRY_MINUTES * 60
-        });
-        if recent_attempt {
+        if !automatic_retry::scheduled_backup_due(
+            &report.snapshots,
+            now,
+            offset,
+            self.inner.config.schedule_hour,
+            self.inner.config.schedule_minute,
+        ) {
             return;
         }
         match self.start_backup("automatic", "Backup Doctor".to_string()) {
             Ok(job) => tracing::info!(backup_id = %job.id, "backup doctor scheduled backup"),
-            Err(BackupDoctorError::AlreadyRunning) => {}
+            Err(BackupDoctorError::AlreadyRunning | BackupDoctorError::ResourcePressure) => {}
             Err(error) => tracing::warn!(%error, "backup doctor could not schedule backup"),
         }
     }

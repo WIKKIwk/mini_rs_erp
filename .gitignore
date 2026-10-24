@@ -10,3 +10,4 @@ __pycache__/
 backups/
 logs/
 CLOUDFLARE.txt
+/tools/runtime/doctor_wifi

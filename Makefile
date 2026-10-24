@@ -10,6 +10,10 @@ RELEASE_NOTES ?=
 RELEASE_NOTES_FILE ?=
 
 .PHONY: verify test-python-tools extract-test-contracts check-generated-test-contracts audit-test-migration up-domain stop-domain seed-demo db-backup db-migrate publish-mobile-apk
+.PHONY: doctor-wifi-helper
+
+doctor-wifi-helper:
+	@sh tools/runtime/build_doctor_wifi_helper.sh
 
 verify: check-generated-test-contracts
 	@python3 tools/mini_erp_verifier/verify.py

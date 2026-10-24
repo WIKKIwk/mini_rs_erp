@@ -60,6 +60,7 @@ async fn main() -> Result<(), error::AppError> {
         tracing::info!(released, "returned molds held by frozen production sessions");
     }
     let state = AppState::from_postgres(config, postgres_pool.clone());
+    http::handlers::admin::start_system_doctor(&state);
     PostgresQolipItemCodeDoctor::from_env(postgres_pool).start_scheduler();
     let bootstrapped_apparatus = state
         .apparatus

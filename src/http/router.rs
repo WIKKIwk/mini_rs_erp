@@ -22,7 +22,7 @@ pub(crate) fn identity_response(mut response: axum::response::Response) -> axum:
 pub fn build_router(state: AppState) -> Router {
     let gzip_level = crate::config::http_gzip_level_from_env()
         .expect("HTTP gzip level must be validated before building the router");
-    health::routes()
+    health::routes(state.clone())
         .merge(mobile::routes(state))
         .layer(CompressionLayer::new()
             .quality(CompressionLevel::Precise(gzip_level))

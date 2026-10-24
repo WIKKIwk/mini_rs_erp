@@ -94,6 +94,10 @@ async fn verified_order_reset_backup(
 
 fn backup_error(error: OrderResetBackupError) -> AdminError {
     match error {
+        OrderResetBackupError::Backup(BackupDoctorError::ResourcePressure) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(AdminErrorResponse::new("backup_resource_pressure")),
+        ),
         OrderResetBackupError::Backup(
             BackupDoctorError::NotConfigured | BackupDoctorError::EngineUnavailable,
         ) => (

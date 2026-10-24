@@ -1,5 +1,173 @@
 use super::*;
 
+#[tokio::test]
+async fn system_doctor_samples_without_an_open_admin_screen() {
+    let state = test_state();
+    crate::http::handlers::admin::start_system_doctor(&state);
+    // Subscribe only to inspect the first background sample, not to start it.
+    let mut samples = state.system_monitor_hub.subscribe();
+    if samples.borrow().is_none() {
+        tokio::time::timeout(Duration::from_secs(6), samples.changed())
+            .await
+            .expect("doctor sample timeout")
+            .expect("doctor sample");
+    }
+    assert!(samples.borrow().as_ref().unwrap().doctor.checked_at_unix > 0);
+}
+
+#[tokio::test]
+async fn system_doctor_sampling_continues_while_backup_catalog_is_pending() {
+    let state = test_state();
+    // Reserve the scan worker without publishing a result, as with slow storage.
+    assert!(state.system_monitor_hub.mark_backup_started());
+    crate::http::handlers::admin::start_system_doctor(&state);
+    let mut samples = state.system_monitor_hub.subscribe();
+    if samples.borrow().is_none() {
+        tokio::time::timeout(Duration::from_secs(6), samples.changed())
+            .await
+            .expect("independent doctor timeout")
+            .expect("sample");
+    }
+    let report = samples.borrow().clone().unwrap();
+    assert!(report.doctor.checked_at_unix > 0);
+    assert_eq!(report.backups.error, "backup monitoring pending");
+}
+
+#[tokio::test]
+async fn system_doctor_resource_pressure_rejects_backup_and_import_over_http() {
+    use crate::core::admin::models::{AdminServerMonitorDatabase, AdminServerMonitorRuntime};
+    let state = test_state();
+    let doctor = state.backup_doctor.system_doctor();
+    let database = AdminServerMonitorDatabase {
+        configured: true,
+        reachable: true,
+        ..Default::default()
+    };
+    let runtime = AdminServerMonitorRuntime {
+        memory_total_mb: 8192,
+        memory_percent: 99,
+        disk_total_mb: 100_000,
+        disk_available_mb: 50_000,
+        ..Default::default()
+    };
+    for _ in 0..60 {
+        doctor.observe(
+            &database,
+            &runtime,
+            time::OffsetDateTime::now_utc().unix_timestamp(),
+        );
+    }
+    assert!(doctor.protected());
+    let token = session(&state, PrincipalRole::Admin).await;
+    let router = build_router(state);
+    for path in [
+        "/v1/mobile/admin/system/backups",
+        "/v1/mobile/admin/system/backups/import",
+    ] {
+        let response = router
+            .clone()
+            .oneshot(request("POST", path, &token))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            json_body(response).await["error"],
+            "backup_resource_pressure"
+        );
+    }
+}
+
+#[tokio::test]
+async fn system_doctor_readiness_is_separate_from_liveness() {
+    use crate::core::admin::models::AdminServerMonitorResponse;
+    let state = test_state();
+    let router = build_router(state.clone());
+    let response = router
+        .clone()
+        .oneshot(request("GET", "/readyz", ""))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let response = router
+        .clone()
+        .oneshot(request("GET", "/healthz", ""))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut report = AdminServerMonitorResponse::default();
+    report.database.configured = true;
+    report.database.reachable = true;
+    report.doctor.checked_at_unix = time::OffsetDateTime::now_utc().unix_timestamp();
+    state.system_monitor_hub.publish(report.clone());
+    let response = router
+        .clone()
+        .oneshot(request("GET", "/readyz", ""))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    report.doctor.protected = true;
+    state.system_monitor_hub.publish(report);
+    let response = router.oneshot(request("GET", "/readyz", "")).await.unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(json_body(response).await, serde_json::json!({"ok": false}));
+}
+
+#[tokio::test]
+async fn system_doctor_readiness_waits_for_confirmed_database_recovery() {
+    use crate::core::admin::models::AdminServerMonitorResponse;
+    let state = test_state();
+    let router = build_router(state.clone());
+    let doctor = crate::core::system_doctor::SystemDoctor::default();
+    let mut report = AdminServerMonitorResponse::default();
+    report.database.configured = true;
+    report.runtime.memory_total_mb = 8192;
+    report.runtime.memory_percent = 50;
+    report.runtime.disk_total_mb = 100_000;
+    report.runtime.disk_available_mb = 50_000;
+    for _ in 0..3 {
+        doctor.observe(
+            &report.database,
+            &report.runtime,
+            time::OffsetDateTime::now_utc().unix_timestamp(),
+        );
+    }
+    report.database.reachable = true;
+    for expected in [StatusCode::SERVICE_UNAVAILABLE, StatusCode::OK] {
+        report.doctor = doctor.observe(
+            &report.database,
+            &report.runtime,
+            time::OffsetDateTime::now_utc().unix_timestamp(),
+        );
+        state.system_monitor_hub.publish(report.clone());
+        let response = router
+            .clone()
+            .oneshot(request("GET", "/readyz", ""))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+    }
+}
+
+#[tokio::test]
+async fn system_doctor_monitor_reads_do_not_advance_failure_counters() {
+    let state = test_state();
+    let doctor = state.backup_doctor.system_doctor();
+    let before = doctor.snapshot();
+    let token = session(&state, PrincipalRole::Admin).await;
+    let router = build_router(state);
+    for _ in 0..2 {
+        let response = router
+            .clone()
+            .oneshot(request("GET", "/v1/mobile/admin/system/monitor", &token))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = json_body(response).await;
+        assert_eq!(body["doctor"]["status"], "starting");
+    }
+    assert_eq!(doctor.snapshot(), before);
+}
+
 struct EnvVarGuard {
     key: &'static str,
     previous: Option<String>,

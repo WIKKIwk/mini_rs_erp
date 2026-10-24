@@ -190,6 +190,10 @@ pub async fn system_backup_import(
 
 fn backup_error(error: BackupDoctorError) -> AdminError {
     match error {
+        BackupDoctorError::ResourcePressure => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(AdminErrorResponse::new("backup_resource_pressure")),
+        ),
         BackupDoctorError::NotConfigured | BackupDoctorError::EngineUnavailable => (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(AdminErrorResponse::new("backup_service_unavailable")),

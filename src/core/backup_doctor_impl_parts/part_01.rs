@@ -7,12 +7,17 @@ impl BackupDoctor {
         let doctor = Self {
             inner: Arc::new(BackupDoctorInner {
                 config,
+                system_doctor: SystemDoctor::new(DoctorPolicy::from_env()),
                 active_job: Mutex::new(None),
                 scheduler_started: AtomicBool::new(false),
             }),
         };
         doctor.reconcile_interrupted_jobs();
         doctor
+    }
+
+    pub fn system_doctor(&self) -> SystemDoctor {
+        self.inner.system_doctor.clone()
     }
 
     #[cfg(test)]
@@ -124,6 +129,9 @@ impl BackupDoctor {
         requested_by: impl Into<String>,
         filename: &str,
     ) -> Result<BackupImportUpload, BackupDoctorError> {
+        if self.inner.system_doctor.protected() {
+            return Err(BackupDoctorError::ResourcePressure);
+        }
         let database_url = self
             .inner
             .config
@@ -280,6 +288,9 @@ impl BackupDoctor {
         source: &str,
         requested_by: String,
     ) -> Result<AdminServerMonitorBackupSnapshot, BackupDoctorError> {
+        if self.inner.system_doctor.protected() {
+            return Err(BackupDoctorError::ResourcePressure);
+        }
         let database_url = self
             .inner
             .config
