@@ -418,12 +418,30 @@ pub(super) async fn load_product_spec_by_qolip_code(
     pool: &PgPool,
     qolip_code: &str,
 ) -> Result<Option<QolipProductSpec>, QolipError> {
+    load_product_spec_by_qolip_code_inner(pool, qolip_code, false).await
+}
+
+pub(super) async fn load_active_product_spec_by_qolip_code(
+    pool: &PgPool,
+    qolip_code: &str,
+) -> Result<Option<QolipProductSpec>, QolipError> {
+    load_product_spec_by_qolip_code_inner(pool, qolip_code, true).await
+}
+
+async fn load_product_spec_by_qolip_code_inner(
+    pool: &PgPool,
+    qolip_code: &str,
+    active_product: bool,
+) -> Result<Option<QolipProductSpec>, QolipError> {
     let row = sqlx::query_as::<_, QolipProductSpecRow>(
         r#"
-        SELECT item_code, item_name, item_group, qolip_code, size, warehouse, color,
+        SELECT COALESCE(active.item_code, candidates.item_code) AS item_code,
+               COALESCE(active.item_name, candidates.item_name) AS item_name,
+               COALESCE(active.item_group, candidates.item_group) AS item_group,
+               candidates.qolip_code, candidates.size, candidates.warehouse, candidates.color,
                COALESCE((SELECT s.payload_json->>'qolip_set_id' FROM mini_qolip_product_specs s
                          WHERE lower(s.qolip_code) = lower(candidates.qolip_code)), '') AS qolip_set_id,
-               created_by_role, created_by_ref, created_by_name
+               candidates.created_by_role, candidates.created_by_ref, candidates.created_by_name
         FROM (
             SELECT
                 spec.item_code,
@@ -493,11 +511,30 @@ pub(super) async fn load_product_spec_by_qolip_code(
                   WHERE lower(location.qolip_code) = lower(checkout.qolip_code)
               )
         ) candidates
-        ORDER BY source_priority, updated_at DESC
+        LEFT JOIN LATERAL (
+            SELECT link.item_code,
+                   COALESCE(NULLIF(btrim(item.name), ''),
+                       CASE WHEN link.item_code_key = lower(btrim(candidates.item_code))
+                            THEN candidates.item_name ELSE link.item_code END) AS item_name,
+                   COALESCE(NULLIF(btrim(item.item_group), ''), candidates.item_group) AS item_group
+            FROM mini_qolip_effective_product_molds link
+            LEFT JOIN mini_items item ON item.code = link.item_code
+            WHERE $2::boolean
+              AND link.qolip_code_key = lower(btrim(candidates.qolip_code))
+            -- Keep the original product only while its link is still active.
+            -- Otherwise choose a stable active link, never an excluded product.
+            ORDER BY (link.item_code_key = lower(btrim(candidates.item_code))) DESC,
+                     link.is_extension, link.item_code_key, link.item_code
+            LIMIT 1
+        ) active ON true
+        WHERE NOT $2::boolean OR candidates.source_priority <> 0
+           OR active.item_code IS NOT NULL OR btrim(candidates.item_code) = ''
+        ORDER BY candidates.source_priority, candidates.updated_at DESC
         LIMIT 1
         "#,
     )
     .bind(qolip_code.trim())
+    .bind(active_product)
     .fetch_optional(pool)
     .await
     .map_err(|_| QolipError::StoreFailed)?;

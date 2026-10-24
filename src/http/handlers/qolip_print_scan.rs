@@ -31,7 +31,7 @@ pub async fn scan(
 
     let spec = state
         .qolip
-        .product_spec_by_qolip_code(qr)
+        .active_product_spec_by_qolip_code(qr)
         .await
         .map_err(qolip_error)?
         .ok_or_else(|| bad_request("qolip_code_not_found"))?;
@@ -202,7 +202,7 @@ pub async fn code_qr_print(
     }
     let spec = state
         .qolip
-        .product_spec_by_qolip_code(qolip_code)
+        .active_product_spec_by_qolip_code(qolip_code)
         .await
         .map_err(qolip_error)?
         .ok_or_else(|| bad_request("qolip_code_not_found"))?;

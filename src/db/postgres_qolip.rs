@@ -161,6 +161,13 @@ impl QolipStorePort for PostgresQolipStore {
         load_product_spec_by_qolip_code(&self.pool, qolip_code).await
     }
 
+    async fn active_product_spec_by_qolip_code(
+        &self,
+        qolip_code: &str,
+    ) -> Result<Option<QolipProductSpec>, QolipError> {
+        catalog::load_active_product_spec_by_qolip_code(&self.pool, qolip_code).await
+    }
+
     async fn put_product_spec(
         &self,
         spec: QolipProductSpec,

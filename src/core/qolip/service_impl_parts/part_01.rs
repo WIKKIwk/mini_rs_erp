@@ -238,6 +238,17 @@ impl QolipService {
         self.store.product_spec_by_qolip_code(qolip_code).await
     }
 
+    pub async fn active_product_spec_by_qolip_code(
+        &self,
+        qolip_code: &str,
+    ) -> Result<Option<QolipProductSpec>, QolipError> {
+        let qolip_code = qolip_code.trim();
+        if qolip_code.is_empty() {
+            return Err(QolipError::MissingQolipCode);
+        }
+        self.store.active_product_spec_by_qolip_code(qolip_code).await
+    }
+
     pub async fn required_qolips_for_order(
         &self,
         item_code: &str,

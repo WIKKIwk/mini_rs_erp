@@ -130,6 +130,13 @@ pub trait QolipStorePort: Send + Sync {
         let _ = qolip_code;
         Ok(None)
     }
+    /// Display the currently linked product without changing the physical mold's identity.
+    async fn active_product_spec_by_qolip_code(
+        &self,
+        qolip_code: &str,
+    ) -> Result<Option<QolipProductSpec>, QolipError> {
+        self.product_spec_by_qolip_code(qolip_code).await
+    }
     async fn put_product_spec(
         &self,
         spec: QolipProductSpec,
