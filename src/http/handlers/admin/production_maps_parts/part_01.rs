@@ -423,6 +423,7 @@ async fn save_production_map_with_order(
     let mut fork_map = prepare_template_fork(state, &mut input).await?;
     if let Some(template) = &input.template {
         validate_template(template).map_err(calculate_order_error)?;
+        validate_order_type_apparatus(state, &input.map, template).await?;
         input.map.print_val_size_mm = template.print_val_size_mm;
         input.map.customer_name = template.customer.trim().to_string();
         if template.kg > 0.0 {

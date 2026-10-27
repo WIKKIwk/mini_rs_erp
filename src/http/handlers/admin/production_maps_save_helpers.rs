@@ -1,3 +1,32 @@
+async fn validate_order_type_apparatus(
+    state: &AppState,
+    map: &ProductionMapDefinition,
+    template: &CalculateOrderTemplate,
+) -> Result<(), AdminError> {
+    if !template.status.trim().eq_ignore_ascii_case("rulon") {
+        return Ok(());
+    }
+    let apparatus_ids = map
+        .nodes
+        .iter()
+        .filter(|node| node.kind == ProductionMapNodeKind::Apparatus)
+        .filter_map(|node| node.canonical_apparatus_id())
+        .collect::<std::collections::BTreeSet<_>>();
+    for apparatus_id in apparatus_ids {
+        let apparatus = state
+            .production_maps
+            .resolve_canonical_apparatus(&apparatus_id)
+            .await
+            .map_err(production_map_error)?;
+        if apparatus.runtime.execution_profile.operation
+            == crate::core::apparatus_standard::ExecutionOperation::Package
+        {
+            return Err(bad_request("rulon_order_package_not_allowed"));
+        }
+    }
+    Ok(())
+}
+
 async fn assign_order_number_if_missing(
     state: &AppState,
     map: &mut ProductionMapDefinition,

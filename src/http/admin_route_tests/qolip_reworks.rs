@@ -3,6 +3,49 @@ use crate::core::qolip::{
     MemoryQolipStore, QolipBlock, QolipProduct, QolipProductSpec, QolipService, QolipStorePort,
 };
 
+async fn assert_admin_order_detail_rework(
+    router: &axum::Router,
+    token: &str,
+    order: &str,
+    expected: bool,
+) {
+    for apparatus in ["", "apparatus:default:bosma_7"] {
+        let response = router
+            .clone()
+            .oneshot(request(
+                "GET",
+                &format!("/v1/mobile/admin/production-maps/sequence?order_id={order}&apparatus={apparatus}&detail=true"),
+                token,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let detail = json_body(response).await;
+        assert_eq!(detail["maps"].as_array().unwrap().len(), 1);
+        assert_eq!(detail["maps"][0]["qolip_in_rework"], expected);
+    }
+}
+
+async fn assert_attached_mold_rework(router: &axum::Router, token: &str, expected_codes: &[&str]) {
+    let response = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/qolip/shared-sets?item_code=ITEM",
+            token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    let products = body["products"].as_array().unwrap();
+    assert_eq!(products.len(), 2);
+    for product in products {
+        let code = product["qolip_code"].as_str().unwrap();
+        assert_eq!(product["is_in_rework"], expected_codes.contains(&code));
+    }
+}
+
 #[tokio::test]
 async fn qolip_rework_blocks_requirements_for_every_order_until_all_codes_return() {
     let store = Arc::new(MemoryQolipStore::new());
@@ -53,6 +96,8 @@ async fn qolip_rework_blocks_requirements_for_every_order_until_all_codes_return
     }
     let token = session(&state, PrincipalRole::Admin).await;
     let router = build_router(state);
+    assert_admin_order_detail_rework(&router, &token, "zakaz-rework-first", false).await;
+    assert_attached_mold_rework(&router, &token, &[]).await;
     let sent = router
         .clone()
         .oneshot(request_with_body(
@@ -65,8 +110,10 @@ async fn qolip_rework_blocks_requirements_for_every_order_until_all_codes_return
         .unwrap();
     assert_eq!(sent.status(), StatusCode::OK);
     let entries = json_body(sent).await["reworks"].as_array().unwrap().clone();
+    assert_attached_mold_rework(&router, &token, &["Q-ONE", "Q-TWO"]).await;
     for (returned_count, entry) in entries.iter().enumerate() {
         for order in ["zakaz-rework-first", "zakaz-rework-second"] {
+            assert_admin_order_detail_rework(&router, &token, order, true).await;
             let body = serde_json::json!({"apparatus":"apparatus:default:bosma_7",
                 "order_id":order,"qolip_code":""})
             .to_string();
@@ -101,8 +148,15 @@ async fn qolip_rework_blocks_requirements_for_every_order_until_all_codes_return
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+        let remaining_codes = entries
+            .iter()
+            .skip(returned_count + 1)
+            .map(|entry| entry["qolip_code"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_attached_mold_rework(&router, &token, &remaining_codes).await;
     }
     for order in ["zakaz-rework-first", "zakaz-rework-second"] {
+        assert_admin_order_detail_rework(&router, &token, order, false).await;
         let body = serde_json::json!({"apparatus":"apparatus:default:bosma_7",
             "order_id":order,"qolip_code":""})
         .to_string();

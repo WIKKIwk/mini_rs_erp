@@ -24,6 +24,17 @@ impl PostgresMiniOrderSink {
 
 #[async_trait]
 impl MiniOrderSink for PostgresMiniOrderSink {
+    async fn order_created_at_unix(&self, order_id: &str) -> Result<Option<i64>, MiniOrderError> {
+        sqlx::query_scalar(
+            "SELECT EXTRACT(EPOCH FROM created_at)::bigint
+             FROM mini_production_maps WHERE id = $1",
+        )
+        .bind(order_id.trim())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|_| MiniOrderError::StoreFailed)
+    }
+
     async fn save_template_map_atomic(
         &self, map: &ProductionMapDefinition, template: &CalculateOrderTemplate, owner: &str,
     ) -> Result<CalculateOrderTemplate, ProductionMapError> {

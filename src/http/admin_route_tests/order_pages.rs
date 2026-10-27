@@ -6,6 +6,77 @@ use crate::core::production_map::{ProductionMapStorePort, queue_state};
 
 const PAGE_APPARATUS: &str = "apparatus:default:bosma_8";
 
+struct OrderCreationTimeSink {
+    reads: Mutex<Vec<String>>,
+}
+
+#[async_trait]
+impl MiniOrderSink for OrderCreationTimeSink {
+    async fn order_created_at_unix(&self, order_id: &str) -> Result<Option<i64>, MiniOrderError> {
+        self.reads.lock().await.push(order_id.to_string());
+        Ok(Some(1_793_083_020))
+    }
+
+    async fn save_order(
+        &self,
+        _: &crate::core::production_map::ProductionMapDefinition,
+        _: &CalculateOrderTemplate,
+    ) -> Result<(), MiniOrderError> {
+        unreachable!("reading an order's creation time must not save it")
+    }
+}
+
+#[tokio::test]
+async fn admin_order_detail_loads_creation_time_only_for_the_requested_order() {
+    let mut state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+    let sink = Arc::new(OrderCreationTimeSink {
+        reads: Mutex::new(Vec::new()),
+    });
+    state.production_orders = sink.clone();
+    for (id, number) in [("zakaz-created-at", "0101"), ("zakaz-unrelated", "0102")] {
+        state
+            .production_maps
+            .upsert_map(
+                serde_json::from_str(&pechat_order_map_json(
+                    id, "Creation time", number, PAGE_APPARATUS,
+                ))
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+    }
+    let app = build_router(state);
+    let list = app
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/order-page?view=orders&projection=orders_list_v1",
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(list.status(), StatusCode::OK);
+    assert!(
+        sink.reads.lock().await.is_empty(),
+        "list reads must not load detail metadata"
+    );
+    let response = app
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/sequence?order_id=zakaz-created-at&detail=true",
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let detail = json_body(response).await;
+    assert_eq!(detail["maps"].as_array().unwrap().len(), 1);
+    assert_eq!(detail["maps"][0]["map"]["id"], "zakaz-created-at");
+    assert_eq!(detail["maps"][0]["created_at_unix"], 1_793_083_020_i64);
+    assert_eq!(*sink.reads.lock().await, ["zakaz-created-at"]);
+}
+
 fn assert_sequence_positions(page: &serde_json::Value, queue: &[String]) {
     let expected = page["order_ids"]
         .as_array()

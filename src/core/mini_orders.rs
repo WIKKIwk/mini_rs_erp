@@ -68,6 +68,11 @@ pub trait MiniOrderSink: Send + Sync {
         Err(MiniOrderError::StoreFailed)
     }
 
+    /// The production order's original creation time, unaffected by later edits.
+    async fn order_created_at_unix(&self, _order_id: &str) -> Result<Option<i64>, MiniOrderError> {
+        Ok(None)
+    }
+
     async fn create_order_atomic(
         &self,
         _order: &NewProductionOrder,

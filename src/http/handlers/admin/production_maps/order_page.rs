@@ -566,8 +566,23 @@ pub(super) async fn read_detail(
         if projected.maps.len() != 1 { return Err(not_found("order_not_available")); }
         let customers = production_map_order_customers(state, &projected.maps).await;
         let templates = page_calculation_templates(state, &projected.maps).await;
+        let created_at = state.production_orders.order_created_at_unix(order_id)
+            .await.map_err(|_| server_error("Buyurtma ochilgan vaqt yuklanmadi"))?;
+        let map = &projected.maps[0].map;
+        let qolip_in_rework = match state.qolip.require_qolips_available_for_layout(
+            &map.products, &map.product_code, &map.title,
+        ).await {
+            Ok(()) => Some(false),
+            Err(crate::core::qolip::QolipError::QolipInRework) => Some(true),
+            Err(error) => {
+                tracing::warn!(order_id, ?error, "failed to read order mold rework status");
+                None
+            }
+        };
         if state.production_maps.snapshot_revision() != revision { continue; }
         let mut payload = serde_json::to_value(projected).unwrap();
+        payload["maps"][0]["created_at_unix"] = serde_json::json!(created_at);
+        payload["maps"][0]["qolip_in_rework"] = serde_json::json!(qolip_in_rework);
         payload["ok"] = true.into();
         payload["projection"] = "order_detail_v1".into();
         payload["order_id"] = order_id.into();

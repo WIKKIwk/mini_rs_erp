@@ -1,6 +1,59 @@
 use super::*;
 
 #[tokio::test]
+async fn production_map_save_with_order_rejects_package_for_rulon_only() {
+    for (status, expected) in [
+        ("Rulon", StatusCode::BAD_REQUEST),
+        (" RULON ", StatusCode::BAD_REQUEST),
+        ("Paket", StatusCode::OK),
+    ] {
+        let state = test_state();
+        let token = session(&state, PrincipalRole::Admin).await;
+        let map: serde_json::Value = serde_json::from_str(&pechat_order_map_json(
+            "zakaz-7788",
+            "Order type routing",
+            "7788",
+            "apparatus:default:paket",
+        ))
+        .unwrap();
+        let body = serde_json::json!({
+            "map": map,
+            "template": {
+                "name": "Order type routing",
+                "product": "Order type routing",
+                "status": status,
+                "frame_product_size_mm": 635,
+                "frame_count": 1,
+                "first_layer_material": "pet",
+                "first_layer_micron": "12"
+            }
+        });
+        let response = build_router(state.clone())
+            .oneshot(request_with_body(
+                "PUT",
+                "/v1/mobile/admin/production-maps/with-order",
+                &token,
+                &body.to_string(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected, "order type: {status}");
+        let value = json_body(response).await;
+        if expected == StatusCode::BAD_REQUEST {
+            assert_eq!(value["error"], "rulon_order_package_not_allowed");
+            assert!(
+                state.production_maps.raw_map("zakaz-7788").await.unwrap().is_none()
+            );
+        } else {
+            assert_eq!(value["ok"], true);
+            assert!(
+                state.production_maps.raw_map("zakaz-7788").await.unwrap().is_some()
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn production_map_save_with_order_saves_map_and_template() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;

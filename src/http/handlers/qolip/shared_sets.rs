@@ -24,6 +24,13 @@ fn product(spec: crate::core::qolip::QolipProductSpec) -> QolipProduct {
     }
 }
 
+#[derive(serde::Serialize)]
+struct ProductReworkStatus {
+    #[serde(flatten)]
+    product: QolipProduct,
+    is_in_rework: bool,
+}
+
 pub async fn shared_sets(
     State(state): State<AppState>,
     method: Method,
@@ -61,6 +68,26 @@ pub async fn shared_sets(
                     Err(error) => return Err(error),
                 }
             }
+            let rework_codes = state
+                .qolip
+                .active_rework_codes(
+                    &products
+                        .iter()
+                        .map(|row| row.qolip_code.clone())
+                        .collect::<Vec<_>>(),
+                )
+                .await
+                .map_err(qolip_error)?
+                .into_iter()
+                .map(|code| code.trim().to_lowercase())
+                .collect::<std::collections::BTreeSet<_>>();
+            let products = products
+                .into_iter()
+                .map(|product| ProductReworkStatus {
+                    is_in_rework: rework_codes.contains(&product.qolip_code.trim().to_lowercase()),
+                    product,
+                })
+                .collect::<Vec<_>>();
             Ok(Json(serde_json::json!({"ok": true, "products": products})))
         }
         Method::POST => {
