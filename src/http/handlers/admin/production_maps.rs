@@ -30,6 +30,8 @@ mod layer_remainders;
 pub use layer_remainders::{production_map_layer_remainders, production_map_layer_remainder_reprint};
 mod lamination_settings;
 pub use lamination_settings::production_map_lamination_settings;
+mod qolip_start;
+pub use qolip_start::production_map_qolip_start_settings;
 mod completion;
 pub(crate) mod order_page;
 pub use order_page::{production_map_order_page, production_map_closed_order_detail};

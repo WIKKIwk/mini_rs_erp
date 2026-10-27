@@ -104,6 +104,7 @@ mod order_images;
 mod production_map_validation;
 mod qolip_blocks;
 mod qolip_reworks;
+mod qolip_automatic_start;
 mod qolip_warehouse_ownership;
 mod qolip_product_transfer;
 mod qolip_cell_qr;

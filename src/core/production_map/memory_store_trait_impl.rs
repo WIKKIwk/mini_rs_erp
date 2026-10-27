@@ -17,6 +17,17 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         self.put_apparatus_queue_states_with_event_and_progress(&write).await?;
         Ok(())
     }
+    async fn qolip_start_settings(&self) -> Result<QolipStartSettings, ProductionMapError> {
+        Ok(self.qolip_start_settings.read().await.clone())
+    }
+    async fn update_qolip_start_settings(&self, enabled: bool, _actor: &QueueActionActor) -> Result<QolipStartSettings, ProductionMapError> {
+        let mut settings = self.qolip_start_settings.write().await;
+        if settings.automatic_confirmation_enabled != enabled {
+            settings.automatic_confirmation_enabled = enabled;
+            settings.revision += 1;
+        }
+        Ok(settings.clone())
+    }
     async fn lamination_settings(&self) -> Result<LaminationSettings, ProductionMapError> {
         Ok(self.lamination_settings.read().await.clone())
     }

@@ -662,6 +662,7 @@ pub(super) async fn execute(
         "qolip_codes",
         "qolip_set_id",
         "qolip_set_snapshot",
+        "qolip_confirmation",
         "qolip_lock_owner",
     ] {
         if let Some(value) = original.get(key) {

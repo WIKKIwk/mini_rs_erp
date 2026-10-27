@@ -215,6 +215,12 @@ fn is_warehouse_processing_marker(value: &str) -> bool {
 
 #[async_trait]
 pub trait ProductionMapStorePort: Send + Sync {
+    async fn qolip_start_settings(&self) -> StoreResult<super::QolipStartSettings> {
+        Ok(super::QolipStartSettings::default())
+    }
+    async fn update_qolip_start_settings(&self, _enabled: bool, _actor: &QueueActionActor) -> StoreResult<super::QolipStartSettings> {
+        Err(ProductionMapError::StoreFailed)
+    }
     /// An independent, read-only reporting snapshot; unsupported stores fail closed.
     async fn output_stats(
         &self,

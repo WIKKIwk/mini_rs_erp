@@ -37,6 +37,7 @@ pub(crate) mod realtime;
 mod layer_remainder;
 mod lamination_astatka;
 mod lamination_settings;
+mod qolip_start_settings;
 mod sequence_move;
 mod re_pause;
 mod temporary_pause;
@@ -1289,6 +1290,14 @@ pub(super) async fn apply_queue_progress_tx(
                 ..QueueActionProgressWriteResult::default()
             });
         }
+        if let Some(raw) = write.event.payload_json.get("qolip_confirmation") {
+            let confirmation: crate::core::production_map::AutomaticQolipConfirmation = serde_json::from_value(raw.clone())
+                .map_err(|_| ProductionMapError::QueueActionNotAllowed)?;
+            if write.event.action != crate::core::production_map::queue_state::ApparatusQueueAction::Start || !confirmation.is_valid() {
+                return Err(ProductionMapError::QueueActionNotAllowed);
+            }
+            qolip_start_settings::require_automatic_tx(tx, &confirmation).await?;
+        }
         order_control_helpers::validate_execution_controls_tx(tx, write).await?;
         if matches!(write.event.action,
             crate::core::production_map::queue_state::ApparatusQueueAction::Start
@@ -1400,7 +1409,14 @@ pub(super) async fn apply_queue_progress_tx(
             if matches!(event.action, crate::core::production_map::queue_state::ApparatusQueueAction::Start)
                 || event.payload_json.get("qolip_reacquired_after_freeze")
                     .and_then(serde_json::Value::as_bool) == Some(true) {
-                qolip_session_helpers::validate_qolip_set_tx(tx, session).await?;
+                if event.action == crate::core::production_map::queue_state::ApparatusQueueAction::Start
+                    && event.payload_json.get("qolip_confirmation").is_some() {
+                    qolip_session_helpers::validate_automatic_qolip_set_tx(tx, session).await?;
+                } else {
+                    // Historical automatic provenance is not a new request:
+                    // Resume keeps the pre-existing reacquisition policy.
+                    qolip_session_helpers::validate_qolip_set_tx(tx, session).await?;
+                }
             }
         }
         put_queue_action_state_tx(tx, event).await?;

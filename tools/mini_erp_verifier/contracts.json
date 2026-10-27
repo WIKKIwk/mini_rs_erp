@@ -1,10 +1,19 @@
 {
   "protocol": 1,
   "route_snapshot": {
-    "count": 343,
-    "sha256": "ebd409fb9903f84cd278515da7d629ae3e17833df921fd666c1dfa320a44af5d"
+    "count": 344,
+    "sha256": "039294d76d37be43ffa33440c9c3c70196f5ba57e95fc38afe98662be6c62b48"
   },
   "access_matrices": [
+    {
+      "name": "qolip_start_settings",
+      "uri": "/v1/mobile/admin/production-maps/qolip-start-settings",
+      "methods": ["GET"],
+      "allowed_roles": ["admin"],
+      "allowed_status": 200,
+      "anonymous_status": 401,
+      "forbidden_status": 403
+    },
     {
       "name": "me",
       "uri": "/v1/mobile/me",

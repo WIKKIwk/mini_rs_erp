@@ -337,6 +337,25 @@ impl QolipService {
         worker_name: &str,
         principal: &Principal,
     ) -> Result<QolipOrderStartPreparation, QolipError> {
+        self.prepare_qolip_for_order_start(qolip_code, expected_item_code, expected_item_name,
+            worker_id, worker_name, principal, true).await
+    }
+
+    /// Read-only individual readiness. The caller separately enforces all-order
+    /// rework, so healthy molds can still be displayed beside an away member.
+    pub(crate) async fn prepare_available_qolip_for_order_start(
+        &self, qolip_code: &str, expected_item_code: &str, expected_item_name: &str,
+        worker_id: &str, worker_name: &str, principal: &Principal,
+    ) -> Result<QolipOrderStartPreparation, QolipError> {
+        self.prepare_qolip_for_order_start(qolip_code, expected_item_code, expected_item_name,
+            worker_id, worker_name, principal, false).await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn prepare_qolip_for_order_start(
+        &self, qolip_code: &str, expected_item_code: &str, expected_item_name: &str,
+        worker_id: &str, worker_name: &str, principal: &Principal, check_order_rework: bool,
+    ) -> Result<QolipOrderStartPreparation, QolipError> {
         let qolip_code = qolip_code.trim();
         if qolip_code.is_empty() {
             return Err(QolipError::MissingQolipCode);
@@ -351,9 +370,9 @@ impl QolipService {
             .await?
             .ok_or(QolipError::QolipCodeMismatch)?;
         let compatible = self.compatible_specs_for_product(&expected_product).await?;
-        self.require_qolip_codes_available(
+        if check_order_rework { self.require_qolip_codes_available(
             &compatible.iter().map(|spec| spec.qolip_code.clone()).collect::<Vec<_>>(),
-        ).await?;
+        ).await?; }
         let candidate = compatible.iter().find(|candidate| candidate.set_id() == spec.set_id()
             && candidate.qolip_code.eq_ignore_ascii_case(&spec.qolip_code))
             .ok_or(QolipError::QolipCodeMismatch)?;

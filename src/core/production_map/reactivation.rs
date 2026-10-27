@@ -34,7 +34,7 @@ pub(crate) fn reclose_control(session: &OrderRunSession) -> Option<ReactivationR
     if token.len() != 64 { return None; }
     let baseline = session.payload_json.get("_reactivation_reclose")?.get("payload")?;
     for key in ["rezka_output_cycle", "rezka_output_revision", "rezka_output_report",
-        "rezka_active_partial_rolls", "rezka_recorded_kadr_counts", "qolip_code", "qolip_codes", "qolip_set_id", "qolip_set_snapshot"] {
+        "rezka_active_partial_rolls", "rezka_recorded_kadr_counts", "qolip_code", "qolip_codes", "qolip_set_id", "qolip_set_snapshot", "qolip_confirmation"] {
         if session.payload_json.get(key) != baseline.get(key) { return None; }
     }
     Some(ReactivationRecloseControl {

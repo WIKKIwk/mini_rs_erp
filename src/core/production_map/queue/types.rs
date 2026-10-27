@@ -112,6 +112,11 @@ pub struct ApparatusQueueWorkerInteraction {
     #[serde(default)]
     pub opening_wip_mode: ApparatusQueuePreviousWipMode,
     pub qolip_mode: ApparatusQueueQolipMode,
+    /// Additive opt-in policy. Older clients keep the ordinary scan contract.
+    #[serde(default)]
+    pub qolip_automatic_confirmation: bool,
+    #[serde(default)]
+    pub qolip_policy_revision: i64,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub blocking_reason_code: String,
 }

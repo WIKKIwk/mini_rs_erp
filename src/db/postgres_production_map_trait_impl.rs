@@ -1,5 +1,11 @@
 #[async_trait]
 impl ProductionMapStorePort for PostgresProductionMapStore {
+    async fn qolip_start_settings(&self) -> Result<crate::core::production_map::QolipStartSettings, ProductionMapError> {
+        qolip_start_settings::load(&self.pool).await
+    }
+    async fn update_qolip_start_settings(&self, enabled: bool, actor: &QueueActionActor) -> Result<crate::core::production_map::QolipStartSettings, ProductionMapError> {
+        qolip_start_settings::update(&self.pool, enabled, actor).await
+    }
     async fn output_stats(
         &self,
         request: &crate::core::production_map::output_stats::OutputStatsRequest,

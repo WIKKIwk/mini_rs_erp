@@ -613,6 +613,7 @@ impl ProductionMapService {
         ProductionMapError,
     > {
         let stage_controls = self.store.stage_order_control_states().await?;
+        let qolip_start_settings = self.store.qolip_start_settings().await?;
         let owned_projections = projections.is_none().then(|| {
             maps.iter()
                 .map(|map| self.projection_map(map))
@@ -1183,6 +1184,10 @@ impl ProductionMapService {
                                     } else {
                                         ApparatusQueueQolipMode::NotRequired
                                     };
+                                if interaction.qolip_mode == ApparatusQueueQolipMode::ScanRequired {
+                                    interaction.qolip_automatic_confirmation = qolip_start_settings.automatic_confirmation_enabled;
+                                    interaction.qolip_policy_revision = qolip_start_settings.revision;
+                                }
                                 if material_requirements.assignments_satisfied {
                                     interaction.mode = ApparatusQueueInteractionMode::FreshStart;
                                     start_ready = true;
