@@ -1,0 +1,135 @@
+{
+  "new_domain_regressions": {
+    "std": 27,
+    "bbtree_all": 27
+  },
+  "existing_unit_groups": {
+    "progress_qr_report": {
+      "std": 8,
+      "bbtree_all": 8
+    },
+    "admin_order_pages_audit": {
+      "std": 1,
+      "bbtree_all": 1
+    },
+    "worker_snapshot": {
+      "std": 13,
+      "bbtree_all": 13
+    }
+  },
+  "logs": {
+    "verification-tests.log": {
+      "results": [
+        "test result: FAILED. 19 passed; 15 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.35s"
+      ],
+      "failed_tests": [
+        "a_stalled_reader_is_bounded_without_returning_a_partial_bundle",
+        "bootstrap_matches_three_legacy_requests_and_reports_cold_warm_bytes_without_writes",
+        "material_and_qolip_readers_start_in_parallel",
+        "optional_barcodes_and_untrusted_qolip_query_remain_read_only",
+        "oversized_section_is_bounded_and_preserves_the_control_and_other_section",
+        "prepare_context_retries_when_occupancy_changes_during_sections",
+        "queue_action_ack_cursor_covers_committed_state_and_rejected_replay_does_not_write",
+        "queue_action_control_reauth_drops_presentation_after_assignment_change",
+        "queue_action_legacy_ack_skips_optional_control_reads",
+        "queue_action_optional_control_timeout_preserves_the_committed_ack",
+        "repeated_revision_churn_stops_after_two_attempts_with_conflict",
+        "retry_rechecks_current_modes_and_discards_sections_that_became_unneeded",
+        "section_errors_preserve_legacy_status_and_json_without_losing_control",
+        "session_assignment_and_capability_revocation_during_reads_discard_the_bundle",
+        "unrelated_revision_change_reuses_sections_with_current_control_cursor"
+      ],
+      "actual_snapshot_hashes": [],
+      "expected_snapshot_hashes": []
+    },
+    "bootstrap-std-baseline.log": {
+      "results": [
+        "test result: FAILED. 19 passed; 15 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.38s"
+      ],
+      "failed_tests": [
+        "a_stalled_reader_is_bounded_without_returning_a_partial_bundle",
+        "bootstrap_matches_three_legacy_requests_and_reports_cold_warm_bytes_without_writes",
+        "material_and_qolip_readers_start_in_parallel",
+        "optional_barcodes_and_untrusted_qolip_query_remain_read_only",
+        "oversized_section_is_bounded_and_preserves_the_control_and_other_section",
+        "prepare_context_retries_when_occupancy_changes_during_sections",
+        "queue_action_ack_cursor_covers_committed_state_and_rejected_replay_does_not_write",
+        "queue_action_control_reauth_drops_presentation_after_assignment_change",
+        "queue_action_legacy_ack_skips_optional_control_reads",
+        "queue_action_optional_control_timeout_preserves_the_committed_ack",
+        "repeated_revision_churn_stops_after_two_attempts_with_conflict",
+        "retry_rechecks_current_modes_and_discards_sections_that_became_unneeded",
+        "section_errors_preserve_legacy_status_and_json_without_losing_control",
+        "session_assignment_and_capability_revocation_during_reads_discard_the_bundle",
+        "unrelated_revision_change_reuses_sections_with_current_control_cursor"
+      ],
+      "actual_snapshot_hashes": [],
+      "expected_snapshot_hashes": []
+    },
+    "integration-bbtree-complete.log": {
+      "results": [
+        "test result: FAILED. 6 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 5 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 3.28s",
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s"
+      ],
+      "failed_tests": [
+        "complete_snapshots_match_pre_optimization_baseline"
+      ],
+      "actual_snapshot_hashes": [
+        "1dc5ddf0ef806f36ce83568d655166aa4660b5c3e797d8dd3fcd05770e8a1aa1"
+      ],
+      "expected_snapshot_hashes": [
+        "8f307a0cefa918e43bc07923b2c706c8ad3e33fe70d18e643d216b0de12a72fa"
+      ]
+    },
+    "integration-std-complete.log": {
+      "results": [
+        "test result: FAILED. 6 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+        "test result: ok. 5 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 2.95s",
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s"
+      ],
+      "failed_tests": [
+        "complete_snapshots_match_pre_optimization_baseline"
+      ],
+      "actual_snapshot_hashes": [
+        "1dc5ddf0ef806f36ce83568d655166aa4660b5c3e797d8dd3fcd05770e8a1aa1"
+      ],
+      "expected_snapshot_hashes": [
+        "8f307a0cefa918e43bc07923b2c706c8ad3e33fe70d18e643d216b0de12a72fa"
+      ]
+    }
+  },
+  "current_snapshot_parity": {
+    "std": {
+      "cancelled": "455c1572bb29ec513eb021ec4fea939a92f94103ef61909a5ad4053fdbb6d3f2",
+      "consumed": "455c1572bb29ec513eb021ec4fea939a92f94103ef61909a5ad4053fdbb6d3f2",
+      "duplicates": "afe38c85fb29f30efa9cc8c9389a7c5a2cdda32d5fe880db9284e71d30e9665f",
+      "failed": "455c1572bb29ec513eb021ec4fea939a92f94103ef61909a5ad4053fdbb6d3f2",
+      "held": "f8f396452598482a74ab16ab42fe98b7ecc9b18595811269f49b363cd1c80e9d",
+      "many": "109db50077d7b9c4e947351fbf58b5b5c3673880f4664927892958e46a25c1b1",
+      "mixed": "ac947d5e01068d44c8bcfbc689292daae2b59c92fb5827b50bda28abfd3fead3",
+      "one": "f8e84bdb8b5d68e04cd55ab133fad3c12f0327b9e21e893e7ffe7a3b01137e81",
+      "passed": "42e926316152b0d0febd7721e977aed573e43d1ab8c1825e98fea030f8bd5d9f",
+      "raw": "42742722a9405b845e5e00613a286fd8e830040a10764c95953c297859e6219e",
+      "running": "d4a470834e56a26bc2229d8a22da2c96045f16ed0be50fb410005873299b5afa",
+      "zero": "1dc5ddf0ef806f36ce83568d655166aa4660b5c3e797d8dd3fcd05770e8a1aa1"
+    },
+    "bbtree": {
+      "cancelled": "455c1572bb29ec513eb021ec4fea939a92f94103ef61909a5ad4053fdbb6d3f2",
+      "consumed": "455c1572bb29ec513eb021ec4fea939a92f94103ef61909a5ad4053fdbb6d3f2",
+      "duplicates": "afe38c85fb29f30efa9cc8c9389a7c5a2cdda32d5fe880db9284e71d30e9665f",
+      "failed": "455c1572bb29ec513eb021ec4fea939a92f94103ef61909a5ad4053fdbb6d3f2",
+      "held": "f8f396452598482a74ab16ab42fe98b7ecc9b18595811269f49b363cd1c80e9d",
+      "many": "109db50077d7b9c4e947351fbf58b5b5c3673880f4664927892958e46a25c1b1",
+      "mixed": "ac947d5e01068d44c8bcfbc689292daae2b59c92fb5827b50bda28abfd3fead3",
+      "one": "f8e84bdb8b5d68e04cd55ab133fad3c12f0327b9e21e893e7ffe7a3b01137e81",
+      "passed": "42e926316152b0d0febd7721e977aed573e43d1ab8c1825e98fea030f8bd5d9f",
+      "raw": "42742722a9405b845e5e00613a286fd8e830040a10764c95953c297859e6219e",
+      "running": "d4a470834e56a26bc2229d8a22da2c96045f16ed0be50fb410005873299b5afa",
+      "zero": "1dc5ddf0ef806f36ce83568d655166aa4660b5c3e797d8dd3fcd05770e8a1aa1"
+    },
+    "equal": true
+  },
+  "bootstrap_failure_sets_equal": true,
+  "snapshot_failure_sets_equal": true
+}
