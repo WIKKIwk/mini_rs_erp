@@ -29,6 +29,12 @@ order control, and apparatus occupancy checks still apply. A search result or
 page boundary never defines adjacency. An idle apparatus may resume its paused
 work without moving that work to a different queue position.
 
+Paused orders can be rearranged in the saved sequence without changing their
+sessions or reserved resources. Running work, colour trials and frozen orders
+retain their existing reorder protections. The temporary-pause neighbor rule
+uses the paused order's new position: moving it to the end does not enable
+pending orders before it; the paused work can still resume on an idle apparatus.
+
 ## Additive mobile contract
 
 Eligible queue controls expose `temporary_pause: {session_id, token}`. Paused

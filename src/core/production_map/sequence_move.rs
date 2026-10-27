@@ -169,8 +169,6 @@ impl SequenceMoveState {
                 let state = raw_states.get(id).map(String::as_str).unwrap_or("pending");
                 let state = if preflight_orders.contains(id) {
                     "print_preflight"
-                } else if state == "paused" && pechat::is_pechat_apparatus(canonical) {
-                    "in_progress"
                 } else {
                     state
                 };

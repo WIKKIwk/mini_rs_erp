@@ -358,7 +358,7 @@ async fn slim_stream_matches_http_after_colour_checkpoint_reorder_and_reconnect(
     assert!(!delta.to_string().contains("\"maps\""));
     apply(&mut pages, &delta);
     assert_eq!(pages[0]["rows"]["zakaz-000"]["display_state"], "paused");
-    assert_eq!(pages[0]["rows"]["zakaz-000"]["can_reorder"], false);
+    assert_eq!(pages[0]["rows"]["zakaz-000"]["can_reorder"], true);
     assert_eq!(pages, prefix(&f, &token, &query, 2).await);
     let mut ids = (0..60).map(|i| format!("zakaz-{i:03}")).collect::<Vec<_>>();
     ids.rotate_left(25);

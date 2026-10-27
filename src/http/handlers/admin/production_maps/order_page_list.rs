@@ -25,12 +25,11 @@ pub(super) fn project(
         let saved = by_id.get(id.as_str())?;
         let state = card_state(snapshot, saved, apparatus, !reorder_enabled);
         let order_control = snapshot.order_controls.get(id).map(|c| c.state).unwrap_or(OrderControlState::Active);
-        // Flutter's reorder guard also treats a paused machine as active.
-        // Preserve its exact semantics rather than the execution state's
-        // narrower is_active() helper (which intentionally excludes pause).
+        // Paused work keeps its session/resources but does not occupy the
+        // apparatus. Only running work, colour trials and frozen rows lock it.
         let can_reorder = reorder_enabled && !matches!(state,
             ApparatusQueueOrderState::InProgress | ApparatusQueueOrderState::PrintPreflight |
-            ApparatusQueueOrderState::Paused | ApparatusQueueOrderState::Frozen)
+            ApparatusQueueOrderState::Frozen)
             && order_control != OrderControlState::Frozen;
         // These are resolved row labels, not a replacement domain map. In
         // particular customer_name is the visible subtitle and may fall back
@@ -893,6 +892,30 @@ mod tests {
         let row = rows(&snapshot)["rows"][ID].clone();
         assert_eq!(row["frozen"], true);
         assert_eq!(row["can_reorder"], false);
+    }
+
+    #[test]
+    fn sequence_rows_allow_paused_reordering_but_keep_running_trial_and_frozen_guards() {
+        for (state, can_reorder) in [
+            ("pending", true),
+            ("paused", true),
+            ("completed", true),
+            ("in_progress", false),
+            ("print_preflight", false),
+            ("frozen", false),
+        ] {
+            let mut snapshot = ProductionMapLiveSnapshot::default();
+            snapshot.maps.push(map());
+            snapshot.queue_states.insert(
+                APPARATUS.into(),
+                BTreeMap::from([(ID.into(), state.into())]),
+            );
+            let rows = project(&snapshot, &[ID.into()], APPARATUS, "", &BTreeMap::new());
+            assert_eq!(rows["rows"][ID]["queue_state"], state);
+            assert_eq!(rows["rows"][ID]["can_reorder"], can_reorder, "{state}");
+            let searched = project(&snapshot, &[ID.into()], APPARATUS, "order", &BTreeMap::new());
+            assert_eq!(searched["rows"][ID]["can_reorder"], false, "search: {state}");
+        }
     }
 
     #[test]

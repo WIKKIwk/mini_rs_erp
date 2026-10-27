@@ -28,7 +28,7 @@ async fn fixture(apparatus: &str) -> (ProductionMapService, Arc<MemoryProduction
 }
 
 #[tokio::test]
-async fn reorder_respects_every_queue_state_and_print_pause_policy() {
+async fn reorder_respects_running_and_preflight_barriers_but_not_paused_work() {
     for apparatus in [PRINT, LAMINATION] {
         for state in [
             "pending",
@@ -47,8 +47,7 @@ async fn reorder_respects_every_queue_state_and_print_pause_policy() {
                 .reorder_apparatus_sequence(apparatus, ids(&["d", "a", "b", "c"]), "d")
                 .await
                 .unwrap();
-            let blocked = matches!(state, "in_progress" | "print_preflight")
-                || (state == "paused" && apparatus == PRINT);
+            let blocked = matches!(state, "in_progress" | "print_preflight");
             assert_eq!(
                 saved,
                 if state == "frozen" {
@@ -69,6 +68,24 @@ async fn reorder_respects_every_queue_state_and_print_pause_policy() {
                 }
             );
         }
+    }
+}
+
+#[tokio::test]
+async fn legacy_sequence_save_can_move_paused_print_work_without_changing_its_state() {
+    let (service, store) = fixture(PRINT).await;
+    let states = BTreeMap::from([("a".into(), "paused".into())]);
+    store
+        .put_apparatus_queue_states(PRINT, states.clone())
+        .await
+        .unwrap();
+    for requested in [ids(&["b", "c", "d", "a"]), ids(&["a", "b", "c", "d"])] {
+        service
+            .set_apparatus_sequence(PRINT, requested.clone())
+            .await
+            .unwrap();
+        assert_eq!(store.apparatus_sequences().await.unwrap()[PRINT], requested);
+        assert_eq!(store.apparatus_queue_states().await.unwrap()[PRINT], states);
     }
 }
 

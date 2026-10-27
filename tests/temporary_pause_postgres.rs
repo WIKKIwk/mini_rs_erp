@@ -738,7 +738,7 @@ async fn temporary_pause_http_checks_assignment_and_rejects_measurements() {
 
 #[tokio::test]
 #[ignore = "requires TEMPORARY_PAUSE_TEST_DATABASE_URL pointing at a disposable PostgreSQL server"]
-async fn temporary_pause_preserves_raw_stock_and_rechecks_its_reservation_on_resume() {
+async fn temporary_pause_and_reorder_preserve_raw_stock_and_recheck_reservation_on_resume() {
     let f = Fixture::new().await;
     let stock_id = format!("stock-{}", f.a);
     let barcode = format!("RAW-{}", f.a);
@@ -766,6 +766,28 @@ async fn temporary_pause_preserves_raw_stock_and_rechecks_its_reservation_on_res
             .await
             .unwrap();
     f.stop(&f.control().await).await.unwrap();
+    let paused = f.current().await;
+    let states = f.store.apparatus_queue_states().await.unwrap();
+    let down = SequenceMove {
+        apparatus: MACHINE.into(),
+        order_id: f.a.clone(),
+        before_order_id: None,
+        after_order_id: None,
+        expected_version: f.service.live_snapshot_shared().await.unwrap()
+            .sequence_versions[MACHINE].clone(),
+        idempotency_key: "paused-stock-down".into(),
+    };
+    let saved = f.service.move_apparatus_sequence(down.clone(), actor()).await.unwrap();
+    assert_eq!(saved.order_ids, vec![f.b.clone(), f.c.clone(), f.a.clone()]);
+    assert!(!saved.adjusted);
+    assert_eq!(f.current().await, paused);
+    assert_eq!(f.store.apparatus_queue_states().await.unwrap(), states);
+    let stale = SequenceMove {
+        before_order_id: Some(f.b.clone()),
+        expected_version: saved.version.clone(),
+        idempotency_key: "paused-stock-before-resume".into(),
+        ..down.clone()
+    };
     let stock_after: Value =
         sqlx::query_scalar("SELECT to_jsonb(s) FROM mini_raw_material_stock s WHERE id=$1")
             .bind(&stock_id)
@@ -774,11 +796,22 @@ async fn temporary_pause_preserves_raw_stock_and_rechecks_its_reservation_on_res
             .unwrap();
     assert_eq!(
         stock_before, stock_after,
-        "temporary removal does not consume, release or reassign raw material"
+        "temporary removal and reorder do not consume, release or reassign raw material"
     );
     f.run(&f.a, Action::Resume, Default::default())
         .await
         .unwrap();
+    assert_eq!(f.current().await.session_id, paused.session_id);
+    assert_eq!(
+        f.service.move_apparatus_sequence(stale, actor()).await,
+        Err(ProductionMapError::QueueReorderConflict),
+    );
+    // A durable retry acknowledges the pause-era move without changing the
+    // resumed session or the material reservation.
+    let resumed = f.current().await;
+    assert_eq!(f.service.move_apparatus_sequence(down, actor()).await.unwrap(), saved);
+    assert_eq!(f.current().await, resumed);
+    assert_eq!(f.store.apparatus_sequences().await.unwrap()[MACHINE], saved.order_ids);
     f.stop(&f.control().await).await.unwrap();
     sqlx::query("UPDATE mini_raw_material_stock SET status='consumed' WHERE id=$1")
         .bind(&stock_id)

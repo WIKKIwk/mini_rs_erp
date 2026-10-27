@@ -173,6 +173,18 @@ impl Fixture {
             .unwrap();
         control
     }
+
+    async fn move_command(&self, order: &str, before: Option<&str>, key: &str) -> SequenceMove {
+        SequenceMove {
+            apparatus: PRESS.into(),
+            order_id: order.into(),
+            before_order_id: before.map(str::to_string),
+            after_order_id: None,
+            expected_version: self.service.live_snapshot_shared().await.unwrap()
+                .sequence_versions[PRESS].clone(),
+            idempotency_key: key.into(),
+        }
+    }
 }
 
 fn output() -> QueueProgressInput {
@@ -324,6 +336,92 @@ async fn strict_sequence_allows_only_the_adjacent_urgent_order_and_cannot_chain_
             .is_err(),
         "suspending B must not bypass the original A anchor"
     );
+}
+
+#[tokio::test]
+async fn paused_order_moves_down_and_back_without_changing_its_roll_or_neighbor_rule() {
+    let f = Fixture::new(QueueDiscipline::StrictSequence).await;
+    f.run(PRESS, A, Action::Start, QueueProgressInput::default()).await.unwrap();
+    f.pause(PRESS, A).await;
+    let session = f.session(PRESS, A).await;
+    let states = f.store.apparatus_queue_states().await.unwrap();
+    let down = f.move_command(A, None, "paused-down").await;
+    let saved = f.service.move_apparatus_sequence(down.clone(), actor()).await.unwrap();
+    assert_eq!(saved.order_ids, vec![B.to_string(), C.to_string(), A.to_string()]);
+    assert!(!saved.adjusted);
+    assert_eq!(f.session(PRESS, A).await, session);
+    assert_eq!(f.store.apparatus_queue_states().await.unwrap(), states);
+    assert!(f.store.progress_batches_for_order(A).await.unwrap().is_empty());
+    assert!(f.control(PRESS, A).await.temporarily_paused);
+    assert!(f.control(PRESS, A).await.allowed_actions.contains(&Action::Resume));
+    // Reordering preserves the existing rule: only the paused order's next
+    // unfinished neighbor can Start. A at the tail opens no fresh Start.
+    for order in [B, C] {
+        assert!(!f.control(PRESS, order).await.allowed_actions.contains(&Action::Start));
+        assert_eq!(
+            f.run(PRESS, order, Action::Start, QueueProgressInput::default()).await,
+            Err(ProductionMapError::QueueActionNotAllowed),
+        );
+    }
+    let back = f.move_command(A, Some(B), "paused-back").await;
+    let restored = f.service.move_apparatus_sequence(back, actor()).await.unwrap();
+    assert_eq!(restored.order_ids, vec![A.to_string(), B.to_string(), C.to_string()]);
+    assert_eq!(f.session(PRESS, A).await, session);
+    assert!(f.control(PRESS, B).await.allowed_actions.contains(&Action::Start));
+    assert!(!f.control(PRESS, C).await.allowed_actions.contains(&Action::Start));
+    // A late retry acknowledges the old move without undoing the newer one.
+    assert_eq!(f.service.move_apparatus_sequence(down, actor()).await.unwrap(), saved);
+    assert_eq!(f.store.apparatus_sequences().await.unwrap()[PRESS], restored.order_ids);
+}
+
+#[tokio::test]
+async fn moved_paused_order_resumes_the_same_roll_and_invalidates_a_prepared_move() {
+    let f = Fixture::new(QueueDiscipline::StrictSequence).await;
+    f.run(PRESS, A, Action::Start, QueueProgressInput::default()).await.unwrap();
+    f.pause(PRESS, A).await;
+    let paused = f.session(PRESS, A).await;
+    let down = f.move_command(A, None, "resume-tail").await;
+    f.service.move_apparatus_sequence(down, actor()).await.unwrap();
+    let stale = f.move_command(A, Some(B), "before-resume").await;
+    let sequence = f.store.apparatus_sequences().await.unwrap();
+    let resumed = f.run(PRESS, A, Action::Resume, QueueProgressInput::default()).await.unwrap();
+    let session = resumed.session.unwrap();
+    assert_eq!(session.session_id, paused.session_id);
+    assert_eq!(session.payload_json["wip_started_at_unix"], paused.payload_json["wip_started_at_unix"]);
+    assert_eq!(session.status, OrderRunStatus::Active);
+    assert!(resumed.progress_batch.is_none());
+    assert_eq!(
+        f.service.move_apparatus_sequence(stale, actor()).await,
+        Err(ProductionMapError::QueueReorderConflict),
+    );
+    assert_eq!(f.store.apparatus_sequences().await.unwrap(), sequence);
+    assert_eq!(f.session(PRESS, A).await, session);
+}
+
+#[tokio::test]
+async fn paused_order_moves_around_a_running_neighbor_without_crossing_its_barrier() {
+    let f = Fixture::new(QueueDiscipline::StrictSequence).await;
+    f.run(PRESS, A, Action::Start, QueueProgressInput::default()).await.unwrap();
+    f.pause(PRESS, A).await;
+    f.run(PRESS, B, Action::Start, QueueProgressInput::default()).await.unwrap();
+    let paused = f.session(PRESS, A).await;
+    let running = f.session(PRESS, B).await;
+    let states = f.store.apparatus_queue_states().await.unwrap();
+    let down = f.move_command(A, None, "behind-running").await;
+    let saved = f.service.move_apparatus_sequence(down, actor()).await.unwrap();
+    assert_eq!(saved.order_ids, vec![B.to_string(), C.to_string(), A.to_string()]);
+    assert!(!saved.adjusted);
+    let up = f.move_command(A, Some(B), "before-running").await;
+    let clamped = f.service.move_apparatus_sequence(up, actor()).await.unwrap();
+    assert_eq!(clamped.order_ids, vec![B.to_string(), A.to_string(), C.to_string()]);
+    assert!(clamped.adjusted);
+    assert_eq!(f.session(PRESS, A).await, paused);
+    assert_eq!(f.session(PRESS, B).await, running);
+    assert_eq!(f.store.apparatus_queue_states().await.unwrap(), states);
+    for order in [A, C] {
+        assert!(!f.control(PRESS, order).await.allowed_actions.contains(&Action::Start));
+        assert!(!f.control(PRESS, order).await.allowed_actions.contains(&Action::Resume));
+    }
 }
 
 #[tokio::test]

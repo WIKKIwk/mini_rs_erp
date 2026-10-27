@@ -270,15 +270,6 @@ impl ProductionMapService {
             return Ok(result.order_ids);
         }
         let mut barrier_states = states.clone();
-        if pechat::is_pechat_apparatus(&canonical) {
-            for state in barrier_states.values_mut() {
-                if queue_state::ApparatusQueueOrderState::parse(state)
-                    == Some(queue_state::ApparatusQueueOrderState::Paused)
-                {
-                    *state = "in_progress".to_string();
-                }
-            }
-        }
         // Running and passed color trials reserve their order, not the entire
         // waiting queue. Never let a moved order cross that reservation.
         for order_id in preflight_order_ids {
