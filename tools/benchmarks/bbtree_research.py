@@ -176,7 +176,11 @@ def main() -> None:
     report = {
         "schema": 1,
         "source_commit": command(["git", "rev-parse", "HEAD"]),
-        "source_dirty": bool(command(["git", "status", "--porcelain"])),
+        "source_dirty": bool(command(["git", "status", "--porcelain", "--",
+                                      "src", "crates", "third_party", "examples",
+                                      "Cargo.toml", "Cargo.lock"])),
+        "working_tree_status": command(["git", "status", "--porcelain"]).splitlines(),
+        "runner_sha256": sha256(Path(__file__)),
         "host": host_details(),
         "method": {"rounds": args.rounds, "target_ms_per_case": args.target_ms,
                    "build_profile": "release", "warmup_iterations": 1,
