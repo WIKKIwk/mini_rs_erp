@@ -1,6 +1,23 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
+
+// Only transient, ordered lookup indexes participate in the experiment.
+// Public lineage sets and the production data loaded from stores stay unchanged.
+#[cfg(feature = "bbtree-wip")]
+use bbtree::unsync::BBTreeMap as LineageMap;
+#[cfg(not(feature = "bbtree-wip"))]
+use std::collections::BTreeMap as LineageMap;
 
 use super::super::*;
+
+#[cfg(any(test, feature = "bbtree-bench"))]
+#[path = "qr_lineage_fixtures.rs"]
+mod fixtures;
+
+#[cfg(feature = "bbtree-bench")]
+pub(super) fn research_workloads()
+-> Vec<Box<dyn crate::core::production_map::bbtree_research::Workload>> {
+    fixtures::research_workloads()
+}
 
 pub(super) struct BatchLineage {
     pub batch_ids: BTreeSet<String>,
@@ -30,7 +47,7 @@ fn session_input_ids(session: &OrderRunSession) -> Result<BTreeSet<String>, ()> 
 
 fn expand(
     seeds: &BTreeSet<String>,
-    links: &BTreeMap<String, BTreeSet<String>>,
+    links: &LineageMap<String, BTreeSet<String>>,
 ) -> BTreeSet<String> {
     let mut ids = seeds.clone();
     let mut pending = seeds.iter().cloned().collect::<Vec<_>>();
@@ -58,18 +75,18 @@ pub(super) fn batch_lineage(
         .iter()
         .filter(|batch| batch.order_id.trim() == order_id)
         .map(|batch| (batch.batch_id.trim(), batch))
-        .collect::<BTreeMap<_, _>>();
+        .collect::<LineageMap<_, _>>();
     let sessions_by_id = sessions
         .iter()
         .filter(|session| session.order_id.trim() == order_id)
         .map(|session| (session.session_id.trim(), session))
-        .collect::<BTreeMap<_, _>>();
+        .collect::<LineageMap<_, _>>();
     let session_inputs = sessions_by_id
         .iter()
         .map(|(id, session)| (*id, session_input_ids(session)))
-        .collect::<BTreeMap<_, _>>();
-    let mut parents = BTreeMap::<String, BTreeSet<String>>::new();
-    let mut children = BTreeMap::<String, BTreeSet<String>>::new();
+        .collect::<LineageMap<_, _>>();
+    let mut parents = LineageMap::<String, BTreeSet<String>>::new();
+    let mut children = LineageMap::<String, BTreeSet<String>>::new();
     let mut incomplete_ids = BTreeSet::<String>::new();
     for batch in batches_by_id.values() {
         let id = batch.batch_id.trim();
@@ -244,7 +261,7 @@ pub(super) fn batch_lineage(
     let mut degrees = batch_ids
         .iter()
         .map(|id| (id.clone(), parents.get(id).map_or(0, BTreeSet::len)))
-        .collect::<BTreeMap<_, _>>();
+        .collect::<LineageMap<_, _>>();
     let mut ready = degrees
         .iter()
         .filter(|(_, degree)| **degree == 0)
