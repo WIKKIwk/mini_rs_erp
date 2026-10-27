@@ -1,5 +1,25 @@
 use super::*;
 
+pub async fn rename_set(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<QolipErrorResponse>)> {
+    let principal = authenticated_principal(&state, &headers).await?;
+    ensure_qolip_access(&state, &principal).await?;
+    if method != Method::POST {
+        return Err(method_not_allowed());
+    }
+    let is_admin = state.admin
+        .principal_has_capability(&principal, Capability::AdminAccess).await;
+    let input: crate::core::qolip::QolipSetRename =
+        serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json"))?;
+    let set = state.qolip.rename_set(&input, &principal, is_admin)
+        .await.map_err(qolip_error)?;
+    Ok(Json(serde_json::json!({"ok": true, "set": set})))
+}
+
 pub async fn create_set(
     State(state): State<AppState>,
     method: Method,

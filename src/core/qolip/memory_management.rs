@@ -46,6 +46,7 @@ impl MemoryQolipStore {
             .map(|draft| draft.standalone_spec(&input.warehouse, &id, principal))
             .collect::<Result<Vec<_>, _>>()?;
         let set = super::QolipManagedSet {
+            name: String::new(),
             snapshot: super::QolipSetSnapshot::new(id.clone(), members.clone(), Vec::new()),
             warehouse: input.warehouse.trim().to_string(),
             item_code: String::new(),
@@ -84,6 +85,7 @@ impl MemoryQolipStore {
                 None => {
                     let first = snapshot.members.first().ok_or(QolipError::SetChanged)?;
                     super::QolipManagedSet {
+                        name: String::new(),
                         snapshot: snapshot.clone(),
                         warehouse: first.warehouse.clone(),
                         item_code: first.item_code.clone(),
@@ -106,6 +108,24 @@ impl MemoryQolipStore {
         }
         result.sort_by_key(|set| set.snapshot.set_id.clone());
         Ok(result)
+    }
+
+    async fn memory_rename_set(
+        &self,
+        input: &super::QolipSetRename,
+        allowed: Option<&[String]>,
+    ) -> Result<super::QolipManagedSet, QolipError> {
+        self.memory_managed_sets(None).await?;
+        let mut registry = self.managed_registry.write().await;
+        let current = registry.get(&input.set_id).ok_or(QolipError::SetChanged)?;
+        memory_management_owner(&current.warehouse, allowed)?;
+        let key = input.name.to_lowercase();
+        if registry.iter().any(|(id, set)| *id != input.set_id && set.name.to_lowercase() == key) {
+            return Err(QolipError::SetNameConflict);
+        }
+        let set = registry.get_mut(&input.set_id).ok_or(QolipError::SetChanged)?;
+        set.name = input.name.clone();
+        Ok(set.clone())
     }
 
     async fn memory_edit_set(

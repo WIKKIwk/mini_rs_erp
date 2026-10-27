@@ -41,6 +41,7 @@ fn memory_shared_snapshot(
         if registry.contains_key(id) { continue; }
         let Some(first) = members.first() else { continue; };
         registry.insert(id.clone(), super::QolipManagedSet {
+            name: String::new(),
             snapshot: super::QolipSetSnapshot::new(id.clone(), members.clone(), Vec::new()),
             warehouse: first.warehouse.clone(),
             item_code: first.item_code.clone(),

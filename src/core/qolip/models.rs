@@ -247,6 +247,10 @@ pub struct QolipLocationUpsert {
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum QolipError {
+    #[error("set name must contain 1 to 160 characters")]
+    InvalidSetName,
+    #[error("set name already exists")]
+    SetNameConflict,
     #[error("qolip set changed; confirm the current complete set")]
     SetChanged,
     #[error("qolip identifier resolves to more than one set")]
