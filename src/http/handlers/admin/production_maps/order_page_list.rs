@@ -60,8 +60,16 @@ pub(super) fn project_worker(
 ) -> serde_json::Value {
     let rows = snapshot.maps.iter().map(|saved| {
         let id = &saved.map.id;
-        (id.clone(), serde_json::json!({"id":id,"code":display_code(&saved.map),"title":display_title(&saved.map),
-            "customer_name":display_subtitle(&saved.map,customers.get(id).map(String::as_str)),"image_id":saved.map.image_id}))
+        let mut row = serde_json::json!({"id":id,"code":display_code(&saved.map),"title":display_title(&saved.map),
+            "customer_name":display_subtitle(&saved.map,customers.get(id).map(String::as_str)),"image_id":saved.map.image_id});
+        let paused = snapshot.queue_action_controls.iter().filter_map(|(apparatus, controls)| {
+            controls.get(id).filter(|control| control.temporarily_paused
+                && control.state == ApparatusQueueOrderState::Paused).map(|_| apparatus)
+        }).collect::<Vec<_>>();
+        if !paused.is_empty() {
+            row["temporarily_paused_apparatus"] = serde_json::json!(paused);
+        }
+        (id.clone(), row)
     }).collect::<BTreeMap<_,_>>();
     let states = snapshot
         .queue_states

@@ -9,37 +9,43 @@ The existing measured roll-removal operation keeps its output-recording behavior
 The original work session, input WIP ownership, material/tooling reservations,
 physical output start, and open cutting-frame records remain attached to the
 order. Already recorded outputs remain unchanged. **Davom ettirish** resumes this
-same unfinished output cycle once the apparatus is available. The eventual roll
-is measured and recorded once. The physical start/end span includes the
-interruption; pause/resume times are separately recorded in audit events.
+same unfinished output cycle once the apparatus and its queue priority allow it.
+The eventual roll is measured and recorded once. The physical start/end span
+includes the interruption; pause/resume times are separately recorded in audit events.
 
 ## Queue discipline
 
 The apparatus's existing canonical queue discipline controls the next selection:
 
-- `strict_sequence`: temporarily removed work remains a queue barrier and opens
-  only the next unfinished neighbor in the actual saved sequence. Another paused
-  neighbor cannot be skipped to reach a later order. Completed/removed rows are
-  handled by the existing effective-sequence rules.
+- `strict_sequence`: both Start and Resume follow the current saved sequence.
+  The first unfinished order has priority, including paused work. Moving a paused
+  order below pending work enables the new first order and prevents that paused
+  order from resuming early. Completed and frozen rows do not take priority;
+  running work and colour trials retain their apparatus occupancy protections.
 - `free_pick`: any otherwise eligible order on the apparatus may start. This
   applies to configured printing apparatus as well as other operations.
 
 Neither choice needs an urgent-order flag. Assignment, material, WIP, tooling,
 order control, and apparatus occupancy checks still apply. A search result or
-page boundary never defines adjacency. An idle apparatus may resume its paused
-work without moving that work to a different queue position.
+page boundary never defines queue priority. An idle apparatus resumes paused
+work when its current sequence position is eligible, or when its policy is
+`free_pick`.
 
 Paused orders can be rearranged in the saved sequence without changing their
 sessions or reserved resources. Running work, colour trials and frozen orders
-retain their existing reorder protections. The temporary-pause neighbor rule
-uses the paused order's new position: moving it to the end does not enable
-pending orders before it; the paused work can still resume on an idle apparatus.
+retain their existing reorder protections. Reordering a paused order changes
+only its priority: moving it to the end enables earlier unfinished work while
+preserving that order's physical roll for its later turn.
 
 ## Additive mobile contract
 
 Eligible queue controls expose `temporary_pause: {session_id, token}`. Paused
 controls expose `temporarily_paused: true`. The existing `allowed_actions` enum
 does not gain an unknown value, preserving compatibility with older clients.
+Compact worker rows optionally expose `temporarily_paused_apparatus`, a list of
+canonical apparatus IDs, so the temporary-pause label survives cache restores
+and list refreshes. Empty lists are omitted. This is display metadata only;
+fresh full controls remain the authority for Start, Resume and other actions.
 
 `POST /v1/mobile/admin/production-maps/temporary-pause` accepts only:
 

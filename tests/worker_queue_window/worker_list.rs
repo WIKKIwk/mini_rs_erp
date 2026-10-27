@@ -38,12 +38,52 @@ fn assert_slim(value: &Value) {
         assert!(value.get(field).is_none(), "heavy field {field}");
     }
     for row in value["worker_list_rows"].as_object().unwrap().values() {
-        assert_eq!(row.as_object().unwrap().len(), 5);
+        assert_eq!(row.as_object().unwrap().len(), 5 + usize::from(row.get("temporarily_paused_apparatus").is_some()));
         assert!(row.get("program").is_none());
     }
     for control in value["order_controls"].as_object().unwrap().values() {
         assert_eq!(control.as_object().unwrap().len(), 1);
     }
+}
+
+#[tokio::test]
+async fn worker_list_preserves_temporary_pause_display_through_http_and_live_resume() {
+    let _guard = FIXTURE_LOCK.lock().await;
+    let f = Fixture::new().await;
+    let mut session = OrderRunSession {
+        session_id: "unfinished-roll".into(), apparatus: CUT.into(), order_id: "zakaz-000".into(),
+        stage_node_id: "work".into(), status: OrderRunStatus::Paused,
+        worker_role: "aparatchi".into(), worker_ref: "window-worker".into(), worker_display_name: "Worker".into(),
+        started_at_unix: 1, updated_at_unix: 2,
+        payload_json: json!({"_temporary_pause_revision":1,"_temporary_pause":{"revision":1,"paused_at_unix":2}}),
+    };
+    f.store.put_order_run_session(session.clone()).await.unwrap();
+    f.store.put_apparatus_queue_states(CUT, BTreeMap::from([("zakaz-000".into(), "paused".into())])).await.unwrap();
+    f.state.production_maps.notify_live();
+    let (status, before) = f.get(&slim_query(BASE)).await;
+    assert_eq!(status, StatusCode::OK, "{before}");
+    assert_slim(&before);
+    assert_eq!(before["worker_list_rows"]["zakaz-000"]["temporarily_paused_apparatus"], json!([CUT]));
+    assert!(before["worker_list_rows"]["zakaz-001"].get("temporarily_paused_apparatus").is_none());
+    assert!(!before.to_string().contains("unfinished-roll"), "display rows must not expose session authority");
+
+    let (address, server) = start(&f).await;
+    let (mut socket, upgrade) = connect(address, &f.token, &live_query(&before, PROJECTION)).await;
+    assert!(upgrade.starts_with("HTTP/1.1 101"), "{upgrade}");
+    assert_eq!(ws_json(&mut socket).await["resync"], false);
+    session.status = OrderRunStatus::Active;
+    session.updated_at_unix = 3;
+    session.payload_json.as_object_mut().unwrap().remove("_temporary_pause");
+    f.store.put_order_run_session(session).await.unwrap();
+    f.store.put_apparatus_queue_states(CUT, BTreeMap::from([("zakaz-000".into(), "in_progress".into())])).await.unwrap();
+    f.state.production_maps.notify_live();
+    let delta = ws_json(&mut socket).await;
+    let resumed = &delta["patch"]["worker_list_rows"]["upsert"]["zakaz-000"];
+    assert_eq!(resumed["id"], "zakaz-000", "{delta}");
+    assert!(resumed.get("temporarily_paused_apparatus").is_none(), "{delta}");
+    assert_eq!(delta["patch"]["worker_display_states"]["scopes"][CUT]["upsert"]["zakaz-000"], "in_progress");
+    drop(socket);
+    server.abort();
 }
 
 #[tokio::test]
