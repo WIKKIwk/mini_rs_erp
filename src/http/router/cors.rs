@@ -33,7 +33,7 @@ fn insert_cors_headers(headers: &mut HeaderMap) {
     headers.insert(
         header::ACCESS_CONTROL_EXPOSE_HEADERS,
         HeaderValue::from_static(
-            "accept-ranges,content-length,content-range,content-type,location,etag,preference-applied",
+            "accept-ranges,content-length,content-range,content-type,location,etag,preference-applied,x-production-epoch,x-production-revision,x-preparation-scope,x-preparation-version",
         ),
     );
     headers.insert(
@@ -73,6 +73,16 @@ mod tests {
         for (header, token) in [
             (header::ACCESS_CONTROL_ALLOW_HEADERS, "prefer"),
             (header::ACCESS_CONTROL_EXPOSE_HEADERS, "preference-applied"),
+            (header::ACCESS_CONTROL_EXPOSE_HEADERS, "x-production-epoch"),
+            (
+                header::ACCESS_CONTROL_EXPOSE_HEADERS,
+                "x-production-revision",
+            ),
+            (header::ACCESS_CONTROL_EXPOSE_HEADERS, "x-preparation-scope"),
+            (
+                header::ACCESS_CONTROL_EXPOSE_HEADERS,
+                "x-preparation-version",
+            ),
         ] {
             assert!(
                 response.headers()[header]
