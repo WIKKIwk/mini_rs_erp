@@ -23,8 +23,16 @@ default = []
 mcp-readonly-prototype = []
 projection-research = []
 verification = ["dep:tower"]
+# Opt-in research variants. The default production collections stay unchanged.
+bbtree-wip = ["dep:bbtree"]
+bbtree-audit = ["dep:bbtree"]
+bbtree-snapshot = ["dep:bbtree"]
+bbtree-experiment = ["bbtree-wip", "bbtree-audit", "bbtree-snapshot"]
+bbtree-bench = []
+bbtree-alloc = ["bbtree-bench"]
 
 [dependencies]
+bbtree = { version = "=0.1.5", optional = true }
 mini_rs_apparatus_contract = { path = "crates/mini_rs_apparatus_contract" }
 mini_rs_domain_types = { path = "crates/mini_rs_domain_types" }
 mini_rs_gscale_domain = { path = "crates/mini_rs_gscale_domain" }
@@ -96,3 +104,8 @@ required-features = ["mcp-readonly-prototype"]
 name = "admin_projection_research"
 path = "examples/admin_projection_research.rs"
 required-features = ["projection-research"]
+
+[[example]]
+name = "bbtree_research"
+path = "examples/bbtree_research.rs"
+required-features = ["bbtree-bench"]
