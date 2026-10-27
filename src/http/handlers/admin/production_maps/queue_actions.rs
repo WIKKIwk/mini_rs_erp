@@ -135,15 +135,6 @@ pub async fn production_map_queue_action(
             .map_err(production_map_error)?;
     }
     let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
-    if let Some(confirmation) = &input.qolip_confirmation {
-        let is_admin = state.admin.principal_has_capability(&principal, Capability::AdminAccess).await;
-        if !is_admin && !queue_state::apparatus_matches_assigned(&input.apparatus, &assigned_apparatus) {
-            return Err(bad_request("apparatus_not_assigned"));
-        }
-        input.materials.qolip_codes = super::qolip_start::resolve_automatic_codes(
-            &state, &principal, &apparatus, &input.order_id, confirmation,
-        ).await?;
-    }
     let _queue_action_guard = state.production_maps.queue_progress_action_guard(
         &input.apparatus, input.action, &input.progress,
         &input.materials.scan_barcodes, &input.materials.qolip_codes,

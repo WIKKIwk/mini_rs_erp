@@ -343,19 +343,16 @@ pub fn stage_node_ids_match_for_map(
     let Some(left_node) = map.nodes.iter().find(|node| node.id.trim() == left) else {
         return false;
     };
-    // Most graph edges connect ordinary occurrences. They cannot alias a
-    // different node, so avoid another node scan for each unrelated edge.
-    let group_id = left_node.alternative_group_id.trim();
-    if left_node.kind != ProductionMapNodeKind::Apparatus || group_id.is_empty() {
-        return false;
-    }
     let Some(right_node) = map.nodes.iter().find(|node| node.id.trim() == right) else {
         return false;
     };
-    if right_node.kind != ProductionMapNodeKind::Apparatus {
+    if left_node.kind != ProductionMapNodeKind::Apparatus
+        || right_node.kind != ProductionMapNodeKind::Apparatus
+    {
         return false;
     }
-    if group_id != right_node.alternative_group_id.trim() {
+    let group_id = left_node.alternative_group_id.trim();
+    if group_id.is_empty() || group_id != right_node.alternative_group_id.trim() {
         return false;
     }
     canonical_apparatus_identity(left_node).is_some()
@@ -654,20 +651,11 @@ fn route_successors<'a>(map: &'a ProductionMapDefinition, node_id: &str) -> Vec<
     let Some(node) = map.nodes.iter().find(|node| node.id == node_id) else {
         return Vec::new();
     };
-    let normalized_id = node_id.trim();
-    let aliases = route_node_has_aliases(map, normalized_id);
-    let matches = |candidate: &str| {
-        let candidate = candidate.trim();
-        !normalized_id.is_empty()
-            && !candidate.is_empty()
-            && (candidate == normalized_id
-                || (aliases && stage_node_ids_match_for_map(map, candidate, normalized_id)))
-    };
     map.edges
         .iter()
         .filter(|edge| {
-            (edge.from == node_id || matches(&edge.from))
-                && !matches(&edge.to)
+            (edge.from == node_id || stage_node_ids_match_for_map(map, &edge.from, node_id))
+                && !stage_node_ids_match_for_map(map, &edge.to, node_id)
                 && route_edge_allowed(node, edge)
         })
         .map(|edge| edge.to.as_str())
@@ -675,20 +663,11 @@ fn route_successors<'a>(map: &'a ProductionMapDefinition, node_id: &str) -> Vec<
 }
 
 fn route_predecessors<'a>(map: &'a ProductionMapDefinition, node_id: &str) -> Vec<&'a str> {
-    let normalized_id = node_id.trim();
-    let aliases = route_node_has_aliases(map, normalized_id);
-    let matches = |candidate: &str| {
-        let candidate = candidate.trim();
-        !normalized_id.is_empty()
-            && !candidate.is_empty()
-            && (candidate == normalized_id
-                || (aliases && stage_node_ids_match_for_map(map, candidate, normalized_id)))
-    };
     map.edges
         .iter()
         .filter(|edge| {
-            (edge.to == node_id || matches(&edge.to))
-                && !matches(&edge.from)
+            (edge.to == node_id || stage_node_ids_match_for_map(map, &edge.to, node_id))
+                && !stage_node_ids_match_for_map(map, &edge.from, node_id)
                 && map
                     .nodes
                     .iter()
@@ -697,18 +676,6 @@ fn route_predecessors<'a>(map: &'a ProductionMapDefinition, node_id: &str) -> Ve
         })
         .map(|edge| edge.from.as_str())
         .collect()
-}
-
-/// Ordinary occurrences can match only their own normalized node ID. Determine
-/// once whether this occurrence can alias, instead of looking up each unrelated
-/// edge's node throughout every graph traversal.
-fn route_node_has_aliases(map: &ProductionMapDefinition, normalized_id: &str) -> bool {
-    !normalized_id.is_empty()
-        && map.nodes.iter().find(|node| node.id.trim() == normalized_id).is_some_and(|node| {
-            node.kind == ProductionMapNodeKind::Apparatus
-                && !node.alternative_group_id.trim().is_empty()
-                && canonical_apparatus_identity(node).is_some()
-        })
 }
 
 fn route_edge_allowed(node: &ProductionMapNode, edge: &ProductionMapEdge) -> bool {

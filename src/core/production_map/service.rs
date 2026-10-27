@@ -10,6 +10,7 @@ use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use super::apparatus::visible_order_ids_by_apparatus;
 use super::apparatus_resolver::CanonicalApparatusResolver;
 pub use super::prepared_queue_action::PreparedApparatusQueueAction;
 pub(super) use super::prepared_queue_action::QueueProgressRecords;
@@ -112,24 +113,19 @@ pub struct ProductionMapLiveSnapshot {
 }
 
 fn stage_states_for_snapshot(
-    projections: &[chain::ProjectionMap<'_>],
-    output_order_ids: Option<&BTreeSet<String>>,
+    maps: &[ProductionMapDefinition],
     controls: &BTreeMap<String, BTreeMap<String, ApparatusQueueOrderActionControl>>,
     logs_by_order: &BTreeMap<String, Vec<ProductionOrderLogEntry>>,
     stored_queue_states: &ApparatusQueueStateMap,
 ) -> BTreeMap<String, BTreeMap<String, String>> {
     let mut result = BTreeMap::new();
     // queue_action_controls_for_snapshot already keys controls by canonical apparatus ID.
-    for projection in projections {
-        let map = projection.map();
-        if output_order_ids.is_some_and(|ids| !ids.contains(&map.id)) {
-            continue;
-        }
+    for map in maps {
         let order_id = map.id.trim();
         if order_id.is_empty() {
             continue;
         }
-        let stages = projection.stages()
+        let stages = chain::linear_work_stages(map)
             .into_iter()
             .filter(|stage| stage.apparatus_id.is_some())
             .collect::<Vec<_>>();
@@ -672,19 +668,7 @@ impl ProductionMapService {
         let stage_order_controls = self.store.stage_order_control_states().await?;
         let canonical_apparatuses = self.snapshot_canonical_apparatuses().await;
 
-        // One immutable topology cache serves every phase of this rebuild.
-        // Queue visibility, sequence versions, controls and presentation must
-        // not independently traverse the same dependency maps.
-        let projections = raw_maps
-            .iter()
-            .map(|map| self.projection_map(map))
-            .collect::<Vec<_>>();
-        let mut projections_by_order = BTreeMap::new();
-        for projection in &projections {
-            projections_by_order.entry(projection.map().id.as_str()).or_insert(projection);
-        }
-        let unfiltered_visible = apparatus::visible_order_ids_by_projection(&projections);
-        let mut visible_order_ids = unfiltered_visible.clone();
+        let mut visible_order_ids = visible_order_ids_by_apparatus(&raw_maps);
         apparatus::filter_unselected_print_orders(
             &raw_maps,
             &canonical_apparatuses,
@@ -696,13 +680,17 @@ impl ProductionMapService {
                 (control.state == OrderControlState::Frozen).then_some(id.clone())
             })
             .collect::<BTreeSet<_>>();
-        let mut sequences = Self::effective_apparatus_sequences_for_visible(
-            &unfiltered_visible,
+        let mut sequences = Self::effective_apparatus_sequences_for_maps(
+            &raw_maps,
             &stored_sequences,
             &frozen_order_ids,
         );
         let holds = self.store.active_print_preflight_holds().await?;
         let sequence_versions = {
+            let projections = raw_maps
+                .iter()
+                .map(|map| self.projection_map(map))
+                .collect::<Vec<_>>();
             let mut sequence_versions = BTreeMap::new();
             for canonical in &canonical_apparatuses {
                 let id = canonical.runtime.apparatus_id.as_str();
@@ -768,7 +756,6 @@ impl ProductionMapService {
                         holds,
                         ids,
                         apparatus_ids,
-                        &projections,
                     )
                     .await
                 } else {
@@ -779,12 +766,11 @@ impl ProductionMapService {
                         &order_controls,
                         &canonical_apparatuses,
                         holds,
-                        &projections,
                     )
                     .await
                 }
             },
-            self.store.queue_snapshot_logs_for_orders(&order_ids),
+            self.store.queue_action_logs_for_orders(&order_ids),
             self.store.production_order_lifecycles(&order_ids),
         )?;
 
@@ -796,8 +782,7 @@ impl ProductionMapService {
                 .collect::<Vec<_>>()
         });
         let mut stage_states = stage_states_for_snapshot(
-            &projections,
-            output_scope.as_ref().map(|(ids, _)| ids),
+            output_maps.as_deref().unwrap_or(&raw_maps),
             &queue_action_controls,
             &queue_logs_by_order,
             &queue_states,
@@ -833,11 +818,10 @@ impl ProductionMapService {
                 }) {
                     return false;
                 }
-                let Some(projection) = projections_by_order.get(order_id.as_str()) else {
+                let Some(map) = raw_maps.iter().find(|map| map.id == *order_id) else {
                     return false;
                 };
-                let map = projection.map();
-                let occurrences = projection.stages()
+                let occurrences = chain::linear_work_stages(map)
                     .into_iter()
                     .filter(|stage| stage.apparatus_id.as_deref() == Some(apparatus.as_str()))
                     .collect::<Vec<_>>();
@@ -876,8 +860,6 @@ impl ProductionMapService {
                 }
             }
         }
-        drop(projections_by_order);
-        drop(projections);
         let maps = compile_saved_maps_reusing_programs(
             output_maps.unwrap_or(raw_maps),
             previous.map(|snapshot| snapshot.maps.as_slice()),

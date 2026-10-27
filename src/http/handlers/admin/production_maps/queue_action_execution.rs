@@ -43,7 +43,6 @@ async fn execute_queue_action(
         completion: _,
         print,
         print_preflight_hold_id,
-        qolip_confirmation,
     } = input;
     let mut prepared = state
         .production_maps
@@ -75,9 +74,6 @@ async fn execute_queue_action(
                 .map(|preparation| preparation.spec.clone())
                 .collect::<Vec<_>>(),
         );
-    }
-    if let Some(confirmation) = &qolip_confirmation {
-        prepared.attach_automatic_qolip_confirmation(confirmation);
     }
     let qolip_checkouts = qolip_preparations
         .into_iter()

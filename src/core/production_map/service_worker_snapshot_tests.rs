@@ -238,54 +238,6 @@ async fn history_fixture() -> (Arc<MemoryProductionMapStore>, ProductionMapServi
     (store, service)
 }
 
-#[tokio::test]
-async fn apparatus_controls_match_full_controls_with_scoped_material_and_opening_wip_reads() {
-    let (store, service) = history_fixture().await;
-    let actor = QueueActionActor {
-        role: "admin".into(),
-        ref_: "scope-regression".into(),
-        display_name: "Scope regression".into(),
-    };
-    for (order_id, apparatus) in [("zakaz-own", OWN), ("zakaz-history", OTHER)] {
-        store.put_raw_material_assignment(RawMaterialAssignment {
-            order_id: order_id.into(),
-            apparatus_id: crate::core::apparatus_standard::ApparatusId::new(apparatus).unwrap(),
-            apparatus: apparatus.into(),
-            barcode: format!("material-{order_id}"),
-            item_code: "RAW".into(),
-            item_name: "Raw material".into(),
-            item_group: "paper".into(),
-            assigned_by_role: actor.role.clone(),
-            assigned_by_ref: actor.ref_.clone(),
-            assigned_by_display_name: actor.display_name.clone(),
-            assigned_at: "now".into(),
-        }).await.unwrap();
-        service.create_opening_wip(OpeningWipCreateInput {
-            idempotency_key: format!("opening-{order_id}"),
-            order_id: order_id.into(),
-            entry_apparatus: apparatus.into(),
-            source_operation: "Bosma".into(),
-            source_apparatus: String::new(),
-            source_stage_node_id: String::new(),
-            current_location: DOWNSTREAM.into(),
-            note: String::new(),
-            batches: vec![OpeningWipBatchInput {
-                quantity_basis: OpeningWipQuantityBasis::Measured,
-                finished_goods_meter: Some(100.0),
-                finished_goods_kg: Some(12.0),
-                bobina_kg: Some(1.0),
-                diameter: None,
-            }],
-        }, actor.clone()).await.unwrap();
-    }
-    let all = service.queue_action_controls().await.unwrap();
-    for apparatus in [OWN, DOWNSTREAM, OTHER] {
-        let scoped = service.queue_action_controls_for_apparatus(apparatus).await.unwrap();
-        assert_eq!(scoped.len(), 1);
-        assert_eq!(scoped[apparatus], all[apparatus], "apparatus={apparatus}");
-    }
-}
-
 async fn assert_original_history_snapshot(
     service: &ProductionMapService,
     snapshot: &ProductionMapLiveSnapshot,

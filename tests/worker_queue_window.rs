@@ -33,9 +33,6 @@ mod page_stream;
 #[path = "worker_queue_window/sequence_positions.rs"]
 mod sequence_positions;
 
-#[path = "worker_queue_window/worker_detail.rs"]
-mod worker_detail;
-
 struct Fixture {
     _dir: tempfile::TempDir,
     state: AppState,

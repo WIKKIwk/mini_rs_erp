@@ -112,11 +112,6 @@ pub struct ApparatusQueueWorkerInteraction {
     #[serde(default)]
     pub opening_wip_mode: ApparatusQueuePreviousWipMode,
     pub qolip_mode: ApparatusQueueQolipMode,
-    /// Additive opt-in policy. Older clients keep the ordinary scan contract.
-    #[serde(default)]
-    pub qolip_automatic_confirmation: bool,
-    #[serde(default)]
-    pub qolip_policy_revision: i64,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub blocking_reason_code: String,
 }
@@ -136,10 +131,6 @@ pub struct ApparatusQueueOrderActionControl {
     pub last_worked_at_unix: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub re_pause: Option<crate::core::production_map::ResumePauseControl>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub temporary_pause: Option<crate::core::production_map::TemporaryPauseControl>,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub temporarily_paused: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reclose: Option<crate::core::production_map::ReactivationRecloseControl>,
     pub state: queue_state::ApparatusQueueOrderState,

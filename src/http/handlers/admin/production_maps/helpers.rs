@@ -372,9 +372,6 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         ProductionMapError::QolipCodeMismatch => bad_request("qolip_code_mismatch"),
         ProductionMapError::QolipAlreadyInUse => bad_request("qolip_already_in_use"),
         ProductionMapError::QolipInRework => conflict("qolip_in_rework"),
-        ProductionMapError::QolipAutomaticConfirmationDisabled => conflict("qolip_automatic_confirmation_disabled"),
-        ProductionMapError::QolipPolicyChanged => conflict("qolip_policy_changed"),
-        ProductionMapError::QolipSetChanged => conflict("qolip_set_changed"),
         ProductionMapError::QolipInsufficientStock => bad_request("insufficient_stock"),
         ProductionMapError::QolipLocationIdentityMismatch => {
             bad_request("location_identity_mismatch")

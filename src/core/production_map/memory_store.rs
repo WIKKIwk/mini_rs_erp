@@ -8,7 +8,6 @@ mod queue;
 #[path = "progress_session/runs.rs"]
 mod runs;
 mod state;
-mod temporary_pause;
 mod transfers;
 mod warehouse_wip;
 
@@ -727,18 +726,7 @@ impl MemoryProductionMapStore {
         &self,
         write: &QueueActionProgressWrite,
     ) -> Result<QueueActionProgressWriteResult, ProductionMapError> {
-        let _queue_write_guard = self.queue_progress_lock.lock().await;
-        if temporary_pause::validate_write(self, write).await? {
-            return Ok(QueueActionProgressWriteResult::default());
-        }
         validate_queue_progress_write(write)?;
-        let _qolip_policy_guard = if let Some(raw) = write.event.payload_json.get("qolip_confirmation") {
-            let confirmation: AutomaticQolipConfirmation = serde_json::from_value(raw.clone())
-                .map_err(|_| ProductionMapError::QueueActionNotAllowed)?;
-            let settings = self.qolip_start_settings.read().await;
-            confirmation.require_policy(&settings)?;
-            Some(settings)
-        } else { None };
         // This store has no pallet persistence. Never report an assigned
         // output as successful when the production PostgreSQL path is absent.
         if write.event.payload_json.get("output_paddon_code").is_some()

@@ -2,10 +2,6 @@ use sqlx::{Postgres, Transaction};
 
 use crate::core::production_map::{OrderRunSession, OrderRunStatus, ProductionMapError};
 
-#[cfg(test)]
-#[path = "automatic_start_tests.rs"]
-mod automatic_start_tests;
-
 // Downstream WIP sessions retain mold identity as production history. Only a
 // session that claims the physical tooling participates in resource validation.
 fn session_owns_qolip_lock(session: &OrderRunSession) -> bool {
@@ -231,18 +227,6 @@ pub(super) async fn validate_qolip_set_tx(
     tx: &mut Transaction<'_, Postgres>,
     session: &OrderRunSession,
 ) -> Result<(), ProductionMapError> {
-    validate_qolip_set_with_confirmation_tx(tx, session, false).await
-}
-
-pub(super) async fn validate_automatic_qolip_set_tx(
-    tx: &mut Transaction<'_, Postgres>, session: &OrderRunSession,
-) -> Result<(), ProductionMapError> {
-    validate_qolip_set_with_confirmation_tx(tx, session, true).await
-}
-
-async fn validate_qolip_set_with_confirmation_tx(
-    tx: &mut Transaction<'_, Postgres>, session: &OrderRunSession, automatic_start: bool,
-) -> Result<(), ProductionMapError> {
     if !session_owns_qolip_lock(session) {
         return Ok(());
     }
@@ -277,23 +261,6 @@ async fn validate_qolip_set_with_confirmation_tx(
     ).bind(&item_code).fetch_all(&mut **tx).await
         .map_err(|_| ProductionMapError::StoreFailed)?;
     rows.extend(legacy);
-    if automatic_start {
-        let raw = session.payload_json.get("qolip_confirmation").ok_or(ProductionMapError::QolipSetChanged)?;
-        let confirmation: crate::core::production_map::AutomaticQolipConfirmation = serde_json::from_value(raw.clone())
-            .map_err(|_| ProductionMapError::QolipSetChanged)?;
-        let selected = rows.iter().map(|(code, id, warehouse, size, color, is_extension)| {
-            crate::core::qolip::QolipProductSpec {
-                qolip_code: code.clone(), qolip_set_id:id.clone(), item_code:item_code.clone(),
-                warehouse:warehouse.clone(), size:*size, color:color.clone(), is_extension:*is_extension,
-                ..Default::default()
-            }
-        }).filter(|spec| spec.is_extension || spec.set_id() == set_id).collect::<Vec<_>>();
-        if confirmation.set_id != set_id
-            || confirmation.fingerprint != crate::core::production_map::automatic_qolip_set_fingerprint(set_id, &selected) {
-            return Err(ProductionMapError::QolipSetChanged);
-        }
-        validate_automatic_common_set_tx(tx, session, &item_code, set_id).await?;
-    }
     let mut has_base = false;
     let mut selected_base = false;
     let required = rows.into_iter().filter_map(|(code, id, warehouse, size, color, is_extension)| {
@@ -320,35 +287,6 @@ async fn validate_qolip_set_with_confirmation_tx(
     if required.is_empty() || (has_base && !selected_base)
         || required.keys().cloned().collect::<std::collections::BTreeSet<_>>() != scanned {
         return Err(ProductionMapError::QolipCodeMismatch);
-    }
-    Ok(())
-}
-
-/// Product associations can change between opening a sheet and committing a
-/// start. Validate every product while the caller holds the composition lock.
-async fn validate_automatic_common_set_tx(
-    tx: &mut Transaction<'_, Postgres>, session: &OrderRunSession, primary: &str, selected_set: &str,
-) -> Result<(), ProductionMapError> {
-    let map: serde_json::Value = sqlx::query_scalar("SELECT map_json FROM mini_production_maps WHERE id=$1")
-        .bind(&session.order_id).fetch_one(&mut **tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
-    let products = map.get("products").and_then(serde_json::Value::as_array).into_iter().flatten()
-        .filter_map(|product| product.get("item_code").and_then(serde_json::Value::as_str))
-        .map(|code| code.trim().to_lowercase()).filter(|code| !code.is_empty() && !code.eq_ignore_ascii_case(primary))
-        .collect::<std::collections::BTreeSet<_>>();
-    let expected = session.payload_json.get("qolip_codes").and_then(serde_json::Value::as_array).into_iter().flatten()
-        .filter_map(serde_json::Value::as_str).map(|code| code.trim().to_lowercase())
-        .collect::<std::collections::BTreeSet<_>>();
-    for product in products {
-        let rows = sqlx::query_as::<_, (String,String,bool)>(
-            "SELECT spec.qolip_code, COALESCE(spec.qolip_set_id,''), effective.is_extension
-             FROM mini_qolip_product_specs spec JOIN mini_qolip_effective_product_molds effective ON effective.qolip_code=spec.qolip_code
-             WHERE effective.item_code_key=$1 ORDER BY lower(spec.qolip_code) FOR SHARE OF spec",
-        ).bind(&product).fetch_all(&mut **tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
-        let has_base = rows.iter().any(|(_,_,extension)| !extension);
-        let selected_base = rows.iter().any(|(_,set,extension)| !extension && set == selected_set);
-        let codes = rows.into_iter().filter(|(_,set,extension)| *extension || set == selected_set)
-            .map(|(code,_,_)| code.trim().to_lowercase()).collect::<std::collections::BTreeSet<_>>();
-        if codes != expected || (has_base && !selected_base) { return Err(ProductionMapError::QolipSetChanged); }
     }
     Ok(())
 }

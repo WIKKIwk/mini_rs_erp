@@ -35,48 +35,6 @@ pub(super) fn queue_order_ids_by_apparatus(
     order_ids_by_apparatus(maps, |map| !is_template_map(map))
 }
 
-pub(super) fn visible_order_ids_by_projection(
-    projections: &[chain::ProjectionMap<'_>],
-) -> BTreeMap<String, Vec<String>> {
-    order_ids_by_projection(projections, is_visible_queue_order)
-}
-
-pub(super) fn queue_order_ids_by_projection(
-    projections: &[chain::ProjectionMap<'_>],
-) -> BTreeMap<String, Vec<String>> {
-    order_ids_by_projection(projections, |map| !is_template_map(map))
-}
-
-fn order_ids_by_projection(
-    projections: &[chain::ProjectionMap<'_>],
-    include: impl Fn(&ProductionMapDefinition) -> bool,
-) -> BTreeMap<String, Vec<String>> {
-    let mut visible = BTreeMap::<String, Vec<String>>::new();
-    for projection in projections {
-        let map = projection.map();
-        let order_id = map.id.trim();
-        if order_id.is_empty() || !include(map) {
-            continue;
-        }
-        let mut seen_apparatus_ids = BTreeSet::<String>::new();
-        for stage in projection.stages() {
-            let Some(apparatus_id) = stage.apparatus_id.as_deref().map(str::trim) else {
-                continue;
-            };
-            if !ApparatusId::is_valid(apparatus_id)
-                || !seen_apparatus_ids.insert(apparatus_id.to_string())
-            {
-                continue;
-            }
-            visible
-                .entry(apparatus_id.to_string())
-                .or_default()
-                .push(order_id.to_string());
-        }
-    }
-    visible
-}
-
 fn order_ids_by_apparatus(
     maps: &[ProductionMapDefinition],
     include: impl Fn(&ProductionMapDefinition) -> bool,
@@ -384,45 +342,6 @@ mod tests {
     fn title_snapshot_does_not_identify_queue_apparatus() {
         let maps = vec![queue_map("zakaz-1234", "1234", "1234")];
         assert!(visible_order_ids_for_apparatus(&maps, "Renamed display title").is_empty());
-    }
-
-    #[test]
-    fn projected_order_ids_preserve_visibility_templates_order_and_stage_deduplication() {
-        let mut repeated = queue_map(" zakaz-repeated ", "", "");
-        let mut second = repeated.nodes[1].clone();
-        second.id = "second".into();
-        repeated.nodes.insert(2, second);
-        repeated.edges = serde_json::from_value(serde_json::json!([
-            {"from":"start","to":"apparatus"},
-            {"from":"apparatus","to":"second"},
-            {"from":"second","to":"end"}
-        ])).unwrap();
-        let maps = vec![
-            queue_map("", "", ""),
-            queue_map("template-zakaz-hidden", "visible-code", "42"),
-            queue_map("draft", "", ""),
-            queue_map("code-order", "X", ""),
-            queue_map("number-order", "", "42"),
-            repeated,
-            queue_map("zakaz-duplicate", "", ""),
-            queue_map("zakaz-duplicate", "", ""),
-        ];
-        let visible = visible_order_ids_by_apparatus(&maps);
-        let queue = queue_order_ids_by_apparatus(&maps);
-        assert_eq!(visible["apparatus:catalog:press-008"], [
-            "code-order", "number-order", "zakaz-repeated", "zakaz-duplicate", "zakaz-duplicate",
-        ]);
-        assert_eq!(queue["apparatus:catalog:press-008"][0], "draft");
-        for cached in [false, true] {
-            let projections = maps.iter().map(|map| {
-                if cached { chain::ProjectionMap::new(map) }
-                else { chain::ProjectionMap::reference(map) }
-            }).collect::<Vec<_>>();
-            for _ in 0..2 {
-                assert_eq!(visible_order_ids_by_projection(&projections), visible);
-                assert_eq!(queue_order_ids_by_projection(&projections), queue);
-            }
-        }
     }
 
     #[test]

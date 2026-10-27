@@ -288,8 +288,6 @@ pub(super) async fn ensure_qolip_access(
 
 pub(super) fn qolip_error(error: QolipError) -> (StatusCode, Json<QolipErrorResponse>) {
     match error {
-        QolipError::InvalidSetName => bad_request("qolip_set_name_invalid"),
-        QolipError::SetNameConflict => conflict("qolip_set_name_conflict"),
         QolipError::AccessDenied => forbidden(),
         QolipError::QolipHistoryLocked => conflict("qolip_history_locked"),
         QolipError::QolipInRework => conflict("qolip_in_rework"),

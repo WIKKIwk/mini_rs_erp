@@ -36,8 +36,6 @@ pub struct OrderScanBootstrapQuery {
     include_context: bool,
     #[serde(default)]
     qr_payload: String,
-    #[serde(default)]
-    automatic_qolip_confirmation: bool,
 }
 
 fn include_sections_default() -> bool {
@@ -152,7 +150,6 @@ async fn bootstrap(
                 }
                 let body = serde_json::json!({
                     "apparatus": apparatus, "order_id": order_id, "qolip_code": "",
-                    "automatic_confirmation":query.automatic_qolip_confirmation,
                 });
                 section(
                     production_map_qolip_validate(

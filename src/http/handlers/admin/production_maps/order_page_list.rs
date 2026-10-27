@@ -550,8 +550,6 @@ mod tests {
             work_activity: None,
             last_worked_at_unix: 0,
             re_pause: None,
-            temporary_pause: None,
-            temporarily_paused: false,
             reclose: None,
             state,
             allowed_actions: Vec::new(),

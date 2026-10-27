@@ -8,7 +8,6 @@ struct QueueActionCommand {
     completion: QueueActionCompletionInput,
     print: QueueActionPrintInput,
     print_preflight_hold_id: String,
-    qolip_confirmation: Option<crate::core::production_map::AutomaticQolipConfirmation>,
 }
 
 #[derive(Debug, Clone)]
@@ -50,12 +49,6 @@ impl QueueActionCommand {
             request.freeze_with_issue,
             principal,
         );
-        if let Some(confirmation) = &request.qolip_confirmation
-            && (!confirmation.is_valid() || action != queue_state::ApparatusQueueAction::Start
-                || !apparatus.requires_qolip_scan() || request.order_id.trim().starts_with("training-")
-                || !request.qolip_code.trim().is_empty() || !request.qolip_codes.is_empty()) {
-            return Err(bad_request("qolip_confirmation_invalid"));
-        }
         if !request.print_preflight_hold_id.trim().is_empty()
             && action != queue_state::ApparatusQueueAction::Start
         {
@@ -177,7 +170,6 @@ impl QueueActionCommand {
         Ok(Self {
             apparatus: apparatus.id.to_string(),
             print_preflight_hold_id: request.print_preflight_hold_id.trim().to_string(),
-            qolip_confirmation: request.qolip_confirmation,
             order_id: request.order_id,
             action,
             materials: QueueActionMaterialInput {

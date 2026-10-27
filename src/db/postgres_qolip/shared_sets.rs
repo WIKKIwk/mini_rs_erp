@@ -65,13 +65,6 @@ pub(super) async fn resolve(
     if let Some(set) = snapshot(&mut conn, identifier).await? {
         return Ok(Some(set));
     }
-    let name = identifier.split_whitespace().collect::<Vec<_>>().join(" ");
-    let named_id = sqlx::query_scalar::<_, String>(
-        "SELECT set_id FROM mini_qolip_set_names WHERE lower(name) = lower($1)",
-    ).bind(name).fetch_optional(&mut *conn).await.map_err(super::reworks::storage_error)?;
-    if let Some(id) = named_id {
-        return snapshot(&mut conn, &id).await;
-    }
     let candidates = crate::core::qolip::candidate_codes(identifier);
     if candidates.is_empty() {
         return Ok(None);

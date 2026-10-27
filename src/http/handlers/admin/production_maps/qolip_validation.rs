@@ -11,8 +11,6 @@ struct QolipStartValidationRequest {
     order_id: String,
     #[serde(default)]
     qolip_code: String,
-    #[serde(default)]
-    automatic_confirmation: bool,
 }
 
 pub async fn production_map_qolip_validate(
@@ -121,17 +119,6 @@ pub async fn production_map_qolip_validate(
                 "required_qolips": required_qolips_payload,
             }
         })));
-    }
-    if input.automatic_confirmation && qolip_code.is_empty()
-        && state.production_maps.qolip_start_settings().await.map_err(production_map_error)?.automatic_confirmation_enabled {
-        let ready = super::qolip_start::automatic_readiness(&state, &principal, &apparatus, order_id).await?;
-        return Ok(json_response(serde_json::json!({"ok":true,"qolip":{
-            "qolip_code":"", "automatic_confirmation_enabled":true,
-            "policy_revision":ready.policy_revision, "blocking_reason_code":ready.blocking_reason_code,
-            "required_qolip_count":ready.molds.len(),
-            "required_qolip_codes":ready.molds.iter().map(|mold| &mold.qolip_code).collect::<Vec<_>>(),
-            "required_qolips":ready.molds, "sets":ready.sets,
-        }})));
     }
     let Some(map) = state
         .production_maps

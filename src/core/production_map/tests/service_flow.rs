@@ -42,8 +42,6 @@ mod cold_glue_workflow;
 mod wip_route_continuity;
 #[path = "progress_qr_lineage.rs"]
 mod progress_qr_lineage;
-#[path = "temporary_pause_latency.rs"]
-mod temporary_pause_latency;
 #[path = "service_flow_rezka_astatka.rs"]
 mod rezka_astatka;
 

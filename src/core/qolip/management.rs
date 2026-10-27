@@ -7,26 +7,10 @@ use crate::core::auth::models::Principal;
 pub struct QolipManagedSet {
     #[serde(flatten)]
     pub snapshot: QolipSetSnapshot,
-    pub name: String,
     pub warehouse: String,
     pub item_code: String,
     pub item_name: String,
     pub item_group: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct QolipSetRename {
-    pub set_id: String,
-    pub name: String,
-}
-
-pub(super) fn normalize_set_name(name: &str) -> Result<String, QolipError> {
-    let name = name.split_whitespace().collect::<Vec<_>>().join(" ");
-    if name.is_empty() || name.chars().count() > 160 || name.chars().any(char::is_control) {
-        return Err(QolipError::InvalidSetName);
-    }
-    Ok(name)
 }
 
 #[derive(Debug, Deserialize)]

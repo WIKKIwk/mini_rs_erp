@@ -1,33 +1,6 @@
 #[async_trait]
 #[cfg(any(test, feature = "verification"))]
 impl ProductionMapStorePort for MemoryProductionMapStore {
-    fn supports_temporary_pause(&self) -> bool { true }
-    async fn temporarily_pause_work(&self, apparatus: &str, order_id: &str, session_id: &str, token: &str,
-        actor: &QueueActionActor, assigned: &[String], policy: ApparatusQueuePolicy) -> Result<(), ProductionMapError> {
-        if !super::temporary_pause::valid_actor(apparatus, order_id, session_id, token, actor, assigned) {
-            return Err(ProductionMapError::QueueActionNotAllowed);
-        }
-        let receipt = self.queue_events.read().await.iter().find(|event| event.event_id == super::temporary_pause::receipt_id(token)).cloned();
-        if let Some(event) = receipt {
-            return temporary_pause::matching_receipt(&event, apparatus, order_id, session_id, actor);
-        }
-        let current = self.active_order_run_session(apparatus, order_id).await?.ok_or(ProductionMapError::QueueActionNotAllowed)?;
-        let states = self.apparatus_queue_states().await?.get(apparatus).cloned().unwrap_or_default();
-        let write = super::temporary_pause::suspension_write(&current, session_id, token, actor, assigned, states, policy)?;
-        self.put_apparatus_queue_states_with_event_and_progress(&write).await?;
-        Ok(())
-    }
-    async fn qolip_start_settings(&self) -> Result<QolipStartSettings, ProductionMapError> {
-        Ok(self.qolip_start_settings.read().await.clone())
-    }
-    async fn update_qolip_start_settings(&self, enabled: bool, _actor: &QueueActionActor) -> Result<QolipStartSettings, ProductionMapError> {
-        let mut settings = self.qolip_start_settings.write().await;
-        if settings.automatic_confirmation_enabled != enabled {
-            settings.automatic_confirmation_enabled = enabled;
-            settings.revision += 1;
-        }
-        Ok(settings.clone())
-    }
     async fn lamination_settings(&self) -> Result<LaminationSettings, ProductionMapError> {
         Ok(self.lamination_settings.read().await.clone())
     }

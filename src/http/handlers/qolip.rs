@@ -27,7 +27,7 @@ mod catalog_delta;
 pub use order_products::order_products;
 pub use product_transfer::product_transfer;
 pub use shared_sets::shared_sets;
-pub use management::{sets, create_set, rename_set, product_molds};
+pub use management::{sets, create_set, product_molds};
 pub use reworks::{reworks, send_reworks, return_reworks};
 pub use mileage::mileage;
 pub use catalog::{catalog_page, catalog_detail};

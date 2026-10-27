@@ -15,8 +15,6 @@ struct ApparatusQueueActionRequest {
     #[serde(default)]
     qolip_codes: Vec<String>,
     #[serde(default)]
-    qolip_confirmation: Option<crate::core::production_map::AutomaticQolipConfirmation>,
-    #[serde(default)]
     produced_qty: Option<f64>,
     #[serde(default)]
     qty: Option<f64>,

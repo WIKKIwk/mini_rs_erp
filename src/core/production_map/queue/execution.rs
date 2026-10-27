@@ -281,25 +281,15 @@ impl ProductionMapService {
         let requeued_resume = requeued_session
             && queue_action == queue_state::ApparatusQueueAction::Resume
             && from_state == queue_state::ApparatusQueueOrderState::Pending;
-        let strict_start = policy == ApparatusQueuePolicy::StrictSequence
-            && (queue_action == queue_state::ApparatusQueueAction::Start || requeued_resume);
-        let sequence_sessions = if strict_start {
-            self.store.active_order_run_sessions_for_orders(&sequence).await?
-        } else { BTreeMap::new() };
-        let temporary_anchors = sequence_sessions.values().flatten().filter(|session| {
-            session.apparatus == storage_key && super::super::temporary_pause::is_temporarily_paused(session)
-        }).collect::<Vec<_>>();
-        let temporary_order_ids = temporary_anchors.iter().map(|s| s.order_id.clone()).collect::<BTreeSet<_>>();
-        let bosma_sequence_start = strict_start && pechat::is_pechat_apparatus(&canonical);
-        let explicit_sequence_start = bosma_sequence_start || (strict_start && !temporary_order_ids.is_empty());
-        if explicit_sequence_start {
-            let detached_order_ids = sequence_sessions.values().flatten().filter(|session| {
+        let bosma_sequence_start = pechat::is_pechat_apparatus(&canonical)
+            && (queue_action == queue_state::ApparatusQueueAction::Start
+                || (requeued_resume && policy == ApparatusQueuePolicy::StrictSequence));
+        if bosma_sequence_start {
+            let sessions = self.store.active_order_run_sessions_for_orders(&sequence).await?;
+            let detached_order_ids = sessions.values().flatten().filter(|session| {
                 session.apparatus == storage_key && session.status == OrderRunStatus::RollDetached
             }).map(|session| session.order_id.clone()).collect::<BTreeSet<_>>();
-            let startable = if !temporary_order_ids.is_empty() {
-                super::super::temporary_pause::next_order_after_suspension(&sequence, &parsed, &temporary_order_ids)
-            } else { bosma_startable_order_id(&sequence, &parsed, &detached_order_ids) };
-            if startable != Some(order_id) {
+            if bosma_startable_order_id(&sequence, &parsed, &detached_order_ids) != Some(order_id) {
                 return Err(ProductionMapError::QueueActionNotAllowed);
             }
         }
@@ -323,10 +313,10 @@ impl ProductionMapService {
             );
         } else {
             if requeued_resume {
-                apply_requeued_resume(if explicit_sequence_start { ApparatusQueuePolicy::FreePick } else { policy }, &sequence, &mut parsed, order_id)?;
+                apply_requeued_resume(policy, &sequence, &mut parsed, order_id)?;
             } else {
                 apply_queue_policy(
-                    if explicit_sequence_start { ApparatusQueuePolicy::FreePick } else { policy },
+                    policy,
                     &sequence,
                     &mut parsed,
                     order_id,
@@ -363,12 +353,6 @@ impl ProductionMapService {
             event.payload_json["bosma_expected_sequence"] = serde_json::json!(stored_sequence);
             event.payload_json["bosma_expected_queue_states"] =
                 serde_json::json!(stored_states.cloned().unwrap_or_default());
-        }
-        if matches!(queue_action, queue_state::ApparatusQueueAction::Start | queue_state::ApparatusQueueAction::Resume) {
-            event.payload_json["queue_expected_sequence"] = serde_json::json!(stored_sequence);
-            event.payload_json["queue_expected_states"] = serde_json::json!(all_states.get(&storage_key).cloned().unwrap_or_default());
-            event.payload_json["queue_expected_policy_revision"] = serde_json::json!(canonical.queue.source_revision);
-            event.payload_json["queue_expected_anchor_sessions"] = serde_json::json!(temporary_anchors);
         }
         if let Some(batch_id) = &closing_output_batch_id {
             let session = active_session.as_ref().ok_or(ProductionMapError::QueueActionNotAllowed)?;
@@ -487,8 +471,7 @@ impl ProductionMapService {
         if matches!(queue_action, queue_state::ApparatusQueueAction::Start | queue_state::ApparatusQueueAction::Merge | queue_state::ApparatusQueueAction::Resume)
             && let Some(input_event) = &progress.progress_event
         {
-            for key in ["wip_input_map_fingerprint", "wip_input_expected_batch",
-                super::super::temporary_pause::EXPECTED_SESSION, "temporary_pause_held_inputs", "temporary_pause_map_fingerprint"] {
+            for key in ["wip_input_map_fingerprint", "wip_input_expected_batch"] {
                 if let Some(value) = input_event.payload_json.get(key) {
                     event.payload_json[key] = value.clone();
                 }
