@@ -134,7 +134,7 @@ pub(crate) async fn capture_session_cycles_tx(
         return Ok(());
     }
     let previous = sqlx::query_as::<_, (Value, f64)>(
-        "SELECT payload_json,EXTRACT(EPOCH FROM created_at)::float8
+        "SELECT payload_json,EXTRACT(EPOCH FROM started_at)::float8
          FROM mini_order_run_sessions WHERE session_id=$1 FOR UPDATE",
     )
     .bind(&session.session_id)
@@ -169,7 +169,7 @@ pub(crate) async fn capture_session_cycles_tx(
         return Ok(());
     }
     // For an old session first touched after deployment, use its original DB
-    // creation time. Do not activate old work against a later peredelka return.
+    // start time. Do not activate old work against a later peredelka return.
     let captured_at = if reacquired || previous.is_none() {
         OffsetDateTime::now_utc().unix_timestamp_nanos() as f64 / 1_000_000_000.0
     } else {

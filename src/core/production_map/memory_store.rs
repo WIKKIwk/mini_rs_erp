@@ -8,6 +8,7 @@ mod queue;
 #[path = "progress_session/runs.rs"]
 mod runs;
 mod state;
+mod temporary_pause;
 mod transfers;
 mod warehouse_wip;
 
@@ -726,6 +727,10 @@ impl MemoryProductionMapStore {
         &self,
         write: &QueueActionProgressWrite,
     ) -> Result<QueueActionProgressWriteResult, ProductionMapError> {
+        let _queue_write_guard = self.queue_progress_lock.lock().await;
+        if temporary_pause::validate_write(self, write).await? {
+            return Ok(QueueActionProgressWriteResult::default());
+        }
         validate_queue_progress_write(write)?;
         // This store has no pallet persistence. Never report an assigned
         // output as successful when the production PostgreSQL path is absent.

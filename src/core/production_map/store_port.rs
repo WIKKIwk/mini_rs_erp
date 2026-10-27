@@ -22,6 +22,30 @@ pub type ApparatusQueueStateMap = BTreeMap<String, QueueStateMap>;
 pub type OrderLogMap = BTreeMap<String, Vec<ProductionOrderLogEntry>>;
 pub type OrderControlMap = BTreeMap<String, OrderControlRecord>;
 
+/// Snapshot consumers need the last state and last freeze for each stage, not
+/// the intervening audit history. Preserve source order to keep timestamp ties
+/// and the latest freeze across stages identical to the complete history.
+pub(crate) fn queue_snapshot_logs_from_history(history: OrderLogMap) -> OrderLogMap {
+    history
+        .into_iter()
+        .map(|(order_id, logs)| {
+            let mut latest = BTreeMap::new();
+            let mut freezes = BTreeMap::new();
+            for (index, log) in logs.iter().enumerate() {
+                latest.insert(log.stage_node_id.clone(), index);
+                if log.action == super::queue_state::ApparatusQueueAction::Freeze
+                    && log.to_state == super::queue_state::ApparatusQueueOrderState::Frozen
+                {
+                    freezes.insert(log.stage_node_id.clone(), index);
+                }
+            }
+            let keep = latest.into_values().chain(freezes.into_values()).collect::<BTreeSet<_>>();
+            (order_id, logs.into_iter().enumerate()
+                .filter_map(|(index, log)| keep.contains(&index).then_some(log)).collect())
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RawMaterialStockTransitionKind {
     InUse,
@@ -518,6 +542,13 @@ pub trait ProductionMapStorePort: Send + Sync {
     }
     /// Only stores with atomic checkpoint validation expose output-free re-pause.
     fn supports_resume_pause(&self) -> bool { false }
+    fn supports_temporary_pause(&self) -> bool { false }
+    async fn temporarily_pause_work(
+        &self, _apparatus: &str, _order_id: &str, _session_id: &str, _token: &str,
+        _actor: &QueueActionActor, _assigned: &[String], _policy: ApparatusQueuePolicy,
+    ) -> StoreResult<()> {
+        Err(ProductionMapError::QueueActionNotAllowed)
+    }
     async fn re_pause_resumed_work(
         &self, _apparatus: &str, _order_id: &str, _resume_id: &str,
         _actor: &QueueActionActor, _assigned_apparatus: &[String],
@@ -598,6 +629,16 @@ pub trait ProductionMapStorePort: Send + Sync {
         _order_ids: &[String],
     ) -> StoreResult<OrderLogMap> {
         Ok(BTreeMap::new())
+    }
+    /// Minimal facts for stage-state and frozen-order snapshot projections.
+    /// Audit and lifecycle callers must keep using the complete history read.
+    async fn queue_snapshot_logs_for_orders(
+        &self,
+        order_ids: &[String],
+    ) -> StoreResult<OrderLogMap> {
+        Ok(queue_snapshot_logs_from_history(
+            self.queue_action_logs_for_orders(order_ids).await?,
+        ))
     }
     async fn queue_action_logs_for_worker(
         &self,
@@ -1057,6 +1098,42 @@ mod tests {
     use async_trait::async_trait;
 
     use super::*;
+
+    #[test]
+    fn snapshot_logs_preserve_latest_stage_states_and_freezes_in_tie_order() {
+        let entry = |id: &str, stage: &str, action: &str, state: &str| {
+            serde_json::from_value::<ProductionOrderLogEntry>(serde_json::json!({
+                "event_id":id,"apparatus":"apparatus:default:bosma_7","order_id":"order",
+                "stage_node_id":stage,"action":action,"from_state":"in_progress","to_state":state,
+                "actor_role":"aparatchi","actor_ref":id,"actor_display_name":id,
+                "created_at_unix":100,"completed_with_issue":false,"issue_note":format!("note-{id}")
+            })).unwrap()
+        };
+        let history = vec![
+            entry("start", "a", "start", "in_progress"),
+            entry("old-freeze", "a", "freeze", "frozen"),
+            entry("resume", "a", "resume", "in_progress"),
+            entry("new-freeze", "a", "freeze", "frozen"),
+            entry("latest-a", "a", "resume", "in_progress"),
+            entry("freeze-b", "b", "freeze", "frozen"),
+            entry("latest-b", "b", "pause", "paused"),
+            entry("global-freeze", "", "freeze", "frozen"),
+            entry("latest-legacy", "", "resume", "in_progress"),
+        ];
+        let compact = queue_snapshot_logs_from_history(BTreeMap::from([("order".into(),history.clone())]));
+        assert_eq!(compact["order"], history[3..]);
+        for stage in ["a", "b", ""] {
+            let latest = |logs: &[ProductionOrderLogEntry]| logs.iter().rev()
+                .find(|log| log.stage_node_id == stage).cloned();
+            let freeze = |logs: &[ProductionOrderLogEntry]| logs.iter().rev()
+                .find(|log| log.stage_node_id == stage && log.action == super::super::queue_state::ApparatusQueueAction::Freeze
+                    && log.to_state == super::super::queue_state::ApparatusQueueOrderState::Frozen).cloned();
+            assert_eq!(latest(&compact["order"]), latest(&history));
+            assert_eq!(freeze(&compact["order"]), freeze(&history));
+        }
+        assert_eq!(compact["order"][0].issue_note,"note-new-freeze");
+        assert_eq!(compact["order"][0].actor_ref,"new-freeze");
+    }
 
     struct DefaultDowntimeStore;
 

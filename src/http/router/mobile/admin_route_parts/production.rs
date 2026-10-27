@@ -7,6 +7,7 @@ fn production_routes() -> Router<AppState> {
         .route("/v1/mobile/admin/production-maps/reactivation", post(admin::production_map_reactivation))
         .route("/v1/mobile/admin/production-maps/reactivation/reclose", post(admin::production_map_reactivation_reclose))
         .route("/v1/mobile/admin/production-maps/re-pause", post(admin::production_map_re_pause))
+        .route("/v1/mobile/admin/production-maps/temporary-pause", post(admin::production_map_temporary_pause))
         .route(
             "/v1/mobile/admin/production-maps/order-alert",
             any(admin::production_map_order_alert),

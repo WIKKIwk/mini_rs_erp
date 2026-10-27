@@ -26,6 +26,8 @@ pub mod pechat;
 mod prepared_queue_action;
 pub(crate) mod re_pause;
 pub use re_pause::ResumePauseControl;
+pub(crate) mod temporary_pause;
+pub use temporary_pause::TemporaryPauseControl;
 pub(crate) mod reactivation;
 pub use reactivation::{ReactivationSelector, ReactivationTarget, ReactivationPreview, ReactivationRecloseControl, ReactivationRecloseTarget};
 mod print_preflight;

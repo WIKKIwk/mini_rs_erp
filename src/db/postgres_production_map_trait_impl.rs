@@ -27,6 +27,12 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         reactivation::execute(self, target, actor, assigned, checkouts, is_print).await
     }
     fn supports_resume_pause(&self) -> bool { true }
+    fn supports_temporary_pause(&self) -> bool { true }
+    async fn temporarily_pause_work(&self, apparatus: &str, order_id: &str, session_id: &str, token: &str,
+        actor: &QueueActionActor, assigned: &[String], policy: crate::core::production_map::ApparatusQueuePolicy)
+        -> Result<(), ProductionMapError> {
+        temporary_pause::execute(self, apparatus, order_id, session_id, token, actor, assigned, policy).await
+    }
 
     async fn re_pause_resumed_work(
         &self, apparatus: &str, order_id: &str, resume_id: &str,
@@ -480,6 +486,13 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         order_ids: &[String],
     ) -> Result<BTreeMap<String, Vec<ProductionOrderLogEntry>>, ProductionMapError> {
         PostgresProductionMapStore::queue_action_logs_for_orders(self, order_ids).await
+    }
+
+    async fn queue_snapshot_logs_for_orders(
+        &self,
+        order_ids: &[String],
+    ) -> Result<BTreeMap<String, Vec<ProductionOrderLogEntry>>, ProductionMapError> {
+        PostgresProductionMapStore::queue_snapshot_logs_for_orders(self, order_ids).await
     }
 
     async fn queue_action_logs_for_worker(

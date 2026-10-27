@@ -39,6 +39,7 @@ mod lamination_astatka;
 mod lamination_settings;
 mod sequence_move;
 mod re_pause;
+mod temporary_pause;
 mod reactivation;
 #[cfg(test)]
 mod sequence_move_tests;
@@ -179,6 +180,7 @@ use self::order_query_helpers::{
     load_progress_batches_for_audit, load_progress_batches_for_order,
     load_progress_batches_for_orders, load_progress_batches_for_worker,
     load_queue_action_logs_for_orders, load_queue_action_logs_for_worker,
+    load_queue_snapshot_logs_for_orders,
 };
 use self::paddon_helpers::{
     add_paddon_item, add_paddon_items, create_paddon, load_paddon_scan_snapshot,
@@ -696,6 +698,13 @@ impl PostgresProductionMapStore {
         order_ids: &[String],
     ) -> Result<BTreeMap<String, Vec<ProductionOrderLogEntry>>, ProductionMapError> {
         load_queue_action_logs_for_orders(&self.pool, order_ids).await
+    }
+
+    async fn queue_snapshot_logs_for_orders(
+        &self,
+        order_ids: &[String],
+    ) -> Result<BTreeMap<String, Vec<ProductionOrderLogEntry>>, ProductionMapError> {
+        load_queue_snapshot_logs_for_orders(&self.pool, order_ids).await
     }
 
     async fn queue_action_logs_for_worker(
@@ -1311,6 +1320,7 @@ pub(super) async fn apply_queue_progress_tx(
         }
         validate_queue_action_event_transition_tx(tx, &write.event).await?;
         re_pause::validate_resume_checkpoint_tx(tx, write).await?;
+        temporary_pause::validate_write_tx(tx, write).await?;
         stage_execution::validate_input_claims_tx(tx, write).await?;
         let output_paddon = output_paddon_assignment::lock_for_output(tx, write).await?;
         if let Some(expected) = write.event.payload_json.get("bosma_closing_expected_payload") {

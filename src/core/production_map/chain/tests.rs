@@ -127,6 +127,93 @@ fn hotlunch_map() -> ProductionMapDefinition {
 }
 
 #[test]
+fn concrete_stage_aliases_require_valid_apparatuses_in_the_same_group() {
+    let mut map = hotlunch_map();
+    let mut repeated = node("repeated", ProductionMapNodeKind::Apparatus, "Repeated");
+    repeated.apparatus_id = "apparatus:test:plain".into();
+    let mut task = node("task", ProductionMapNodeKind::Task, "Task");
+    task.alternative_group_id = "group".into();
+    let mut invalid = alternative_node("invalid", "Invalid", "group");
+    invalid.apparatus_id = "legacy display name".into();
+    map.nodes = vec![
+        node("plain", ProductionMapNodeKind::Apparatus, "Plain"),
+        repeated,
+        alternative_node("alt-a", "Alternative A", "group"),
+        alternative_node("alt-b", "Alternative B", "group"),
+        alternative_node("other", "Other group", "other-group"),
+        task,
+        invalid,
+    ];
+    assert!(stage_node_ids_match_for_map(&map,"alt-a","alt-b"));
+    assert!(stage_node_ids_match_for_map(&map,"alt-b","alt-a"));
+    for (left,right) in [("plain","repeated"),("plain","alt-a"),("alt-a","other"),
+        ("alt-a","task"),("alt-a","invalid"),("alt-a","missing")] {
+        assert!(!stage_node_ids_match_for_map(&map,left,right),"{left} vs {right}");
+        assert!(!stage_node_ids_match_for_map(&map,right,left),"{right} vs {left}");
+    }
+    assert!(stage_node_ids_match_for_map(&map," plain ","plain"));
+}
+
+#[test]
+fn route_adjacency_fast_paths_preserve_occurrences_aliases_and_legacy_edge_ids() {
+    // Freeze the original adjacency predicates as an independent reference.
+    // Equality must retain whitespace normalization and empty/missing-node
+    // behavior, while aliases still require valid apparatuses in one group.
+    fn reference_successors<'a>(map: &'a ProductionMapDefinition, id: &str) -> Vec<&'a str> {
+        let Some(node) = map.nodes.iter().find(|node| node.id == id) else {
+            return Vec::new();
+        };
+        map.edges.iter().filter(|edge| {
+            (edge.from == id || stage_node_ids_match_for_map(map, &edge.from, id))
+                && !stage_node_ids_match_for_map(map, &edge.to, id)
+                && route_edge_allowed(node, edge)
+        }).map(|edge| edge.to.as_str()).collect()
+    }
+    fn reference_predecessors<'a>(map: &'a ProductionMapDefinition, id: &str) -> Vec<&'a str> {
+        map.edges.iter().filter(|edge| {
+            (edge.to == id || stage_node_ids_match_for_map(map, &edge.to, id))
+                && !stage_node_ids_match_for_map(map, &edge.from, id)
+                && map.nodes.iter().find(|node| node.id == edge.from)
+                    .is_some_and(|node| route_edge_allowed(node, edge))
+        }).map(|edge| edge.from.as_str()).collect()
+    }
+
+    let mut map = hotlunch_map();
+    let mut repeated = node("repeated", ProductionMapNodeKind::Apparatus, "Repeated");
+    repeated.apparatus_id = "apparatus:test:plain".into();
+    let mut task = node("task", ProductionMapNodeKind::Task, "Task");
+    task.alternative_group_id = "group".into();
+    let mut invalid = alternative_node("invalid", "Invalid", "group");
+    invalid.apparatus_id = "legacy display name".into();
+    map.nodes = vec![
+        node("start", ProductionMapNodeKind::Start, "Start"),
+        node("plain", ProductionMapNodeKind::Apparatus, "Plain"),
+        repeated,
+        alternative_node("alt-a", "Alternative A", "group"),
+        alternative_node("alt-b", "Alternative B", "group"),
+        alternative_node("other", "Other group", "other-group"),
+        task,
+        invalid,
+        node("condition", ProductionMapNodeKind::Condition, "Condition"),
+        node("end", ProductionMapNodeKind::End, "End"),
+        node("", ProductionMapNodeKind::Task, "Legacy empty ID"),
+        node(" spaced ", ProductionMapNodeKind::Apparatus, "Legacy spaced ID"),
+    ];
+    let ids = map.nodes.iter().map(|node| node.id.clone())
+        .chain(["missing".into(), " plain ".into(), " alt-a ".into(), "spaced".into(), " ".into()])
+        .collect::<Vec<_>>();
+    map.edges = ids.iter().flat_map(|from| ids.iter().flat_map(move |to| {
+        ["", "true", "false", "unsupported"].into_iter().map(move |branch| ProductionMapEdge {
+            from: from.clone(), to: to.clone(), branch: branch.into(),
+        })
+    })).collect();
+    for id in &ids {
+        assert_eq!(route_successors(&map, id), reference_successors(&map, id), "successors: {id:?}");
+        assert_eq!(route_predecessors(&map, id), reference_predecessors(&map, id), "predecessors: {id:?}");
+    }
+}
+
+#[test]
 fn map_has_work_stage_matches_canonical_and_virtual_ids() {
     let map = hotlunch_map();
     assert!(map_has_work_stage_for_station(&map, "task:lamin"));

@@ -65,6 +65,8 @@ mod progress_qr;
 mod qolip_validation;
 mod queue_actions;
 mod re_pause;
+mod temporary_pause;
+pub use temporary_pause::production_map_temporary_pause;
 mod reactivation;
 pub use reactivation::{production_map_reactivation, production_map_reactivation_preview, production_map_reactivation_reclose};
 pub use re_pause::production_map_re_pause;
