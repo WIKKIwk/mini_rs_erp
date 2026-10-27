@@ -8,6 +8,7 @@ use super::super::*;
 
 #[cfg(any(test, feature = "verification"))]
 pub struct MemoryProductionMapStore {
+    pub(super) queue_progress_lock: tokio::sync::Mutex<()>,
     pub(super) sequence_move_receipts: tokio::sync::Mutex<BTreeMap<(String, String, String, String), (SequenceMove, SequenceMoveResult)>>,
     pub(super) maps: RwLock<BTreeMap<String, ProductionMapDefinition>>,
     pub(super) production_order_lifecycles:
@@ -30,6 +31,7 @@ pub struct MemoryProductionMapStore {
     pub(super) paddon_lock_owners: RwLock<BTreeMap<String, String>>,
     pub(super) paddon_management_settings: RwLock<PaddonManagementSettings>,
     pub(super) lamination_settings: RwLock<LaminationSettings>,
+    pub(super) qolip_start_settings: RwLock<QolipStartSettings>,
     pub(super) paddon_successors: tokio::sync::Mutex<BTreeMap<(String, String, String, String), String>>,
     pub(super) progress_batch_corrections: RwLock<Vec<ProgressBatchCorrectionRecord>>,
     pub(super) laminatsiya_astatka_reports: RwLock<Vec<LaminatsiyaAstatkaReport>>,
@@ -49,6 +51,7 @@ pub struct MemoryProductionMapStore {
 impl MemoryProductionMapStore {
     pub fn new() -> Self {
         Self {
+            queue_progress_lock: tokio::sync::Mutex::new(()),
             sequence_move_receipts: tokio::sync::Mutex::new(BTreeMap::new()),
             maps: RwLock::new(BTreeMap::new()),
             production_order_lifecycles: RwLock::new(BTreeMap::new()),
@@ -68,6 +71,7 @@ impl MemoryProductionMapStore {
             paddons: RwLock::new(BTreeMap::new()),
             paddon_management_settings: RwLock::new(PaddonManagementSettings::default()),
             lamination_settings: RwLock::new(LaminationSettings::default()),
+            qolip_start_settings: RwLock::new(QolipStartSettings::default()),
             paddon_successors: tokio::sync::Mutex::new(BTreeMap::new()),
             paddon_lock_owners: RwLock::new(BTreeMap::new()),
             progress_batch_corrections: RwLock::new(Vec::new()),

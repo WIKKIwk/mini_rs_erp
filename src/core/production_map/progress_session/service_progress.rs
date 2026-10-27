@@ -1423,6 +1423,13 @@ impl ProductionMapService {
             now,
             ..
         } = context;
+        let temporary_session = self.store.active_order_run_session(apparatus, order_id).await?;
+        if temporary_session.as_ref().is_some_and(super::temporary_pause::is_temporarily_paused) {
+            if !progress.progress_batch_id.trim().is_empty() || !progress.qr_payload.trim().is_empty() {
+                return Err(ProductionMapError::ProgressBatchNotResumable);
+            }
+            return self.build_resumed_work_session(context, temporary_session.unwrap()).await;
+        }
         let opening_record = if !progress.progress_batch_id.trim().is_empty()
             || !progress.qr_payload.trim().is_empty()
         {
@@ -1928,6 +1935,22 @@ impl ProductionMapService {
             return Err(ProductionMapError::ProgressBatchNotResumable);
         }
 
+        if super::temporary_pause::is_temporarily_paused(&session) {
+            let expected_session = serde_json::to_value(&session).map_err(|_| ProductionMapError::StoreFailed)?;
+            let inputs = super::temporary_pause::held_inputs(self, &session).await?;
+            let mut payload = super::temporary_pause::resume(&mut session, actor, now)?;
+            payload[super::temporary_pause::EXPECTED_SESSION] = expected_session;
+            payload["temporary_pause_held_inputs"] = inputs;
+            payload["temporary_pause_map_fingerprint"] = serde_json::json!(super::wip_route::production_map_fingerprint(order_map));
+            let event = zero_quantity_event(
+                ProgressRecordContext { session: &session, apparatus, order_id, action, actor },
+                String::new(), String::new(), payload);
+            return Ok(QueueProgressRecords {
+                session: Some(session), progress_event: Some(event), progress_batch: None,
+                progress_batches: Vec::new(), progress_batch_updates: Vec::new(),
+                opening_wip_batch_updates: Vec::new(),
+            });
+        }
         // A normal output pause must have a real output in this session. Its
         // downstream WIP status and the number of earlier outputs are irrelevant.
         let has_output = self.store.progress_batches_for_order(order_id).await?

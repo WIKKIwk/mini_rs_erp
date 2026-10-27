@@ -21,6 +21,9 @@ pub struct QolipService {
 }
 
 impl QolipService {
+    pub(crate) async fn active_rework_codes(&self, codes: &[String]) -> Result<Vec<String>, QolipError> {
+        self.store.active_rework_codes(codes).await
+    }
     pub async fn order_product_readiness(
         &self, item_codes: &[String], warehouses: &[String],
     ) -> Result<std::collections::BTreeMap<String, bool>, QolipError> {

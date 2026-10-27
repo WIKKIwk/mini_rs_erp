@@ -17,6 +17,37 @@ pub(crate) struct PreparationOrderCatalog {
 }
 
 impl PostgresPreparationStore {
+    /// Tuple identities detect committed label/material edits without reading
+    /// or decoding map/template JSON. Production authority is separately bound
+    /// to its live revision. Include every template because legacy customer
+    /// fallbacks can match a product/width from outside this apparatus.
+    pub(crate) async fn order_list_metadata_stamp(
+        &self,
+        apparatus: &str,
+    ) -> Result<String, PreparationError> {
+        Ok(sqlx::query_scalar(
+            "WITH candidates AS MATERIALIZED (
+                SELECT m.id,m.xmin::text AS version,m.ctid::text AS location
+                FROM mini_production_maps m
+                WHERE m.id LIKE 'zakaz-%' AND m.lifecycle_status IN ('released','in_progress')
+                  AND m.id IN (SELECT map_id FROM mini_production_map_nodes
+                    WHERE canonical_apparatus_id=$1 OR canonical_alternative_apparatus_id=$1)
+             ) SELECT md5(jsonb_build_array(
+                (SELECT COALESCE(string_agg(id||':'||version||':'||location,',' ORDER BY id),'')
+                 FROM candidates),
+                (SELECT COALESCE(string_agg(p.id||':'||p.xmin::text||':'||p.ctid::text,',' ORDER BY p.id),'')
+                 FROM mini_order_products p WHERE p.order_id IN (SELECT id FROM candidates)),
+                (SELECT COALESCE(string_agg(t.id||':'||t.xmin::text||':'||t.ctid::text,',' ORDER BY t.id),'')
+                 FROM mini_quick_order_templates t),
+                (SELECT COALESCE(string_agg(q.xmin::text||':'||q.ctid::text,','),'')
+                 FROM mini_queue_sequences q WHERE q.canonical_apparatus_id=$1)
+             )::text)",
+        )
+        .bind(apparatus)
+        .fetch_one(&self.pool)
+        .await?)
+    }
+
     pub(crate) async fn order_list_catalog(
         &self,
         owner: &str,
@@ -119,10 +150,15 @@ impl PostgresPreparationStore {
         }
         let mut maps = candidates
             .iter()
+            .filter(|candidate| candidate.allowed)
             .map(|candidate| candidate.map.clone())
             .collect::<Vec<_>>();
         super::order_customers::fill_customers(&mut tx, &mut maps).await?;
-        for (candidate, map) in candidates.iter_mut().zip(maps) {
+        for (candidate, map) in candidates
+            .iter_mut()
+            .filter(|candidate| candidate.allowed)
+            .zip(maps)
+        {
             candidate.map = map;
         }
         tx.commit().await?;

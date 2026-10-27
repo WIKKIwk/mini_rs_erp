@@ -312,7 +312,7 @@ struct ApparatusQueuePolicyPutRequest {
 }
 
 /// Apparatus queue policy controls whether a worker must follow the saved
-/// sequence or can pick any ready order. Pechat stays strict in the service.
+/// sequence or can pick any ready order, including configured printing equipment.
 pub async fn production_map_queue_policies(
     State(state): State<AppState>,
     method: Method,

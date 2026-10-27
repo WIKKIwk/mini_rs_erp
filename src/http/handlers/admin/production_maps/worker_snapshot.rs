@@ -264,13 +264,27 @@ pub(super) async fn read_detail(
         || state.admin.principal_has_capability(principal, Capability::AdminAccess).await
         || state.admin.principal_has_capability(principal, Capability::ProductionMapManage).await;
     if !can_read { return Err(forbidden()); }
-    let window = WorkerQueueWindow::default();
     for _ in 0..3 {
         let (assigned, assignment_scope) = scope_token(state,principal).await?;
         if !state.worker_show_all_apparatus_tabs && !queue_state::apparatus_matches_assigned(apparatus,&assigned) {
             return Err(forbidden());
         }
-        let (mut snapshot,revision,_,_) = read_for_principal(state,principal,Vec::new(),&window).await?;
+        // One detail read must not rebuild every order assigned to this worker.
+        // The one-order snapshot retains competing queue/WIP dependencies while
+        // only materializing controls and programs for the requested order.
+        let (detail, revision) = state.production_maps
+            .order_snapshot_shared_with_revision(&[order_id.to_string()])
+            .await.map_err(production_map_error)?;
+        let detail = super::super::training::merge_worker_training_snapshot_shared(
+            state, principal, detail,
+        ).await.map_err(super::super::training::training_workspace_error)?;
+        // Preserve the existing assignment projection as the membership proof.
+        // Reading a map by ID alone never authorizes a foreign worker order.
+        let mut snapshot = if state.worker_show_all_apparatus_tabs {
+            detail.clone()
+        } else {
+            Arc::new(project(&detail, &assigned, std::iter::empty()))
+        };
         let visible_context = snapshot.maps.iter().find(|saved| saved.map.id == order_id).is_some_and(|saved| {
             snapshot.queue_action_controls.get(apparatus).is_some_and(|values| values.contains_key(order_id))
                 || snapshot.visible_order_ids.get(apparatus).is_some_and(|ids| ids.iter().any(|id| id == order_id))
@@ -285,10 +299,7 @@ pub(super) async fn read_detail(
             let decisions = state.production_maps.completion_request_decisions_for_actor(&actor.ref_,usize::MAX).await.map_err(production_map_error)?;
             if !completed.iter().any(|order| order.order_id == order_id)
                 && !decisions.iter().any(|decision| decision.order_id == order_id) { return Err(not_found("worker_order_not_available")); }
-            let (value,actual_revision) = state.production_maps.order_snapshot_shared_with_revision(&[order_id.to_string()]).await.map_err(production_map_error)?;
-            if actual_revision != revision { continue; }
-            snapshot = super::super::training::merge_worker_training_snapshot_shared(state,principal,value).await
-                .map_err(super::super::training::training_workspace_error)?;
+            snapshot = detail;
         }
         let projected = super::order_page::project(&snapshot,&[order_id.to_string()]);
         if projected.maps.len() != 1 { return Err(not_found("worker_order_not_available")); }

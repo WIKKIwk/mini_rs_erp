@@ -662,6 +662,7 @@ pub(super) async fn execute(
         "qolip_codes",
         "qolip_set_id",
         "qolip_set_snapshot",
+        "qolip_confirmation",
         "qolip_lock_owner",
     ] {
         if let Some(value) = original.get(key) {
@@ -905,7 +906,8 @@ pub(super) async fn release_reservations_tx(
         != field(&session.payload_json, "input_progress_batch_id");
     let changed_cycle =
         previous.get("rezka_output_cycle") != session.payload_json.get("rezka_output_cycle");
-    if session.status == OrderRunStatus::Active
+    if (session.status == OrderRunStatus::Active
+        || crate::core::production_map::temporary_pause::is_temporarily_paused(session))
         && !changed_input
         && !changed_cycle
         && session

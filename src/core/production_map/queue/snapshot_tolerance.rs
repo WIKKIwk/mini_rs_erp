@@ -5,7 +5,7 @@
 //! hide that one order's controls — never fail the snapshot for everyone.
 //! Write paths keep their own strict validation and stay fail-closed.
 
-use super::super::service_progress_support::rezka_output_kadr_counts;
+use super::super::service_progress_support::{rezka_output_kadr_counts, rezka_output_kadr_counts_projected};
 use super::super::types::{
     OrderRunInputLink, OrderRunSession, ProductionMapDefinition, RezkaActivePartialRoll,
     order_run_input_links_from_payload, rezka_active_partial_rolls_from_payload,
@@ -78,12 +78,35 @@ pub(super) fn snapshot_rezka_output_kadr_counts(
     input_contained_kadr_count: Option<usize>,
     order_id: &str,
 ) -> Option<Vec<i64>> {
-    let frame_groups = match rezka_output_kadr_counts(
+    snapshot_rezka_frame_groups(
+        rezka_output_kadr_counts(
         order_map,
         storage_key,
         stage_node_id,
         input_contained_kadr_count,
-    ) {
+        ), storage_key, order_id,
+    )
+}
+
+pub(super) fn snapshot_rezka_output_kadr_counts_projected(
+    projection: &super::super::chain::ProjectionMap<'_>,
+    storage_key: &str,
+    stage_node_id: &str,
+    input_contained_kadr_count: Option<usize>,
+    order_id: &str,
+) -> Option<Vec<i64>> {
+    snapshot_rezka_frame_groups(
+        rezka_output_kadr_counts_projected(projection,storage_key,stage_node_id,input_contained_kadr_count),
+        storage_key, order_id,
+    )
+}
+
+fn snapshot_rezka_frame_groups(
+    groups: Result<Vec<usize>, super::super::ProductionMapError>,
+    storage_key: &str,
+    order_id: &str,
+) -> Option<Vec<i64>> {
+    let frame_groups = match groups {
         Ok(groups) => groups,
         Err(error) => {
             tracing::warn!(

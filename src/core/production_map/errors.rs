@@ -160,6 +160,12 @@ pub enum ProductionMapError {
     QolipAlreadyInUse,
     #[error("an order mold is in peredelka")]
     QolipInRework,
+    #[error("automatic mold confirmation is disabled")]
+    QolipAutomaticConfirmationDisabled,
+    #[error("mold confirmation policy changed")]
+    QolipPolicyChanged,
+    #[error("mold set changed since automatic confirmation")]
+    QolipSetChanged,
     #[error("qolip stock is insufficient")]
     QolipInsufficientStock,
     #[error("qolip location identity does not match")]

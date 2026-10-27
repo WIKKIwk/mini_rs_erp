@@ -116,6 +116,54 @@ pub(super) async fn load_queue_action_logs_for_orders(
     Ok(logs)
 }
 
+/// Keep the audit table intact while avoiding a transfer/decoding of every
+/// historical event whenever a worker's current queue is rebuilt.
+pub(super) async fn load_queue_snapshot_logs_for_orders(
+    pool: &PgPool,
+    order_ids: &[String],
+) -> Result<BTreeMap<String, Vec<ProductionOrderLogEntry>>, ProductionMapError> {
+    let order_ids = order_ids
+        .iter()
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .collect::<Vec<_>>();
+    if order_ids.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let rows = sqlx::query_as::<_, QueueActionLogRow>(
+        "WITH candidates AS MATERIALIZED (
+             SELECT id,order_id,stage_node_id,action,to_state,created_at
+             FROM mini_queue_action_events WHERE order_id=ANY($1)
+         ), snapshot_ids AS (
+             (SELECT DISTINCT ON (order_id,stage_node_id) id
+              FROM candidates ORDER BY order_id,stage_node_id,created_at DESC,id DESC)
+             UNION
+             (SELECT DISTINCT ON (order_id,stage_node_id) id
+              FROM candidates WHERE action='freeze' AND to_state='frozen'
+              ORDER BY order_id,stage_node_id,created_at DESC,id DESC)
+         )
+         SELECT event.event_id,event.canonical_apparatus_id AS apparatus,event.order_id,
+                event.stage_node_id,event.action,event.from_state,event.to_state,
+                event.actor_role,event.actor_ref,event.actor_display_name,
+                EXTRACT(EPOCH FROM event.created_at)::bigint AS created_at_unix,
+                COALESCE((event.payload_json->>'completed_with_issue')::boolean,false) AS completed_with_issue,
+                COALESCE(event.payload_json->>'issue_note','') AS issue_note,
+                event.payload_json->'zero_output_waste' AS zero_output_waste
+         FROM mini_queue_action_events event JOIN snapshot_ids USING (id)
+         ORDER BY event.created_at ASC,event.id ASC",
+    )
+    .bind(&order_ids)
+    .fetch_all(pool)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    let mut logs: BTreeMap<String, Vec<ProductionOrderLogEntry>> = BTreeMap::new();
+    for row in rows {
+        let entry = queue_action_log_from_row(row)?;
+        logs.entry(entry.order_id.clone()).or_default().push(entry);
+    }
+    Ok(logs)
+}
+
 pub(super) async fn load_queue_action_logs_for_worker(
     pool: &PgPool,
     worker_refs: &[String],

@@ -35,6 +35,13 @@ pub struct PreparedApparatusQueueAction {
 }
 
 impl PreparedApparatusQueueAction {
+    pub(crate) fn attach_automatic_qolip_confirmation(&mut self, confirmation: &super::AutomaticQolipConfirmation) {
+        let value = serde_json::to_value(confirmation).expect("serializable mold confirmation");
+        self.event.payload_json["qolip_confirmation"] = value.clone();
+        if let Some(session) = &mut self.session {
+            session.payload_json["qolip_confirmation"] = value;
+        }
+    }
     /// Build the ordinary Pause/Complete write for an atomic layer return.
     pub(crate) fn into_lamination_report_queue_write(mut self) -> super::QueueActionProgressWrite {
         let completing = self.event.action == super::queue_state::ApparatusQueueAction::Complete;

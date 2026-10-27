@@ -8,8 +8,12 @@ use super::rows::{QolipProductSpecRow, row_to_product_spec};
 use crate::core::auth::models::Principal;
 use crate::core::qolip::{
     QolipError, QolipManagedSet, QolipProductMoldEdits, QolipSetCreate, QolipSetEdit, QolipSetProduct,
-    QolipSetSnapshot, role_code,
+    QolipSetRename, QolipSetSnapshot, role_code,
 };
+
+#[cfg(test)]
+#[path = "set_names_tests.rs"]
+mod set_names_tests;
 
 fn owner(warehouse: &str, allowed: Option<&[String]>) -> Result<(), QolipError> {
     if warehouse.trim().is_empty()
@@ -35,11 +39,13 @@ async fn read_sets(
             .map(|s| s.trim().to_lowercase())
             .collect::<Vec<_>>()
     });
-    let rows = sqlx::query_as::<_, (String, String, String, String, String)>(
+    let rows = sqlx::query_as::<_, (String, String, String, String, String, String)>(
         "SELECT sets.set_id, sets.warehouse_key,
-             COALESCE(item.code, sets.item_code_key, ''), COALESCE(item.name, ''), COALESCE(item.item_group, '')
+             COALESCE(item.code, sets.item_code_key, ''), COALESCE(item.name, ''), COALESCE(item.item_group, ''),
+             COALESCE(names.name, '')
          FROM mini_qolip_sets sets
          LEFT JOIN mini_items item ON lower(btrim(item.code)) = sets.item_code_key
+         LEFT JOIN mini_qolip_set_names names ON names.set_id = sets.set_id
          WHERE NOT sets.is_product_local AND ($1::text[] IS NULL OR sets.warehouse_key = ANY($1))
            AND ($2::text IS NULL OR sets.set_id = $2)
          ORDER BY sets.set_id",
@@ -82,9 +88,10 @@ async fn read_sets(
     Ok(rows
         .into_iter()
         .map(
-            |(id, warehouse, item_code, item_name, item_group)| {
+            |(id, warehouse, item_code, item_name, item_group, name)| {
                 let members = by_set.remove(&id).unwrap_or_default();
                 QolipManagedSet {
+                    name,
                     warehouse: members
                         .first()
                         .map(|s| s.warehouse.clone())
@@ -101,6 +108,46 @@ async fn read_sets(
             },
         )
         .collect())
+}
+
+pub(super) async fn rename_set(
+    pool: &PgPool,
+    input: &QolipSetRename,
+    principal: &Principal,
+    allowed: Option<&[String]>,
+) -> Result<QolipManagedSet, QolipError> {
+    let mut tx = pool.begin().await.map_err(super::reworks::storage_error)?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("qolip:set-name:{}", input.set_id))
+        .execute(&mut *tx).await.map_err(super::reworks::storage_error)?;
+    let warehouses = allowed.map(|values| values.iter()
+        .map(|value| value.trim().to_lowercase()).collect::<Vec<_>>());
+    let id = sqlx::query_scalar::<_, String>(
+        "SELECT set_id FROM mini_qolip_sets
+         WHERE set_id = $1 AND NOT is_product_local
+           AND ($2::text[] IS NULL OR warehouse_key = ANY($2))",
+    ).bind(&input.set_id).bind(warehouses).fetch_optional(&mut *tx)
+        .await.map_err(super::reworks::storage_error)?.ok_or(QolipError::SetChanged)?;
+    let previous = read_sets(&mut tx, allowed, Some(&id)).await?
+        .pop().ok_or(QolipError::SetChanged)?;
+    sqlx::query(
+        "INSERT INTO mini_qolip_set_names (set_id, name) VALUES ($1, $2)
+         ON CONFLICT (set_id) DO UPDATE SET name = EXCLUDED.name, updated_at = now()",
+    ).bind(&id).bind(&input.name).execute(&mut *tx).await.map_err(|error| {
+        if error.as_database_error().and_then(|error| error.constraint())
+            == Some("mini_qolip_set_names_name_unique") {
+            QolipError::SetNameConflict
+        } else {
+            super::reworks::storage_error(error)
+        }
+    })?;
+    audit(&mut tx, principal, "set_rename", &id, serde_json::json!({
+        "before": previous.name, "after": input.name,
+    })).await?;
+    let updated = read_sets(&mut tx, allowed, Some(&id)).await?
+        .pop().ok_or(QolipError::SetChanged)?;
+    tx.commit().await.map_err(super::reworks::storage_error)?;
+    Ok(updated)
 }
 
 pub(super) async fn list(

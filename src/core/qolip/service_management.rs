@@ -1,4 +1,24 @@
 impl QolipService {
+    pub async fn rename_set(
+        &self,
+        input: &super::QolipSetRename,
+        principal: &Principal,
+        is_admin: bool,
+    ) -> Result<super::QolipManagedSet, QolipError> {
+        let set_id = input.set_id.trim();
+        if set_id.is_empty() || set_id.len() > 512 {
+            return Err(QolipError::SetChanged);
+        }
+        let input = super::QolipSetRename {
+            set_id: set_id.to_owned(),
+            name: super::management::normalize_set_name(&input.name)?,
+        };
+        let allowed = self.warehouses_for_principal(principal, false).await?;
+        self.store
+            .rename_set(&input, principal, if is_admin { None } else { Some(&allowed) })
+            .await
+    }
+
     pub async fn create_set(
         &self,
         input: &super::QolipSetCreate,

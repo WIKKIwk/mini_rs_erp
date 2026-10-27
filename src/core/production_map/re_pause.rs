@@ -42,6 +42,7 @@ pub(crate) fn attach_checkpoint(
 ) {
     use queue_state::{ApparatusQueueAction as Action, ApparatusQueueOrderState as State};
     if prepared.event.action != Action::Resume
+        || super::temporary_pause::is_temporarily_paused(previous)
         || prepared.event.from_state != State::Paused
         || !matches!(
             previous.status,

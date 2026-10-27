@@ -21,6 +21,9 @@ impl QolipStorePort for MemoryQolipStore {
     async fn managed_sets(&self, allowed: Option<&[String]>) -> Result<Vec<super::QolipManagedSet>, QolipError> {
         self.memory_managed_sets(allowed).await
     }
+    async fn rename_set(&self, input: &super::QolipSetRename, _principal: &Principal, allowed: Option<&[String]>) -> Result<super::QolipManagedSet, QolipError> {
+        self.memory_rename_set(input, allowed).await
+    }
     async fn create_set(&self, input: &super::QolipSetCreate, principal: &Principal, allowed: &[String]) -> Result<super::QolipManagedSet, QolipError> {
         self.memory_create_set(input, principal, allowed).await
     }

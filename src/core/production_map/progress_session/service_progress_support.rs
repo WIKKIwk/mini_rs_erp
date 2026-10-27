@@ -367,11 +367,45 @@ pub(crate) fn rezka_output_kadr_counts(
         .iter()
         .find(|node| node.id.trim() == stage.node_id.trim())
         .ok_or(ProductionMapError::ProgressBatchNotAccepted)?;
+    rezka_output_kadr_counts_for_node(
+        node,
+        input_contained_kadr_count,
+        chain::is_final_work_stage_node(order_map, &stage.node_id),
+    )
+}
+
+/// Snapshot callers already own this immutable map's topology projection.
+/// Reuse its stage/adjacency witnesses instead of traversing the entire graph
+/// several more times for every Rezka control on every queue refresh.
+pub(crate) fn rezka_output_kadr_counts_projected(
+    projection: &chain::ProjectionMap<'_>,
+    apparatus: &str,
+    stage_node_id: &str,
+    input_contained_kadr_count: Option<usize>,
+) -> Result<Vec<usize>, ProductionMapError> {
+    let stage = projection
+        .work_stage(apparatus, stage_node_id)
+        .ok_or(ProductionMapError::ProgressBatchNotAccepted)?;
+    let node = projection.map().nodes.iter()
+        .find(|node| node.id.trim() == stage.node_id.trim())
+        .ok_or(ProductionMapError::ProgressBatchNotAccepted)?;
+    rezka_output_kadr_counts_for_node(
+        node,
+        input_contained_kadr_count,
+        stage.apparatus_id.is_some() && projection.next_stages(&stage.node_id).is_empty(),
+    )
+}
+
+fn rezka_output_kadr_counts_for_node(
+    node: &ProductionMapNode,
+    input_contained_kadr_count: Option<usize>,
+    is_final: bool,
+) -> Result<Vec<usize>, ProductionMapError> {
     let total_kadr_count = node
         .rezka_kadr_count
         .filter(|value| *value > 0)
         .ok_or(ProductionMapError::RezkaKadrCountRequired)? as usize;
-    if chain::is_final_work_stage_node(order_map, &stage.node_id) {
+    if is_final {
         let count = input_contained_kadr_count.unwrap_or(total_kadr_count);
         if count == 0 {
             return Err(ProductionMapError::RezkaKadrCountRequired);
@@ -449,6 +483,36 @@ mod rezka_output_kadr_count_tests {
             ),
             Ok(vec![1, 1, 1])
         );
+    }
+
+    #[test]
+    fn projected_rezka_groups_match_reference_for_repeated_stages_and_invalid_data() {
+        for variant in 0..4 {
+            let mut map = repeated_rezka_map();
+            match variant {
+                1 => map.nodes[1].rezka_frame_groups = vec![0],
+                2 => map.nodes[1].rezka_kadr_count = None,
+                3 => map.nodes[1].rezka_frame_groups.clear(),
+                _ => {}
+            }
+            let projection = chain::ProjectionMap::new(&map);
+            for stage in ["rezka_before_lamination", "rezka_final", "", "missing"] {
+                for count in [None, Some(0), Some(1), Some(5)] {
+                    let reference = rezka_output_kadr_counts(
+                        &map, "apparatus:default:asset-010", stage, count,
+                    );
+                    for _ in 0..2 {
+                        assert_eq!(
+                            rezka_output_kadr_counts_projected(
+                                &projection, "apparatus:default:asset-010", stage, count,
+                            ),
+                            reference,
+                            "variant={variant} stage={stage} count={count:?}",
+                        );
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -782,6 +846,7 @@ pub(super) fn preserve_qolip_lineage(
         replacement["qolip_lock_owner"] = owner.clone();
     }
     for field in [
+        "qolip_confirmation",
         "_reactivation_of_session_id",
         "_reactivation_reserved_outputs",
         "reactivation_token",
@@ -794,6 +859,8 @@ pub(super) fn preserve_qolip_lineage(
         "rezka_recorded_kadr_counts",
         "wip_started_at_unix",
         "wip_waiting_for_resume",
+        super::temporary_pause::REVISION,
+        "_temporary_pause_last_interval",
     ] {
         if let Some(value) = current.payload_json.get(field) {
             replacement[field] = value.clone();
