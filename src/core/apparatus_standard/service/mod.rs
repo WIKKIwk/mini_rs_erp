@@ -7,6 +7,8 @@ mod memory_repository;
 mod repository;
 #[cfg(test)]
 mod tests;
+#[cfg(any(test, feature = "bbtree-bench"))]
+mod cache_research;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -14,6 +16,19 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use tokio::sync::RwLock;
+
+// Keep the existing lock/generation protocol: the experiment only changes the
+// private ordered container. ApparatusId uses its ordinary Ord implementation.
+#[cfg(feature = "bbtree-apparatus")]
+use bbtree::unsync::BBTreeMap as ReadCacheMap;
+#[cfg(not(feature = "bbtree-apparatus"))]
+use std::collections::BTreeMap as ReadCacheMap;
+
+#[cfg(feature = "bbtree-bench")]
+pub(crate) fn bbtree_research_workloads(
+) -> Vec<Box<dyn crate::core::production_map::bbtree_research::Workload>> {
+    cache_research::workloads()
+}
 
 pub use commands::{CanonicalApparatusPatch, CanonicalCommandMetadata};
 pub use error::CanonicalApparatusError;
@@ -38,8 +53,8 @@ use super::{
 pub struct CanonicalApparatusService {
     repository: Arc<dyn CanonicalApparatusRepository>,
     cache_generation: Arc<AtomicU64>,
-    runtime_cache: Arc<RwLock<BTreeMap<ApparatusId, Arc<RuntimeApparatusProjection>>>>,
-    configuration_cache: Arc<RwLock<BTreeMap<ApparatusId, Arc<RuntimeApparatusConfiguration>>>>,
+    runtime_cache: Arc<RwLock<ReadCacheMap<ApparatusId, Arc<RuntimeApparatusProjection>>>>,
+    configuration_cache: Arc<RwLock<ReadCacheMap<ApparatusId, Arc<RuntimeApparatusConfiguration>>>>,
 }
 
 impl CanonicalApparatusService {
@@ -47,8 +62,8 @@ impl CanonicalApparatusService {
         Self {
             repository,
             cache_generation: Arc::new(AtomicU64::new(0)),
-            runtime_cache: Arc::new(RwLock::new(BTreeMap::new())),
-            configuration_cache: Arc::new(RwLock::new(BTreeMap::new())),
+            runtime_cache: Arc::new(RwLock::new(ReadCacheMap::new())),
+            configuration_cache: Arc::new(RwLock::new(ReadCacheMap::new())),
         }
     }
 

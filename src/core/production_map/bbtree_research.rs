@@ -13,6 +13,7 @@ pub fn workloads() -> Vec<Box<dyn Workload>> {
     let mut cases = super::service_wip::bbtree_research_workloads();
     cases.extend(super::service_audit::bbtree_research_workloads());
     cases.extend(super::service_maps::bbtree_research_workloads());
+    cases.extend(crate::core::apparatus_standard::bbtree_research_workloads());
     cases
 }
 
@@ -25,6 +26,8 @@ pub fn variant() -> &'static str {
         "bbtree-audit"
     } else if cfg!(feature = "bbtree-snapshot") {
         "bbtree-snapshot"
+    } else if cfg!(feature = "bbtree-apparatus") {
+        "bbtree-apparatus"
     } else {
         "std"
     }

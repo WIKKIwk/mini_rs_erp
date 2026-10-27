@@ -21,3 +21,6 @@ pub use service::{
     CanonicalApparatusError, CanonicalApparatusPatch, CanonicalApparatusService,
     CanonicalCommandMetadata, CommittedCanonicalApparatus, StoredCanonicalAasx,
 };
+
+#[cfg(feature = "bbtree-bench")]
+pub(crate) use service::bbtree_research_workloads;

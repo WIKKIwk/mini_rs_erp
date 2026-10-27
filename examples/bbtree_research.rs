@@ -1,5 +1,6 @@
 //! No-DB collection experiment. Run through tools/benchmarks/bbtree_research.py.
-//! This executable never loads .env or constructs application services.
+//! This executable never loads .env, connects to a database or starts AppState/
+//! HTTP. The apparatus domain service uses a synthetic read-only repository.
 use mini_rs_erp::core::production_map::bbtree_research::{variant, workloads};
 use serde_json::json;
 use std::time::{Duration, Instant};
