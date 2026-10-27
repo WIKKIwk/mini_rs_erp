@@ -9,9 +9,11 @@ pub trait Workload {
     fn run(&mut self);
     fn fingerprint(&self) -> String;
 }
-
 pub fn workloads() -> Vec<Box<dyn Workload>> {
-    Vec::new()
+    let mut cases = super::service_wip::bbtree_research_workloads();
+    cases.extend(super::service_audit::bbtree_research_workloads());
+    cases.extend(super::service_maps::bbtree_research_workloads());
+    cases
 }
 
 pub fn variant() -> &'static str {
@@ -26,9 +28,4 @@ pub fn variant() -> &'static str {
     } else {
         "std"
     }
-}
-
-pub(crate) fn fingerprint(value: &impl serde::Serialize) -> String {
-    use sha2::{Digest, Sha256};
-    format!("{:x}", Sha256::digest(serde_json::to_vec(value).unwrap()))
 }

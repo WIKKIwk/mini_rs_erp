@@ -75,11 +75,13 @@ impl Sample {
     pub(super) fn finish(self, iterations: usize) -> serde_json::Value {
         let calls = CALLS.load(Ordering::Relaxed) - self.calls;
         let bytes = BYTES.load(Ordering::Relaxed) - self.bytes;
+        let peak_growth = PEAK.load(Ordering::Relaxed).saturating_sub(self.live);
+        let retained_growth = LIVE.load(Ordering::Relaxed).saturating_sub(self.live);
         serde_json::json!({
             "calls_per_iteration":calls as f64 / iterations as f64,
             "requested_bytes_per_iteration":bytes as f64 / iterations as f64,
-            "peak_live_growth_bytes":PEAK.load(Ordering::Relaxed).saturating_sub(self.live),
-            "retained_live_growth_bytes":LIVE.load(Ordering::Relaxed).saturating_sub(self.live),
+            "peak_live_growth_bytes":peak_growth,
+            "retained_live_growth_bytes":retained_growth,
         })
     }
 }
