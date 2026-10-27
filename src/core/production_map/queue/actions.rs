@@ -17,9 +17,9 @@ pub fn apply_queue_action(
     if !sequence.iter().any(|id| id.trim() == order_id) {
         return Err(ProductionMapError::QueueActionNotAllowed);
     }
-    // Sequence priority selects fresh work. Paused work is resumable when the
-    // apparatus is idle, and an already running order owns its stop actions.
-    if action == ApparatusQueueAction::Start
+    // Starting and continuing work consume the same current queue slot.
+    // Stop/report actions still belong to the already running order.
+    if matches!(action, ApparatusQueueAction::Start | ApparatusQueueAction::Resume)
         && first_actionable_order_id(sequence, states) != Some(order_id)
     {
         return Err(ProductionMapError::QueueActionNotAllowed);

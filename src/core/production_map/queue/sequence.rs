@@ -51,7 +51,7 @@ pub fn first_actionable_order_id<'a>(
     sequence: &'a [String],
     states: &BTreeMap<String, ApparatusQueueOrderState>,
 ) -> Option<&'a str> {
-    let mut first_pending = None;
+    let mut first_waiting = None;
     for id in sequence {
         let id = id.trim();
         if id.is_empty() {
@@ -65,13 +65,12 @@ pub fn first_actionable_order_id<'a>(
             ApparatusQueueOrderState::InProgress | ApparatusQueueOrderState::PrintPreflight => {
                 return Some(id);
             }
-            ApparatusQueueOrderState::Pending => {
-                first_pending.get_or_insert(id);
+            ApparatusQueueOrderState::Pending | ApparatusQueueOrderState::Paused => {
+                first_waiting.get_or_insert(id);
             }
-            ApparatusQueueOrderState::Paused
-            | ApparatusQueueOrderState::Frozen
+            ApparatusQueueOrderState::Frozen
             | ApparatusQueueOrderState::Completed => {}
         }
     }
-    first_pending
+    first_waiting
 }

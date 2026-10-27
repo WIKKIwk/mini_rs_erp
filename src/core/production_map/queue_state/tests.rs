@@ -91,24 +91,33 @@ fn print_preflight_is_a_persisted_active_state_without_starting_work() {
 }
 
 #[test]
-fn paused_work_does_not_own_the_apparatus_queue() {
+fn paused_work_keeps_sequence_priority_without_occupying_the_apparatus() {
     let sequence = vec!["a".to_string(), "b".to_string()];
     let mut states = BTreeMap::from([("a".to_string(), ApparatusQueueOrderState::Paused)]);
     assert!(!ApparatusQueueOrderState::Paused.is_active());
-    assert_eq!(first_actionable_order_id(&sequence, &states), Some("b"));
+    assert_eq!(first_actionable_order_id(&sequence, &states), Some("a"));
     states.insert("b".to_string(), ApparatusQueueOrderState::InProgress);
     assert_eq!(first_actionable_order_id(&sequence, &states), Some("b"));
 }
 
 #[test]
-fn strict_queue_can_switch_between_paused_orders_without_parallel_execution() {
+fn strict_queue_start_and_resume_follow_the_current_sequence() {
     use ApparatusQueueAction::*;
     use ApparatusQueueOrderState as S;
-    let sequence = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+    let mut sequence = vec!["a".to_string(), "b".to_string(), "c".to_string()];
     let mut states = BTreeMap::new();
-    for (order, action) in [("a", Start), ("a", Pause), ("b", Start)] {
+    for (order, action) in [("a", Start), ("a", Pause)] {
         apply_queue_action(&sequence, &mut states, order, action).unwrap();
     }
+    let paused = states.clone();
+    assert_eq!(
+        apply_queue_action(&sequence, &mut states, "b", Start),
+        Err(ProductionMapError::QueueActionNotAllowed)
+    );
+    assert_eq!(states, paused);
+
+    sequence = vec!["b".to_string(), "a".to_string(), "c".to_string()];
+    apply_queue_action(&sequence, &mut states, "b", Start).unwrap();
     let before = states.clone();
     for (order, action) in [("a", Resume), ("c", Start)] {
         assert_eq!(
@@ -118,7 +127,12 @@ fn strict_queue_can_switch_between_paused_orders_without_parallel_execution() {
         assert_eq!(states, before);
     }
     apply_queue_action(&sequence, &mut states, "b", DetachRoll).unwrap();
-    // Either paused order can be resumed; its position is not an execution lock.
+    let paused = states.clone();
+    assert_eq!(
+        apply_queue_action(&sequence, &mut states, "a", Resume),
+        Err(ProductionMapError::QueueActionNotAllowed)
+    );
+    assert_eq!(states, paused);
     apply_queue_action(&sequence, &mut states, "b", Resume).unwrap();
     apply_queue_action(&sequence, &mut states, "b", Complete).unwrap();
     apply_queue_action(&sequence, &mut states, "a", Resume).unwrap();

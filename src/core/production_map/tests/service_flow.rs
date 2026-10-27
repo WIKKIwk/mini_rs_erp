@@ -2883,23 +2883,23 @@ async fn bosma_adjacent_fixture() -> (ProductionMapService, Arc<MemoryProduction
 }
 
 #[tokio::test]
-async fn bosma_adjacent_sequence_keeps_barrier_and_allows_only_next_order() {
+async fn bosma_strict_sequence_uses_current_priority_for_start_and_resume() {
     use queue_state::ApparatusQueueAction as A;
     let (service, _, actor, first_batch) = bosma_adjacent_fixture().await;
     let assigned = [FLOW_PECHAT_ID.to_string()];
     let controls = service.queue_action_controls().await.unwrap();
-    assert!(controls[FLOW_PECHAT_ID]["zakaz-bosma-next"].allowed_actions.contains(&A::Start));
+    assert!(controls[FLOW_PECHAT_ID]["zakaz-bosma-close"].allowed_actions.contains(&A::Resume));
+    assert!(!controls[FLOW_PECHAT_ID]["zakaz-bosma-next"].allowed_actions.contains(&A::Start));
     assert!(!controls[FLOW_PECHAT_ID]["zakaz-bosma-third"].allowed_actions.contains(&A::Start));
-    for sequence in [
-        vec!["zakaz-bosma-next", "zakaz-bosma-close", "zakaz-bosma-third"],
-        vec!["zakaz-bosma-third", "zakaz-bosma-close", "zakaz-bosma-next"],
-        vec!["zakaz-bosma-next", "zakaz-bosma-third"],
-    ] {
-        assert!(service.set_apparatus_sequence(FLOW_PECHAT_ID,
-            sequence.into_iter().map(String::from).collect()).await.is_err());
-    }
+    assert!(service.apply_apparatus_queue_action_with_progress(FLOW_PECHAT_ID, "zakaz-bosma-next",
+        A::Start, &assigned, actor.clone(), QueueProgressInput::default()).await.is_err());
     assert!(service.apply_apparatus_queue_action_with_progress(FLOW_PECHAT_ID, "zakaz-bosma-third",
         A::Start, &assigned, actor.clone(), QueueProgressInput::default()).await.is_err());
+    service.set_apparatus_sequence(FLOW_PECHAT_ID,
+        ["zakaz-bosma-next", "zakaz-bosma-third", "zakaz-bosma-close"].map(String::from).to_vec()).await.unwrap();
+    let controls = service.queue_action_controls().await.unwrap();
+    assert!(controls[FLOW_PECHAT_ID]["zakaz-bosma-next"].allowed_actions.contains(&A::Start));
+    assert!(!controls[FLOW_PECHAT_ID]["zakaz-bosma-close"].allowed_actions.contains(&A::Resume));
     service.apply_apparatus_queue_action_with_progress(FLOW_PECHAT_ID, "zakaz-bosma-next",
         A::Start, &assigned, actor.clone(), QueueProgressInput::default()).await.unwrap();
     assert!(service.apply_apparatus_queue_action_with_progress(FLOW_PECHAT_ID, "zakaz-bosma-close",
@@ -2907,13 +2907,13 @@ async fn bosma_adjacent_sequence_keeps_barrier_and_allows_only_next_order() {
     let next_batch = service.apply_apparatus_queue_action_with_progress(FLOW_PECHAT_ID, "zakaz-bosma-next",
         A::DetachRoll, &assigned, actor.clone(),
         QueueProgressInput { produced_qty: Some(20.0), uom: "m".into(), ..Default::default() }).await.unwrap().progress_batch.unwrap();
-    // Two detached orders must not turn the exception into unrestricted skipping.
+    // The newly detached head keeps its priority until completed or moved.
     assert!(!service.queue_action_controls().await.unwrap()[FLOW_PECHAT_ID]["zakaz-bosma-third"].allowed_actions.contains(&A::Start));
     assert!(service.apply_apparatus_queue_action_with_progress(FLOW_PECHAT_ID, "zakaz-bosma-third",
         A::Start, &assigned, actor.clone(), QueueProgressInput::default()).await.is_err());
     service.apply_apparatus_queue_action_with_progress(FLOW_PECHAT_ID, "zakaz-bosma-next",
         A::Complete, &assigned, actor.clone(), bosma_closing_input(&next_batch)).await.unwrap();
-    // Completed B leaves the worker list, so C is now A's visible neighbour.
+    // Completing the current head makes the next unfinished order eligible.
     assert!(service.queue_action_controls().await.unwrap()[FLOW_PECHAT_ID]["zakaz-bosma-third"].allowed_actions.contains(&A::Start));
     service.apply_apparatus_queue_action_with_progress(FLOW_PECHAT_ID, "zakaz-bosma-third",
         A::Start, &assigned, actor.clone(), QueueProgressInput::default()).await.unwrap();
@@ -2923,7 +2923,7 @@ async fn bosma_adjacent_sequence_keeps_barrier_and_allows_only_next_order() {
 }
 
 #[tokio::test]
-async fn bosma_adjacent_sequence_skips_hidden_completed_orders() {
+async fn bosma_strict_sequence_skips_hidden_completed_orders() {
     use queue_state::ApparatusQueueAction as A;
     let (service, store, actor, _) = bosma_adjacent_fixture().await;
     let assigned = [FLOW_PECHAT_ID.to_string()];
@@ -2941,13 +2941,17 @@ async fn bosma_adjacent_sequence_skips_hidden_completed_orders() {
     store.put_apparatus_queue_states(FLOW_PECHAT_ID, states).await.unwrap();
 
     let controls = service.queue_action_controls().await.unwrap();
-    assert!(controls[FLOW_PECHAT_ID]["zakaz-bosma-next"].allowed_actions.contains(&A::Start));
+    assert!(controls[FLOW_PECHAT_ID]["zakaz-bosma-close"].allowed_actions.contains(&A::Resume));
+    assert!(!controls[FLOW_PECHAT_ID]["zakaz-bosma-next"].allowed_actions.contains(&A::Start));
     assert!(!controls[FLOW_PECHAT_ID]["zakaz-bosma-third"].allowed_actions.contains(&A::Start));
     assert!(service.apply_apparatus_queue_action_with_progress(FLOW_PECHAT_ID, "zakaz-bosma-third",
         A::Start, &assigned, actor.clone(), QueueProgressInput::default()).await.is_err());
-    assert!(service.set_apparatus_sequence(FLOW_PECHAT_ID, [
+    service.set_apparatus_sequence(FLOW_PECHAT_ID, [
         "zakaz-0007", "zakaz-bosma-next", "zakaz-bosma-close", "zakaz-0001", "zakaz-bosma-third",
-    ].map(String::from).to_vec()).await.is_err());
+    ].map(String::from).to_vec()).await.unwrap();
+    let controls = service.queue_action_controls().await.unwrap();
+    assert!(controls[FLOW_PECHAT_ID]["zakaz-bosma-next"].allowed_actions.contains(&A::Start));
+    assert!(!controls[FLOW_PECHAT_ID]["zakaz-bosma-close"].allowed_actions.contains(&A::Resume));
 
     let started = service.apply_apparatus_queue_action_with_progress(FLOW_PECHAT_ID, "zakaz-bosma-next",
         A::Start, &assigned, actor, QueueProgressInput::default()).await.unwrap();
@@ -2958,7 +2962,7 @@ async fn bosma_adjacent_sequence_skips_hidden_completed_orders() {
 }
 
 #[tokio::test]
-async fn bosma_adjacent_sequence_rejects_ready_wip_bypass() {
+async fn bosma_strict_sequence_rejects_ready_wip_bypass() {
     use queue_state::ApparatusQueueAction as A;
     let (_, store, actor, _) = bosma_adjacent_fixture().await;
     let (service, _) = service_with_apparatus_store(store, &[
@@ -2981,25 +2985,33 @@ async fn bosma_adjacent_sequence_rejects_ready_wip_bypass() {
 }
 
 #[tokio::test]
-async fn bosma_adjacent_sequence_rejects_stale_start() {
+async fn bosma_strict_sequence_rejects_stale_start_and_resume() {
     use queue_state::ApparatusQueueAction as A;
     let (service, _, actor, _) = bosma_adjacent_fixture().await;
     let assigned = [FLOW_PECHAT_ID.to_string()];
+    let prepared_resume = service.prepare_apparatus_queue_action_with_progress(FLOW_PECHAT_ID, "zakaz-bosma-close",
+        A::Resume, &assigned, actor.clone(), QueueProgressInput::default()).await.unwrap();
+    service.set_apparatus_sequence(FLOW_PECHAT_ID,
+        ["zakaz-bosma-next", "zakaz-bosma-close", "zakaz-bosma-third"].map(String::from).to_vec()).await.unwrap();
+    assert!(service.commit_prepared_queue_action(prepared_resume).await.is_err());
+    assert_eq!(service.apparatus_queue_states().await.unwrap()[FLOW_PECHAT_ID]["zakaz-bosma-close"], "paused");
     let prepared = service.prepare_apparatus_queue_action_with_progress(FLOW_PECHAT_ID, "zakaz-bosma-next",
         A::Start, &assigned, actor.clone(), QueueProgressInput::default()).await.unwrap();
-    // Admin may reorder the waiting tail, but cannot move anything above A.
+    // Moving a different pending order to the head invalidates preparation.
     service.set_apparatus_sequence(FLOW_PECHAT_ID,
-        ["zakaz-bosma-close", "zakaz-bosma-third", "zakaz-bosma-next"].map(String::from).to_vec()).await.unwrap();
+        ["zakaz-bosma-third", "zakaz-bosma-close", "zakaz-bosma-next"].map(String::from).to_vec()).await.unwrap();
     assert!(service.commit_prepared_queue_action(prepared).await.is_err());
     let prepared = service.prepare_apparatus_queue_action_with_progress(FLOW_PECHAT_ID, "zakaz-bosma-third",
         A::Start, &assigned, actor.clone(), QueueProgressInput::default()).await.unwrap();
+    service.set_apparatus_sequence(FLOW_PECHAT_ID,
+        ["zakaz-bosma-close", "zakaz-bosma-third", "zakaz-bosma-next"].map(String::from).to_vec()).await.unwrap();
     service.apply_apparatus_queue_action_with_progress(FLOW_PECHAT_ID, "zakaz-bosma-close",
         A::Resume, &assigned, actor, QueueProgressInput::default()).await.unwrap();
     assert!(service.commit_prepared_queue_action(prepared).await.is_err());
 }
 
 #[tokio::test]
-async fn bosma_adjacent_sequence_requires_detached_session() {
+async fn bosma_strict_sequence_prioritizes_paused_work() {
     use queue_state::ApparatusQueueAction as A;
     let (service, _, actor, _) = bosma_adjacent_fixture().await;
     let assigned = [FLOW_PECHAT_ID.to_string()];
@@ -3021,6 +3033,8 @@ async fn bosma_closing_does_not_duplicate_or_reclaim_output_or_stop_another_orde
     batch.used_by_session_id = "downstream-session".into();
     store.put_order_progress_batch(batch.clone()).await.unwrap();
     service.upsert_map(apparatus_stage_map("zakaz-bosma-other", FLOW_PECHAT_ID)).await.unwrap();
+    service.set_apparatus_sequence(FLOW_PECHAT_ID,
+        ["zakaz-bosma-other", "zakaz-bosma-close"].map(String::from).to_vec()).await.unwrap();
     service.apply_apparatus_queue_action_with_progress(FLOW_PECHAT_ID, "zakaz-bosma-other",
         queue_state::ApparatusQueueAction::Start, &[FLOW_PECHAT_ID.into()], actor.clone(), QueueProgressInput::default()).await.unwrap();
     let controls = service.queue_action_controls().await.unwrap();
@@ -4060,7 +4074,7 @@ async fn resume_without_resumable_wip_keeps_queue_paused() {
             session_id: "session-laminatsiya-ghost-resume".to_string(),
             apparatus: apparatus.to_string(),
             order_id: order_id.to_string(),
-            stage_node_id: "apparatus".to_string(),
+            stage_node_id: "second".to_string(),
             status: OrderRunStatus::Paused,
             worker_role: actor.role.clone(),
             worker_ref: actor.ref_.clone(),

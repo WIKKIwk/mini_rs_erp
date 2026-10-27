@@ -174,6 +174,18 @@ impl Fixture {
             .await
     }
 
+    async fn move_a_before(&self, before: Option<&str>, key: &str) {
+        self.service.move_apparatus_sequence(SequenceMove {
+            apparatus: MACHINE.into(),
+            order_id: self.a.clone(),
+            before_order_id: before.map(str::to_string),
+            after_order_id: None,
+            expected_version: self.service.live_snapshot_shared().await.unwrap()
+                .sequence_versions[MACHINE].clone(),
+            idempotency_key: key.into(),
+        }, actor()).await.unwrap();
+    }
+
     async fn run(
         &self,
         order: &str,
@@ -309,6 +321,13 @@ async fn temporary_pause_persists_one_receipt_and_resumes_the_same_unfinished_ro
     assert_eq!(event, (0.0, String::new()));
     let controls = f.service.queue_action_controls().await.unwrap();
     assert!(controls[MACHINE][&f.a].temporarily_paused);
+    assert!(controls[MACHINE][&f.a].allowed_actions.contains(&Action::Resume));
+    assert!(!controls[MACHINE][&f.b].allowed_actions.contains(&Action::Start));
+    f.move_a_before(Some(&f.c), "urgent-order-first").await;
+    let controls = f.service.queue_action_controls().await.unwrap();
+    assert!(!controls[MACHINE][&f.a].allowed_actions.contains(&Action::Resume));
+    assert_eq!(f.run(&f.a, Action::Resume, Default::default()).await,
+        Err(ProductionMapError::QueueActionNotAllowed));
     assert!(
         controls[MACHINE][&f.b]
             .allowed_actions
@@ -782,12 +801,6 @@ async fn temporary_pause_and_reorder_preserve_raw_stock_and_recheck_reservation_
     assert!(!saved.adjusted);
     assert_eq!(f.current().await, paused);
     assert_eq!(f.store.apparatus_queue_states().await.unwrap(), states);
-    let stale = SequenceMove {
-        before_order_id: Some(f.b.clone()),
-        expected_version: saved.version.clone(),
-        idempotency_key: "paused-stock-before-resume".into(),
-        ..down.clone()
-    };
     let stock_after: Value =
         sqlx::query_scalar("SELECT to_jsonb(s) FROM mini_raw_material_stock s WHERE id=$1")
             .bind(&stock_id)
@@ -798,6 +811,21 @@ async fn temporary_pause_and_reorder_preserve_raw_stock_and_recheck_reservation_
         stock_before, stock_after,
         "temporary removal and reorder do not consume, release or reassign raw material"
     );
+    let controls = f.service.queue_action_controls().await.unwrap();
+    assert!(controls[MACHINE][&f.b].allowed_actions.contains(&Action::Start));
+    assert!(!controls[MACHINE][&f.a].allowed_actions.contains(&Action::Resume));
+    assert_eq!(f.run(&f.a, Action::Resume, Default::default()).await,
+        Err(ProductionMapError::QueueActionNotAllowed));
+    assert_eq!(f.current().await, paused);
+    f.move_a_before(Some(&f.b), "paused-stock-back-to-head").await;
+    let resumed_sequence = f.store.apparatus_sequences().await.unwrap()[MACHINE].clone();
+    let stale = SequenceMove {
+        before_order_id: None,
+        expected_version: f.service.live_snapshot_shared().await.unwrap()
+            .sequence_versions[MACHINE].clone(),
+        idempotency_key: "paused-stock-before-resume".into(),
+        ..down.clone()
+    };
     f.run(&f.a, Action::Resume, Default::default())
         .await
         .unwrap();
@@ -811,7 +839,7 @@ async fn temporary_pause_and_reorder_preserve_raw_stock_and_recheck_reservation_
     let resumed = f.current().await;
     assert_eq!(f.service.move_apparatus_sequence(down, actor()).await.unwrap(), saved);
     assert_eq!(f.current().await, resumed);
-    assert_eq!(f.store.apparatus_sequences().await.unwrap()[MACHINE], saved.order_ids);
+    assert_eq!(f.store.apparatus_sequences().await.unwrap()[MACHINE], resumed_sequence);
     f.stop(&f.control().await).await.unwrap();
     sqlx::query("UPDATE mini_raw_material_stock SET status='consumed' WHERE id=$1")
         .bind(&stock_id)

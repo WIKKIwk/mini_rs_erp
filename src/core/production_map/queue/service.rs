@@ -886,26 +886,8 @@ impl ProductionMapService {
                 .iter()
                 .find_map(|(order_id, state)| state.is_active().then_some(order_id.as_str()));
             let is_bosma = pechat::is_pechat_apparatus(canonical);
-            let detached_order_ids = order_inputs
-                .iter()
-                .filter_map(|input| {
-                    input
-                        .active_session
-                        .filter(|session| session.status == OrderRunStatus::RollDetached)
-                        .map(|_| input.order_id.to_string())
-                })
-                .collect::<BTreeSet<_>>();
-            let temporary_order_ids = order_inputs.iter().filter_map(|input| {
-                input.active_session.filter(|session| super::super::temporary_pause::is_temporarily_paused(session))
-                    .map(|_| input.order_id.to_string())
-            }).collect::<BTreeSet<_>>();
-            let actionable_order_id = if policy == ApparatusQueuePolicy::StrictSequence && !temporary_order_ids.is_empty() {
-                super::super::temporary_pause::next_order_after_suspension(&sequence, &effective_states, &temporary_order_ids)
-            } else if is_bosma && policy == ApparatusQueuePolicy::StrictSequence {
-                bosma_startable_order_id(&sequence, &effective_states, &detached_order_ids)
-            } else {
-                queue_state::first_actionable_order_id(&sequence, &effective_states)
-            };
+            let actionable_order_id =
+                queue_state::first_actionable_order_id(&sequence, &effective_states);
             let mut apparatus_controls = BTreeMap::new();
 
             for input in &order_inputs {
@@ -1047,7 +1029,6 @@ impl ProductionMapService {
                     apparatus_preflight.is_some_and(|hold| hold.order_id.trim() != order_id.trim());
                 let queue_actionable = active_order_is_this
                     && (state.is_active()
-                        || state == queue_state::ApparatusQueueOrderState::Paused
                         || policy == ApparatusQueuePolicy::FreePick
                         || actionable_order_id == Some(order_id.trim()));
                 let mut complete_requires_full_report = false;
@@ -1273,6 +1254,8 @@ impl ProductionMapService {
                         }
                         if !active_order_is_this {
                             interaction.blocking_reason_code = "apparatus_busy".to_string();
+                        } else if !queue_actionable {
+                            interaction.blocking_reason_code = "waiting_sequence".to_string();
                         }
                     }
                     queue_state::ApparatusQueueOrderState::Frozen => {

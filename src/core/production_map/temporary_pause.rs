@@ -64,37 +64,6 @@ pub(crate) fn receipt_id(token: &str) -> String {
     format!("temporary-pause:{token}")
 }
 
-/// The temporary anchor opens one visible neighbour, never another paused job.
-pub(crate) fn next_order_after_suspension<'a>(
-    sequence: &'a [String],
-    states: &std::collections::BTreeMap<String, queue_state::ApparatusQueueOrderState>,
-    anchors: &std::collections::BTreeSet<String>,
-) -> Option<&'a str> {
-    use queue_state::ApparatusQueueOrderState as S;
-    // A passed colour trial still has PrintPreflight queue state. Its own
-    // official Start must remain reachable; the ordinary occupancy and hold
-    // checks reject a trial belonging to any other order.
-    if states.values().any(|state| *state == S::InProgress) {
-        return None;
-    }
-    let index = sequence.iter().position(|id| anchors.contains(id.trim()))?;
-    let next = sequence[index + 1..]
-        .iter()
-        .map(|id| id.trim())
-        .find(|id| {
-            !id.is_empty()
-                && !matches!(
-                    states.get(*id).copied().unwrap_or(S::Pending),
-                    S::Completed | S::Frozen
-                )
-        })?;
-    matches!(
-        states.get(next).copied().unwrap_or(S::Pending),
-        S::Pending | S::PrintPreflight
-    )
-    .then_some(next)
-}
-
 /// A stopped cycle keeps its inputs reserved; Resume must not claim a new roll.
 pub(crate) async fn held_inputs(
     service: &ProductionMapService,
