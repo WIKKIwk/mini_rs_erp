@@ -70,6 +70,20 @@ async fn qolip_set_names_persist_and_enforce_unique_names_and_access() {
     assert_eq!(saved["name"], "Hot lunch");
     assert_eq!(saved["fingerprint"], sets[0]["fingerprint"]);
     assert_eq!(saved["members"], sets[0]["members"]);
+    let response = router
+        .clone()
+        .oneshot(request_with_body(
+            "GET",
+            "/v1/mobile/qolip/shared-sets?identifier=hot%20%20LUNCH",
+            &clerk,
+            "",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let resolved = json_body(response).await;
+    assert_eq!(resolved["set"]["set_id"], saved["set_id"]);
+    assert_eq!(resolved["set"]["fingerprint"], saved["fingerprint"]);
 
     for (name, status, error) in [
         (

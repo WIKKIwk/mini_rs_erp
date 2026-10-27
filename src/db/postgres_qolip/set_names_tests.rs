@@ -78,6 +78,20 @@ async fn qolip_set_names_postgres_persist_and_serialize_case_insensitive_conflic
         .unwrap();
     assert_eq!(saved.name, "Hot lunch");
     assert_eq!(saved.snapshot.fingerprint, sets[0].snapshot.fingerprint);
+    let resolved = service
+        .resolve_shared_set("  hot   LUNCH ")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(resolved.set_id, sets[0].snapshot.set_id);
+    assert_eq!(resolved.fingerprint, sets[0].snapshot.fingerprint);
+    assert!(
+        service
+            .resolve_shared_set("Hot lun")
+            .await
+            .unwrap()
+            .is_none()
+    );
     assert!(matches!(
         service
             .rename_set(&request(1, "HOT LUNCH"), &principal, false)

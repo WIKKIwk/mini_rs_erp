@@ -62,6 +62,13 @@ fn memory_shared_snapshot(
         .filter(|(id, members)| matches(id, members, &[identifier.to_string()]))
         .collect::<Vec<_>>();
     if selected.is_empty() {
+        let name = identifier.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
+        selected = groups.iter().filter(|(id, members)| {
+            !members.is_empty() && registry.get(*id)
+                .is_some_and(|set| !set.name.is_empty() && set.name.to_lowercase() == name)
+        }).collect();
+    }
+    if selected.is_empty() {
         let candidates = super::candidate_codes(identifier);
         selected = groups
             .iter()
