@@ -11,29 +11,6 @@ use crate::core::apparatus_standard::ApparatusId;
 #[path = "alternatives.rs"]
 mod alternatives;
 
-// This index is local to one read projection. The feature changes neither the
-// serialized snapshot maps nor the revision/authorization boundaries around it.
-#[cfg(feature = "bbtree-snapshot")]
-use bbtree::unsync::BBTreeMap as PreviousProgramIndex;
-#[cfg(not(feature = "bbtree-snapshot"))]
-use std::collections::BTreeMap as PreviousProgramIndex;
-
-#[cfg(any(test, feature = "bbtree-bench"))]
-#[path = "snapshot_fixture.rs"]
-mod snapshot_fixture;
-#[cfg(test)]
-#[path = "snapshot_experiment_tests.rs"]
-mod snapshot_experiment_tests;
-#[cfg(feature = "bbtree-bench")]
-#[path = "snapshot_research.rs"]
-mod snapshot_research;
-
-#[cfg(feature = "bbtree-bench")]
-pub(super) fn bbtree_research_workloads(
-) -> Vec<Box<dyn crate::core::production_map::bbtree_research::Workload>> {
-    snapshot_research::workloads()
-}
-
 pub(super) fn compile_saved_maps(
     maps: impl IntoIterator<Item = ProductionMapDefinition>,
 ) -> Vec<ProductionMapSaved> {
@@ -68,7 +45,7 @@ pub(super) fn compile_saved_maps_reusing_programs(
         .unwrap_or_default()
         .iter()
         .map(|saved| (saved.map.id.as_str(), saved))
-        .collect::<PreviousProgramIndex<_, _>>();
+        .collect::<std::collections::BTreeMap<_, _>>();
     let mut result = Vec::new();
     for mut map in maps {
         if map.code.trim().is_empty() && !map.order_number.trim().is_empty() {

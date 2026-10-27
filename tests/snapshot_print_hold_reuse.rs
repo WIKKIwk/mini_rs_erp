@@ -460,29 +460,3 @@ async fn controls_keep_error_precedence_and_retry_after_presentation_failure() {
     svc.live_snapshot().await.unwrap();
     assert_eq!(store.hold_reads.load(Ordering::SeqCst), 6);
 }
-
-/// Compare the complete current fixture outputs between collection variants
-/// without replacing or weakening the historical golden baseline above.
-#[tokio::test]
-#[ignore = "research: print current snapshot fingerprints for std/bbtree comparison"]
-async fn bbtree_current_snapshot_fixture_fingerprints() {
-    let mut fingerprints = BTreeMap::new();
-    for (name, store) in cases() {
-        let svc = service(store);
-        let snapshot = svc.live_snapshot().await.unwrap();
-        let expected = digest(&snapshot);
-        let cached = svc.live_snapshot().await.unwrap();
-        assert_eq!(digest(&cached), expected, "cached snapshot: {name}");
-        svc.notify_live();
-        let rebuilt = svc.live_snapshot().await.unwrap();
-        assert_eq!(digest(&rebuilt), expected, "rebuilt snapshot: {name}");
-        assert!(
-            fingerprints.insert(name, expected).is_none(),
-            "duplicate snapshot fixture: {name}"
-        );
-    }
-    println!(
-        "BBTREE_SNAPSHOT_FINGERPRINTS={}",
-        serde_json::to_string(&fingerprints).unwrap()
-    );
-}

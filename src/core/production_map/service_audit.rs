@@ -1,12 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-// Only private, per-call indexes participate in this opt-in experiment.
-// Persisted state, public reports and queue-state maps retain their std types.
-#[cfg(feature = "bbtree-audit")]
-use bbtree::unsync::BBTreeMap as AuditMap;
-#[cfg(not(feature = "bbtree-audit"))]
-use std::collections::BTreeMap as AuditMap;
-
 use super::apparatus::visible_order_ids_for_apparatus;
 use super::chain;
 use super::queue_state;
@@ -25,14 +18,14 @@ impl ProductionMapService {
                 let id = map.id.trim();
                 (!id.is_empty()).then(|| (id.to_string(), map))
             })
-            .collect::<AuditMap<_, _>>();
+            .collect::<BTreeMap<_, _>>();
         let known_orders = maps_by_id.keys().cloned().collect::<BTreeSet<_>>();
         let queue_states = self.store.apparatus_queue_states().await?;
         let sequences = self.store.apparatus_sequences().await?;
         let mut violations = Vec::new();
-        let mut qr_owners = AuditMap::<String, (String, Vec<(String, String)>)>::new();
-        let mut active_sessions = AuditMap::<(String, String), Vec<String>>::new();
-        let mut active_queue_orders = AuditMap::<String, Vec<String>>::new();
+        let mut qr_owners = BTreeMap::<String, (String, Vec<(String, String)>)>::new();
+        let mut active_sessions = BTreeMap::<(String, String), Vec<String>>::new();
+        let mut active_queue_orders = BTreeMap::<String, Vec<String>>::new();
 
         audit_queue_states(
             &known_orders,
@@ -61,7 +54,7 @@ impl ProductionMapService {
                 let id = session.session_id.trim();
                 (!id.is_empty()).then(|| (id.to_string(), session))
             })
-            .collect::<AuditMap<_, _>>();
+            .collect::<BTreeMap<_, _>>();
         let mut checked_session_count = 0;
         for session in &sessions {
             checked_session_count += 1;
@@ -76,7 +69,7 @@ impl ProductionMapService {
         }
 
         let stored_batches = self.store.progress_batches_for_audit().await?;
-        let mut batches_by_id = AuditMap::<String, OrderProgressBatch>::new();
+        let mut batches_by_id = BTreeMap::<String, OrderProgressBatch>::new();
         for batch in stored_batches {
             let batch_id = batch.batch_id.trim().to_string();
             if batch_id.is_empty() {
@@ -191,7 +184,7 @@ fn audit_queue_states(
     known_orders: &BTreeSet<String>,
     maps: &[ProductionMapDefinition],
     queue_states: &BTreeMap<String, BTreeMap<String, String>>,
-    active_orders: &mut AuditMap<String, Vec<String>>,
+    active_orders: &mut BTreeMap<String, Vec<String>>,
     violations: &mut Vec<ProductionWorkflowAuditViolation>,
 ) {
     for (apparatus, states) in queue_states {
@@ -304,10 +297,10 @@ fn audit_sequences(
 
 fn audit_session(
     known_orders: &BTreeSet<String>,
-    maps_by_id: &AuditMap<String, &ProductionMapDefinition>,
+    maps_by_id: &BTreeMap<String, &ProductionMapDefinition>,
     queue_states: &BTreeMap<String, BTreeMap<String, String>>,
     session: &OrderRunSession,
-    active_sessions: &mut AuditMap<(String, String), Vec<String>>,
+    active_sessions: &mut BTreeMap<(String, String), Vec<String>>,
     violations: &mut Vec<ProductionWorkflowAuditViolation>,
 ) {
     let order_id = session.order_id.trim();
@@ -416,9 +409,9 @@ fn audit_session(
 
 fn audit_progress_batch(
     known_orders: &BTreeSet<String>,
-    maps_by_id: &AuditMap<String, &ProductionMapDefinition>,
-    sessions_by_id: &AuditMap<String, &OrderRunSession>,
-    batches_by_id: &AuditMap<String, OrderProgressBatch>,
+    maps_by_id: &BTreeMap<String, &ProductionMapDefinition>,
+    sessions_by_id: &BTreeMap<String, &OrderRunSession>,
+    batches_by_id: &BTreeMap<String, OrderProgressBatch>,
     batch: &OrderProgressBatch,
     violations: &mut Vec<ProductionWorkflowAuditViolation>,
 ) {
@@ -641,7 +634,7 @@ fn audit_progress_batch(
 
 fn audit_paused_session_progress(
     sessions: &[OrderRunSession],
-    batches_by_id: &AuditMap<String, OrderProgressBatch>,
+    batches_by_id: &BTreeMap<String, OrderProgressBatch>,
     violations: &mut Vec<ProductionWorkflowAuditViolation>,
 ) {
     for session in sessions {
@@ -700,7 +693,7 @@ fn audit_paused_session_progress(
 
 fn audit_transfers(
     known_orders: &BTreeSet<String>,
-    maps_by_id: &AuditMap<String, &ProductionMapDefinition>,
+    maps_by_id: &BTreeMap<String, &ProductionMapDefinition>,
     queue_states: &BTreeMap<String, BTreeMap<String, String>>,
     transfers: &[ProductionMapApparatusTransferRecord],
     violations: &mut Vec<ProductionWorkflowAuditViolation>,
@@ -922,14 +915,4 @@ fn queue_state_for_apparatus_order(
         .find(|(stored_apparatus, _)| queue_state::apparatus_ids_match(stored_apparatus, apparatus))
         .and_then(|(_, states)| states.get(order_id.trim()))
         .and_then(|state| ApparatusQueueOrderState::parse(state))
-}
-
-
-#[cfg(any(test, feature = "bbtree-bench"))]
-#[path = "service_audit_research.rs"]
-mod research;
-
-#[cfg(feature = "bbtree-bench")]
-pub(super) fn bbtree_research_workloads() -> Vec<Box<dyn super::bbtree_research::Workload>> {
-    research::workloads()
 }

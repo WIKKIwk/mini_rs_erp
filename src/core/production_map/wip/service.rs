@@ -9,12 +9,6 @@ use super::service_queue_support::*;
 #[path = "qr_lineage.rs"]
 mod qr_lineage;
 
-#[cfg(feature = "bbtree-bench")]
-pub(super) fn bbtree_research_workloads()
--> Vec<Box<dyn super::bbtree_research::Workload>> {
-    qr_lineage::research_workloads()
-}
-
 impl ProductionMapService {
     pub async fn progress_qr_report(
         &self,

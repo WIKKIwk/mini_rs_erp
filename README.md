@@ -153,7 +153,6 @@ PostgreSQL behavior also have focused Rust test suites.
 
 ## Documentation
 
-- [Opt-in bbtree evaluation and measured tradeoffs](docs/bbtree-evaluation-2026-10-25.md)
 - [Algorithmic System Doctor and resource protection](docs/system-doctor.md)
 - [WIP route continuity](docs/wip-route-continuity.md)
 - [Warehouse QR receiving](docs/warehouse-qr-preview.md)
