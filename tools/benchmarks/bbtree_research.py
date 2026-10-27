@@ -36,6 +36,16 @@ def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def host_details() -> dict:
+    details = {"platform": platform.platform(), "machine": platform.machine(),
+               "logical_cpus": os.cpu_count(), "rustc": command(["rustc", "--version"]),
+               "cargo": command(["cargo", "--version"])}
+    if platform.system() == "Darwin":
+        details["cpu_brand"] = command(["sysctl", "-n", "machdep.cpu.brand_string"])
+        details["physical_memory_bytes"] = int(command(["sysctl", "-n", "hw.memsize"]))
+    return details
+
+
 def source_sha256() -> str:
     paths = command(["git", "ls-files", "-z", "src", "crates", "third_party",
                      "examples", "Cargo.toml", "Cargo.lock"]).split("\0")
@@ -124,6 +134,7 @@ def main() -> None:
 
     rounds = []
     for round_index in range(args.rounds):
+        load_before = os.getloadavg()
         order = ["std", "bbtree-all"]
         if round_index % 2:
             order.reverse()
@@ -132,7 +143,8 @@ def main() -> None:
             print(f"Latency round {round_index + 1}/{args.rounds}: {label}", flush=True)
             results[label] = run(label, ["--target-ms", str(args.target_ms)])
             require_same(reference, results[label])
-        rounds.append({"order": order, "results": results})
+        rounds.append({"order": order, "results": results,
+                       "loadavg_before": load_before, "loadavg_after": os.getloadavg()})
 
     print("Measuring allocations separately (instrumented timings are excluded)", flush=True)
     allocations = {label: run(label, ["--iterations", "3"])
@@ -165,9 +177,7 @@ def main() -> None:
         "schema": 1,
         "source_commit": command(["git", "rev-parse", "HEAD"]),
         "source_dirty": bool(command(["git", "status", "--porcelain"])),
-        "host": {"platform": platform.platform(), "machine": platform.machine(),
-                 "logical_cpus": os.cpu_count(), "rustc": command(["rustc", "--version"]),
-                 "cargo": command(["cargo", "--version"])},
+        "host": host_details(),
         "method": {"rounds": args.rounds, "target_ms_per_case": args.target_ms,
                    "build_profile": "release", "warmup_iterations": 1,
                    "ordering": "alternating whole-process baseline/candidate",
