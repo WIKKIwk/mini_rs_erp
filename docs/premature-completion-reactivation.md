@@ -13,19 +13,32 @@ strict action parser.
   The token is also the idempotency key; an authenticated matching receipt
   acknowledges a retry without modifying any subsequent work.
 
-Both endpoints require apparatus queue capability, worker role, apparatus
-assignment and the original worker's stable identity. Preview is advisory:
+Both endpoints require apparatus queue capability, worker role and apparatus
+assignment. Another assigned worker may reopen the completed work; the original
+worker's identity and completion report remain immutable. Worker completion
+history is scoped to assigned apparatuses, including work from previous shifts.
+Preview is advisory:
 execution revalidates the whole proposal under order/apparatus, package, batch,
 material, catalog and tooling locks. The token includes the exact graph,
 configuration, source session, affected batches, resources and queue state.
 
-A new linked continuation session becomes active. The old completed session,
+A new linked continuation session is created **paused**, never running. Resume
+is a separate action. Before Resume, the reopening worker can use Close again
+without recording new production. The old completed session,
 its report and actual output measurements remain immutable. Existing quantities
 are never produced or counted again by reactivation; subsequent reports contain
 **additional production only**. Current source input is restored only when its
-processed owner is the exact completed source session. The selected completion
-outputs and affected cutting siblings are reserved to the continuation and are
-unavailable downstream. Every session writer releases these reservations when
+processed owner is the exact completed source session. Lamination's previous
+outputs remain with their downstream consumers and do not block reopening.
+The selected output identifies its completed execution; it is never reclaimed.
+If the input was physically returned, reported exhausted, or lacks positive
+remainder evidence, the continuation
+requires a valid remainder or new input QR through normal Resume intake. A
+pre-completion snapshot must not restore a returned parent roll. Released or
+exhausted lamination materials require normal material intake as well.
+Cutting's selected completion outputs and affected siblings are still reserved
+to the continuation and unavailable downstream. Every session writer releases
+these cutting reservations when
 work stops, its source changes, a shift closes, or a new output cycle starts.
 
 Raw material consumption is compensated with the existing immutable
@@ -77,3 +90,6 @@ services racing the same receipt, immutable output quantities, downstream use,
 stale revisions, final closure, worker/assignment ownership, reservation release
 on freeze and cutting boundaries, incremental completion and another reopening,
 opening intake validity, and compensating material consumption accounting.
+Lamination regressions also cover already-used downstream outputs, shared
+apparatus history, another assigned worker's continuation, returned or exhausted
+inputs, missing remainder evidence, and immutable residual material accounting.

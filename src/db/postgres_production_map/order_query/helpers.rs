@@ -23,6 +23,30 @@ pub(super) async fn load_completed_queue_orders_for_actor(
     if actor_ref.is_empty() || limit == 0 {
         return Ok(Vec::new());
     }
+    load_completed_queue_orders(pool, Some(actor_ref), None, limit).await
+}
+
+pub(super) async fn load_completed_queue_orders_for_apparatuses(
+    pool: &PgPool,
+    apparatuses: &[String],
+    limit: usize,
+) -> Result<Vec<CompletedQueueOrder>, ProductionMapError> {
+    let scope = apparatuses.iter().map(|id| ApparatusId::new(id.trim().to_string())
+        .map(|id| id.to_string()).map_err(|_| ProductionMapError::StoreFailed))
+        .collect::<Result<std::collections::BTreeSet<_>, _>>()?
+        .into_iter().collect::<Vec<_>>();
+    if scope.is_empty() || limit == 0 {
+        return Ok(Vec::new());
+    }
+    load_completed_queue_orders(pool, None, Some(&scope), limit).await
+}
+
+async fn load_completed_queue_orders(
+    pool: &PgPool,
+    actor_ref: Option<&str>,
+    apparatuses: Option<&[String]>,
+    limit: usize,
+) -> Result<Vec<CompletedQueueOrder>, ProductionMapError> {
     // The explicit "all" worker window uses MAX; SQL LIMIT NULL is unbounded.
     // Keep the existing cap for ordinary bounded history callers.
     let limit = (limit != usize::MAX).then(|| i64::try_from(limit.min(500)).unwrap_or(500));
@@ -40,7 +64,9 @@ pub(super) async fn load_completed_queue_orders_for_actor(
                     ELSE 'in_progress'
                 END AS history_status
             FROM mini_queue_action_events
-            WHERE actor_ref = $1
+            WHERE ($1::text IS NOT NULL OR $2::text[] IS NOT NULL)
+              AND ($1::text IS NULL OR actor_ref = $1)
+              AND ($2::text[] IS NULL OR canonical_apparatus_id = ANY($2))
               AND (
                   action IN ('pause', 'freeze', 'detach_roll', 'roll_complete', 'complete')
                   OR (action = 'resume' AND payload_json->>'event' = 'reactivation')
@@ -53,9 +79,10 @@ pub(super) async fn load_completed_queue_orders_for_actor(
          FROM latest_actor_history
          WHERE history_status <> 'frozen'
          ORDER BY created_at DESC, id DESC
-         LIMIT $2",
+         LIMIT $3",
     )
     .bind(actor_ref)
+    .bind(apparatuses)
     .bind(limit)
     .fetch_all(pool)
     .await

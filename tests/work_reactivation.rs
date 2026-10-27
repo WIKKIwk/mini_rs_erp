@@ -12,6 +12,8 @@ const LAM: &str = "apparatus:default:asset-007";
 const CUT: &str = "apparatus:default:asset-010";
 #[path = "work_reactivation/reclose.rs"]
 mod reclose;
+#[path = "work_reactivation/continuation.rs"]
+mod continuation;
 
 fn actor() -> QueueActionActor {
     QueueActionActor {
@@ -191,6 +193,19 @@ impl Fixture {
                 "finished_goods_meter":100.0,"finished_goods_kg":10.0,"bobina_kg":1.0,
                 "payload_json":{"stage_node_id":node,"next_stage_node_id":next_node,"contained_kadr_count":1}
             })).unwrap()).await.unwrap();
+            if station == LAM {
+                // Restoring a physical input requires explicit completion
+                // evidence that the printed roll and film still had remainder.
+                f.store.put_order_progress_event(serde_json::from_value(json!({
+                    "event_id":format!("progress-complete-{id}"),"session_id":id,
+                    "batch_id":output,"apparatus":station,"order_id":f.order,
+                    "action":"complete","produced_qty":100.0,"uom":"m",
+                    "worker_role":"aparatchi","worker_ref":actor().ref_,
+                    "worker_display_name":"Worker","lamination_print_leftover_rolls":1.0,
+                    "lamination_film_leftover_rolls":1.0,"finished_goods_meter":100.0,
+                    "finished_goods_kg":10.0,"bobina_kg":1.0,"total_waste":0.0,"payload_json":{}
+                })).unwrap()).await.unwrap();
+            }
             f.store
                 .append_apparatus_queue_action_event(ApparatusQueueActionEvent {
                     event_id: format!("complete-{id}"),
@@ -357,8 +372,13 @@ async fn reactivation_preserves_history_reserves_wip_and_retries_once() {
         let output = f.store.progress_batch(&f.output).await.unwrap().unwrap();
         assert_eq!(output.produced_qty, 100.0);
         if apparatus != PRESS {
-            assert_eq!(output.wip_status, OrderProgressBatchWipStatus::InUse);
-            assert_eq!(output.used_by_session_id, active.session_id);
+            if apparatus == CUT {
+                assert_eq!(output.wip_status, OrderProgressBatchWipStatus::InUse);
+                assert_eq!(output.used_by_session_id, active.session_id);
+            } else {
+                assert_eq!(output.wip_status, OrderProgressBatchWipStatus::Waiting);
+                assert!(output.used_by_session_id.is_empty());
+            }
             let input = f.store.progress_batch(&f.input).await.unwrap().unwrap();
             assert_eq!(input.wip_status, OrderProgressBatchWipStatus::InUse);
             assert_eq!(input.used_by_session_id, active.session_id);
@@ -428,18 +448,9 @@ async fn reactivation_preserves_history_reserves_wip_and_retries_once() {
 
 #[tokio::test]
 #[ignore = "requires REACTIVATION_TEST_DATABASE_URL on a disposable server"]
-async fn reactivation_rejects_consumed_stale_busy_owner_and_final_closure() {
+async fn reactivation_rejects_stale_unassigned_busy_and_final_closure() {
     let f = Fixture::new(LAM, false).await;
     let target = f.preview().await.target.unwrap();
-    let mut other = actor();
-    other.ref_ = "other-worker".into();
-    assert!(
-        !f.service
-            .preview_reactivation(&f.selector(), &[LAM.into()], &other)
-            .await
-            .unwrap()
-            .available
-    );
     assert!(
         f.service
             .preview_reactivation(&f.selector(), &[], &actor())
@@ -447,15 +458,17 @@ async fn reactivation_rejects_consumed_stale_busy_owner_and_final_closure() {
             .is_err()
     );
     sqlx::query("UPDATE mini_progress_batches SET revision=revision+1 WHERE batch_id=$1")
-        .bind(&f.output)
+        .bind(&f.input)
         .execute(&f.pool)
         .await
         .unwrap();
     assert!(f.execute(&target).await.is_err());
+    f.release().await;
+    let f = Fixture::new(CUT, false).await;
     // A downstream worker can release a roll back to Waiting while retaining
     // resumable work. Waiting alone must not authorize producer recovery.
     f.store.put_order_run_session(OrderRunSession {
-        session_id: format!("downstream-{}", f.order), apparatus: CUT.into(), order_id: f.order.clone(), stage_node_id: "cut".into(),
+        session_id: format!("downstream-{}", f.order), apparatus: LAM.into(), order_id: f.order.clone(), stage_node_id: "lam".into(),
         status: OrderRunStatus::RollDetached, worker_role: "aparatchi".into(), worker_ref: "downstream-worker".into(), worker_display_name: "Downstream".into(),
         started_at_unix: 100, updated_at_unix: 100,
         payload_json: json!({"stage_work_protocol":1,"input_progress_batch_id":f.output,"roll_removed_from_apparatus":true}),
@@ -464,7 +477,7 @@ async fn reactivation_rejects_consumed_stale_busy_owner_and_final_closure() {
         f.preview().await.denial_reason.as_deref(),
         Some("source_not_free")
     );
-    sqlx::query("UPDATE mini_progress_batches SET wip_status='in_use',used_by_session_id='downstream',used_by_apparatus=$2 WHERE batch_id=$1").bind(&f.output).bind(CUT).execute(&f.pool).await.unwrap();
+    sqlx::query("UPDATE mini_progress_batches SET wip_status='in_use',used_by_session_id='downstream',used_by_apparatus=$2 WHERE batch_id=$1").bind(&f.output).bind(LAM).execute(&f.pool).await.unwrap();
     assert_eq!(
         f.preview().await.denial_reason.as_deref(),
         Some("source_not_free")

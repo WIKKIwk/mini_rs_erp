@@ -230,6 +230,32 @@ pub(super) async fn completed_queue_orders_for_actor(
     if actor_ref.is_empty() || limit == 0 {
         return Ok(Vec::new());
     }
+    completed_queue_orders(store, Some(actor_ref), None, limit).await
+}
+
+pub(super) async fn completed_queue_orders_for_apparatuses(
+    store: &MemoryProductionMapStore,
+    apparatuses: &[String],
+    limit: usize,
+) -> Result<Vec<CompletedQueueOrder>, ProductionMapError> {
+    let scope = apparatuses.iter().map(|id| ApparatusId::new(id.trim().to_string())
+        .map(|id| id.to_string()).map_err(|_| ProductionMapError::StoreFailed))
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    if scope.is_empty() || limit == 0 {
+        return Ok(Vec::new());
+    }
+    completed_queue_orders(store, None, Some(&scope), limit).await
+}
+
+async fn completed_queue_orders(
+    store: &MemoryProductionMapStore,
+    actor_ref: Option<&str>,
+    apparatuses: Option<&BTreeSet<String>>,
+    limit: usize,
+) -> Result<Vec<CompletedQueueOrder>, ProductionMapError> {
+    if actor_ref.is_none() && apparatuses.is_none() {
+        return Ok(Vec::new());
+    }
     let events = store.queue_events.read().await;
     let mut seen = BTreeSet::new();
     let mut completed = Vec::new();
@@ -237,7 +263,8 @@ pub(super) async fn completed_queue_orders_for_actor(
         let reactivation = event.action == queue_state::ApparatusQueueAction::Resume
             && event.payload_json.get("event").and_then(serde_json::Value::as_str)
                 == Some("reactivation");
-        if event.actor.ref_.trim() != actor_ref
+        if actor_ref.is_some_and(|actor| event.actor.ref_.trim() != actor)
+            || apparatuses.is_some_and(|scope| !scope.contains(event.apparatus.trim()))
             || event
                 .payload_json
                 .get("completion_request")

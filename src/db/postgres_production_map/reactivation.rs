@@ -25,6 +25,8 @@ struct Prepared {
     queue_state: String,
     latest_started: i64,
     latest_session_id: String,
+    input_released: bool,
+    raw_released: bool,
 }
 macro_rules! deny {
     ($reason:literal) => {
@@ -40,6 +42,7 @@ async fn prepare(
     selector: &ReactivationSelector,
     actor: &QueueActionActor,
     is_print: bool,
+    is_lamination: bool,
 ) -> Result<Result<Prepared, &'static str>, ProductionMapError> {
     transaction_locks::lock_order_and_apparatuses_tx(
         tx,
@@ -89,6 +92,7 @@ async fn prepare(
     {
         deny!("apparatus_busy");
     }
+    let mut selected_output = None;
     let selected = if is_print {
         if !selector.batch_id.is_empty() {
             deny!("stale_target");
@@ -99,8 +103,8 @@ async fn prepare(
                 s.apparatus == selector.apparatus
                     && s.status == OrderRunStatus::Completed
                     && s.payload_json.get("_reactivation_reclosed_without_work").and_then(Value::as_bool) != Some(true)
-                    && s.worker_role == actor.role
-                    && s.worker_ref == actor.ref_
+                    && s.worker_role == "aparatchi"
+                    && !s.worker_ref.trim().is_empty()
             })
             .collect::<Vec<_>>();
         if candidates
@@ -128,6 +132,16 @@ async fn prepare(
         if batch.order_id != selector.order_id || batch.apparatus != selector.apparatus {
             deny!("stale_target");
         }
+        if batch.is_layer_remainder() {
+            deny!("unsupported_history");
+        }
+        selected_output = Some(json!({
+            "batch_id":batch.batch_id,"session_id":batch.session_id,"order_id":batch.order_id,
+            "apparatus":batch.apparatus,"qr_payload":batch.qr_payload,"produced_qty":batch.produced_qty,
+            "stage_node_id":batch.payload_json.get("stage_node_id"),
+            "finished_goods_meter":batch.finished_goods_meter,"finished_goods_kg":batch.finished_goods_kg,
+            "bobina_kg":batch.bobina_kg,"total_waste":batch.total_waste,
+        }));
         sessions
             .iter()
             .find(|s| s.session_id == batch.session_id)
@@ -137,8 +151,8 @@ async fn prepare(
         deny!("stale_target");
     };
     if session.status != OrderRunStatus::Completed
-        || session.worker_role != actor.role
-        || session.worker_ref != actor.ref_
+        || session.worker_role != "aparatchi"
+        || session.worker_ref.trim().is_empty()
         || session.stage_node_id.is_empty()
     {
         deny!("unsupported_history");
@@ -209,7 +223,7 @@ async fn prepare(
         .bind(report_id).bind(&selector.order_id).bind(&selector.apparatus).bind(&session.stage_node_id).fetch_one(&mut **tx).await.map_err(|_|ProductionMapError::StoreFailed)?;
     let report_id = if exact_anchor { report_id } else { "" };
     let mut closings: Vec<(Value,String)> = sqlx::query_as("SELECT payload_json,policy FROM mini_queue_action_events WHERE order_id=$1 AND canonical_apparatus_id=$2 AND stage_node_id=$3 AND action='complete' AND actor_role=$4 AND actor_ref=$5 AND (($6<>'' AND event_id=$6) OR ($6='' AND extract(epoch FROM created_at)>=$7 AND extract(epoch FROM created_at)<$8)) ORDER BY id DESC LIMIT 2")
-        .bind(&selector.order_id).bind(&selector.apparatus).bind(&session.stage_node_id).bind(&actor.role).bind(&actor.ref_).bind(report_id).bind(session.updated_at_unix as f64).bind((session.updated_at_unix+1) as f64).fetch_all(&mut **tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
+        .bind(&selector.order_id).bind(&selector.apparatus).bind(&session.stage_node_id).bind(&session.worker_role).bind(&session.worker_ref).bind(report_id).bind(session.updated_at_unix as f64).bind((session.updated_at_unix+1) as f64).fetch_all(&mut **tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
     if closings.len() != 1 {
         deny!("unsupported_history");
     }
@@ -245,6 +259,12 @@ async fn prepare(
     output_ids.dedup();
     if !is_print && !output_ids.contains(&selector.batch_id) {
         deny!("unsupported_history");
+    }
+    // Lamination continues its INPUT, while its previous outputs remain owned
+    // by downstream consumers. The selected output only identifies the exact
+    // completed occurrence; cutting retains its coupled output reservations.
+    if is_lamination {
+        output_ids.clear();
     }
     // Lock packages before their rolls, matching receipt/movement lock order.
     let paddons = sqlx::query_as::<_,(String,bool)>("SELECT p.id,(p.locked_at IS NOT NULL OR p.receipt_json IS NOT NULL) FROM mini_paddons p WHERE EXISTS(SELECT 1 FROM mini_paddon_items i WHERE i.paddon_id=p.id AND i.progress_batch_id=ANY($1) AND i.removed_at IS NULL) ORDER BY p.id FOR UPDATE")
@@ -284,8 +304,17 @@ async fn prepare(
         outputs.push(batch);
     }
     let input_id = field(&session.payload_json, "input_progress_batch_id");
+    let mut input_released = is_lamination && input_id.is_empty();
+    let remaining_rolls = if is_lamination {
+        sqlx::query_as::<_, (Option<f64>, Option<f64>)>("SELECT lamination_print_leftover_rolls::float8,lamination_film_leftover_rolls::float8 FROM mini_order_progress_events WHERE session_id=$1 AND action='complete' ORDER BY id DESC LIMIT 1")
+            .bind(&session.session_id).fetch_optional(&mut **tx).await
+            .map_err(|_| ProductionMapError::StoreFailed)?.unwrap_or_default()
+    } else { (None, None) };
+    // A processed owner proves provenance, not physical stock. Legacy history
+    // without positive leftover evidence must scan a new/remainder input.
+    let input_exhausted = is_lamination && remaining_rolls.0.is_none_or(|qty| qty <= 0.0);
     let source_kind = field(&session.payload_json, "input_wip_source_kind");
-    let opening_input = if source_kind == "opening_wip" {
+    let mut opening_input = if source_kind == "opening_wip" {
         let row:Option<Value>=sqlx::query_scalar("SELECT to_jsonb(b) FROM mini_opening_wip_batches b WHERE batch_id=$1 AND order_id=$2 FOR UPDATE")
             .bind(input_id).bind(&selector.order_id).fetch_optional(&mut **tx).await.map_err(|_|ProductionMapError::StoreFailed)?;
         let Some(mut row) = row else {
@@ -345,10 +374,10 @@ async fn prepare(
     {
         deny!("unsupported_history");
     }
-    let input = if opening_input.is_some() {
+    let mut input = if opening_input.is_some() {
         None
     } else if input_id.is_empty() {
-        if !is_print {
+        if !is_print && !is_lamination {
             deny!("unsupported_history");
         }
         None
@@ -370,7 +399,7 @@ async fn prepare(
             deny!("source_not_free");
         }
         let returned: bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM mini_layer_remainder_operations WHERE source_kind='progress_batch' AND source_id=$1)").bind(input_id).fetch_one(&mut **tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
-        if returned {
+        if returned && !is_lamination {
             deny!("source_not_free");
         }
         if crate::core::production_map::wip_route::resolve_wip_input_route(&map, &batch).is_ok_and(
@@ -382,11 +411,40 @@ async fn prepare(
         {
             deny!("stale_target");
         }
-        Some(batch)
+        if is_lamination && (returned || input_exhausted) {
+            input_released = true;
+            None
+        } else {
+            Some(batch)
+        }
     };
+    if input_exhausted {
+        input_released = true;
+        input = None;
+        opening_input = None;
+    }
     let mut raw=sqlx::query_scalar::<_,Value>("SELECT to_jsonb(s) FROM mini_raw_material_stock s JOIN mini_raw_material_assignments a ON lower(a.barcode)=lower(s.barcode) WHERE a.order_id=$1 AND a.canonical_apparatus_id=$2 ORDER BY s.id FOR UPDATE OF s,a")
         .bind(&selector.order_id).bind(&selector.apparatus).fetch_all(&mut **tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
-    let recorded_resources = ProductionQrSessionResources::for_session(&session);
+    let mut recorded_resources = ProductionQrSessionResources::for_session(&session);
+    let resource_ids = recorded_resources.raw_materials.iter().filter_map(|material| {
+        material.stock_id.clone().or_else(|| raw.iter()
+            .find(|row| field(row, "barcode").eq_ignore_ascii_case(&material.barcode))
+            .map(|row| field(row, "id").to_string()))
+    }).collect::<Vec<_>>();
+    let raw_returned = is_lamination && sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM mini_layer_remainder_operations WHERE source_kind='raw_material' AND source_id=ANY($1))")
+        .bind(&resource_ids).fetch_one(&mut **tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
+    let raw_released = is_lamination && (raw_returned
+        || (!recorded_resources.raw_materials.is_empty()
+            && remaining_rolls.1.is_none_or(|qty| qty <= 0.0))
+        || session.payload_json.get("lamination_astatka_raw_released")
+            .and_then(Value::as_bool) == Some(true));
+    if raw_released {
+        // An astatka return already accounted for consumed parent stock and
+        // its residual child. Require normal material intake on Resume.
+        raw.clear();
+        recorded_resources.raw_materials.clear();
+    }
     let unlinked = closing
         .get("unused_raw_material_unlinks")
         .and_then(Value::as_array)
@@ -495,7 +553,7 @@ async fn prepare(
         deny!("apparatus_busy");
     }
     let continuations = sessions.iter().filter(|s| field(&s.payload_json, "_reactivation_of_session_id") == session.session_id).map(|s| &s.session_id).collect::<BTreeSet<_>>();
-    let token=format!("{:x}",Sha256::digest(serde_json::to_vec(&json!({"apparatus_config":apparatus_config,"map":map_json,"session":session,"outputs":outputs,"input":input,"opening_input":opening_input,"raw":raw,"actor_role":actor.role,"actor_ref":actor.ref_,"queue":queue_state,"continuations":continuations})).map_err(|_| ProductionMapError::StoreFailed)?));
+    let token=format!("{:x}",Sha256::digest(serde_json::to_vec(&json!({"apparatus_config":apparatus_config,"map":map_json,"session":session,"selected_output":selected_output,"outputs":outputs,"input":input,"opening_input":opening_input,"raw":raw,"input_released":input_released,"raw_released":raw_released,"actor_role":actor.role,"actor_ref":actor.ref_,"queue":queue_state,"continuations":continuations})).map_err(|_| ProductionMapError::StoreFailed)?));
     let target = ReactivationTarget {
         apparatus: selector.apparatus.clone(),
         order_id: selector.order_id.clone(),
@@ -525,6 +583,8 @@ async fn prepare(
             .max_by_key(|s| (s.started_at_unix, &s.session_id))
             .map(|s| s.session_id.clone())
             .unwrap_or_default(),
+        input_released,
+        raw_released,
     }))
 }
 
@@ -533,13 +593,14 @@ pub(super) async fn preview(
     selector: &ReactivationSelector,
     actor: &QueueActionActor,
     is_print: bool,
+    is_lamination: bool,
 ) -> Result<ReactivationPreview, ProductionMapError> {
     let mut tx = store
         .pool
         .begin()
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
-    let result = prepare(&mut tx, selector, actor, is_print).await?;
+    let result = prepare(&mut tx, selector, actor, is_print, is_lamination).await?;
     tx.rollback()
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
@@ -582,6 +643,7 @@ pub(super) async fn execute(
     assigned: &[String],
     checkouts: &[crate::core::qolip::QolipCheckout],
     is_print: bool,
+    is_lamination: bool,
 ) -> Result<(), ProductionMapError> {
     if actor.role != "aparatchi"
         || actor.ref_.is_empty()
@@ -618,6 +680,7 @@ pub(super) async fn execute(
         },
         actor,
         is_print,
+        is_lamination,
     )
     .await?
     .map_err(|reason| ProductionMapError::ReactivationDenied(reason.into()))?;
@@ -645,10 +708,14 @@ pub(super) async fn execute(
         format!("continuation:{}", target.token)
     };
     let mut payload = json!({"stage_work_protocol":1,"_reactivation_of_session_id":source.session_id,"_reactivation_reserved_outputs":prepared.outputs.iter().map(|b|b.batch_id.clone()).collect::<Vec<_>>(),"reactivation_token":target.token});
-    let original = source
-        .payload_json
-        .get("_completion_reactivation_payload")
-        .unwrap_or(&source.payload_json);
+    let original = if is_lamination {
+        // Completion/astatka can physically return or exhaust an input. Its
+        // current detached state wins over any pre-completion snapshot.
+        &source.payload_json
+    } else {
+        source.payload_json.get("_completion_reactivation_payload")
+            .unwrap_or(&source.payload_json)
+    };
     for key in [
         "input_progress_batch_id",
         "input_progress_qr_payload",
@@ -672,12 +739,25 @@ pub(super) async fn execute(
     let mut links = order_run_input_links_from_payload(&payload)
         .map_err(|_| ProductionMapError::ProgressInputInvalid)?;
     for link in &mut links {
-        if link.input_batch_id == field(&source.payload_json, "input_progress_batch_id") {
+        if prepared.input_released {
+            link.status = OrderRunInputStatus::Processed;
+            link.processed_at_unix = link.processed_at_unix.or(Some(source.updated_at_unix));
+        } else if link.input_batch_id == field(&source.payload_json, "input_progress_batch_id") {
             link.status = OrderRunInputStatus::InUse;
             link.processed_at_unix = None;
         }
     }
     write_order_run_input_links(&mut payload, &links);
+    if prepared.input_released {
+        for key in ["input_progress_batch_id", "input_progress_qr_payload", "input_progress_apparatus", "input_wip_source_kind"] {
+            payload[key] = json!("");
+        }
+        payload.as_object_mut().map(|p| p.remove("contained_kadr_count"));
+        payload["lamination_astatka_shift_closed"] = json!(true);
+    }
+    if prepared.raw_released {
+        payload["lamination_astatka_raw_released"] = json!(true);
+    }
     let cycle_stamp = u128::from_str_radix(&target.token[..32], 16)
         .map_err(|_| ProductionMapError::QueueActionNotAllowed)?;
     payload["rezka_output_cycle"] = json!(format!("progress:{cycle_stamp}:reactivation"));

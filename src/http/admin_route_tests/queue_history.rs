@@ -56,21 +56,31 @@ async fn early_close_unstarted_order_route_retains_history_and_rejects_delete() 
 }
 
 #[tokio::test]
-async fn worker_completed_orders_are_actor_scoped_and_latest_first() {
+async fn worker_completed_orders_are_apparatus_scoped_and_latest_first() {
+    use crate::core::production_map::{
+        ApparatusQueueActionEvent, ApparatusQueuePolicy, ProductionMapStorePort, QueueActionActor,
+        queue_state,
+    };
     let print_requests = Arc::new(Mutex::new(Vec::<ScaleDriverPrintRequest>::new()));
     let mut state = test_state();
+    let production_store = Arc::new(MemoryProductionMapStore::new());
+    state.production_maps = production_map_service_with_store(&state, production_store.clone());
     state.gscale = GscaleService::new().with_driver(Arc::new(FakeProgressDriver {
         requests: print_requests,
         fail: false,
     }));
-    for worker_ref in ["worker-complete-1", "worker-complete-2"] {
+    for (worker_ref, apparatus) in [
+        ("worker-complete-1", "apparatus:default:bosma_7"),
+        ("worker-complete-2", "apparatus:default:bosma_7"),
+        ("worker-foreign-history", "apparatus:default:bosma_8"),
+    ] {
         state
             .admin
             .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
                 principal_role: PrincipalRole::Aparatchi,
                 principal_ref: worker_ref.to_string(),
                 role_id: "aparatchi".to_string(),
-                assigned_apparatus: vec!["apparatus:default:bosma_7".to_string()],
+                assigned_apparatus: vec![apparatus.to_string()],
                 assigned_item_groups: Vec::new(),
             })
             .await
@@ -79,6 +89,7 @@ async fn worker_completed_orders_are_actor_scoped_and_latest_first() {
     let admin_token = session(&state, PrincipalRole::Admin).await;
     let worker_one = session_for(&state, PrincipalRole::Aparatchi, "worker-complete-1").await;
     let worker_two = session_for(&state, PrincipalRole::Aparatchi, "worker-complete-2").await;
+    let foreign_worker = session_for(&state, PrincipalRole::Aparatchi, "worker-foreign-history").await;
     let router = build_router(state);
 
     for (id, number) in [
@@ -173,6 +184,18 @@ async fn worker_completed_orders_are_actor_scoped_and_latest_first() {
         .expect("partial pause");
     assert_eq!(pause_response.status(), StatusCode::OK);
 
+    // Even a matching original worker cannot widen the current apparatus scope.
+    production_store.append_apparatus_queue_action_event(ApparatusQueueActionEvent {
+        event_id: "foreign-history-completion".into(), apparatus: "apparatus:default:bosma_8".into(),
+        order_id: "zakaz-foreign-history".into(), stage_node_id: "foreign-stage".into(),
+        action: queue_state::ApparatusQueueAction::Complete,
+        from_state: queue_state::ApparatusQueueOrderState::InProgress,
+        to_state: queue_state::ApparatusQueueOrderState::Completed,
+        policy: ApparatusQueuePolicy::FreePick,
+        actor: QueueActionActor { role: "aparatchi".into(), ref_: "worker-complete-1".into(), display_name: "Previous shift".into() },
+        assigned_apparatus: vec!["apparatus:default:bosma_8".into()], payload_json: serde_json::json!({}),
+    }).await.unwrap();
+
     let first_worker_completed = router
         .clone()
         .oneshot(request(
@@ -187,15 +210,18 @@ async fn worker_completed_orders_are_actor_scoped_and_latest_first() {
     let items = body["completed_orders"]
         .as_array()
         .expect("completed_orders");
-    assert_eq!(items.len(), 3);
+    assert_eq!(items.len(), 4);
     assert_eq!(items[0]["order_id"], "zakaz-partial-pause");
     assert_eq!(items[0]["status"], "in_progress");
-    assert_eq!(items[1]["order_id"], "zakaz-complete-2");
+    assert_eq!(items[1]["order_id"], "zakaz-complete-3");
     assert_eq!(items[1]["status"], "completed");
-    assert_eq!(items[2]["order_id"], "zakaz-complete-1");
+    assert_eq!(items[2]["order_id"], "zakaz-complete-2");
     assert_eq!(items[2]["status"], "completed");
+    assert_eq!(items[3]["order_id"], "zakaz-complete-1");
+    assert_eq!(items[3]["status"], "completed");
+    assert!(items.iter().all(|item| item["apparatus"] == "apparatus:default:bosma_7"));
 
-    let second_worker_completed = router
+    let second_worker_completed = router.clone()
         .oneshot(request(
             "GET",
             "/v1/mobile/admin/production-maps/completed-orders",
@@ -208,9 +234,21 @@ async fn worker_completed_orders_are_actor_scoped_and_latest_first() {
     let items = body["completed_orders"]
         .as_array()
         .expect("completed_orders");
+    assert_eq!(items.len(), 4);
+    assert_eq!(items[0]["order_id"], "zakaz-partial-pause");
+    assert_eq!(items[1]["order_id"], "zakaz-complete-3");
+    assert_eq!(items[2]["order_id"], "zakaz-complete-2");
+    assert_eq!(items[3]["order_id"], "zakaz-complete-1");
+    assert!(items.iter().all(|item| item["apparatus"] == "apparatus:default:bosma_7"));
+
+    let response = router.oneshot(request("GET",
+        "/v1/mobile/admin/production-maps/completed-orders", &foreign_worker)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    let items = body["completed_orders"].as_array().unwrap();
     assert_eq!(items.len(), 1);
-    assert_eq!(items[0]["order_id"], "zakaz-complete-3");
-    assert_eq!(items[0]["status"], "completed");
+    assert_eq!(items[0]["apparatus"], "apparatus:default:bosma_8");
+    assert_eq!(items[0]["order_id"], "zakaz-foreign-history");
 }
 
 #[tokio::test]

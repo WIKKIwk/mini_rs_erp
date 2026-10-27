@@ -26,11 +26,11 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
     async fn reactivation_was_applied(&self, target: &crate::core::production_map::ReactivationTarget, actor: &QueueActionActor) -> Result<bool, ProductionMapError> {
         reactivation::was_applied(self, target, actor).await
     }
-    async fn preview_reactivation(&self, selector: &crate::core::production_map::ReactivationSelector, actor: &QueueActionActor, is_print: bool) -> Result<crate::core::production_map::ReactivationPreview, ProductionMapError> {
-        reactivation::preview(self, selector, actor, is_print).await
+    async fn preview_reactivation(&self, selector: &crate::core::production_map::ReactivationSelector, actor: &QueueActionActor, is_print: bool, is_lamination: bool) -> Result<crate::core::production_map::ReactivationPreview, ProductionMapError> {
+        reactivation::preview(self, selector, actor, is_print, is_lamination).await
     }
-    async fn reactivate_completed_work(&self, target: &crate::core::production_map::ReactivationTarget, actor: &QueueActionActor, assigned: &[String], checkouts: &[crate::core::qolip::QolipCheckout], is_print: bool) -> Result<(), ProductionMapError> {
-        reactivation::execute(self, target, actor, assigned, checkouts, is_print).await
+    async fn reactivate_completed_work(&self, target: &crate::core::production_map::ReactivationTarget, actor: &QueueActionActor, assigned: &[String], checkouts: &[crate::core::qolip::QolipCheckout], is_print: bool, is_lamination: bool) -> Result<(), ProductionMapError> {
+        reactivation::execute(self, target, actor, assigned, checkouts, is_print, is_lamination).await
     }
     fn supports_resume_pause(&self) -> bool { true }
     fn supports_temporary_pause(&self) -> bool { true }
@@ -452,6 +452,14 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         limit: usize,
     ) -> Result<Vec<CompletedQueueOrder>, ProductionMapError> {
         PostgresProductionMapStore::completed_queue_orders_for_actor(self, actor_ref, limit).await
+    }
+
+    async fn completed_queue_orders_for_apparatuses(
+        &self,
+        apparatuses: &[String],
+        limit: usize,
+    ) -> Result<Vec<CompletedQueueOrder>, ProductionMapError> {
+        PostgresProductionMapStore::completed_queue_orders_for_apparatuses(self, apparatuses, limit).await
     }
 
     async fn completion_requests(

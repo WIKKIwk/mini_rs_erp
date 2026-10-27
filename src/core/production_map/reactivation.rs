@@ -100,7 +100,7 @@ impl ProductionMapService {
         selector: &ReactivationSelector,
         assigned: &[String],
         actor: &QueueActionActor,
-    ) -> Result<bool, ProductionMapError> {
+    ) -> Result<(bool, bool), ProductionMapError> {
         if actor.role != "aparatchi"
             || actor.ref_.trim().is_empty()
             || selector.order_id.trim().is_empty()
@@ -120,7 +120,7 @@ impl ProductionMapService {
         {
             return Err(ProductionMapError::QueueActionNotAllowed);
         }
-        Ok(pechat::is_pechat_apparatus(&canonical))
+        Ok((pechat::is_pechat_apparatus(&canonical), apparatus::uses_lamination_workflow(&canonical)))
     }
     /// A matching immutable receipt acknowledges a retry without reading or
     /// preparing resources for whatever work is current now.
@@ -142,11 +142,11 @@ impl ProductionMapService {
         assigned: &[String],
         actor: &QueueActionActor,
     ) -> Result<ReactivationPreview, ProductionMapError> {
-        let is_print = self
+        let (is_print, is_lamination) = self
             .validate_reactivation_selector(selector, assigned, actor)
             .await?;
         self.store
-            .preview_reactivation(selector, actor, is_print)
+            .preview_reactivation(selector, actor, is_print, is_lamination)
             .await
     }
     pub async fn reactivate_completed_work(
@@ -156,7 +156,7 @@ impl ProductionMapService {
         actor: &QueueActionActor,
         checkouts: &[crate::core::qolip::QolipCheckout],
     ) -> Result<(), ProductionMapError> {
-        let is_print = self
+        let (is_print, is_lamination) = self
             .validate_reactivation_selector(
                 &ReactivationSelector {
                     apparatus: target.apparatus.clone(),
@@ -175,7 +175,7 @@ impl ProductionMapService {
         }
         let _guard = self.queue_action_guard().await;
         self.store
-            .reactivate_completed_work(target, actor, assigned, checkouts, is_print)
+            .reactivate_completed_work(target, actor, assigned, checkouts, is_print, is_lamination)
             .await?;
         self.notify_live();
         Ok(())

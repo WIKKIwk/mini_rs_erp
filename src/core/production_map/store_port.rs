@@ -567,10 +567,10 @@ pub trait ProductionMapStorePort: Send + Sync {
     async fn reactivation_was_applied(&self, _target: &super::ReactivationTarget, _actor: &QueueActionActor) -> StoreResult<bool> {
         Ok(false)
     }
-    async fn preview_reactivation(&self, _selector: &super::ReactivationSelector, _actor: &QueueActionActor, _is_print: bool) -> StoreResult<super::ReactivationPreview> {
+    async fn preview_reactivation(&self, _selector: &super::ReactivationSelector, _actor: &QueueActionActor, _is_print: bool, _is_lamination: bool) -> StoreResult<super::ReactivationPreview> {
         Ok(super::ReactivationPreview::denied("unsupported_history"))
     }
-    async fn reactivate_completed_work(&self, _target: &super::ReactivationTarget, _actor: &QueueActionActor, _assigned: &[String], _checkouts: &[QolipCheckout], _is_print: bool) -> StoreResult<()> {
+    async fn reactivate_completed_work(&self, _target: &super::ReactivationTarget, _actor: &QueueActionActor, _assigned: &[String], _checkouts: &[QolipCheckout], _is_print: bool, _is_lamination: bool) -> StoreResult<()> {
         Err(ProductionMapError::QueueActionNotAllowed)
     }
     async fn apparatus_queue_states(&self) -> StoreResult<ApparatusQueueStateMap>;
@@ -597,6 +597,13 @@ pub trait ProductionMapStorePort: Send + Sync {
     async fn completed_queue_orders_for_actor(
         &self,
         _actor_ref: &str,
+        _limit: usize,
+    ) -> StoreResult<Vec<CompletedQueueOrder>> {
+        Ok(Vec::new())
+    }
+    async fn completed_queue_orders_for_apparatuses(
+        &self,
+        _apparatuses: &[String],
         _limit: usize,
     ) -> StoreResult<Vec<CompletedQueueOrder>> {
         Ok(Vec::new())

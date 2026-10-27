@@ -71,10 +71,16 @@ async fn read_view_consistent(
     for _ in 0..3 {
         let started_revision = service.snapshot_revision();
         let actor = queue_action_actor(principal);
+        let worker_assignment = if principal.role == PrincipalRole::Aparatchi {
+            Some(super::worker_snapshot::scope_token(state, principal).await?)
+        } else { None };
         // Reuse history only for an exact colour-only revision. Retry when a
         // concurrent commit moves the revision while history/snapshot is read.
         let reusable = reuse_history.filter(|(before, expected)| {
             colour_history_unchanged(before.revision, started_revision, *expected)
+                && worker_assignment.as_ref().is_none_or(|(_, assignment_scope)| {
+                    worker_scope && before.scope == window.scope(assignment_scope)
+                })
         });
         let (completed, requests, decisions) = if let Some((before, _)) = reusable {
             (
@@ -84,7 +90,13 @@ async fn read_view_consistent(
             )
         } else {
             tokio::try_join!(
-                service.completed_queue_orders_for_actor(&actor.ref_, window.history_limit()),
+                async {
+                    if let Some((assigned, _)) = &worker_assignment {
+                        service.completed_queue_orders_for_apparatuses(assigned, window.history_limit()).await
+                    } else {
+                        service.completed_queue_orders_for_actor(&actor.ref_, window.history_limit()).await
+                    }
+                },
                 async {
                     if include_requests {
                         service.completion_requests(200).await
@@ -127,6 +139,10 @@ async fn read_view_consistent(
         let customers = production_map_order_customers(state, &snapshot.maps).await;
         if service.snapshot_revision() != revision {
             continue;
+        }
+        if let Some((_, assignment_scope)) = &worker_assignment {
+            let (_, current_scope) = super::worker_snapshot::scope_token(state, principal).await?;
+            if current_scope != *assignment_scope { continue; }
         }
         return Ok(LiveView {
             snapshot,

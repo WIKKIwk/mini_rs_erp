@@ -851,6 +851,14 @@ async fn producer_history_pages_owned_output_and_keeps_order_read_authorization(
     assert_eq!(response.status(), StatusCode::OK);
     let second = json_body(response).await;
     assert_eq!(second["batches"][0]["batch_id"], "a-owned-free");
+    let shared = base.replace("&own_worker=true", "").replace("&limit=1", "&limit=20");
+    let response = router.clone().oneshot(request("GET", &shared, &token)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let shared = json_body(response).await;
+    let shared = shared["batches"].as_array().unwrap();
+    assert_eq!(shared.len(), 3);
+    assert!(shared.iter().any(|batch| batch["worker_ref"] == "someone-else"));
+    assert!(shared.iter().all(|batch| batch["apparatus"] == producer));
     // Neither a caller-supplied worker ref nor the cursor can widen ownership.
     let response = router
         .clone()
@@ -880,4 +888,43 @@ async fn producer_history_pages_owned_output_and_keeps_order_read_authorization(
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn completed_history_uses_assigned_apparatus_not_original_worker() {
+    use crate::core::production_map::{
+        ApparatusQueueActionEvent, ApparatusQueuePolicy, ProductionMapStorePort, QueueActionActor,
+        queue_state::{ApparatusQueueAction as Action, ApparatusQueueOrderState as State},
+    };
+    let mut state = test_state();
+    let store = Arc::new(MemoryProductionMapStore::new());
+    state.production_maps = production_map_service_with_store(&state, store.clone());
+    let assigned = "apparatus:default:asset-007";
+    let foreign = "apparatus:default:asset-010";
+    let worker = "next-shift-history-worker";
+    state.admin.upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+        principal_role: PrincipalRole::Aparatchi, principal_ref: worker.into(),
+        role_id: "aparatchi".into(), assigned_apparatus: vec![assigned.into()],
+        assigned_item_groups: vec![],
+    }).await.unwrap();
+    for (apparatus, owner) in [(assigned, "previous-shift"), (foreign, worker)] {
+        store.append_apparatus_queue_action_event(ApparatusQueueActionEvent {
+            event_id: format!("history-{apparatus}"), apparatus: apparatus.into(),
+            order_id: "zakaz-shared-history".into(), stage_node_id: "history-stage".into(),
+            action: Action::Complete, from_state: State::InProgress, to_state: State::Completed,
+            policy: ApparatusQueuePolicy::FreePick,
+            actor: QueueActionActor { role: "aparatchi".into(), ref_: owner.into(), display_name: owner.into() },
+            assigned_apparatus: vec![apparatus.into()], payload_json: serde_json::json!({}),
+        }).await.unwrap();
+    }
+    let token = session_for(&state, PrincipalRole::Aparatchi, worker).await;
+    let response = build_router(state).oneshot(request(
+        "GET", "/v1/mobile/admin/production-maps/completed-orders", &token,
+    )).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    let orders = body["completed_orders"].as_array().unwrap();
+    assert_eq!(orders.len(), 1);
+    assert_eq!(orders[0]["apparatus"], assigned);
+    assert_eq!(orders[0]["order_id"], "zakaz-shared-history");
 }

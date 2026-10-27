@@ -579,6 +579,14 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         MemoryProductionMapStore::completed_queue_orders_for_actor(self, actor_ref, limit).await
     }
 
+    async fn completed_queue_orders_for_apparatuses(
+        &self,
+        apparatuses: &[String],
+        limit: usize,
+    ) -> Result<Vec<CompletedQueueOrder>, ProductionMapError> {
+        MemoryProductionMapStore::completed_queue_orders_for_apparatuses(self, apparatuses, limit).await
+    }
+
     async fn completion_requests(
         &self,
         limit: usize,

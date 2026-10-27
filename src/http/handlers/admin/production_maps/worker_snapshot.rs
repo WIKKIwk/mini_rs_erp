@@ -291,13 +291,12 @@ pub(super) async fn read_detail(
                 || saved.map.nodes.iter().any(|node| node.apparatus_id == apparatus || node.alternative_assigned_apparatus_id == apparatus)
         });
         if !visible_context {
-            // Actor history can lie outside the current candidate snapshot.
-            // Never accept a client-provided history ID as authorization;
-            // prove it through this actor's persisted history.
+            // Assigned-apparatus history can lie outside the candidate snapshot.
+            // Never accept a client-provided history ID as authorization.
             let actor = queue_action_actor(principal);
-            let completed = state.production_maps.completed_queue_orders_for_actor(&actor.ref_,usize::MAX).await.map_err(production_map_error)?;
+            let completed = state.production_maps.completed_queue_orders_for_apparatuses(&assigned,usize::MAX).await.map_err(production_map_error)?;
             let decisions = state.production_maps.completion_request_decisions_for_actor(&actor.ref_,usize::MAX).await.map_err(production_map_error)?;
-            if !completed.iter().any(|order| order.order_id == order_id)
+            if !completed.iter().any(|order| order.order_id == order_id && order.apparatus == apparatus)
                 && !decisions.iter().any(|decision| decision.order_id == order_id) { return Err(not_found("worker_order_not_available")); }
             snapshot = detail;
         }

@@ -175,7 +175,8 @@ use self::order_control_helpers::{
 use self::order_query_helpers::{
     load_active_order_run_session, load_active_order_run_session_for_qolip,
     load_active_order_run_sessions_for_orders, load_active_order_run_sessions_for_worker,
-    load_completed_queue_orders_for_actor, load_order_run_session,
+    load_completed_queue_orders_for_actor, load_completed_queue_orders_for_apparatuses,
+    load_order_run_session,
     load_order_run_sessions_for_audit, load_order_run_sessions_for_order,
     load_order_run_sessions_for_orders, load_progress_batch, load_progress_batch_by_qr,
     load_progress_batches_for_audit, load_progress_batches_for_order,
@@ -651,6 +652,14 @@ impl PostgresProductionMapStore {
         limit: usize,
     ) -> Result<Vec<CompletedQueueOrder>, ProductionMapError> {
         load_completed_queue_orders_for_actor(&self.pool, actor_ref, limit).await
+    }
+
+    async fn completed_queue_orders_for_apparatuses(
+        &self,
+        apparatuses: &[String],
+        limit: usize,
+    ) -> Result<Vec<CompletedQueueOrder>, ProductionMapError> {
+        load_completed_queue_orders_for_apparatuses(&self.pool, apparatuses, limit).await
     }
 
     async fn completion_requests(

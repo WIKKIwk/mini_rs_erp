@@ -358,7 +358,14 @@ async fn send_production_map_live_snapshot(
         Err(error) => Err(error),
     };
     let (completed_orders, completion_requests, completion_request_decisions) = tokio::join!(
-        service.completed_queue_orders_for_actor(&actor_ref, 200),
+        async {
+            if principal.role == PrincipalRole::Aparatchi {
+                let assigned = state.admin.principal_assigned_apparatus(principal).await;
+                service.completed_queue_orders_for_apparatuses(&assigned, 200).await
+            } else {
+                service.completed_queue_orders_for_actor(&actor_ref, 200).await
+            }
+        },
         async {
             if include_completion_requests {
                 service.completion_requests(200).await
@@ -486,11 +493,14 @@ pub async fn production_map_completed_orders(
         ],
     )
     .await?;
-    let completed_orders = state
-        .production_maps
-        .completed_queue_orders_for_actor(&queue_action_actor(&principal).ref_, 200)
-        .await
-        .map_err(production_map_error)?;
+    let completed_orders = if principal.role == PrincipalRole::Aparatchi {
+        let assigned = state.admin.principal_assigned_apparatus(&principal).await;
+        state.production_maps.completed_queue_orders_for_apparatuses(&assigned, 200).await
+    } else {
+        state.production_maps.completed_queue_orders_for_actor(
+            &queue_action_actor(&principal).ref_, 200,
+        ).await
+    }.map_err(production_map_error)?;
     Ok(json_response(serde_json::json!({
         "ok": true,
         "completed_orders": completed_orders,

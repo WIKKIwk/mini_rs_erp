@@ -299,14 +299,33 @@ impl ProductionMapService {
         actor_ref: &str,
         limit: usize,
     ) -> Result<Vec<CompletedQueueOrder>, ProductionMapError> {
-        // This endpoint is the actor-scoped stage history consumed by the
-        // worker "Tugatish" tab. Global order closure belongs to
-        // `fully_completed_orders`, which is exposed separately through the
-        // closed-orders endpoint. Do not project the global closure invariant
-        // onto this worker history.
+        // Personal stage audit remains actor-scoped. Worker queue views use
+        // assigned-apparatus history so the next shift can continue the work.
+        // Global order closure belongs to `fully_completed_orders`, not either
+        // of these per-apparatus histories.
         self.store
             .completed_queue_orders_for_actor(actor_ref, limit)
             .await
+    }
+
+    /// Stage history shared by workers assigned to these exact apparatuses.
+    /// Assignment authorization belongs to the caller; an empty scope stays empty.
+    pub async fn completed_queue_orders_for_apparatuses(
+        &self,
+        apparatuses: &[String],
+        limit: usize,
+    ) -> Result<Vec<CompletedQueueOrder>, ProductionMapError> {
+        let scope = apparatuses.iter().map(|id| {
+            crate::core::apparatus_standard::ApparatusId::new(id.trim().to_string())
+                .map(|id| id.to_string())
+                .map_err(|_| ProductionMapError::QueueActionNotAllowed)
+        }).collect::<Result<BTreeSet<_>, _>>()?;
+        if scope.is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+        self.store.completed_queue_orders_for_apparatuses(
+            &scope.into_iter().collect::<Vec<_>>(), limit,
+        ).await
     }
 
     pub async fn queue_action_logs_for_order(

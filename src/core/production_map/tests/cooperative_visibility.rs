@@ -105,3 +105,45 @@ async fn local_report_on_repeated_machine_uses_latest_occurrence_without_closing
     assert!(!snapshot.visible_order_ids[REZKA_ID].contains(&ORDER.into()));
     assert!(snapshot.visible_order_ids[LAMINATION_2_ID].contains(&ORDER.into()));
 }
+
+#[tokio::test]
+async fn assigned_apparatus_history_shares_workers_but_keeps_scope_and_latest_state() {
+    let (service, store) = fixture(true).await;
+    let scope = vec![LAMINATION_1_ID.to_string()];
+    let history = service.completed_queue_orders_for_apparatuses(&scope, 20).await.unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].apparatus, LAMINATION_1_ID);
+    assert_eq!(history[0].status, CompletedQueueOrderStatus::Completed);
+    assert!(service.completed_queue_orders_for_actor("next-shift", 20).await.unwrap().is_empty());
+    assert!(service.completed_queue_orders_for_apparatuses(&[], 20).await.unwrap().is_empty());
+    assert!(service.completed_queue_orders_for_apparatuses(&scope, 0).await.unwrap().is_empty());
+    assert!(service.completed_queue_orders_for_apparatuses(&["legacy-name".into()], 20).await.is_err());
+
+    let event = ApparatusQueueActionEvent {
+        event_id: "next-shift-reactivation".into(), apparatus: LAMINATION_1_ID.into(),
+        order_id: ORDER.into(), stage_node_id: "a".into(), action: A::Resume,
+        from_state: S::Completed, to_state: S::Paused,
+        policy: ApparatusQueuePolicy::FreePick,
+        actor: QueueActionActor { role: "aparatchi".into(), ref_: "next-shift".into(), display_name: "Next".into() },
+        assigned_apparatus: scope.clone(), payload_json: serde_json::json!({"event":"reactivation"}),
+    };
+    store.append_apparatus_queue_action_event(event.clone()).await.unwrap();
+    let history = service.completed_queue_orders_for_apparatuses(&scope, 20).await.unwrap();
+    assert_eq!(history.len(), 1, "latest state spans actors without duplicating an order");
+    assert_eq!(history[0].status, CompletedQueueOrderStatus::InProgress);
+    let original = service.completed_queue_orders_for_actor("same-worker", 20).await.unwrap();
+    assert_eq!(original.iter().find(|h| h.apparatus == LAMINATION_1_ID).unwrap().status,
+        CompletedQueueOrderStatus::Completed, "personal history retains its original scope");
+    let recent = service.completed_queue_orders_for_apparatuses(
+        &[REZKA_ID.into(), LAMINATION_1_ID.into()], 1,
+    ).await.unwrap();
+    assert_eq!(recent.len(), 1);
+    assert_eq!(recent[0].apparatus, LAMINATION_1_ID);
+
+    store.append_apparatus_queue_action_event(ApparatusQueueActionEvent {
+        event_id: "next-shift-freeze".into(), action: A::Freeze,
+        from_state: S::Paused, to_state: S::Frozen, payload_json: serde_json::json!({}), ..event
+    }).await.unwrap();
+    assert!(service.completed_queue_orders_for_apparatuses(&scope, 20).await.unwrap().is_empty(),
+        "a later freeze suppresses another worker's old completed row");
+}
