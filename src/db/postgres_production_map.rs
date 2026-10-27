@@ -37,8 +37,10 @@ pub(crate) mod realtime;
 mod layer_remainder;
 mod lamination_astatka;
 mod lamination_settings;
+mod qolip_start_settings;
 mod sequence_move;
 mod re_pause;
+mod temporary_pause;
 mod reactivation;
 #[cfg(test)]
 mod sequence_move_tests;
@@ -179,6 +181,7 @@ use self::order_query_helpers::{
     load_progress_batches_for_audit, load_progress_batches_for_order,
     load_progress_batches_for_orders, load_progress_batches_for_worker,
     load_queue_action_logs_for_orders, load_queue_action_logs_for_worker,
+    load_queue_snapshot_logs_for_orders,
 };
 use self::paddon_helpers::{
     add_paddon_item, add_paddon_items, create_paddon, load_paddon_scan_snapshot,
@@ -696,6 +699,13 @@ impl PostgresProductionMapStore {
         order_ids: &[String],
     ) -> Result<BTreeMap<String, Vec<ProductionOrderLogEntry>>, ProductionMapError> {
         load_queue_action_logs_for_orders(&self.pool, order_ids).await
+    }
+
+    async fn queue_snapshot_logs_for_orders(
+        &self,
+        order_ids: &[String],
+    ) -> Result<BTreeMap<String, Vec<ProductionOrderLogEntry>>, ProductionMapError> {
+        load_queue_snapshot_logs_for_orders(&self.pool, order_ids).await
     }
 
     async fn queue_action_logs_for_worker(
@@ -1280,6 +1290,14 @@ pub(super) async fn apply_queue_progress_tx(
                 ..QueueActionProgressWriteResult::default()
             });
         }
+        if let Some(raw) = write.event.payload_json.get("qolip_confirmation") {
+            let confirmation: crate::core::production_map::AutomaticQolipConfirmation = serde_json::from_value(raw.clone())
+                .map_err(|_| ProductionMapError::QueueActionNotAllowed)?;
+            if write.event.action != crate::core::production_map::queue_state::ApparatusQueueAction::Start || !confirmation.is_valid() {
+                return Err(ProductionMapError::QueueActionNotAllowed);
+            }
+            qolip_start_settings::require_automatic_tx(tx, &confirmation).await?;
+        }
         order_control_helpers::validate_execution_controls_tx(tx, write).await?;
         if matches!(write.event.action,
             crate::core::production_map::queue_state::ApparatusQueueAction::Start
@@ -1311,6 +1329,7 @@ pub(super) async fn apply_queue_progress_tx(
         }
         validate_queue_action_event_transition_tx(tx, &write.event).await?;
         re_pause::validate_resume_checkpoint_tx(tx, write).await?;
+        temporary_pause::validate_write_tx(tx, write).await?;
         stage_execution::validate_input_claims_tx(tx, write).await?;
         let output_paddon = output_paddon_assignment::lock_for_output(tx, write).await?;
         if let Some(expected) = write.event.payload_json.get("bosma_closing_expected_payload") {
@@ -1390,7 +1409,14 @@ pub(super) async fn apply_queue_progress_tx(
             if matches!(event.action, crate::core::production_map::queue_state::ApparatusQueueAction::Start)
                 || event.payload_json.get("qolip_reacquired_after_freeze")
                     .and_then(serde_json::Value::as_bool) == Some(true) {
-                qolip_session_helpers::validate_qolip_set_tx(tx, session).await?;
+                if event.action == crate::core::production_map::queue_state::ApparatusQueueAction::Start
+                    && event.payload_json.get("qolip_confirmation").is_some() {
+                    qolip_session_helpers::validate_automatic_qolip_set_tx(tx, session).await?;
+                } else {
+                    // Historical automatic provenance is not a new request:
+                    // Resume keeps the pre-existing reacquisition policy.
+                    qolip_session_helpers::validate_qolip_set_tx(tx, session).await?;
+                }
             }
         }
         put_queue_action_state_tx(tx, event).await?;

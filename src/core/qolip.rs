@@ -29,7 +29,7 @@ pub use normalize_qr::qolip_scan_code_from_qr;
 pub use ports::QolipStorePort;
 pub use service::{QolipService, selected_product_specs};
 pub use shared_sets::{QolipSetProduct, QolipSetReuse, QolipSetSnapshot};
-pub use management::{QolipManagedSet, QolipMoldDraft, QolipSetCreate, QolipSetEdit, QolipProductMoldEdit, QolipProductMoldEdits};
+pub use management::{QolipManagedSet, QolipMoldDraft, QolipSetCreate, QolipSetEdit, QolipSetRename, QolipProductMoldEdit, QolipProductMoldEdits};
 pub(crate) use shared_sets::candidate_codes;
 pub use reworks::{QolipRework, QolipReworkSend, QolipReworkReturn};
 pub use mileage::{QolipMileage, QolipMileageCycle};

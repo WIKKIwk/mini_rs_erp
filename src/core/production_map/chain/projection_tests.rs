@@ -174,6 +174,21 @@ fn cached_routes_topology_and_stage_statuses_match_reference() {
                         format!("{:?}", view.work_stage(station, node)),
                         format!("{:?}", chain::work_stage_for_station(map, station, node))
                     );
+                    for count in [None, Some(0), Some(1), Some(4)] {
+                        let expected = pm::service_progress_support::rezka_output_kadr_counts(
+                            map, station, node, count,
+                        );
+                        for _ in 0..2 {
+                            assert_eq!(
+                                pm::service_progress_support::rezka_output_kadr_counts_projected(
+                                    &view, station, node, count,
+                                ),
+                                expected,
+                                "Rezka count differs cached={cached} map={} station={station} node={node} count={count:?}",
+                                map.id,
+                            );
+                        }
+                    }
                 }
             }
             let inputs = stage_execution::work_inputs_projected(&view, &batches[&map.id], &[]);

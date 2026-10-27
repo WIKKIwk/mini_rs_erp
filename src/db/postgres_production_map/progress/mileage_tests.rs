@@ -37,7 +37,7 @@ async fn setup(tx: &mut Transaction<'_, Postgres>) {
     sqlx::raw_sql(
         "CREATE TABLE mini_apparatus(id text PRIMARY KEY,name text,execution_profile_json jsonb);
          CREATE TABLE mini_order_run_sessions(session_id text PRIMARY KEY,canonical_apparatus_id text,
-             order_id text,payload_json jsonb,created_at timestamptz NOT NULL DEFAULT now());
+             order_id text,payload_json jsonb,started_at timestamptz NOT NULL DEFAULT now());
          CREATE TABLE mini_progress_batches(
              batch_id text PRIMARY KEY,session_id text,apparatus text,canonical_apparatus_id text,
              order_id text,action text,status text,produced_qty numeric(18,6),uom text,qr_payload text,
@@ -72,7 +72,7 @@ async fn session(
 ) -> OrderRunSession {
     let mut payload = inherited.unwrap_or_else(|| json!({"qolip_codes":["A","B"]}));
     payload["qolip_lock_owner"] = json!(owner);
-    sqlx::query("INSERT INTO mini_order_run_sessions(session_id,canonical_apparatus_id,order_id,payload_json,created_at)
+    sqlx::query("INSERT INTO mini_order_run_sessions(session_id,canonical_apparatus_id,order_id,payload_json,started_at)
         VALUES($1,$2,'order-mileage',$3,to_timestamp($4::float8))")
         .bind(id).bind(apparatus).bind(&payload).bind(started as f64).execute(&mut **tx).await.unwrap();
     let mut session = OrderRunSession {

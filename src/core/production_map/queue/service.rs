@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use super::super::*;
 use super::{QueueActionPolicyInput, QueueActionPolicyProfile, allowed_actions_for_control};
 
-use super::super::apparatus::{queue_order_ids_by_apparatus, visible_order_ids_by_apparatus};
+use super::super::apparatus::{queue_order_ids_by_projection, visible_order_ids_by_apparatus};
 use super::super::chain;
 use super::super::materials::{
     TrustedQolipStartValidation, build_raw_material_start_requirements_refs, live_material_rule,
@@ -20,7 +20,7 @@ use super::super::service_progress_support::{
 use super::super::service_queue_support::*;
 use super::super::store_port::{ApparatusQueueStateMap, OrderControlMap};
 use super::snapshot_tolerance::{
-    snapshot_rezka_output_kadr_counts, snapshot_session_lineage, warn_skipped_snapshot_apparatus,
+    snapshot_rezka_output_kadr_counts_projected, snapshot_session_lineage, warn_skipped_snapshot_apparatus,
     warn_skipped_snapshot_order,
 };
 
@@ -61,6 +61,16 @@ impl ProductionMapService {
         frozen_order_ids: &BTreeSet<String>,
     ) -> BTreeMap<String, Vec<String>> {
         let visible_by_apparatus = visible_order_ids_by_apparatus(maps);
+        Self::effective_apparatus_sequences_for_visible(
+            &visible_by_apparatus, sequences, frozen_order_ids,
+        )
+    }
+
+    pub(crate) fn effective_apparatus_sequences_for_visible(
+        visible_by_apparatus: &BTreeMap<String, Vec<String>>,
+        sequences: &BTreeMap<String, Vec<String>>,
+        frozen_order_ids: &BTreeSet<String>,
+    ) -> BTreeMap<String, Vec<String>> {
         let apparatuses = sequences
             .keys()
             .chain(visible_by_apparatus.keys())
@@ -470,7 +480,7 @@ impl ProductionMapService {
         self.queue_action_controls_in_scope(None).await
     }
 
-    pub(crate) async fn queue_action_controls_for_apparatus(
+    pub async fn queue_action_controls_for_apparatus(
         &self,
         apparatus: &str,
     ) -> Result<
@@ -512,6 +522,7 @@ impl ProductionMapService {
             None,
             None,
             None,
+            None,
         )
         .await
     }
@@ -528,6 +539,7 @@ impl ProductionMapService {
             crate::core::apparatus_standard::RuntimeApparatusConfiguration,
         >],
         active_print_preflight_holds: Vec<PrintPreflightHold>,
+        projections: &[chain::ProjectionMap<'_>],
     ) -> Result<
         BTreeMap<String, BTreeMap<String, ApparatusQueueOrderActionControl>>,
         ProductionMapError,
@@ -542,6 +554,7 @@ impl ProductionMapService {
             Some(active_print_preflight_holds),
             None,
             None,
+            Some(projections),
         )
         .await
     }
@@ -560,6 +573,7 @@ impl ProductionMapService {
         holds: Vec<PrintPreflightHold>,
         order_ids: &BTreeSet<String>,
         apparatus_ids: &BTreeSet<String>,
+        projections: &[chain::ProjectionMap<'_>],
     ) -> Result<
         BTreeMap<String, BTreeMap<String, ApparatusQueueOrderActionControl>>,
         ProductionMapError,
@@ -574,6 +588,7 @@ impl ProductionMapService {
             Some(holds),
             Some(order_ids),
             Some(apparatus_ids),
+            Some(projections),
         )
         .await
     }
@@ -592,13 +607,23 @@ impl ProductionMapService {
         snapshot_print_preflight_holds: Option<Vec<PrintPreflightHold>>,
         output_order_ids: Option<&BTreeSet<String>>,
         output_apparatus_ids: Option<&BTreeSet<String>>,
+        projections: Option<&[chain::ProjectionMap<'_>]>,
     ) -> Result<
         BTreeMap<String, BTreeMap<String, ApparatusQueueOrderActionControl>>,
         ProductionMapError,
     > {
         let stage_controls = self.store.stage_order_control_states().await?;
+        let qolip_start_settings = self.store.qolip_start_settings().await?;
+        let owned_projections = projections.is_none().then(|| {
+            maps.iter()
+                .map(|map| self.projection_map(map))
+                .collect::<Vec<_>>()
+        });
+        let projections = projections.unwrap_or_else(|| {
+            owned_projections.as_deref().expect("standalone projections are initialized")
+        });
         let scoped_order_ids = only_apparatus.map(|apparatus| {
-            queue_order_ids_by_apparatus(maps)
+            queue_order_ids_by_projection(projections)
                 .remove(apparatus)
                 .unwrap_or_default()
                 .into_iter()
@@ -628,7 +653,7 @@ impl ProductionMapService {
             active_print_preflight_holds,
         ) = tokio::join!(
             async {
-                if output_order_ids.is_some() {
+                if output_order_ids.is_some() || scoped_order_ids.is_some() {
                     self.store
                         .raw_material_assignments_for_orders(&order_ids)
                         .await
@@ -639,7 +664,7 @@ impl ProductionMapService {
             self.store.order_run_sessions_for_orders(&order_ids),
             self.store.progress_batches_for_orders(&order_ids),
             async {
-                if output_order_ids.is_some() {
+                if output_order_ids.is_some() || scoped_order_ids.is_some() {
                     self.store.opening_wip_records_for_orders(&order_ids).await
                 } else {
                     self.store.opening_wip_records(opening_wip_query).await
@@ -658,11 +683,7 @@ impl ProductionMapService {
         let active_sessions_by_order = active_sessions_by_order?;
         let progress_batches_by_order = progress_batches_by_order?;
         let opening_wip_records = opening_wip_records?;
-        let projections = maps
-            .iter()
-            .map(|map| self.projection_map(map))
-            .collect::<Vec<_>>();
-        let projections_by_order_id = projections_by_order_id(&projections);
+        let projections_by_order_id = projections_by_order_id(projections);
         let now = super::super::progress::unix_seconds();
         let print_preflight_by_apparatus = active_print_preflight_holds?
             .into_iter()
@@ -749,7 +770,7 @@ impl ProductionMapService {
                 .or_default()
                 .push(assignment);
         }
-        let mut queue_orders_by_apparatus = queue_order_ids_by_apparatus(maps);
+        let mut queue_orders_by_apparatus = queue_order_ids_by_projection(projections);
         apparatus::filter_unselected_print_orders(
             maps,
             canonical_apparatuses,
@@ -883,7 +904,13 @@ impl ProductionMapService {
                         .map(|_| input.order_id.to_string())
                 })
                 .collect::<BTreeSet<_>>();
-            let actionable_order_id = if is_bosma {
+            let temporary_order_ids = order_inputs.iter().filter_map(|input| {
+                input.active_session.filter(|session| super::super::temporary_pause::is_temporarily_paused(session))
+                    .map(|_| input.order_id.to_string())
+            }).collect::<BTreeSet<_>>();
+            let actionable_order_id = if policy == ApparatusQueuePolicy::StrictSequence && !temporary_order_ids.is_empty() {
+                super::super::temporary_pause::next_order_after_suspension(&sequence, &effective_states, &temporary_order_ids)
+            } else if is_bosma && policy == ApparatusQueuePolicy::StrictSequence {
                 bosma_startable_order_id(&sequence, &effective_states, &detached_order_ids)
             } else {
                 queue_state::first_actionable_order_id(&sequence, &effective_states)
@@ -1030,8 +1057,7 @@ impl ProductionMapService {
                 let queue_actionable = active_order_is_this
                     && (state.is_active()
                         || state == queue_state::ApparatusQueueOrderState::Paused
-                        || (policy == ApparatusQueuePolicy::FreePick
-                            && (!is_bosma || requeued_session))
+                        || policy == ApparatusQueuePolicy::FreePick
                         || actionable_order_id == Some(order_id.trim()));
                 let mut complete_requires_full_report = false;
                 let mut complete_requires_rezka_total_waste_only = false;
@@ -1158,6 +1184,10 @@ impl ProductionMapService {
                                     } else {
                                         ApparatusQueueQolipMode::NotRequired
                                     };
+                                if interaction.qolip_mode == ApparatusQueueQolipMode::ScanRequired {
+                                    interaction.qolip_automatic_confirmation = qolip_start_settings.automatic_confirmation_enabled;
+                                    interaction.qolip_policy_revision = qolip_start_settings.revision;
+                                }
                                 if material_requirements.assignments_satisfied {
                                     interaction.mode = ApparatusQueueInteractionMode::FreshStart;
                                     start_ready = true;
@@ -1337,8 +1367,8 @@ impl ProductionMapService {
                         Err(_) => continue,
                     }
                 } else if is_rezka {
-                    match snapshot_rezka_output_kadr_counts(
-                        order_map,
+                    match snapshot_rezka_output_kadr_counts_projected(
+                        projection,
                         &storage_key,
                         &stage_node_id,
                         input_contained_kadr_count,
@@ -1362,6 +1392,13 @@ impl ProductionMapService {
                             && control == OrderControlState::Active {
                             active_session.and_then(super::super::re_pause::control)
                         } else { None },
+                        temporary_pause: if self.store.supports_temporary_pause()
+                            && state == queue_state::ApparatusQueueOrderState::InProgress
+                            && control == OrderControlState::Active {
+                            active_session.and_then(super::super::temporary_pause::control)
+                        } else { None },
+                        temporarily_paused: state == queue_state::ApparatusQueueOrderState::Paused
+                            && active_session.is_some_and(super::super::temporary_pause::is_temporarily_paused),
                         stage_work,
                         work_activity: ApparatusQueueWorkActivity::from_session(
                             active_session,
