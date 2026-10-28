@@ -106,7 +106,11 @@ pub(super) async fn resolve_target(
                 avatar_url: detail.avatar_url,
             })
         }
-        PrincipalRole::Qolipchi | PrincipalRole::Boyoqchi | PrincipalRole::TayyorlovMasteri | PrincipalRole::HomashyoRezkachi => {
+        PrincipalRole::Qolipchi
+        | PrincipalRole::Boyoqchi
+        | PrincipalRole::TayyorlovMasteri
+        | PrincipalRole::HomashyoRezkachi
+        | PrincipalRole::SalesManager => {
             let user = state
                 .system_users
                 .users_by_ids(&[ref_.to_string()])
@@ -258,6 +262,7 @@ async fn load_directory_entries(
         PrincipalRole::Boyoqchi,
         PrincipalRole::TayyorlovMasteri,
         PrincipalRole::HomashyoRezkachi,
+        PrincipalRole::SalesManager,
     ] {
         if role.is_some_and(|role| role != system_role) {
             continue;
@@ -453,6 +458,7 @@ mod tests {
                 PrincipalRole::Boyoqchi,
                 PrincipalRole::TayyorlovMasteri,
                 PrincipalRole::HomashyoRezkachi,
+                PrincipalRole::SalesManager,
             ]
             .into_iter()
             .enumerate()
@@ -493,6 +499,7 @@ mod tests {
             PrincipalRole::Admin,
             PrincipalRole::TayyorlovMasteri,
             PrincipalRole::HomashyoRezkachi,
+            PrincipalRole::SalesManager,
         ] {
             let role_value = serde_json::to_value(role).expect("role");
             let role_code = role_value.as_str().expect("role code");

@@ -15,6 +15,7 @@ pub async fn production_map_output_stats(
         &[
             Capability::AdminAccess,
             Capability::ProductionMapManage,
+            Capability::ProductionMapRead,
             Capability::ApparatusQueueRead,
         ],
     )

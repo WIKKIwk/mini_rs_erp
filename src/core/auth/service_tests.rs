@@ -36,21 +36,55 @@ fn config() -> AppConfig {
 
 #[tokio::test]
 async fn raw_material_split_role_login_is_independent_and_blocked_users_are_denied() {
-    use crate::core::system_users::{SystemUserService,MemorySystemUserStore,SystemUserUpsert};
-    let users=Arc::new(SystemUserService::new(Arc::new(MemorySystemUserStore::new())));
-    let user=users.upsert_user(SystemUserUpsert { id:"raw-cutter".into(),role:PrincipalRole::HomashyoRezkachi,
-        name:"Cutter".into(),phone:"+998901112291".into() }).await.unwrap();
-    assert_eq!(users.users(&PrincipalRole::HomashyoRezkachi,"",10).await.unwrap(),vec![user]);
-    assert!(users.users(&PrincipalRole::Qolipchi,"",10).await.unwrap().is_empty());
-    for blocked in [false,true] {
-        let states=Arc::new(FakeStateLookup { states:BTreeMap::from([("raw-cutter".into(),
-            AdminAccessState {custom_code:"911234567890".into(),blocked,removed:false})]) });
-        let auth=AuthService::new(&config()).with_system_user_dependencies(users.clone(),states);
-        let result=auth.login("+998901112291","911234567890").await;
-        if blocked {assert_eq!(result.unwrap_err(),AuthError::InvalidCredentials);}
-        else {let principal=result.unwrap();assert_eq!(principal.role,PrincipalRole::HomashyoRezkachi);assert_eq!(principal.ref_,"raw-cutter");}
-        for code in ["91ABCDEF1234","401234567890","901234567890"] {
-            assert!(auth.login("+998901112291",code).await.is_err());
+    use crate::core::system_users::{MemorySystemUserStore, SystemUserService, SystemUserUpsert};
+    let users = Arc::new(SystemUserService::new(Arc::new(
+        MemorySystemUserStore::new(),
+    )));
+    let user = users
+        .upsert_user(SystemUserUpsert {
+            id: "raw-cutter".into(),
+            role: PrincipalRole::HomashyoRezkachi,
+            name: "Cutter".into(),
+            phone: "+998901112291".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        users
+            .users(&PrincipalRole::HomashyoRezkachi, "", 10)
+            .await
+            .unwrap(),
+        vec![user]
+    );
+    assert!(
+        users
+            .users(&PrincipalRole::Qolipchi, "", 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    for blocked in [false, true] {
+        let states = Arc::new(FakeStateLookup {
+            states: BTreeMap::from([(
+                "raw-cutter".into(),
+                AdminAccessState {
+                    custom_code: "911234567890".into(),
+                    blocked,
+                    removed: false,
+                },
+            )]),
+        });
+        let auth = AuthService::new(&config()).with_system_user_dependencies(users.clone(), states);
+        let result = auth.login("+998901112291", "911234567890").await;
+        if blocked {
+            assert_eq!(result.unwrap_err(), AuthError::InvalidCredentials);
+        } else {
+            let principal = result.unwrap();
+            assert_eq!(principal.role, PrincipalRole::HomashyoRezkachi);
+            assert_eq!(principal.ref_, "raw-cutter");
+        }
+        for code in ["91ABCDEF1234", "401234567890", "901234567890"] {
+            assert!(auth.login("+998901112291", code).await.is_err());
         }
     }
 }
@@ -276,9 +310,13 @@ async fn supplier_login_accepts_migrated_deterministic_code() {
         }],
     });
     let states = Arc::new(FakeStateLookup {
-        states: BTreeMap::from([("SUP-001".to_string(), AdminAccessState {
-            custom_code: "104LJINSVVO5".into(), ..Default::default()
-        })]),
+        states: BTreeMap::from([(
+            "SUP-001".to_string(),
+            AdminAccessState {
+                custom_code: "104LJINSVVO5".into(),
+                ..Default::default()
+            },
+        )]),
     });
     let auth = AuthService::new(&config()).with_supplier_dependencies(suppliers, states);
 
@@ -294,23 +332,37 @@ async fn supplier_login_accepts_migrated_deterministic_code() {
 #[tokio::test]
 async fn database_mode_rejects_missing_builtin_without_config_fallback() {
     let config = config();
-    let auth = AuthService::new(&config).with_access_state_lookup(Arc::new(FakeStateLookup::default()));
-    assert!(auth.login(&config.admin_phone, &config.admin_code).await.is_err());
-    assert!(auth.login(&config.werka_phone, &config.werka_code).await.is_err());
+    let auth =
+        AuthService::new(&config).with_access_state_lookup(Arc::new(FakeStateLookup::default()));
+    assert!(
+        auth.login(&config.admin_phone, &config.admin_code)
+            .await
+            .is_err()
+    );
+    assert!(
+        auth.login(&config.werka_phone, &config.werka_code)
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
 async fn supplier_login_never_derives_a_code_without_a_stored_hash() {
     let suppliers = Arc::new(FakeSupplierLookup {
         suppliers: vec![SupplierRecord {
-            id: "SUP-001".into(), name: "Abdulloh".into(), phone: "+998901234567".into(),
+            id: "SUP-001".into(),
+            name: "Abdulloh".into(),
+            phone: "+998901234567".into(),
         }],
     });
     let states = Arc::new(FakeStateLookup {
         states: BTreeMap::from([("SUP-001".into(), AdminAccessState::default())]),
     });
     let auth = AuthService::new(&config()).with_supplier_dependencies(suppliers, states);
-    assert_eq!(auth.login("+998901234567", "104LJINSVVO5").await, Err(AuthError::InvalidCredentials));
+    assert_eq!(
+        auth.login("+998901234567", "104LJINSVVO5").await,
+        Err(AuthError::InvalidCredentials)
+    );
 }
 
 #[tokio::test]
@@ -685,11 +737,62 @@ impl AdminAccessStateLookup for FakeStateLookup {
     async fn list_states(&self) -> Result<BTreeMap<String, AdminAccessState>, AuthPortError> {
         let mut states = self.states.clone();
         for state in states.values_mut() {
-            if !state.custom_code.is_empty() && !crate::core::auth::password::is_password_hash(&state.custom_code) {
-                state.custom_code = crate::core::auth::password::hash_password(state.custom_code.clone())
-                    .await.map_err(|_| AuthPortError::LookupFailed)?;
+            if !state.custom_code.is_empty()
+                && !crate::core::auth::password::is_password_hash(&state.custom_code)
+            {
+                state.custom_code =
+                    crate::core::auth::password::hash_password(state.custom_code.clone())
+                        .await
+                        .map_err(|_| AuthPortError::LookupFailed)?;
             }
         }
         Ok(states)
+    }
+}
+
+#[tokio::test]
+async fn sales_manager_login_uses_its_numeric_passport_prefix_and_rejects_blocked_or_removed_accounts()
+ {
+    use crate::core::system_users::{MemorySystemUserStore, SystemUserService, SystemUserUpsert};
+    let users = Arc::new(SystemUserService::new(Arc::new(
+        MemorySystemUserStore::new(),
+    )));
+    let user = users
+        .upsert_user(SystemUserUpsert {
+            id: "sales_manager_test".into(),
+            role: PrincipalRole::SalesManager,
+            name: "Sales manager".into(),
+            phone: "+998901112292".into(),
+        })
+        .await
+        .unwrap();
+    for (blocked, removed) in [(false, false), (true, false), (false, true)] {
+        let states = Arc::new(FakeStateLookup {
+            states: BTreeMap::from([(
+                user.id.clone(),
+                AdminAccessState {
+                    custom_code: "921234567890".into(),
+                    blocked,
+                    removed,
+                },
+            )]),
+        });
+        let auth = AuthService::new(&config()).with_system_user_dependencies(users.clone(), states);
+        let login = auth.login(&user.phone, "921234567890").await;
+        if blocked || removed {
+            assert_eq!(login, Err(AuthError::InvalidCredentials));
+        } else {
+            let principal = login.unwrap();
+            assert_eq!(principal.role, PrincipalRole::SalesManager);
+            assert_eq!(principal.ref_, user.id);
+        }
+        for code in [
+            "92ABCDEF1234",
+            "911234567890",
+            "901234567890",
+            "401234567890",
+        ] {
+            assert!(auth.login(&user.phone, code).await.is_err());
+        }
     }
 }

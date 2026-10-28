@@ -98,7 +98,11 @@ pub async fn combos(
             let principal = authorize_any_capability(
                 &state,
                 &headers,
-                &[Capability::AdminAccess, Capability::ProductionMapManage],
+                &[
+                    Capability::AdminAccess,
+                    Capability::ProductionMapManage,
+                    Capability::ProductionOrderCreate,
+                ],
             )
             .await?;
             require_capability(&state, &principal, Capability::CatalogItemCreate).await?;
@@ -140,6 +144,7 @@ pub async fn combos(
                     Capability::AdminAccess,
                     Capability::ProductionMapManage,
                     Capability::QolipManage,
+                    Capability::ProductionMapRead,
                 ],
             )
             .await?;

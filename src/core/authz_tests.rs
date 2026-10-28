@@ -4,12 +4,27 @@ use crate::core::auth::models::PrincipalRole;
 
 #[test]
 fn raw_material_split_role_has_only_its_independent_workspace_capability() {
-    assert_eq!(capability_codes_for_role(PrincipalRole::HomashyoRezkachi),vec!["raw_material.split"]);
-    let role=system_role_definitions().into_iter().find(|r|r.id=="homashyo_rezkachi").unwrap();
-    assert_eq!(role.base_role,Some(PrincipalRole::HomashyoRezkachi));
-    assert_eq!(role.label,"Homashyo rezkachisi");
-    for old in [PrincipalRole::Admin,PrincipalRole::Werka,PrincipalRole::Aparatchi,PrincipalRole::MaterialTaminotchi] {
-        assert!(!capability_codes_for_role(old).iter().any(|c|c=="raw_material.split"));
+    assert_eq!(
+        capability_codes_for_role(PrincipalRole::HomashyoRezkachi),
+        vec!["raw_material.split"]
+    );
+    let role = system_role_definitions()
+        .into_iter()
+        .find(|r| r.id == "homashyo_rezkachi")
+        .unwrap();
+    assert_eq!(role.base_role, Some(PrincipalRole::HomashyoRezkachi));
+    assert_eq!(role.label, "Homashyo rezkachisi");
+    for old in [
+        PrincipalRole::Admin,
+        PrincipalRole::Werka,
+        PrincipalRole::Aparatchi,
+        PrincipalRole::MaterialTaminotchi,
+    ] {
+        assert!(
+            !capability_codes_for_role(old)
+                .iter()
+                .any(|c| c == "raw_material.split")
+        );
     }
 }
 
@@ -205,4 +220,42 @@ fn core_system_role_rejects_wrong_principal_role() {
     .expect_err("werka customer assignment must fail");
 
     assert_eq!(error, RoleAssignmentError::RoleBaseMismatch);
+}
+
+#[test]
+fn sales_manager_system_role_has_only_sales_planning_and_catalog_capabilities() {
+    let role = system_role_definitions()
+        .into_iter()
+        .find(|role| role.id == "sales_manager")
+        .expect("sales system role");
+    assert!(role.system);
+    assert_eq!(role.base_role, Some(PrincipalRole::SalesManager));
+    let actual = role
+        .capability_codes
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    let expected = [
+        "sales.access",
+        "production.map.read",
+        "production.order.create",
+        "production.order.edit",
+        "production.map.edit",
+        "catalog.item.read",
+        "catalog.item.create",
+        "catalog.item_group.read",
+        "party.customer.read",
+        "party.customer.manage",
+        "push.token.manage",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect();
+    assert_eq!(actual, expected);
+    let custom = normalize_custom_role(RoleDefinitionUpsert {
+        id: "sales_manager".into(),
+        label: "Replacement".into(),
+        base_role: None,
+        capability_codes: vec!["admin.access".into()],
+    });
+    assert_eq!(custom, Err(RoleDefinitionError::ReservedId));
 }

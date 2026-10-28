@@ -44,6 +44,7 @@ impl AdminSessionRevoker for SessionManager {
             PrincipalRole::Admin,
             PrincipalRole::TayyorlovMasteri,
             PrincipalRole::HomashyoRezkachi,
+            PrincipalRole::SalesManager,
         ] {
             self.delete_for_principal(&role, principal_ref)
                 .await

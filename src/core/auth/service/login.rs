@@ -21,7 +21,11 @@ impl AuthService {
                 attempts.reset();
                 if let Some(store) = &self.admin_state_lookup {
                     // A recovery failure must not turn a correct login into a failure.
-                    if store.remember_access_code(&principal.ref_, code.trim()).await.is_err() {
+                    if store
+                        .remember_access_code(&principal.ref_, code.trim())
+                        .await
+                        .is_err()
+                    {
                         tracing::warn!("could not preserve verified access code for admin display");
                     }
                 }
@@ -74,7 +78,7 @@ impl AuthService {
                 self.login_system_user_by_role(&normalized_phone, code, role)
                     .await
             }
-            PrincipalRole::HomashyoRezkachi => {
+            PrincipalRole::HomashyoRezkachi | PrincipalRole::SalesManager => {
                 self.login_system_user_by_role(&normalized_phone, code, role)
                     .await
             }
@@ -208,6 +212,8 @@ impl AuthService {
             Ok(PrincipalRole::Qolipchi)
         } else if trimmed.starts_with("80") {
             Ok(PrincipalRole::Boyoqchi)
+        } else if trimmed.starts_with("92") {
+            Ok(PrincipalRole::SalesManager)
         } else if trimmed.starts_with("91") {
             Ok(PrincipalRole::HomashyoRezkachi)
         } else if trimmed.starts_with("90") {

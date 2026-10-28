@@ -13,9 +13,17 @@ pub async fn production_map_qolip_start_settings(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, AdminError> {
-    let principal = authorize_capability(&state, &headers, Capability::AdminAccess).await?;
-    if principal.role != PrincipalRole::Admin {
-        return Err(forbidden());
+    let principal = authorize_any_capability(
+        &state,
+        &headers,
+        &[Capability::AdminAccess, Capability::ProductionMapRead],
+    )
+    .await?;
+    if method != Method::GET {
+        require_capability(&state, &principal, Capability::AdminAccess).await?;
+        if principal.role != PrincipalRole::Admin {
+            return Err(forbidden());
+        }
     }
     let settings = match method {
         Method::GET => state.production_maps.qolip_start_settings().await,

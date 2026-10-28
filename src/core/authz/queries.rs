@@ -33,8 +33,21 @@ pub fn system_role_definitions() -> Vec<RoleDefinition> {
         (PrincipalRole::Customer, "customer", "Customer"),
         (PrincipalRole::Qolipchi, "qolipchi", "Qolipchi"),
         (PrincipalRole::Boyoqchi, "boyoqchi", "Bo‘yoqchi"),
-        (PrincipalRole::TayyorlovMasteri, "tayyorlov_masteri", "Tayyorlov masteri"),
-        (PrincipalRole::HomashyoRezkachi, "homashyo_rezkachi", "Homashyo rezkachisi"),
+        (
+            PrincipalRole::TayyorlovMasteri,
+            "tayyorlov_masteri",
+            "Tayyorlov masteri",
+        ),
+        (
+            PrincipalRole::HomashyoRezkachi,
+            "homashyo_rezkachi",
+            "Homashyo rezkachisi",
+        ),
+        (
+            PrincipalRole::SalesManager,
+            "sales_manager",
+            "Sotuv manageri",
+        ),
         (
             PrincipalRole::MaterialTaminotchi,
             "material_taminotchi",

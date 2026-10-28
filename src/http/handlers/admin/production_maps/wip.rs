@@ -81,6 +81,7 @@ pub async fn production_map_wip_batches(
         &[
             Capability::AdminAccess,
             Capability::ProductionMapManage,
+            Capability::ProductionMapRead,
             Capability::ApparatusQueueRead,
         ],
     )
@@ -123,6 +124,10 @@ pub async fn production_map_wip_batches(
         || state
             .admin
             .principal_has_capability(&principal, Capability::ProductionMapManage)
+            .await
+        || state
+            .admin
+            .principal_has_capability(&principal, Capability::ProductionMapRead)
             .await;
     if !can_view_all {
         let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
@@ -301,10 +306,7 @@ pub async fn werka_paddon_preview(
                 .resolve_canonical_apparatus_text(id)
                 .await
             {
-                apparatus_names.insert(
-                    id.clone(),
-                    canonical.runtime.display.display_name.clone(),
-                );
+                apparatus_names.insert(id.clone(), canonical.runtime.display.display_name.clone());
             }
         }
     }

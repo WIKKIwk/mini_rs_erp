@@ -18,7 +18,11 @@ pub async fn production_map_order_summary(
     authorize_any_capability(
         &state,
         &headers,
-        &[Capability::AdminAccess, Capability::ProductionMapManage],
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::ProductionMapRead,
+        ],
     )
     .await?;
     let template = state
@@ -58,7 +62,11 @@ pub async fn production_map_order_edit(
     let principal = authorize_any_capability(
         &state,
         &headers,
-        &[Capability::AdminAccess, Capability::ProductionMapManage],
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::ProductionOrderEdit,
+        ],
     )
     .await?;
     if method != Method::GET && method != Method::PUT {
@@ -110,7 +118,9 @@ pub async fn production_map_order_edit(
     }
     let mut template = if input.template.products.is_empty() {
         crate::core::calculate_orders::hydrate_template_layers(input.template)
-    } else { crate::core::calculate_orders::hydrate_template_dimensions(input.template) };
+    } else {
+        crate::core::calculate_orders::hydrate_template_dimensions(input.template)
+    };
     validate_multi_product_customer(&state, &template).await?;
     // Identity belongs to the existing order, not to the submitted form.
     template.id = current.template.id.clone();

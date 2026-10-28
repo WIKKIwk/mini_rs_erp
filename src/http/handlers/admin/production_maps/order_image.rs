@@ -22,6 +22,7 @@ pub async fn production_map_order_image_view(
         &[
             Capability::AdminAccess,
             Capability::ProductionMapManage,
+            Capability::ProductionMapRead,
             Capability::ApparatusQueueRead,
             Capability::RawMaterialAssign,
             Capability::QolipManage,

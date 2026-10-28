@@ -63,7 +63,15 @@ impl AdminService {
     ) -> Result<AdminSystemUserDetail, AdminPortError> {
         let mut existing = self.existing_state_codes().await?;
         let mut state = self.state_for(&user.id).await?;
-        if state.removed || !matches!(user.role, PrincipalRole::Qolipchi | PrincipalRole::Boyoqchi | PrincipalRole::TayyorlovMasteri | PrincipalRole::HomashyoRezkachi)
+        if state.removed
+            || !matches!(
+                user.role,
+                PrincipalRole::Qolipchi
+                    | PrincipalRole::Boyoqchi
+                    | PrincipalRole::TayyorlovMasteri
+                    | PrincipalRole::HomashyoRezkachi
+                    | PrincipalRole::SalesManager
+            )
         {
             return Err(AdminPortError::NotFound);
         }
@@ -74,6 +82,7 @@ impl AdminService {
             PrincipalRole::Boyoqchi => "80",
             PrincipalRole::TayyorlovMasteri => "90",
             PrincipalRole::HomashyoRezkachi => "91",
+            PrincipalRole::SalesManager => "92",
             _ => return Err(AdminPortError::NotFound),
         };
         state.custom_code = random_code(prefix, &mut existing);
@@ -110,14 +119,18 @@ impl AdminService {
         let code = random_code(&self.config.read().await.werka_prefix, &mut existing);
         state.custom_code = code.clone();
         if let Some(port) = &self.state_port
-            && port.builtin_identity("werka").await?.is_none() {
+            && port.builtin_identity("werka").await?.is_none()
+        {
             let config = self.config.read().await;
-            port.put_builtin_identity("werka", &config.werka_phone, &config.werka_name).await?;
+            port.put_builtin_identity("werka", &config.werka_phone, &config.werka_name)
+                .await?;
         }
         self.put_state("werka", state).await?;
         // Keep only a hash in the in-memory compatibility identity.
-        self.config.write().await.werka_code = crate::core::auth::password::hash_password(code.clone())
-            .await.map_err(|_| AdminPortError::LookupFailed)?;
+        self.config.write().await.werka_code =
+            crate::core::auth::password::hash_password(code.clone())
+                .await
+                .map_err(|_| AdminPortError::LookupFailed)?;
         let config = self.config.read().await;
         self.update_auth_runtime(
             &config.werka_phone,

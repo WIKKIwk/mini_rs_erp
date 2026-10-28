@@ -220,3 +220,86 @@ async fn removed_account_rejects_persisted_session_after_restart() {
         SessionManager::persistent(path, Some(60)).with_access_validator(Arc::new(admin));
     assert!(restarted.get(&token).await.is_err());
 }
+
+#[tokio::test]
+async fn sales_manager_cannot_gain_operational_powers_through_a_custom_role_assignment() {
+    let (admin, _, _) = fixture();
+    let admin = admin.with_role_store(Arc::new(
+        crate::core::authz::MemoryRoleDefinitionStore::new(),
+    ));
+    let sales = principal(PrincipalRole::SalesManager, "sales-manager");
+    assert!(
+        admin
+            .principal_has_capability(&sales, Capability::SalesAccess)
+            .await
+    );
+    admin
+        .upsert_role_definition(RoleDefinitionUpsert {
+            id: "sales-escalation".into(),
+            label: "Attempted escalation".into(),
+            base_role: None,
+            capability_codes: vec![
+                "admin.access".into(),
+                "production.map.manage".into(),
+                "apparatus.queue.manage".into(),
+                "catalog.item_group.manage".into(),
+                "party.supplier.manage".into(),
+                "production.map.read".into(),
+            ],
+        })
+        .await
+        .unwrap();
+    admin
+        .upsert_role_assignment(RoleAssignmentUpsert {
+            principal_role: PrincipalRole::SalesManager,
+            principal_ref: sales.ref_.clone(),
+            role_id: "sales-escalation".into(),
+            assigned_apparatus: vec![],
+            assigned_item_groups: vec![],
+        })
+        .await
+        .unwrap();
+    for capability in [
+        Capability::AdminAccess,
+        Capability::ProductionMapManage,
+        Capability::ApparatusQueueManage,
+        Capability::CatalogItemGroupManage,
+        Capability::SupplierDirectoryManage,
+    ] {
+        assert!(!admin.principal_has_capability(&sales, capability).await);
+    }
+    assert!(
+        admin
+            .principal_has_capability(&sales, Capability::ProductionMapRead)
+            .await
+    );
+    assert_eq!(
+        admin.principal_capability_codes(&sales).await,
+        vec!["production.map.read"]
+    );
+}
+
+#[tokio::test]
+async fn sales_manager_passport_codes_are_unique_numeric_and_have_their_own_prefix() {
+    let (admin, _, _) = fixture();
+    let user = |id: &str| crate::core::system_users::SystemUser {
+        id: id.into(),
+        role: PrincipalRole::SalesManager,
+        name: "Sales manager".into(),
+        phone: "+998901112292".into(),
+    };
+    let first = admin
+        .regenerate_system_user_code(user("sales-manager-a"))
+        .await
+        .unwrap();
+    let second = admin
+        .regenerate_system_user_code(user("sales-manager-b"))
+        .await
+        .unwrap();
+    for code in [&first.code, &second.code] {
+        assert!(code.starts_with("92"));
+        assert_eq!(code.len(), 12);
+        assert!(code.chars().all(|c| c.is_ascii_digit()));
+    }
+    assert_ne!(first.code, second.code);
+}

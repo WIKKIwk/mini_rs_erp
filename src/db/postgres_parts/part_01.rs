@@ -3,7 +3,7 @@ const DEFAULT_MAX_CONNECTIONS: u32 = 16;
 const DEFAULT_ACQUIRE_TIMEOUT_MS: u64 = 500;
 const MIGRATION_LOCK_KEY: i64 = 6_514_811_918_052_026_001;
 
-const POSTGRES_MIGRATIONS: [(&str, &str); 173] = [
+const POSTGRES_MIGRATIONS: [(&str, &str); 174] = [
     (
         "0001_mini_erp_foundation",
         include_str!("../../../migrations/postgres/0001_mini_erp_foundation.sql"),
@@ -364,11 +364,15 @@ const POSTGRES_MIGRATIONS: [(&str, &str); 173] = [
     ),
     (
         "0090_drop_progress_batch_current_apparatus_key",
-        include_str!("../../../migrations/postgres/0090_drop_progress_batch_current_apparatus_key.sql"),
+        include_str!(
+            "../../../migrations/postgres/0090_drop_progress_batch_current_apparatus_key.sql"
+        ),
     ),
     (
         "0091_production_order_canonical_flow_stock_status",
-        include_str!("../../../migrations/postgres/0091_production_order_canonical_flow_stock_status.sql"),
+        include_str!(
+            "../../../migrations/postgres/0091_production_order_canonical_flow_stock_status.sql"
+        ),
     ),
     (
         "0092_rezka_lineage_payload_cutover",
@@ -654,7 +658,6 @@ const POSTGRES_MIGRATIONS: [(&str, &str); 173] = [
         "0161_paddon_apparatus_scope",
         include_str!("../../../migrations/postgres/0161_paddon_apparatus_scope.sql"),
     ),
-
     (
         "0162_stage_order_controls",
         include_str!("../../../migrations/postgres/0162_stage_order_controls.sql"),
@@ -694,6 +697,10 @@ const POSTGRES_MIGRATIONS: [(&str, &str); 173] = [
     (
         "0171_requeued_apparatus_transfers",
         include_str!("../../../migrations/postgres/0171_requeued_apparatus_transfers.sql"),
+    ),
+    (
+        "0172_sales_manager",
+        include_str!("../../../migrations/postgres/0172_sales_manager.sql"),
     ),
     (
         "0173_qolip_paddons",

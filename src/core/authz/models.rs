@@ -6,6 +6,11 @@ use crate::core::auth::models::PrincipalRole;
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum Capability {
     AdminAccess,
+    SalesAccess,
+    ProductionMapRead,
+    ProductionOrderCreate,
+    ProductionOrderEdit,
+    ProductionMapEdit,
     RoleCapabilityRead,
     RoleCapabilityManage,
     AdminSettingsRead,

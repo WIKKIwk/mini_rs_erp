@@ -131,6 +131,7 @@ fn encode_role(role: &PrincipalRole) -> u8 {
         PrincipalRole::Boyoqchi => 7,
         PrincipalRole::TayyorlovMasteri => 9,
         PrincipalRole::HomashyoRezkachi => 10,
+        PrincipalRole::SalesManager => 11,
     }
 }
 
@@ -146,6 +147,7 @@ fn decode_role(role: u8) -> Result<PrincipalRole, BoxedError> {
         7 => Ok(PrincipalRole::Boyoqchi),
         9 => Ok(PrincipalRole::TayyorlovMasteri),
         10 => Ok(PrincipalRole::HomashyoRezkachi),
+        11 => Ok(PrincipalRole::SalesManager),
         _ => Err("invalid stored session principal role".into()),
     }
 }
@@ -153,12 +155,21 @@ fn decode_role(role: u8) -> Result<PrincipalRole, BoxedError> {
 #[cfg(test)]
 #[test]
 fn raw_material_split_session_codec_preserves_existing_role_bytes() {
-    assert_eq!(encode_role(&PrincipalRole::HomashyoRezkachi),10);
-    assert_eq!(decode_role(10).unwrap(),PrincipalRole::HomashyoRezkachi);
-    for (byte,role) in [(0,PrincipalRole::Supplier),(1,PrincipalRole::Werka),(2,PrincipalRole::Customer),
-        (3,PrincipalRole::Admin),(4,PrincipalRole::Aparatchi),(5,PrincipalRole::Qolipchi),
-        (6,PrincipalRole::MaterialTaminotchi),(7,PrincipalRole::Boyoqchi),(9,PrincipalRole::TayyorlovMasteri)] {
-        assert_eq!(encode_role(&role),byte);assert_eq!(decode_role(byte).unwrap(),role);
+    assert_eq!(encode_role(&PrincipalRole::HomashyoRezkachi), 10);
+    assert_eq!(decode_role(10).unwrap(), PrincipalRole::HomashyoRezkachi);
+    for (byte, role) in [
+        (0, PrincipalRole::Supplier),
+        (1, PrincipalRole::Werka),
+        (2, PrincipalRole::Customer),
+        (3, PrincipalRole::Admin),
+        (4, PrincipalRole::Aparatchi),
+        (5, PrincipalRole::Qolipchi),
+        (6, PrincipalRole::MaterialTaminotchi),
+        (7, PrincipalRole::Boyoqchi),
+        (9, PrincipalRole::TayyorlovMasteri),
+    ] {
+        assert_eq!(encode_role(&role), byte);
+        assert_eq!(decode_role(byte).unwrap(), role);
     }
 }
 
@@ -167,4 +178,13 @@ fn decode_timestamp(timestamp: Option<i128>) -> Result<Option<OffsetDateTime>, B
         .map(OffsetDateTime::from_unix_timestamp_nanos)
         .transpose()
         .map_err(Into::into)
+}
+
+#[cfg(test)]
+#[test]
+fn sales_manager_session_codec_uses_a_new_discriminator_without_reassigning_existing_roles() {
+    assert_eq!(encode_role(&PrincipalRole::SalesManager), 11);
+    assert_eq!(decode_role(11).unwrap(), PrincipalRole::SalesManager);
+    assert_eq!(decode_role(10).unwrap(), PrincipalRole::HomashyoRezkachi);
+    assert_eq!(decode_role(9).unwrap(), PrincipalRole::TayyorlovMasteri);
 }

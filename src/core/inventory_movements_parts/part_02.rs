@@ -1,4 +1,3 @@
-
 impl InventoryTransferActionKind {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -253,10 +252,7 @@ fn normalize_asset_selectors(
     {
         return Err(InventoryMovementError::DuplicateAsset);
     }
-    Ok(keyed
-        .into_iter()
-        .map(|(_, _, asset)| asset)
-        .collect())
+    Ok(keyed.into_iter().map(|(_, _, asset)| asset).collect())
 }
 
 pub fn inventory_role_code(role: &PrincipalRole) -> &'static str {
@@ -269,6 +265,7 @@ pub fn inventory_role_code(role: &PrincipalRole) -> &'static str {
         PrincipalRole::Boyoqchi => "boyoqchi",
         PrincipalRole::TayyorlovMasteri => "tayyorlov_masteri",
         PrincipalRole::HomashyoRezkachi => "homashyo_rezkachi",
+        PrincipalRole::SalesManager => "sales_manager",
         PrincipalRole::MaterialTaminotchi => "material_taminotchi",
         PrincipalRole::Admin => "admin",
     }

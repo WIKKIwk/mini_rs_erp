@@ -12,7 +12,12 @@ pub async fn item_uoms(
     method: Method,
     headers: HeaderMap,
 ) -> Result<Response, AdminError> {
-    authorize_capability(&state, &headers, Capability::AdminAccess).await?;
+    authorize_any_capability(
+        &state,
+        &headers,
+        &[Capability::AdminAccess, Capability::CatalogItemRead],
+    )
+    .await?;
     if method != Method::GET {
         return Err(method_not_allowed());
     }
@@ -31,7 +36,15 @@ pub async fn item_detail(
     Query(query): Query<AdminItemDetailQuery>,
     body: Bytes,
 ) -> Result<Response, AdminError> {
-    authorize_capability(&state, &headers, Capability::AdminAccess).await?;
+    let principal = authorize_any_capability(
+        &state,
+        &headers,
+        &[Capability::AdminAccess, Capability::CatalogItemRead],
+    )
+    .await?;
+    if method != Method::GET {
+        require_capability(&state, &principal, Capability::AdminAccess).await?;
+    }
     match method {
         Method::GET => {
             let code = query.code.as_deref().unwrap_or_default().trim();
@@ -47,6 +60,9 @@ pub async fn item_detail(
                     AdminPortError::InvalidInput(message) => bad_request(message),
                     _ => server_error("admin item detail failed"),
                 })?;
+            if principal.role == PrincipalRole::SalesManager && !detail.is_finished_goods {
+                return Err(forbidden());
+            }
             if query.include_image
                 && detail.is_finished_goods
                 && !detail.item_group.trim().eq_ignore_ascii_case("kombo")

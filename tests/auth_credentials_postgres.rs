@@ -151,8 +151,9 @@ async fn postgres_credential_cutover_and_all_login_roles() {
         (6, PrincipalRole::Boyoqchi, "80"),
         (7, PrincipalRole::TayyorlovMasteri, "90"),
         (8, PrincipalRole::HomashyoRezkachi, "91"),
+        (12, PrincipalRole::SalesManager, "92"),
     ] {
-        let phone = format!("+99890123450{index}");
+        let phone = format!("+9989012345{index:02}");
         let user = system_users
             .upsert_user(SystemUserUpsert {
                 id: format!("system-{index}"),

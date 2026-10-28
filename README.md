@@ -35,6 +35,16 @@ The mobile API retains the `/v1/mobile/*` namespace. Current endpoint definition
 are maintained in [the HTTP router](src/http/router), and the versioned database
 schema is maintained in [PostgreSQL migrations](migrations/postgres).
 
+### Sales manager workspace
+
+`sales_manager` is a system user role with a unique `sales_manager_...` identity
+and a numeric access code starting with `92`. It uses the existing planning APIs
+to create orders, read the full work map, edit order details and edit map layouts.
+It can create customers and finished products, including finished-product
+subgroups. Queue moves, operational order controls, stock operations, printing
+and other user administration are denied by the API. Customer and item writes
+are limited to creation. Migration `0172_sales_manager` enables the new user role.
+
 ### Qolip catalog paging
 
 `GET /v1/mobile/qolip/products/page?limit=200` returns distinct products as

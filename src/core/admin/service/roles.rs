@@ -94,6 +94,11 @@ impl AdminService {
         if !matches!(self.principal_is_active(principal).await, Ok(true)) {
             return false;
         }
+        // Sales is a fixed system workspace: a custom assignment cannot grant
+        // stock, queue, lifecycle, administration or other operational powers.
+        if principal.role == PrincipalRole::SalesManager && !has_capability(principal, capability) {
+            return false;
+        }
         match self.principal_assigned_role(principal).await {
             Ok(Some(role)) => capability_code(capability)
                 .map(|code| role.capability_codes.iter().any(|item| item == code))
@@ -117,6 +122,13 @@ impl AdminService {
             return Vec::new();
         }
         match self.principal_assigned_role(principal).await {
+            Ok(Some(role)) if principal.role == PrincipalRole::SalesManager => {
+                let allowed = capability_codes_for_role(PrincipalRole::SalesManager);
+                role.capability_codes
+                    .into_iter()
+                    .filter(|code| allowed.contains(code))
+                    .collect()
+            }
             Ok(Some(role)) => role.capability_codes,
             Ok(None) => capability_codes_for_role(principal.role),
             Err(error) => {

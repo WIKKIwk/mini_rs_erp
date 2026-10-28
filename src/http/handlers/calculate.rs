@@ -31,7 +31,15 @@ pub async fn calculate_route(
         .admin
         .principal_has_capability(&principal, Capability::ProductionMapManage)
         .await;
-    if !can_admin && !can_production_map {
+    let can_edit_orders = state
+        .admin
+        .principal_has_capability(&principal, Capability::ProductionOrderCreate)
+        .await
+        || state
+            .admin
+            .principal_has_capability(&principal, Capability::ProductionOrderEdit)
+            .await;
+    if !can_admin && !can_production_map && !can_edit_orders {
         return Err(forbidden());
     }
     let request: CalculateRequest =
@@ -229,8 +237,12 @@ pub async fn calculate_order_image_view_route(
     let key = principal_owner_key(&principal);
     let image = state
         .order_image_cache
-        .get(state.calculate_orders.as_ref(), Some(&key), &image_id,
-            super::calculate_image::wants_thumbnail(&uri))
+        .get(
+            state.calculate_orders.as_ref(),
+            Some(&key),
+            &image_id,
+            super::calculate_image::wants_thumbnail(&uri),
+        )
         .await
         .map_err(store_error)?
         .ok_or_else(|| {
@@ -264,7 +276,15 @@ async fn authorize_calculate_admin(
         .admin
         .principal_has_capability(&principal, Capability::ProductionMapManage)
         .await;
-    if !can_admin && !can_production_map {
+    let can_edit_orders = state
+        .admin
+        .principal_has_capability(&principal, Capability::ProductionOrderCreate)
+        .await
+        || state
+            .admin
+            .principal_has_capability(&principal, Capability::ProductionOrderEdit)
+            .await;
+    if !can_admin && !can_production_map && !can_edit_orders {
         return Err(forbidden());
     }
     Ok(principal)
@@ -280,6 +300,7 @@ fn principal_owner_key(principal: &Principal) -> String {
         PrincipalRole::Boyoqchi => "boyoqchi",
         PrincipalRole::TayyorlovMasteri => "tayyorlov_masteri",
         PrincipalRole::HomashyoRezkachi => "homashyo_rezkachi",
+        PrincipalRole::SalesManager => "sales_manager",
         PrincipalRole::MaterialTaminotchi => "material_taminotchi",
         PrincipalRole::Admin => "admin",
     };

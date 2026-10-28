@@ -1,4 +1,3 @@
-
 pub async fn production_map_audit(
     State(state): State<AppState>,
     method: Method,
@@ -7,7 +6,11 @@ pub async fn production_map_audit(
     authorize_any_capability(
         &state,
         &headers,
-        &[Capability::AdminAccess, Capability::ProductionMapManage],
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::ProductionMapRead,
+        ],
     )
     .await?;
     if method != Method::GET {
@@ -36,6 +39,7 @@ pub async fn production_map_capacity(
         &[
             Capability::AdminAccess,
             Capability::ProductionMapManage,
+            Capability::ProductionMapRead,
             Capability::ApparatusQueueRead,
         ],
     )
@@ -195,6 +199,7 @@ pub async fn production_maps(
         &[
             Capability::AdminAccess,
             Capability::ProductionMapManage,
+            Capability::ProductionMapRead,
             Capability::ApparatusQueueRead,
             Capability::RawMaterialAssign,
             Capability::QolipManage,
@@ -241,12 +246,22 @@ pub async fn production_maps(
             authorize_any_capability(
                 &state,
                 &headers,
-                &[Capability::AdminAccess, Capability::ProductionMapManage],
+                &[
+                    Capability::AdminAccess,
+                    Capability::ProductionMapManage,
+                    Capability::ProductionMapEdit,
+                ],
             )
             .await?;
             let mut input: ProductionMapDefinition = parse_json(&body)?;
-            let previous_combo = state.production_maps.raw_map(&input.id).await
+            let previous_combo = state
+                .production_maps
+                .raw_map(&input.id)
+                .await
                 .map_err(production_map_error)?;
+            if principal.role == PrincipalRole::SalesManager && previous_combo.is_none() {
+                return Err(forbidden());
+            }
             super::combos::validate_combo_map_catalog_identity(&state, &input).await?;
             super::combos::validate_combo_map_update(&input, previous_combo.as_ref())?;
             assign_order_number_if_missing(&state, &mut input)
@@ -308,7 +323,11 @@ pub async fn production_map_save_with_order(
     let principal = authorize_any_capability(
         &state,
         &headers,
-        &[Capability::AdminAccess, Capability::ProductionMapManage],
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::ProductionOrderCreate,
+        ],
     )
     .await?;
     if method != Method::PUT {
@@ -329,7 +348,11 @@ pub async fn production_map_auto_open(
     let principal = authorize_any_capability(
         &state,
         &headers,
-        &[Capability::AdminAccess, Capability::ProductionMapManage],
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::ProductionOrderCreate,
+        ],
     )
     .await?;
     if method != Method::POST {
@@ -396,7 +419,9 @@ async fn save_production_map_with_order(
         if input.map.combo.is_some() && input.map.combo != template.combo {
             return Err(conflict("combo_reference_mismatch"));
         }
-        let template = if template.products.is_empty() { template } else {
+        let template = if template.products.is_empty() {
+            template
+        } else {
             crate::core::calculate_orders::hydrate_template_dimensions(template)
         };
         validate_multi_product_customer(state, &template).await?;
@@ -418,8 +443,10 @@ async fn save_production_map_with_order(
     ) {
         return Err(bad_request("template_action_invalid"));
     }
-    if input.template_action == "use" && !is_sheet_order_map(&input.map)
-        && !input.map.id.starts_with("zakaz-draft-") {
+    if input.template_action == "use"
+        && !is_sheet_order_map(&input.map)
+        && !input.map.id.starts_with("zakaz-draft-")
+    {
         return Err(bad_request("template_action_invalid"));
     }
     let owner_key = principal_owner_key(principal);
@@ -562,23 +589,31 @@ async fn save_production_map_with_order(
             }
         };
         state.production_maps.notify_live();
-        spawn_order_sheet_append(
-            state.order_sheets.clone(),
-            saved.map.clone(),
-            snapshot,
-        );
+        spawn_order_sheet_append(state.order_sheets.clone(), saved.map.clone(), snapshot);
         return Ok(json_response(serde_json::json!({
             "ok": true, "saved": saved, "template": saved_template,
         })));
     }
-    if !is_sheet_order_map(&input.map) && state.production_orders.enabled()
-        && let Some(mut template) = input.template.clone() {
-        let _guard=state.production_maps.queue_action_guard().await;
-        let saved=state.production_maps.prepare_map_for_save(input.map.clone()).await.map_err(production_map_error)?;
-        template.source_map_id=template_source_map_id_for_save(&saved.map,&template);
-        let saved_template=state.production_orders.save_template_map_atomic(&saved.map,&template,&owner_key).await.map_err(production_map_error)?;
+    if !is_sheet_order_map(&input.map)
+        && state.production_orders.enabled()
+        && let Some(mut template) = input.template.clone()
+    {
+        let _guard = state.production_maps.queue_action_guard().await;
+        let saved = state
+            .production_maps
+            .prepare_map_for_save(input.map.clone())
+            .await
+            .map_err(production_map_error)?;
+        template.source_map_id = template_source_map_id_for_save(&saved.map, &template);
+        let saved_template = state
+            .production_orders
+            .save_template_map_atomic(&saved.map, &template, &owner_key)
+            .await
+            .map_err(production_map_error)?;
         state.production_maps.notify_live();
-        return Ok(json_response(serde_json::json!({"ok":true,"saved":saved,"template":saved_template})));
+        return Ok(json_response(
+            serde_json::json!({"ok":true,"saved":saved,"template":saved_template}),
+        ));
     }
     let saved_map = if let Some(template_map) = template_map {
         state
@@ -654,11 +689,7 @@ async fn save_production_map_with_order(
             .cloned()
             .or_else(|| saved_template.clone())
     {
-        spawn_order_sheet_append(
-            state.order_sheets.clone(),
-            saved_map.map.clone(),
-            template,
-        );
+        spawn_order_sheet_append(state.order_sheets.clone(), saved_map.map.clone(), template);
     }
     Ok(json_response(serde_json::json!({
         "ok": true,

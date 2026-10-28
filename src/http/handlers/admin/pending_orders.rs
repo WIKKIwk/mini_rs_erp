@@ -32,7 +32,11 @@ pub async fn pending_orders(
     authorize_any_capability(
         &state,
         &headers,
-        &[Capability::AdminAccess, Capability::ProductionMapManage],
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::ProductionMapRead,
+        ],
     )
     .await?;
     if method != Method::GET {
@@ -57,7 +61,11 @@ pub async fn pending_order_image(
     authorize_any_capability(
         &state,
         &headers,
-        &[Capability::AdminAccess, Capability::ProductionMapManage],
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::ProductionMapRead,
+        ],
     )
     .await?;
     if method != Method::GET {

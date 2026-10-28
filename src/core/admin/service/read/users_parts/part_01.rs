@@ -1,4 +1,3 @@
-
 impl AdminService {
     pub async fn user_list_page(
         &self,
@@ -209,8 +208,8 @@ impl AdminService {
                     name: supplier.name,
                     phone: supplier.phone,
                     avatar_url: String::new(),
-                        apparatus_display: String::new(),
-                        apparatus_id: String::new(),
+                    apparatus_display: String::new(),
+                    apparatus_id: String::new(),
                     role_label,
                     blocked: state.blocked,
                     status: if state.blocked { "blocked" } else { "active" }.to_string(),
@@ -273,8 +272,8 @@ impl AdminService {
                 name: worker.name,
                 phone: worker.phone,
                 avatar_url: String::new(),
-                        apparatus_display: String::new(),
-                        apparatus_id: String::new(),
+                apparatus_display: String::new(),
+                apparatus_id: String::new(),
                 role_label: worker.level,
                 blocked: false,
                 status: "active".to_string(),
@@ -300,6 +299,7 @@ impl AdminService {
                 PrincipalRole::Boyoqchi => "Bo‘yoqchi",
                 PrincipalRole::TayyorlovMasteri => "Tayyorlov masteri",
                 PrincipalRole::HomashyoRezkachi => "Homashyo rezkachisi",
+                PrincipalRole::SalesManager => "Sotuv manageri",
                 _ => "System user",
             };
             entries.push(AdminUserListEntry {
@@ -310,8 +310,8 @@ impl AdminService {
                 name: user.name,
                 phone: user.phone,
                 avatar_url: String::new(),
-                        apparatus_display: String::new(),
-                        apparatus_id: String::new(),
+                apparatus_display: String::new(),
+                apparatus_id: String::new(),
                 role_label: role_label.to_string(),
                 blocked: state.blocked,
                 status: if state.blocked { "blocked" } else { "active" }.to_string(),

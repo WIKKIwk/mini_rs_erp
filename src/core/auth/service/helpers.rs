@@ -1,13 +1,12 @@
 use crate::core::auth::models::PrincipalRole;
-use crate::core::auth::ports::{
-    CustomerRecord, MaterialTaminotchiRecord, WorkerRecord,
-};
+use crate::core::auth::ports::{CustomerRecord, MaterialTaminotchiRecord, WorkerRecord};
 
 use super::AuthError;
 
 pub(super) async fn code_matches(hash: &str, code: &str) -> Result<bool, AuthError> {
     crate::core::auth::password::verify_password(hash, code.trim())
-        .await.map_err(|_| AuthError::Internal)
+        .await
+        .map_err(|_| AuthError::Internal)
 }
 
 pub fn normalize_phone(input: &str) -> Result<String, AuthError> {
@@ -60,7 +59,12 @@ pub(super) fn blank_default(value: &str, fallback: &str) -> String {
 pub(super) fn requires_numeric_access_code(role: &PrincipalRole) -> bool {
     matches!(
         role,
-        PrincipalRole::Aparatchi | PrincipalRole::Qolipchi | PrincipalRole::Boyoqchi | PrincipalRole::TayyorlovMasteri | PrincipalRole::HomashyoRezkachi
+        PrincipalRole::Aparatchi
+            | PrincipalRole::Qolipchi
+            | PrincipalRole::Boyoqchi
+            | PrincipalRole::TayyorlovMasteri
+            | PrincipalRole::HomashyoRezkachi
+            | PrincipalRole::SalesManager
     )
 }
 

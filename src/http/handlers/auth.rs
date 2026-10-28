@@ -45,12 +45,26 @@ pub async fn login(
         return Err(login_error(AuthError::InvalidCredentials));
     }
     if principal.role == PrincipalRole::TayyorlovMasteri
-        && !state.admin.principal_has_capability(&principal, Capability::PreparationAccess).await
+        && !state
+            .admin
+            .principal_has_capability(&principal, Capability::PreparationAccess)
+            .await
     {
         return Err(login_error(AuthError::InvalidCredentials));
     }
     if principal.role == PrincipalRole::HomashyoRezkachi
-        && !state.admin.principal_has_capability(&principal, Capability::RawMaterialSplitAccess).await
+        && !state
+            .admin
+            .principal_has_capability(&principal, Capability::RawMaterialSplitAccess)
+            .await
+    {
+        return Err(login_error(AuthError::InvalidCredentials));
+    }
+    if principal.role == PrincipalRole::SalesManager
+        && !state
+            .admin
+            .principal_has_capability(&principal, Capability::SalesAccess)
+            .await
     {
         return Err(login_error(AuthError::InvalidCredentials));
     }

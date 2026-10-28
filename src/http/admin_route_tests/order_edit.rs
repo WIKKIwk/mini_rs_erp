@@ -52,7 +52,7 @@ impl MiniOrderSink for EditSink {
         if source.revision != original.revision {
             return Err(OrderEditError::Conflict);
         }
-        assert_eq!(actor.role, "admin");
+        assert!(matches!(actor.role.as_str(), "admin" | "sales_manager"));
         *source = OrderEditSource {
             map: map.clone(),
             template: template.clone(),
@@ -83,7 +83,8 @@ async fn order_summary_reads_saved_calculation_when_editing_is_blocked() {
             map: serde_json::from_value(serde_json::json!({
                 "id": "zakaz-1234", "product_code": "item", "title": "Product",
                 "order_number": "1234"
-            })).unwrap(),
+            }))
+            .unwrap(),
             template: template.clone(),
             revision: 7,
             restrictions: Default::default(),
@@ -101,21 +102,53 @@ async fn order_summary_reads_saved_calculation_when_editing_is_blocked() {
         (worker.as_str(), StatusCode::FORBIDDEN),
         ("invalid", StatusCode::UNAUTHORIZED),
     ] {
-        let response = app.clone().oneshot(request_with_body("GET", path, credential, "")).await.unwrap();
+        let response = app
+            .clone()
+            .oneshot(request_with_body("GET", path, credential, ""))
+            .await
+            .unwrap();
         assert_eq!(response.status(), expected);
     }
-    let response = app.clone().oneshot(request_with_body("GET", path, &token, "")).await.unwrap();
+    let response = app
+        .clone()
+        .oneshot(request_with_body("GET", path, &token, ""))
+        .await
+        .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(json_body(response).await["template"], serde_json::to_value(template).unwrap());
-    let response = app.clone().oneshot(request_with_body("PUT", path, &token, "{}")).await.unwrap();
+    assert_eq!(
+        json_body(response).await["template"],
+        serde_json::to_value(template).unwrap()
+    );
+    let response = app
+        .clone()
+        .oneshot(request_with_body("PUT", path, &token, "{}"))
+        .await
+        .unwrap();
     assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
-    let response = app.oneshot(request_with_body("GET", "/v1/mobile/admin/production-maps/order-summary?id=missing", &token, "")).await.unwrap();
+    let response = app
+        .oneshot(request_with_body(
+            "GET",
+            "/v1/mobile/admin/production-maps/order-summary?id=missing",
+            &token,
+            "",
+        ))
+        .await
+        .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     assert_eq!(sink.saves.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
 async fn order_edit_route_authorization_stale_form_and_existing_order_update() {
+    check_order_edit_route(PrincipalRole::Admin).await;
+}
+
+#[tokio::test]
+async fn sales_order_edit_preserves_stale_form_and_material_guards() {
+    check_order_edit_route(PrincipalRole::SalesManager).await;
+}
+
+async fn check_order_edit_route(role: PrincipalRole) {
     let mut state = test_state();
     let template = CalculateOrderTemplate {
         id: "quick-1".into(),
@@ -129,7 +162,10 @@ async fn order_edit_route_authorization_stale_form_and_existing_order_update() {
         frame_product_size_mm: 300.0,
         frame_count: 2.0,
         roll_count: Some(6),
-        layers: vec![crate::core::formula::LayerInput::new("pet", "12"), crate::core::formula::LayerInput::new("pe", "40")],
+        layers: vec![
+            crate::core::formula::LayerInput::new("pet", "12"),
+            crate::core::formula::LayerInput::new("pe", "40"),
+        ],
         ..Default::default()
     };
     let result = crate::core::formula::calculate_with_material_catalog(
@@ -181,7 +217,7 @@ async fn order_edit_route_authorization_stale_form_and_existing_order_update() {
         storage_failure: std::sync::atomic::AtomicBool::new(false),
     });
     state.production_orders = sink.clone();
-    let token = session(&state, PrincipalRole::Admin).await;
+    let token = session(&state, role).await;
     let worker = session(&state, PrincipalRole::Aparatchi).await;
     let app = build_router(state.clone());
     let path = "/v1/mobile/admin/production-maps/order-edit?id=zakaz-1234";
@@ -224,11 +260,20 @@ async fn order_edit_route_authorization_stale_form_and_existing_order_update() {
     assert_eq!(json_body(response).await["error"], "Buyurtmada harakat bor");
     sink.blocked.store(false, Ordering::SeqCst);
     sink.storage_failure.store(true, Ordering::SeqCst);
-    let response = app.clone().oneshot(request_with_body("PUT", path, &token, &body)).await.unwrap();
+    let response = app
+        .clone()
+        .oneshot(request_with_body("PUT", path, &token, &body))
+        .await
+        .unwrap();
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let failure = json_body(response).await;
     assert_eq!(failure["error"], "order_edit_database_permission");
-    assert!(failure["message"].as_str().unwrap().contains("tarix yozuvlarini himoyalash"));
+    assert!(
+        failure["message"]
+            .as_str()
+            .unwrap()
+            .contains("tarix yozuvlarini himoyalash")
+    );
     assert_eq!(sink.saves.load(Ordering::SeqCst), 0);
     sink.storage_failure.store(false, Ordering::SeqCst);
     let response = app
@@ -267,24 +312,58 @@ async fn order_edit_route_authorization_stale_form_and_existing_order_update() {
     // cannot authorize an edit to a now-protected layer.
     sink.source.lock().await.restrictions =
         crate::core::order_edit::OrderEditRestrictions::for_materials(
-            &saved.template, &[vec!["PET".into()]],
+            &saved.template,
+            &[vec!["PET".into()]],
         );
-    let response = app.clone().oneshot(request_with_body("GET", path, &token, "")).await.unwrap();
+    let response = app
+        .clone()
+        .oneshot(request_with_body("GET", path, &token, ""))
+        .await
+        .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(json_body(response).await["restrictions"]["locked_layer_indices"], serde_json::json!([0]));
+    assert_eq!(
+        json_body(response).await["restrictions"]["locked_layer_indices"],
+        serde_json::json!([0])
+    );
     let mut forbidden = saved.template.clone();
     forbidden.layers[0].micron = "35".into();
-    let response = app.clone().oneshot(request_with_body("PUT", path, &token,
-        &serde_json::json!({"original": saved, "template": forbidden}).to_string())).await.unwrap();
+    let response = app
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            path,
+            &token,
+            &serde_json::json!({"original": saved, "template": forbidden}).to_string(),
+        ))
+        .await
+        .unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    assert!(json_body(response).await["error"].as_str().unwrap().contains("1-qatlam"));
+    assert!(
+        json_body(response).await["error"]
+            .as_str()
+            .unwrap()
+            .contains("1-qatlam")
+    );
     assert_eq!(sink.saves.load(Ordering::SeqCst), 1);
     let mut allowed = saved.template.clone();
     allowed.kg = 650.0;
     allowed.layers[1].micron = "50".into();
-    let response = app.clone().oneshot(request_with_body("PUT", path, &token,
-        &serde_json::json!({"original": saved, "template": allowed}).to_string())).await.unwrap();
-    assert_eq!(response.status(), StatusCode::OK, "{}", json_body(response).await);
+    let response = app
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            path,
+            &token,
+            &serde_json::json!({"original": saved, "template": allowed}).to_string(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "{}",
+        json_body(response).await
+    );
     assert_eq!(sink.saves.load(Ordering::SeqCst), 2);
     let changed_layer = sink.source.lock().await.clone();
     assert_eq!(changed_layer.template.layers[0], saved.template.layers[0]);

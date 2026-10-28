@@ -1,4 +1,3 @@
-
 fn push_retry_delay_seconds(attempts: i32) -> i64 {
     let exponent = attempts.clamp(1, 10) as u32;
     (1_i64 << exponent).clamp(2, 900)
@@ -40,6 +39,7 @@ fn chat_role_from_code(value: &str) -> Result<PrincipalRole, ChatError> {
         "boyoqchi" => Ok(PrincipalRole::Boyoqchi),
         "tayyorlov_masteri" => Ok(PrincipalRole::TayyorlovMasteri),
         "homashyo_rezkachi" => Ok(PrincipalRole::HomashyoRezkachi),
+        "sales_manager" => Ok(PrincipalRole::SalesManager),
         "material_taminotchi" => Ok(PrincipalRole::MaterialTaminotchi),
         "customer" => Ok(PrincipalRole::Customer),
         "admin" => Ok(PrincipalRole::Admin),

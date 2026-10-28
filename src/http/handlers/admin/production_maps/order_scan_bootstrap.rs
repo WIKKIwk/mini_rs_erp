@@ -16,6 +16,7 @@ const BOOTSTRAP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10
 pub(super) const BOOTSTRAP_CAPABILITIES: &[Capability] = &[
     Capability::AdminAccess,
     Capability::ProductionMapManage,
+    Capability::ProductionMapRead,
     Capability::ApparatusQueueRead,
     Capability::RawMaterialAssign,
     Capability::QolipManage,
@@ -100,9 +101,7 @@ async fn bootstrap(
     for _ in 0..SNAPSHOT_ATTEMPTS {
         let (snapshot, mut revision) = state
             .production_maps
-            .worker_snapshot_shared_with_revision(
-                &[apparatus.to_string()], &[order_id.to_string()],
-            )
+            .worker_snapshot_shared_with_revision(&[apparatus.to_string()], &[order_id.to_string()])
             .await
             .map_err(production_map_error)?;
         let control = snapshot
@@ -179,8 +178,10 @@ async fn bootstrap(
                         Method::GET,
                         headers.clone(),
                         Bytes::new(),
-                    ).await,
-                ).await
+                    )
+                    .await,
+                )
+                .await
             },
             async {
                 if !include_prepared_sections || !needs_input_progress {
@@ -192,8 +193,10 @@ async fn bootstrap(
                         Query(wip::WipBatchesQuery::for_scan_bootstrap(order_id)),
                         Method::GET,
                         headers.clone(),
-                    ).await,
-                ).await
+                    )
+                    .await,
+                )
+                .await
             },
         );
         if validated_progress.is_err() {
@@ -226,12 +229,18 @@ async fn bootstrap(
                 .queue_action_controls
                 .get(apparatus)
                 .and_then(|orders| orders.get(order_id));
-            let previous = serde_json::to_value((Some(control),
-                snapshot.stage_states.get(order_id), snapshot.order_controls.get(order_id)))
-                .map_err(|_| conflict("order_scan_bootstrap_changed"))?;
-            let current = serde_json::to_value((latest_control,
-                latest.stage_states.get(order_id), latest.order_controls.get(order_id)))
-                .map_err(|_| conflict("order_scan_bootstrap_changed"))?;
+            let previous = serde_json::to_value((
+                Some(control),
+                snapshot.stage_states.get(order_id),
+                snapshot.order_controls.get(order_id),
+            ))
+            .map_err(|_| conflict("order_scan_bootstrap_changed"))?;
+            let current = serde_json::to_value((
+                latest_control,
+                latest.stage_states.get(order_id),
+                latest.order_controls.get(order_id),
+            ))
+            .map_err(|_| conflict("order_scan_bootstrap_changed"))?;
             if previous != current {
                 continue;
             }
@@ -395,6 +404,7 @@ pub(super) async fn authorization_scope(
     assigned.sort();
     assigned.dedup();
     if !has(Capability::AdminAccess)
+        && !has(Capability::ProductionMapRead)
         && !queue_state::apparatus_matches_assigned(apparatus, &assigned)
     {
         return Err(forbidden());

@@ -16,6 +16,7 @@ pub enum PrincipalRole {
     Admin,
     TayyorlovMasteri,
     HomashyoRezkachi,
+    SalesManager,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

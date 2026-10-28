@@ -14,15 +14,24 @@ pub(super) const SEQUENCE_LIST_PROJECTION: &str = "sequence_list_v1";
 pub(super) const ORDERS_LIST_PROJECTION: &str = "orders_list_v1";
 
 pub(super) fn valid_list_projection(view: &str, projection: &str) -> bool {
-    projection.is_empty() || matches!((view, projection),
-        ("sequence", SEQUENCE_LIST_PROJECTION) | ("orders", ORDERS_LIST_PROJECTION))
+    projection.is_empty()
+        || matches!(
+            (view, projection),
+            ("sequence", SEQUENCE_LIST_PROJECTION) | ("orders", ORDERS_LIST_PROJECTION)
+        )
 }
 
-pub(super) fn worker_list_fields(snapshot: &ProductionMapLiveSnapshot, customers: &BTreeMap<String, String>) -> serde_json::Value {
+pub(super) fn worker_list_fields(
+    snapshot: &ProductionMapLiveSnapshot,
+    customers: &BTreeMap<String, String>,
+) -> serde_json::Value {
     list::project_worker(snapshot, customers)
 }
 
-pub(super) fn worker_pending_report_ids(snapshot: &ProductionMapLiveSnapshot, completed: &[crate::core::production_map::CompletedQueueOrder]) -> BTreeMap<String, Vec<String>> {
+pub(super) fn worker_pending_report_ids(
+    snapshot: &ProductionMapLiveSnapshot,
+    completed: &[crate::core::production_map::CompletedQueueOrder],
+) -> BTreeMap<String, Vec<String>> {
     list::worker_pending_report_ids(snapshot, completed)
 }
 
@@ -106,7 +115,11 @@ pub async fn production_map_order_page(
     let principal = authorize_any_capability(
         &state,
         &headers,
-        &[Capability::AdminAccess, Capability::ProductionMapManage],
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::ProductionMapRead,
+        ],
     )
     .await?;
     let identity = query.compression == "identity";
@@ -114,7 +127,11 @@ pub async fn production_map_order_page(
         Some(payload) => json_response(payload),
         None => not_modified(),
     };
-    Ok(if identity { crate::http::router::identity_response(response) } else { response })
+    Ok(if identity {
+        crate::http::router::identity_response(response)
+    } else {
+        response
+    })
 }
 
 /// The HTTP bootstrap and live windows use the same domain projection and
@@ -137,7 +154,8 @@ pub(super) async fn read_page(
         || (query.view == "sequence" && !queue_state::is_canonical_apparatus_id(&query.apparatus))
         || !valid_list_projection(&query.view, &query.projection)
         || (!query.compression.is_empty()
-            && (query.compression != "identity" || !matches!(query.view.as_str(), "sequence" | "orders")))
+            && (query.compression != "identity"
+                || !matches!(query.view.as_str(), "sequence" | "orders")))
         || (query.view == "move"
             && (!valid_move_apparatus(&query.apparatus)
                 || !valid_move_apparatus(&query.target)
@@ -154,11 +172,15 @@ pub(super) async fn read_page(
         &query.target,
         &query.search,
         limit,
-    )).map_err(|_| bad_request("invalid_order_page_scope"))?;
+    ))
+    .map_err(|_| bad_request("invalid_order_page_scope"))?;
     // Preserve legacy scopes byte-for-byte; a new projection cannot reuse a
     // full-page cursor, conditional response, live baseline or disk cache.
     if !query.projection.is_empty() {
-        scope_value.as_array_mut().unwrap().push(query.projection.clone().into());
+        scope_value
+            .as_array_mut()
+            .unwrap()
+            .push(query.projection.clone().into());
     }
     let scope = scope_value.to_string();
 
@@ -296,8 +318,14 @@ pub(super) async fn read_page(
             production_map_definition_customers(&state, &catalog.iter().collect::<Vec<_>>()).await
         };
         let configurations = if query.view == "move" {
-            state.production_maps.admin_move_page_configurations().await.map_err(production_map_error)?
-        } else { Vec::new() };
+            state
+                .production_maps
+                .admin_move_page_configurations()
+                .await
+                .map_err(production_map_error)?
+        } else {
+            Vec::new()
+        };
         let ids = catalog
             .iter()
             .filter(|map| {
@@ -438,14 +466,24 @@ pub(super) async fn read_page(
     }
     let mut payload = if query.projection == SEQUENCE_LIST_PROJECTION {
         if !snapshot.sequence_versions.contains_key(apparatus)
-            || !snapshot.queue_policies.iter().any(|policy| policy.apparatus_id.as_str() == apparatus)
+            || !snapshot
+                .queue_policies
+                .iter()
+                .any(|policy| policy.apparatus_id.as_str() == apparatus)
         {
             return Err(bad_request("invalid_order_page_scope"));
         }
         if query.search.is_empty() {
-            customers = production_map_definition_customers(state, &snapshot.maps.iter()
-                .filter(|saved| selected.contains(&saved.map.id))
-                .map(|saved| &saved.map).collect::<Vec<_>>()).await;
+            customers = production_map_definition_customers(
+                state,
+                &snapshot
+                    .maps
+                    .iter()
+                    .filter(|saved| selected.contains(&saved.map.id))
+                    .map(|saved| &saved.map)
+                    .collect::<Vec<_>>(),
+            )
+            .await;
         }
         list::project(&snapshot, &selected, apparatus, &query.search, &customers)
     } else if query.projection == ORDERS_LIST_PROJECTION {
@@ -460,7 +498,10 @@ pub(super) async fn read_page(
         payload["pending_orders"] = serde_json::json!(selected_pending);
         payload["calculation_templates"] = serde_json::json!(calculation_templates);
         payload["order_customers"] = serde_json::json!(
-            customers.iter().filter(|(id, _)| selected.contains(id)).collect::<BTreeMap<_, _>>()
+            customers
+                .iter()
+                .filter(|(id, _)| selected.contains(id))
+                .collect::<BTreeMap<_, _>>()
         );
         payload
     };
@@ -555,21 +596,36 @@ pub(super) async fn read_detail(
     order_id: &str,
 ) -> Result<Response, AdminError> {
     for _ in 0..3 {
-        let (snapshot, revision) = state.production_maps
+        let (snapshot, revision) = state
+            .production_maps
             .order_snapshot_shared_with_revision(&[order_id.to_string()])
-            .await.map_err(production_map_error)?;
+            .await
+            .map_err(production_map_error)?;
         let snapshot = super::super::training::merge_worker_training_snapshot_shared(
             state, principal, snapshot,
-        ).await.map_err(super::super::training::training_workspace_error)?;
-        if state.production_maps.snapshot_revision() != revision { continue; }
+        )
+        .await
+        .map_err(super::super::training::training_workspace_error)?;
+        if state.production_maps.snapshot_revision() != revision {
+            continue;
+        }
         let projected = project(&snapshot, &[order_id.to_string()]);
-        if projected.maps.len() != 1 { return Err(not_found("order_not_available")); }
+        if projected.maps.len() != 1 {
+            return Err(not_found("order_not_available"));
+        }
         let customers = production_map_order_customers(state, &projected.maps).await;
         let templates = page_calculation_templates(state, &projected.maps).await;
-        let created_at = state.production_orders.order_created_at_unix(order_id)
-            .await.map_err(|_| server_error("Buyurtma ochilgan vaqt yuklanmadi"))?;
+        let created_at = state
+            .production_orders
+            .order_created_at_unix(order_id)
+            .await
+            .map_err(|_| server_error("Buyurtma ochilgan vaqt yuklanmadi"))?;
         let map = &projected.maps[0].map;
-        let qolip_in_rework = match state.qolip.require_qolips_available_for_production_map(&map).await {
+        let qolip_in_rework = match state
+            .qolip
+            .require_qolips_available_for_production_map(&map)
+            .await
+        {
             Ok(()) => Some(false),
             Err(crate::core::qolip::QolipError::QolipInRework) => Some(true),
             Err(error) => {
@@ -577,7 +633,9 @@ pub(super) async fn read_detail(
                 None
             }
         };
-        if state.production_maps.snapshot_revision() != revision { continue; }
+        if state.production_maps.snapshot_revision() != revision {
+            continue;
+        }
         let mut payload = serde_json::to_value(projected).unwrap();
         payload["maps"][0]["created_at_unix"] = serde_json::json!(created_at);
         payload["maps"][0]["qolip_in_rework"] = serde_json::json!(qolip_in_rework);
@@ -588,8 +646,14 @@ pub(super) async fn read_detail(
         payload["epoch"] = state.production_maps.snapshot_epoch().into();
         payload["rev"] = revision.into();
         payload["scope"] = serde_json::json!([
-            principal.role, principal.ref_, "order_detail_v1", apparatus, order_id,
-        ]).to_string().into();
+            principal.role,
+            principal.ref_,
+            "order_detail_v1",
+            apparatus,
+            order_id,
+        ])
+        .to_string()
+        .into();
         payload["order_customers"] = serde_json::json!(customers);
         payload["calculation_templates"] = serde_json::json!(templates);
         return Ok(json_response(payload));
@@ -605,7 +669,11 @@ pub async fn production_map_closed_order_detail(
     authorize_any_capability(
         &state,
         &headers,
-        &[Capability::AdminAccess, Capability::ProductionMapManage],
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::ProductionMapRead,
+        ],
     )
     .await?;
     let order = state
@@ -729,7 +797,10 @@ pub(crate) fn ordered_ids(snapshot: &ProductionMapLiveSnapshot, apparatus: &str)
     }
 }
 
-pub(super) fn project(snapshot: &ProductionMapLiveSnapshot, ids: &[String]) -> ProductionMapLiveSnapshot {
+pub(super) fn project(
+    snapshot: &ProductionMapLiveSnapshot,
+    ids: &[String],
+) -> ProductionMapLiveSnapshot {
     let selected = ids.iter().cloned().collect::<BTreeSet<_>>();
     fn keep<T: Clone>(
         values: &BTreeMap<String, T>,
@@ -790,7 +861,12 @@ pub(super) fn project(snapshot: &ProductionMapLiveSnapshot, ids: &[String]) -> P
         stage_states: keep(&snapshot.stage_states, &selected),
         order_statuses: keep(&snapshot.order_statuses, &selected),
         order_controls: keep(&snapshot.order_controls, &selected),
-        stage_order_controls: snapshot.stage_order_controls.iter().filter(|c| selected.contains(&c.order_id)).cloned().collect(),
+        stage_order_controls: snapshot
+            .stage_order_controls
+            .iter()
+            .filter(|c| selected.contains(&c.order_id))
+            .cloned()
+            .collect(),
         queue_policies: snapshot.queue_policies.clone(),
         frozen_orders_by_apparatus: snapshot
             .frozen_orders_by_apparatus

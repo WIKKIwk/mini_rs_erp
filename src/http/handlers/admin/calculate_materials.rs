@@ -46,7 +46,11 @@ pub async fn calculate_materials(
     let principal = authorize_any_capability(
         &state,
         &headers,
-        &[Capability::AdminAccess, Capability::ProductionMapManage],
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::ProductionMapRead,
+        ],
     )
     .await?;
     match method {

@@ -36,7 +36,21 @@ pub async fn production_map_layer_remainders(
     uri: axum::http::Uri,
     body: Bytes,
 ) -> Result<Response, AdminError> {
-    let principal = layer_remainder_principal(&state, &headers).await?;
+    let principal = if method == Method::GET {
+        authorize_any_capability(
+            &state,
+            &headers,
+            &[
+                Capability::AdminAccess,
+                Capability::ProductionMapManage,
+                Capability::ProductionMapRead,
+                Capability::ApparatusQueueManage,
+            ],
+        )
+        .await?
+    } else {
+        layer_remainder_principal(&state, &headers).await?
+    };
     if method == Method::GET {
         let Query(query) = Query::<LayerRemainderQuery>::try_from_uri(&uri)
             .map_err(|_| bad_request("apparatus and order_id are required"))?;
@@ -142,6 +156,10 @@ async fn layer_remainder_scope(
         .admin
         .principal_has_capability(principal, Capability::AdminAccess)
         .await
+        && !state
+            .admin
+            .principal_has_capability(principal, Capability::ProductionMapRead)
+            .await
     {
         let assigned = state.admin.principal_assigned_apparatus(principal).await;
         if !queue_state::apparatus_matches_assigned(apparatus, &assigned) {

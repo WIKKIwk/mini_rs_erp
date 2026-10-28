@@ -25,7 +25,13 @@ pub async fn apparatus_options(
     if method != Method::GET {
         return Err(method_not_allowed());
     }
-    require_capability(&state, &principal, Capability::ProductionMapManage).await?;
+    if !state
+        .admin
+        .principal_has_capability(&principal, Capability::ProductionMapRead)
+        .await
+    {
+        require_capability(&state, &principal, Capability::ProductionMapManage).await?;
+    }
     Ok(json_response(serde_json::json!({
         "contract": "canonical_apparatus_revision",
         "schema_version": CANONICAL_APPARATUS_SCHEMA_VERSION,

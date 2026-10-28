@@ -20,6 +20,7 @@ pub async fn production_map_lamination_settings(
                 &[
                     Capability::AdminAccess,
                     Capability::ProductionMapManage,
+                    Capability::ProductionMapRead,
                     Capability::ApparatusQueueRead,
                     Capability::ApparatusQueueManage,
                 ],

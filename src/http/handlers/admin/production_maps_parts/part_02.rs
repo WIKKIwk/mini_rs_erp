@@ -43,6 +43,7 @@ pub async fn production_map_sequence(
         &[
             Capability::AdminAccess,
             Capability::ProductionMapManage,
+            Capability::ProductionMapRead,
             Capability::ApparatusQueueRead,
             Capability::RawMaterialAssign,
             Capability::QolipManage,
@@ -50,9 +51,19 @@ pub async fn production_map_sequence(
         ],
     )
     .await?;
-    let window = worker_snapshot::WorkerQueueWindow::new(query.queue_limit, &query.queue_search, query.worker_scope)?
-        .with_positions(query.queue_positions)
-        .with_projection(&query.projection, query.worker_scope && !query.detail && query.apparatus.trim().is_empty() && query.order_id.trim().is_empty())?;
+    let window = worker_snapshot::WorkerQueueWindow::new(
+        query.queue_limit,
+        &query.queue_search,
+        query.worker_scope,
+    )?
+    .with_positions(query.queue_positions)
+    .with_projection(
+        &query.projection,
+        query.worker_scope
+            && !query.detail
+            && query.apparatus.trim().is_empty()
+            && query.order_id.trim().is_empty(),
+    )?;
     match method {
         Method::GET => {
             let apparatus = query.apparatus.trim();
@@ -60,14 +71,21 @@ pub async fn production_map_sequence(
             if (!query.detail && apparatus.is_empty() != order_id.is_empty())
                 || (!apparatus.is_empty() && !queue_state::is_canonical_apparatus_id(apparatus))
             {
-                return Err(bad_request("canonical apparatus and order_id are required together"));
+                return Err(bad_request(
+                    "canonical apparatus and order_id are required together",
+                ));
             }
             if query.detail {
                 if query.worker_scope {
-                    if apparatus.is_empty() || order_id.is_empty() || order_id.len() > 256 { return Err(bad_request("worker detail requires apparatus and order_id")); }
-                    return tokio::time::timeout(std::time::Duration::from_secs(15),
-                        worker_snapshot::read_detail(&state, &principal, apparatus, order_id))
-                        .await.map_err(|_| conflict("production_state_read_timeout"))?;
+                    if apparatus.is_empty() || order_id.is_empty() || order_id.len() > 256 {
+                        return Err(bad_request("worker detail requires apparatus and order_id"));
+                    }
+                    return tokio::time::timeout(
+                        std::time::Duration::from_secs(15),
+                        worker_snapshot::read_detail(&state, &principal, apparatus, order_id),
+                    )
+                    .await
+                    .map_err(|_| conflict("production_state_read_timeout"))?;
                 }
                 if order_id.is_empty() || order_id.len() > 256 {
                     return Err(bad_request("order detail requires order_id"));
@@ -77,22 +95,47 @@ pub async fn production_map_sequence(
                 }
                 // A full map is an explicit admin-only detail expansion. Old
                 // scoped reads and every worker bootstrap keep their contract.
-                authorize_any_capability(&state, &headers,
-                    &[Capability::AdminAccess, Capability::ProductionMapManage]).await?;
-                let response = tokio::time::timeout(std::time::Duration::from_secs(15),
-                    order_page::read_detail(&state, &principal, apparatus, order_id))
-                    .await.map_err(|_| conflict("order_page_changed"))??;
+                authorize_any_capability(
+                    &state,
+                    &headers,
+                    &[
+                        Capability::AdminAccess,
+                        Capability::ProductionMapManage,
+                        Capability::ProductionMapRead,
+                    ],
+                )
+                .await?;
+                let response = tokio::time::timeout(
+                    std::time::Duration::from_secs(15),
+                    order_page::read_detail(&state, &principal, apparatus, order_id),
+                )
+                .await
+                .map_err(|_| conflict("order_page_changed"))??;
                 return Ok(if query.compression == "identity" {
                     crate::http::router::identity_response(response)
-                } else { response });
+                } else {
+                    response
+                });
             }
-            if query.worker_scope && apparatus.is_empty() && query.if_rev.is_some()
-                && worker_snapshot::snapshot_unchanged(&state, &principal,
-                    &query.if_epoch, query.if_rev, &query.if_scope, query.wait_ms, &window).await?
+            if query.worker_scope
+                && apparatus.is_empty()
+                && query.if_rev.is_some()
+                && worker_snapshot::snapshot_unchanged(
+                    &state,
+                    &principal,
+                    &query.if_epoch,
+                    query.if_rev,
+                    &query.if_scope,
+                    query.wait_ms,
+                    &window,
+                )
+                .await?
             {
-                return Ok(Response::builder().status(StatusCode::NOT_MODIFIED)
+                return Ok(Response::builder()
+                    .status(StatusCode::NOT_MODIFIED)
                     .header("Cache-Control", "no-store")
-                    .body(axum::body::Body::empty()).expect("empty conditional response"));
+                    .body(axum::body::Body::empty())
+                    .expect("empty conditional response"));
             }
             // Canonical initial snapshot: same authority as the live stream
             // (`ProductionMapLiveSnapshot` + monotonic revision + maps).
@@ -110,21 +153,46 @@ pub async fn production_map_sequence(
                         query.worker_scope,
                         None,
                         &window,
-                    ).await?;
+                    )
+                    .await?;
                     if window.worker_list {
-                        return Ok(json_response(live_delta::worker_list_payload(&view, state.worker_show_all_apparatus_tabs)));
+                        return Ok(json_response(live_delta::worker_list_payload(
+                            &view,
+                            state.worker_show_all_apparatus_tabs,
+                        )));
                     }
-                    (view.snapshot, view.revision, view.scope, view.completed,
-                        view.requests, view.decisions, Some(view.customers))
+                    (
+                        view.snapshot,
+                        view.revision,
+                        view.scope,
+                        view.completed,
+                        view.requests,
+                        view.decisions,
+                        Some(view.customers),
+                    )
                 } else {
-                    let (snapshot, revision) = state.production_maps
+                    let (snapshot, revision) = state
+                        .production_maps
                         .worker_snapshot_shared_with_revision(
-                            &[apparatus.to_string()], &[order_id.to_string()],
-                        ).await.map_err(production_map_error)?;
+                            &[apparatus.to_string()],
+                            &[order_id.to_string()],
+                        )
+                        .await
+                        .map_err(production_map_error)?;
                     let snapshot = super::training::merge_worker_training_snapshot_shared(
                         &state, &principal, snapshot,
-                    ).await.map_err(super::training::training_workspace_error)?;
-                    (snapshot, revision, String::new(), Vec::new(), Vec::new(), Vec::new(), None)
+                    )
+                    .await
+                    .map_err(super::training::training_workspace_error)?;
+                    (
+                        snapshot,
+                        revision,
+                        String::new(),
+                        Vec::new(),
+                        Vec::new(),
+                        Vec::new(),
+                        None,
+                    )
                 };
             if !apparatus.is_empty() {
                 // Same queue rules and authorization as the full GET. A cold
@@ -185,17 +253,32 @@ pub async fn production_map_sequence(
             Ok(json_response(payload))
         }
         Method::POST => {
-            authorize_any_capability(&state, &headers,
-                &[Capability::AdminAccess, Capability::ProductionMapManage]).await?;
+            authorize_any_capability(
+                &state,
+                &headers,
+                &[Capability::AdminAccess, Capability::ProductionMapManage],
+            )
+            .await?;
             let command: crate::core::production_map::SequenceMove = parse_json(&body)?;
             let base_version = command.expected_version.clone();
-            let minimal = headers.get_all("prefer").iter().filter_map(|value| value.to_str().ok())
+            let minimal = headers
+                .get_all("prefer")
+                .iter()
+                .filter_map(|value| value.to_str().ok())
                 .flat_map(|value| value.split(','))
                 .filter_map(|preference| preference.split(';').next()?.split_once('='))
-                .any(|(name, value)| name.trim().eq_ignore_ascii_case("return")
-                    && value.trim().trim_matches('"').eq_ignore_ascii_case("minimal"));
-            let result = state.production_maps.move_apparatus_sequence(command, queue_action_actor(&principal))
-                .await.map_err(production_map_error)?;
+                .any(|(name, value)| {
+                    name.trim().eq_ignore_ascii_case("return")
+                        && value
+                            .trim()
+                            .trim_matches('"')
+                            .eq_ignore_ascii_case("minimal")
+                });
+            let result = state
+                .production_maps
+                .move_apparatus_sequence(command, queue_action_actor(&principal))
+                .await
+                .map_err(production_map_error)?;
             let mut payload = serde_json::json!({
                 "ok": true,
                 "version": result.version,
@@ -210,14 +293,17 @@ pub async fn production_map_sequence(
                 // length plus fingerprint certify the server-clamped result.
                 payload["base_version"] = serde_json::json!(base_version);
                 payload["order_count"] = serde_json::json!(result.order_ids.len());
-                payload["order_hash"] = serde_json::json!(sequence_delta::fingerprint(&result.order_ids));
+                payload["order_hash"] =
+                    serde_json::json!(sequence_delta::fingerprint(&result.order_ids));
             } else {
                 payload["order_ids"] = serde_json::json!(result.order_ids);
             }
             let mut response = json_response(payload);
             if minimal {
-                response.headers_mut().insert("preference-applied",
-                    axum::http::HeaderValue::from_static("return=minimal"));
+                response.headers_mut().insert(
+                    "preference-applied",
+                    axum::http::HeaderValue::from_static("return=minimal"),
+                );
             }
             Ok(response)
         }
@@ -246,7 +332,9 @@ pub async fn production_map_sequence(
                     .map_err(production_map_error)?;
                 input.order_ids
             };
-            Ok(json_response(serde_json::json!({"ok": true, "order_ids": order_ids})))
+            Ok(json_response(
+                serde_json::json!({"ok": true, "order_ids": order_ids}),
+            ))
         }
         _ => Err(method_not_allowed()),
     }
@@ -277,6 +365,7 @@ pub async fn production_map_replay(
         &[
             Capability::AdminAccess,
             Capability::ProductionMapManage,
+            Capability::ProductionMapRead,
             Capability::ApparatusQueueRead,
             Capability::RawMaterialAssign,
             Capability::QolipManage,
@@ -287,9 +376,12 @@ pub async fn production_map_replay(
 
     let apparatus = query.apparatus.trim();
     if !queue_state::is_canonical_apparatus_id(apparatus)
-        || query.from_rev < 0 || query.to_rev < query.from_rev
+        || query.from_rev < 0
+        || query.to_rev < query.from_rev
     {
-        return Err(bad_request("canonical apparatus and valid revision range are required"));
+        return Err(bad_request(
+            "canonical apparatus and valid revision range are required",
+        ));
     }
     let events = state
         .production_maps
@@ -325,6 +417,7 @@ pub async fn production_map_queue_policies(
         &[
             Capability::AdminAccess,
             Capability::ProductionMapManage,
+            Capability::ProductionMapRead,
             Capability::ApparatusQueueRead,
         ],
     )
@@ -365,7 +458,9 @@ pub async fn production_map_queue_policies(
                     input.expected_revision,
                     CanonicalApparatusPatch {
                         policies: Some(ApparatusOperationalPolicies {
-                            worker_material_assignment_allowed: current.runtime.worker_material_assignment_allowed,
+                            worker_material_assignment_allowed: current
+                                .runtime
+                                .worker_material_assignment_allowed,
                             queue: input.discipline,
                             material: current.material.policy.clone(),
                             tooling: current.material.tooling.clone(),

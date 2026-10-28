@@ -96,12 +96,23 @@ pub async fn items(
         return Err(forbidden());
     }
     let order_id = query.order_id.as_deref().unwrap_or_default().trim();
-    let order_materials = if principal.role == PrincipalRole::MaterialTaminotchi && !order_id.is_empty() {
-        Some(state.production_orders.order_materials(order_id).await
-            .map_err(|_| bad_request("order_materials_failed", "Order homashyolarini yuklab bo‘lmadi"))?)
-    } else {
-        None
-    };
+    let order_materials =
+        if principal.role == PrincipalRole::MaterialTaminotchi && !order_id.is_empty() {
+            Some(
+                state
+                    .production_orders
+                    .order_materials(order_id)
+                    .await
+                    .map_err(|_| {
+                        bad_request(
+                            "order_materials_failed",
+                            "Order homashyolarini yuklab bo‘lmadi",
+                        )
+                    })?,
+            )
+        } else {
+            None
+        };
     let items = gscale_items_for_principal(&state, &principal, &query, order_materials.as_deref())
         .await
         .map_err(admin_read_error)?;
@@ -111,8 +122,14 @@ pub async fn items(
         .await
         .map_err(admin_read_error)?;
     let mut catalog = Vec::with_capacity(items.len());
-    let groups = if order_id.is_empty() { Vec::new() } else {
-        state.admin.item_group_tree().await.map_err(admin_read_error)?
+    let groups = if order_id.is_empty() {
+        Vec::new()
+    } else {
+        state
+            .admin
+            .item_group_tree()
+            .await
+            .map_err(admin_read_error)?
     };
     let mut options_by_group = BTreeMap::<String, BTreeMap<String, String>>::new();
     for item in items {
@@ -121,23 +138,44 @@ pub async fn items(
             order_apparatus_options = options.clone();
         } else if !order_id.is_empty() {
             let group_path = material_group_path(&groups, &item.item_group);
-            let options = state.production_maps.raw_material_assignment_apparatus_options(order_id, &group_path)
-                .await.map_err(|_| bad_request("order_material_options_failed", "Order apparatlarini aniqlab bo‘lmadi"))?;
+            let options = state
+                .production_maps
+                .raw_material_assignment_apparatus_options(order_id, &group_path)
+                .await
+                .map_err(|_| {
+                    bad_request(
+                        "order_material_options_failed",
+                        "Order apparatlarini aniqlab bo‘lmadi",
+                    )
+                })?;
             for option in options {
                 let id = crate::core::apparatus_standard::ApparatusId::new(option.clone())
                     .map_err(|_| bad_request("invalid_apparatus", "Apparat noto‘g‘ri"))?;
-                let name = state.apparatus.current_configuration(&id).await.ok().flatten()
-                    .map(|config| config.runtime.display.display_name.clone()).unwrap_or_else(|| option.clone());
+                let name = state
+                    .apparatus
+                    .current_configuration(&id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|config| config.runtime.display.display_name.clone())
+                    .unwrap_or_else(|| option.clone());
                 order_apparatus_options.insert(option, name);
             }
             options_by_group.insert(item.item_group.clone(), order_apparatus_options.clone());
         }
         catalog.push(GscaleCatalogItem {
             requires_dimensions: requires_material_dimensions(&item, &dimension_groups),
-            order_microns: order_materials.as_ref()
-                .and_then(|materials| materials.iter().find(|material| material.item.code == item.code))
-                .map(|material| material.microns.clone()).unwrap_or_default(),
-            item, order_apparatus_options,
+            order_microns: order_materials
+                .as_ref()
+                .and_then(|materials| {
+                    materials
+                        .iter()
+                        .find(|material| material.item.code == item.code)
+                })
+                .map(|material| material.microns.clone())
+                .unwrap_or_default(),
+            item,
+            order_apparatus_options,
         });
     }
     Ok(Json(
@@ -155,10 +193,17 @@ struct GscaleCatalogItem {
     order_apparatus_options: std::collections::BTreeMap<String, String>,
 }
 
-fn material_group_path(groups: &[crate::core::admin::models::AdminItemGroup], group: &str) -> Vec<String> {
+fn material_group_path(
+    groups: &[crate::core::admin::models::AdminItemGroup],
+    group: &str,
+) -> Vec<String> {
     let mut path = vec![group.to_string()];
-    while let Some(parent) = groups.iter().find(|item| item.name == *path.last().unwrap())
-        .map(|item| item.parent_item_group.clone()).filter(|parent| !parent.is_empty() && !path.contains(parent)) {
+    while let Some(parent) = groups
+        .iter()
+        .find(|item| item.name == *path.last().unwrap())
+        .map(|item| item.parent_item_group.clone())
+        .filter(|parent| !parent.is_empty() && !path.contains(parent))
+    {
         path.push(parent);
     }
     path
@@ -222,11 +267,23 @@ async fn gscale_items_for_principal(
 
     if let Some(materials) = order_materials {
         let search = search.trim().to_lowercase();
-        return Ok(materials.iter()
+        return Ok(materials
+            .iter()
             .map(|material| &material.item)
-            .filter(|item| groups.iter().any(|group| group.trim().eq_ignore_ascii_case(item.item_group.trim())))
-            .filter(|item| search.is_empty() || item.code.to_lowercase().contains(&search) || item.name.to_lowercase().contains(&search))
-            .skip(offset).take(limit).cloned().collect());
+            .filter(|item| {
+                groups
+                    .iter()
+                    .any(|group| group.trim().eq_ignore_ascii_case(item.item_group.trim()))
+            })
+            .filter(|item| {
+                search.is_empty()
+                    || item.code.to_lowercase().contains(&search)
+                    || item.name.to_lowercase().contains(&search)
+            })
+            .skip(offset)
+            .take(limit)
+            .cloned()
+            .collect());
     }
 
     state
@@ -311,19 +368,15 @@ pub(super) async fn require_material_warehouse_access(
     // Preparation may supply another person's warehouse, but only through
     // this QR-producing workflow. Manual bulk receipts have stricter scope.
     if principal.role == PrincipalRole::TayyorlovMasteri {
-        let destination = state
-            .warehouses
-            .warehouse(warehouse)
-            .await
-            .map_err(|_| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(GscaleErrorResponse::new(
-                        "warehouse_scope_failed",
-                        "warehouse scope failed",
-                    )),
-                )
-            })?;
+        let destination = state.warehouses.warehouse(warehouse).await.map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(GscaleErrorResponse::new(
+                    "warehouse_scope_failed",
+                    "warehouse scope failed",
+                )),
+            )
+        })?;
         return match destination {
             Some(warehouse) if !warehouse.is_group => Ok(()),
             _ => Err((
@@ -395,7 +448,13 @@ fn gscale_error(error: GscaleServiceError) -> (StatusCode, Json<GscaleErrorRespo
 
 fn material_catalog_error(error: MaterialCatalogError) -> (StatusCode, Json<GscaleErrorResponse>) {
     match error {
-        MaterialCatalogError::OrderAssignment(detail) => (StatusCode::BAD_REQUEST, Json(GscaleErrorResponse::new("order_material_assignment_invalid", detail))),
+        MaterialCatalogError::OrderAssignment(detail) => (
+            StatusCode::BAD_REQUEST,
+            Json(GscaleErrorResponse::new(
+                "order_material_assignment_invalid",
+                detail,
+            )),
+        ),
         MaterialCatalogError::ReadFailed => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(GscaleErrorResponse::new(
@@ -458,6 +517,7 @@ fn principal_role_code(role: &PrincipalRole) -> &'static str {
         PrincipalRole::Boyoqchi => "boyoqchi",
         PrincipalRole::TayyorlovMasteri => "tayyorlov_masteri",
         PrincipalRole::HomashyoRezkachi => "homashyo_rezkachi",
+        PrincipalRole::SalesManager => "sales_manager",
         PrincipalRole::MaterialTaminotchi => "material_taminotchi",
         PrincipalRole::Admin => "admin",
     }

@@ -152,6 +152,27 @@ pub async fn user_list(
     if method != Method::GET {
         return Err(method_not_allowed());
     }
+    if principal.role == PrincipalRole::SalesManager {
+        if query
+            .role
+            .as_deref()
+            .is_some_and(|role| !role.trim().eq_ignore_ascii_case("customer"))
+        {
+            return Err(forbidden());
+        }
+        let mut page = state
+            .admin
+            .user_list_page(
+                query.q.as_deref().unwrap_or_default(),
+                optional_search_limit(query.limit.as_deref(), 20, 50),
+                optional_offset(query.offset.as_deref()),
+                Some("customer"),
+            )
+            .await
+            .map_err(|_| server_error("customer users page failed"))?;
+        proxy_user_list_avatars(&headers, &mut page);
+        return Ok(Json(page));
+    }
     require_capability(&state, &principal, Capability::SupplierDirectoryRead).await?;
     require_capability(&state, &principal, Capability::CustomerDirectoryRead).await?;
     let role = query
@@ -160,9 +181,9 @@ pub async fn user_list(
         .map(str::trim)
         .map(str::to_ascii_lowercase);
     let mut page = match role.as_deref() {
-        Some("qolipchi" | "boyoqchi" | "tayyorlov_masteri" | "homashyo_rezkachi") => {
-            system_users::system_user_list_page(&state, &query).await?
-        }
+        Some(
+            "qolipchi" | "boyoqchi" | "tayyorlov_masteri" | "homashyo_rezkachi" | "sales_manager",
+        ) => system_users::system_user_list_page(&state, &query).await?,
         Some("worker" | "ishchi" | "aparatchi" | "apparatchi") => {
             workers::worker_user_list_page(&state, &query).await?
         }

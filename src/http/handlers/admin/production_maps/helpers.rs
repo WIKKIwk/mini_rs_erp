@@ -21,7 +21,11 @@ pub(super) async fn production_map_order_customers(
     state: &AppState,
     maps: &[ProductionMapSaved],
 ) -> BTreeMap<String, String> {
-    production_map_definition_customers(state, &maps.iter().map(|saved| &saved.map).collect::<Vec<_>>()).await
+    production_map_definition_customers(
+        state,
+        &maps.iter().map(|saved| &saved.map).collect::<Vec<_>>(),
+    )
+    .await
 }
 
 pub(super) async fn production_map_definition_customers(
@@ -30,10 +34,7 @@ pub(super) async fn production_map_definition_customers(
 ) -> BTreeMap<String, String> {
     let mut order_map_count = 0;
     let mut customers = BTreeMap::new();
-    for map in maps
-        .iter()
-        .filter(|map| is_customer_order_map(map))
-    {
+    for map in maps.iter().filter(|map| is_customer_order_map(map)) {
         order_map_count += 1;
         let map_id = map.id.trim();
         let customer = map.customer_name.trim();
@@ -52,10 +53,7 @@ pub(super) async fn production_map_definition_customers(
             return customers;
         }
     };
-    for map in maps
-        .iter()
-        .filter(|map| is_customer_order_map(map))
-    {
+    for map in maps.iter().filter(|map| is_customer_order_map(map)) {
         let map_id = map.id.trim();
         if map_id.is_empty() || customers.contains_key(map_id) {
             continue;
@@ -233,7 +231,9 @@ pub(super) fn calculate_order_error(error: CalculateOrderError) -> AdminError {
 
 pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
     match error {
-        ProductionMapError::ReactivationDenied(reason) => conflict(format!("reactivation_{reason}")),
+        ProductionMapError::ReactivationDenied(reason) => {
+            conflict(format!("reactivation_{reason}"))
+        }
         ProductionMapError::TemplateIdentityConflict => conflict("template_identity_conflict"),
         ProductionMapError::MissingId => bad_request("map_id_required"),
         ProductionMapError::MissingProductCode => bad_request("map_product_code_required"),
@@ -301,7 +301,9 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         ProductionMapError::QueueReorderConflict => conflict("queue_reorder_conflict"),
         ProductionMapError::QueueReorderFrozen => conflict("queue_reorder_frozen"),
         ProductionMapError::QueueReorderBlocked => conflict("queue_reorder_blocked"),
-        ProductionMapError::QueueReorderIdempotencyConflict => conflict("queue_reorder_idempotency_conflict"),
+        ProductionMapError::QueueReorderIdempotencyConflict => {
+            conflict("queue_reorder_idempotency_conflict")
+        }
         ProductionMapError::PrintPreflightActive => conflict("print_preflight_active"),
         ProductionMapError::PrintPreflightNotFound => not_found("print_preflight_not_found"),
         ProductionMapError::PrintPreflightNotReady => conflict("print_preflight_not_ready"),
@@ -372,7 +374,9 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         ProductionMapError::QolipCodeMismatch => bad_request("qolip_code_mismatch"),
         ProductionMapError::QolipAlreadyInUse => bad_request("qolip_already_in_use"),
         ProductionMapError::QolipInRework => conflict("qolip_in_rework"),
-        ProductionMapError::QolipAutomaticConfirmationDisabled => conflict("qolip_automatic_confirmation_disabled"),
+        ProductionMapError::QolipAutomaticConfirmationDisabled => {
+            conflict("qolip_automatic_confirmation_disabled")
+        }
         ProductionMapError::QolipPolicyChanged => conflict("qolip_policy_changed"),
         ProductionMapError::QolipSetChanged => conflict("qolip_set_changed"),
         ProductionMapError::QolipInsufficientStock => bad_request("insufficient_stock"),
@@ -436,7 +440,9 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         ProductionMapError::ProgressBatchNotFound => not_found("progress_batch_not_found"),
         ProductionMapError::ProgressBatchNotAccepted => bad_request("progress_batch_not_accepted"),
         ProductionMapError::WipRouteSourceUnresolved => bad_request("wip_route_source_unresolved"),
-        ProductionMapError::WipRouteDestinationUnresolved => bad_request("wip_route_destination_unresolved"),
+        ProductionMapError::WipRouteDestinationUnresolved => {
+            bad_request("wip_route_destination_unresolved")
+        }
         ProductionMapError::WipRouteAmbiguous => bad_request("wip_route_ambiguous"),
         ProductionMapError::WipRouteChanged => conflict("wip_route_changed"),
         ProductionMapError::ProgressBatchAlreadyUsed { apparatus_name } => {
@@ -609,6 +615,7 @@ fn principal_role_code(role: &PrincipalRole) -> &'static str {
         PrincipalRole::Boyoqchi => "boyoqchi",
         PrincipalRole::TayyorlovMasteri => "tayyorlov_masteri",
         PrincipalRole::HomashyoRezkachi => "homashyo_rezkachi",
+        PrincipalRole::SalesManager => "sales_manager",
         PrincipalRole::MaterialTaminotchi => "material_taminotchi",
         PrincipalRole::Admin => "admin",
     }

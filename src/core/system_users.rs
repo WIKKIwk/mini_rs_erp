@@ -138,7 +138,11 @@ impl SystemUserLookup for SystemUserService {
 
 fn validate_role(role: &PrincipalRole) -> Result<(), SystemUserError> {
     match role {
-        PrincipalRole::Qolipchi | PrincipalRole::Boyoqchi | PrincipalRole::TayyorlovMasteri | PrincipalRole::HomashyoRezkachi => Ok(()),
+        PrincipalRole::Qolipchi
+        | PrincipalRole::Boyoqchi
+        | PrincipalRole::TayyorlovMasteri
+        | PrincipalRole::HomashyoRezkachi
+        | PrincipalRole::SalesManager => Ok(()),
         _ => Err(SystemUserError::InvalidRole),
     }
 }
@@ -150,6 +154,7 @@ fn new_system_user_id(role: &PrincipalRole) -> String {
         PrincipalRole::Boyoqchi => "boyoqchi",
         PrincipalRole::TayyorlovMasteri => "tayyorlov_masteri",
         PrincipalRole::HomashyoRezkachi => "homashyo_rezkachi",
+        PrincipalRole::SalesManager => "sales_manager",
         _ => "system_user",
     };
     format!("{prefix}_{}", data_encoding::HEXLOWER.encode(&bytes))
@@ -239,4 +244,48 @@ impl SystemUserStorePort for MemorySystemUserStore {
 
 fn normalized_phone(value: &str) -> String {
     value.chars().filter(char::is_ascii_digit).collect()
+}
+
+#[cfg(test)]
+mod sales_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn sales_manager_gets_a_unique_native_identity_and_phone_conflicts_are_rejected() {
+        let users = SystemUserService::new(Arc::new(MemorySystemUserStore::new()));
+        let create = |name: &str, phone: &str| SystemUserUpsert {
+            id: String::new(),
+            role: PrincipalRole::SalesManager,
+            name: name.into(),
+            phone: phone.into(),
+        };
+        let first = users
+            .upsert_user(create("First", "+998901112292"))
+            .await
+            .unwrap();
+        let second = users
+            .upsert_user(create("Second", "+998901112293"))
+            .await
+            .unwrap();
+        assert!(first.id.starts_with("sales_manager_"));
+        assert_ne!(first.id, second.id);
+        assert_eq!(
+            users
+                .users(&PrincipalRole::SalesManager, "First", 10)
+                .await
+                .unwrap(),
+            vec![first]
+        );
+        assert!(
+            users
+                .users(&PrincipalRole::Qolipchi, "", 10)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            users.upsert_user(create("Duplicate", "998901112293")).await,
+            Err(SystemUserError::DuplicatePhone)
+        );
+    }
 }

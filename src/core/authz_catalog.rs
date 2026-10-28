@@ -2,15 +2,13 @@ use super::*;
 use crate::core::auth::models::PrincipalRole;
 
 const ADMIN_ONLY: &[PrincipalRole] = &[PrincipalRole::Admin];
+const ADMIN_SALES: &[PrincipalRole] = &[PrincipalRole::Admin, PrincipalRole::SalesManager];
 const WERKA_ONLY: &[PrincipalRole] = &[PrincipalRole::Werka];
 const SUPPLIER_ONLY: &[PrincipalRole] = &[PrincipalRole::Supplier];
 const CUSTOMER_ONLY: &[PrincipalRole] = &[PrincipalRole::Customer];
 const QOLIPCHI_ONLY: &[PrincipalRole] = &[PrincipalRole::Qolipchi];
 const BOYOQCHI_ONLY: &[PrincipalRole] = &[PrincipalRole::Boyoqchi];
 const ADMIN_APARATCHI: &[PrincipalRole] = &[PrincipalRole::Admin, PrincipalRole::Aparatchi];
-const SUPPLIER_WERKA: &[PrincipalRole] = &[PrincipalRole::Supplier, PrincipalRole::Werka];
-const ADMIN_MATERIAL_TAMINOTCHI: &[PrincipalRole] =
-    &[PrincipalRole::Admin, PrincipalRole::MaterialTaminotchi];
 /// Operatsion kirim/ulash to'plami: tarozi katalogi, kirim chop etish,
 /// RPS batch va homashyoni orderga ulash. Tayyorlov masteri ham o'z
 /// ombori + biriktirilgan homashyolari doirasida shu to'plamni ishlatadi.
@@ -29,6 +27,36 @@ const INVENTORY_MOVEMENT_ROLES: &[PrincipalRole] = &[
 ];
 
 pub(super) const CAPABILITY_CATALOG: &[CapabilityDefinition] = &[
+    CapabilityDefinition {
+        capability: Capability::SalesAccess,
+        code: "sales.access",
+        label: "Sotuv manageri ish joyi",
+        default_roles: &[PrincipalRole::SalesManager],
+    },
+    CapabilityDefinition {
+        capability: Capability::ProductionMapRead,
+        code: "production.map.read",
+        label: "Production map read",
+        default_roles: ADMIN_SALES,
+    },
+    CapabilityDefinition {
+        capability: Capability::ProductionOrderCreate,
+        code: "production.order.create",
+        label: "Production order create",
+        default_roles: ADMIN_SALES,
+    },
+    CapabilityDefinition {
+        capability: Capability::ProductionOrderEdit,
+        code: "production.order.edit",
+        label: "Production order edit",
+        default_roles: ADMIN_SALES,
+    },
+    CapabilityDefinition {
+        capability: Capability::ProductionMapEdit,
+        code: "production.map.edit",
+        label: "Production map edit",
+        default_roles: ADMIN_SALES,
+    },
     CapabilityDefinition {
         capability: Capability::RawMaterialSplitAccess,
         code: "raw_material.split",
@@ -111,7 +139,11 @@ pub(super) const CAPABILITY_CATALOG: &[CapabilityDefinition] = &[
         capability: Capability::PushTokenManage,
         code: "push.token.manage",
         label: "Push token manage",
-        default_roles: SUPPLIER_WERKA,
+        default_roles: &[
+            PrincipalRole::Supplier,
+            PrincipalRole::Werka,
+            PrincipalRole::SalesManager,
+        ],
     },
     CapabilityDefinition {
         capability: Capability::SupplierAvatarManage,
@@ -123,19 +155,23 @@ pub(super) const CAPABILITY_CATALOG: &[CapabilityDefinition] = &[
         capability: Capability::CatalogItemRead,
         code: "catalog.item.read",
         label: "Catalog item read",
-        default_roles: ADMIN_ONLY,
+        default_roles: ADMIN_SALES,
     },
     CapabilityDefinition {
         capability: Capability::CatalogItemCreate,
         code: "catalog.item.create",
         label: "Catalog item create",
-        default_roles: ADMIN_MATERIAL_TAMINOTCHI,
+        default_roles: &[
+            PrincipalRole::Admin,
+            PrincipalRole::MaterialTaminotchi,
+            PrincipalRole::SalesManager,
+        ],
     },
     CapabilityDefinition {
         capability: Capability::CatalogItemGroupRead,
         code: "catalog.item_group.read",
         label: "Catalog item group read",
-        default_roles: ADMIN_ONLY,
+        default_roles: ADMIN_SALES,
     },
     CapabilityDefinition {
         capability: Capability::CatalogItemGroupManage,
@@ -177,13 +213,13 @@ pub(super) const CAPABILITY_CATALOG: &[CapabilityDefinition] = &[
         capability: Capability::CustomerDirectoryRead,
         code: "party.customer.read",
         label: "Customer directory read",
-        default_roles: ADMIN_ONLY,
+        default_roles: ADMIN_SALES,
     },
     CapabilityDefinition {
         capability: Capability::CustomerDirectoryManage,
         code: "party.customer.manage",
         label: "Customer directory manage",
-        default_roles: ADMIN_ONLY,
+        default_roles: ADMIN_SALES,
     },
     CapabilityDefinition {
         capability: Capability::CustomerItemAssign,

@@ -34,7 +34,8 @@ pub async fn production_map_live(
     let include_completion_requests = matches!(principal.role, PrincipalRole::Admin);
     let delta_enabled = query.protocol.as_deref() == Some("delta");
     let compact_state_delta = query.protocol.as_deref() == Some("state_delta_v2");
-    let state_delta_enabled = compact_state_delta || query.protocol.as_deref() == Some("state_delta_v1");
+    let state_delta_enabled =
+        compact_state_delta || query.protocol.as_deref() == Some("state_delta_v1");
     let page_delta_enabled = query.protocol.as_deref() == Some("page_delta_v1");
     let notifications_enabled = query.protocol.as_deref() == Some("notifications_v1");
     let page_windows = if page_delta_enabled {
@@ -149,6 +150,7 @@ pub(super) async fn require_any_live_capability(
     for capability in [
         Capability::AdminAccess,
         Capability::ProductionMapManage,
+        Capability::ProductionMapRead,
         Capability::ApparatusQueueRead,
         Capability::RawMaterialAssign,
         Capability::QolipManage,
@@ -169,7 +171,11 @@ pub(super) async fn require_paged_live_capability(
     state: &AppState,
     principal: &Principal,
 ) -> Result<(), AdminError> {
-    for capability in [Capability::AdminAccess, Capability::ProductionMapManage] {
+    for capability in [
+        Capability::AdminAccess,
+        Capability::ProductionMapManage,
+        Capability::ProductionMapRead,
+    ] {
         if state
             .admin
             .principal_has_capability(principal, capability)
@@ -328,8 +334,11 @@ async fn send_production_map_live_snapshot(
             "rev": state.production_maps.snapshot_revision(),
         });
         *last_payload_initialized = true;
-        return send_production_map_live_message(socket, Message::Text(json_research::value_to_string(&payload).into()))
-            .await;
+        return send_production_map_live_message(
+            socket,
+            Message::Text(json_research::value_to_string(&payload).into()),
+        )
+        .await;
     }
     let service = &state.production_maps;
     let actor_ref = queue_action_actor(principal).ref_;
@@ -362,9 +371,13 @@ async fn send_production_map_live_snapshot(
         async {
             if principal.role == PrincipalRole::Aparatchi {
                 let assigned = state.admin.principal_assigned_apparatus(principal).await;
-                service.completed_queue_orders_for_apparatuses(&assigned, 200).await
+                service
+                    .completed_queue_orders_for_apparatuses(&assigned, 200)
+                    .await
             } else {
-                service.completed_queue_orders_for_actor(&actor_ref, 200).await
+                service
+                    .completed_queue_orders_for_actor(&actor_ref, 200)
+                    .await
             }
         },
         async {
@@ -490,18 +503,24 @@ pub async fn production_map_completed_orders(
         &[
             Capability::AdminAccess,
             Capability::ProductionMapManage,
+            Capability::ProductionMapRead,
             Capability::ApparatusQueueRead,
         ],
     )
     .await?;
     let completed_orders = if principal.role == PrincipalRole::Aparatchi {
         let assigned = state.admin.principal_assigned_apparatus(&principal).await;
-        state.production_maps.completed_queue_orders_for_apparatuses(&assigned, 200).await
+        state
+            .production_maps
+            .completed_queue_orders_for_apparatuses(&assigned, 200)
+            .await
     } else {
-        state.production_maps.completed_queue_orders_for_actor(
-            &queue_action_actor(&principal).ref_, 200,
-        ).await
-    }.map_err(production_map_error)?;
+        state
+            .production_maps
+            .completed_queue_orders_for_actor(&queue_action_actor(&principal).ref_, 200)
+            .await
+    }
+    .map_err(production_map_error)?;
     Ok(json_response(serde_json::json!({
         "ok": true,
         "completed_orders": completed_orders,
@@ -519,7 +538,11 @@ pub async fn production_map_completion_requests(
     authorize_any_capability(
         &state,
         &headers,
-        &[Capability::AdminAccess, Capability::ProductionMapManage],
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::ProductionMapRead,
+        ],
     )
     .await?;
     let completion_requests = state
@@ -613,6 +636,7 @@ pub async fn production_map_completion_request_decisions(
         &[
             Capability::AdminAccess,
             Capability::ProductionMapManage,
+            Capability::ProductionMapRead,
             Capability::ApparatusQueueRead,
             Capability::ApparatusQueueManage,
         ],
@@ -643,6 +667,7 @@ pub async fn production_map_closed_orders(
         &[
             Capability::AdminAccess,
             Capability::ProductionMapManage,
+            Capability::ProductionMapRead,
             Capability::ApparatusQueueRead,
         ],
     )

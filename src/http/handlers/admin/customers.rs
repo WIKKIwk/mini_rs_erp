@@ -122,7 +122,8 @@ pub async fn customer_detail(
     headers: HeaderMap,
     Query(query): Query<RefQuery>,
 ) -> Result<Json<AdminCustomerDetail>, AdminError> {
-    authorize_capability(&state, &headers, Capability::CustomerDirectoryRead).await?;
+    let principal =
+        authorize_capability(&state, &headers, Capability::CustomerDirectoryRead).await?;
     if method != Method::GET {
         return Err(method_not_allowed());
     }
@@ -132,6 +133,9 @@ pub async fn customer_detail(
         .customer_detail(ref_)
         .await
         .map_err(|_| server_error("customer detail failed"))?;
+    if principal.role == PrincipalRole::SalesManager {
+        detail.code.clear();
+    }
     detail.avatar_url =
         with_admin_profile_avatar_proxy(&headers, detail.avatar_url, "customer", ref_);
     Ok(Json(detail))
@@ -293,6 +297,41 @@ pub async fn items(
                 material_scoped_items(&state, &principal, &query)
                     .await
                     .map(json_response)
+            } else if principal.role == PrincipalRole::SalesManager {
+                let groups = state
+                    .admin
+                    .item_group_tree()
+                    .await
+                    .map_err(|_| server_error("item group tree failed"))?;
+                let requested = query.group.as_deref().unwrap_or("").trim();
+                let selected = groups.iter().filter(|group| {
+                    let name = if group.item_group_name.trim().is_empty() { &group.name } else { &group.item_group_name };
+                    crate::core::admin::item_customer_policy::item_group_requires_customer(name, &groups)
+                        && (requested.is_empty() || crate::core::admin::item_customer_policy::item_group_is_descendant_of(name, requested, &groups))
+                }).map(|group| if group.item_group_name.trim().is_empty() { group.name.clone() } else { group.item_group_name.clone() }).collect::<Vec<_>>();
+                if !requested.is_empty()
+                    && !crate::core::admin::item_customer_policy::item_group_requires_customer(
+                        requested, &groups,
+                    )
+                {
+                    return Err(forbidden());
+                }
+                if selected.is_empty() {
+                    return Ok(json_response(
+                        Vec::<crate::core::werka::models::SupplierItem>::new(),
+                    ));
+                }
+                state
+                    .admin
+                    .items_page_in_groups(
+                        &selected,
+                        query.q.as_deref().unwrap_or(""),
+                        positive_int(query.limit.as_deref(), 50),
+                        optional_offset(query.offset.as_deref()),
+                    )
+                    .await
+                    .map(json_response)
+                    .map_err(|_| server_error("finished items failed"))
             } else {
                 require_capability(&state, &principal, Capability::CatalogItemRead).await?;
                 state
@@ -315,6 +354,19 @@ pub async fn items(
             require_capability(&state, &principal, Capability::CatalogItemCreate).await?;
             let input: AdminCreateItemRequest = parse_json(&body)?;
             require_material_item_group_scope(&state, &principal, &input.item_group).await?;
+            if principal.role == PrincipalRole::SalesManager {
+                let groups = state
+                    .admin
+                    .item_group_tree()
+                    .await
+                    .map_err(|_| server_error("item group tree failed"))?;
+                if !crate::core::admin::item_customer_policy::item_group_requires_customer(
+                    &input.item_group,
+                    &groups,
+                ) {
+                    return Err(forbidden());
+                }
+            }
             match state
                 .admin
                 .create_item(

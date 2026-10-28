@@ -32,6 +32,7 @@ pub async fn production_map_progress_qr_lookup(
         &[
             Capability::AdminAccess,
             Capability::ProductionMapManage,
+            Capability::ProductionMapRead,
             Capability::ApparatusQueueManage,
         ],
     )
@@ -53,6 +54,10 @@ pub async fn production_map_progress_qr_lookup(
             || state
                 .admin
                 .principal_has_capability(&principal, Capability::ProductionMapManage)
+                .await
+            || state
+                .admin
+                .principal_has_capability(&principal, Capability::ProductionMapRead)
                 .await;
         if !can_manage {
             let assigned = state.admin.principal_assigned_apparatus(&principal).await;
@@ -132,20 +137,34 @@ pub async fn production_map_progress_qr_lookup(
             .await;
         batch = match result {
             Ok(batch) => batch,
-            Err(error @ (ProductionMapError::OrderFrozen |
-                ProductionMapError::OrderFreezeRequested)) => {
+            Err(
+                error
+                @ (ProductionMapError::OrderFrozen | ProductionMapError::OrderFreezeRequested),
+            ) => {
                 return Err(progress_qr_order_control_error(&state, &batch, error).await);
             }
             Err(error) => return Err(production_map_error(error)),
         };
     }
-    let (input_route, input_route_error) = if batch.wip_status == OrderProgressBatchWipStatus::Waiting {
-        match state.production_maps.progress_batch_input_route(&batch).await {
-            Ok(route) => (Some(route), None),
-            Err(error) if !scoped => (None, Some(crate::core::production_map::wip_route::route_error_code(&error))),
-            Err(error) => return Err(production_map_error(error)),
-        }
-    } else { (None, None) };
+    let (input_route, input_route_error) =
+        if batch.wip_status == OrderProgressBatchWipStatus::Waiting {
+            match state
+                .production_maps
+                .progress_batch_input_route(&batch)
+                .await
+            {
+                Ok(route) => (Some(route), None),
+                Err(error) if !scoped => (
+                    None,
+                    Some(crate::core::production_map::wip_route::route_error_code(
+                        &error,
+                    )),
+                ),
+                Err(error) => return Err(production_map_error(error)),
+            }
+        } else {
+            (None, None)
+        };
     Ok(json_response(serde_json::json!({
         "ok": true,
         "validated_apparatus": input.apparatus.trim(),
@@ -174,8 +193,13 @@ async fn progress_qr_order_control_error(
         .map(|map| map.title.trim().to_string())
         .filter(|title| !title.is_empty())
         .unwrap_or_else(|| {
-            batch.label_item_name.split(", apparat:")
-                .next().unwrap_or_default().trim().to_string()
+            batch
+                .label_item_name
+                .split(", apparat:")
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .to_string()
         });
     if !title.is_empty() {
         response.1.0.order_title = Some(title);
@@ -195,6 +219,7 @@ pub async fn production_map_progress_qr_report(
         &[
             Capability::AdminAccess,
             Capability::ProductionMapManage,
+            Capability::ProductionMapRead,
             Capability::ApparatusQueueRead,
             Capability::ApparatusQueueManage,
         ],
@@ -281,6 +306,7 @@ pub async fn production_map_progress_qr_history(
         &[
             Capability::AdminAccess,
             Capability::ProductionMapManage,
+            Capability::ProductionMapRead,
             Capability::ApparatusQueueRead,
             Capability::ApparatusQueueManage,
         ],
@@ -449,7 +475,10 @@ fn progress_history_scope(
     principal: &Principal,
     query: &ProgressQrHistoryQuery,
 ) -> Result<(Vec<String>, String), AdminError> {
-    if principal.role == PrincipalRole::Admin {
+    if matches!(
+        principal.role,
+        PrincipalRole::Admin | PrincipalRole::SalesManager
+    ) {
         let refs = query
             .worker_ref
             .split(',')
