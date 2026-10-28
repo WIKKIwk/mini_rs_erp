@@ -129,13 +129,20 @@ async fn serve_listener(
 
         let app = app.clone();
         tokio::spawn(async move {
+            let opened_at = std::time::Instant::now();
             let io = TokioIo::new(stream);
             let service = TowerToHyperService::new(app);
             let mut builder = http1::Builder::new();
             builder.keep_alive(true);
 
             if let Err(error) = builder.serve_connection(io, service).with_upgrades().await {
-                tracing::trace!(%error, %peer_addr, worker, "connection failed");
+                tracing::warn!(
+                    error = ?error,
+                    %peer_addr,
+                    worker,
+                    connection_ms = opened_at.elapsed().as_millis(),
+                    "HTTP connection failed"
+                );
             }
         });
     }

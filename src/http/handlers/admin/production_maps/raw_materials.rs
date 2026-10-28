@@ -1190,14 +1190,12 @@ pub async fn raw_material_assignment_candidate_orders(
             RawMaterialAssignmentOrderCandidateResponse,
         >::new()));
     }
-    let normalized_barcode = barcode.to_ascii_uppercase();
     if state
         .production_maps
-        .raw_material_assignments()
+        .raw_material_assignment_by_barcode(barcode)
         .await
         .map_err(production_map_error)?
-        .iter()
-        .any(|assignment| assignment.barcode.trim().to_ascii_uppercase() == normalized_barcode)
+        .is_some()
     {
         return Ok(json_response(Vec::<
             RawMaterialAssignmentOrderCandidateResponse,
@@ -1238,7 +1236,7 @@ pub async fn raw_material_assignment_candidate_orders(
     for order in active_orders {
         let apparatus_options = state
             .production_maps
-            .raw_material_assignment_apparatus_options(&order.map.id, &group_path)
+            .raw_material_assignment_apparatus_options_for_map(&order.map, &group_path)
             .await
             .map_err(production_map_error)?;
         let filtered_apparatus = filter_raw_material_apparatus_options(

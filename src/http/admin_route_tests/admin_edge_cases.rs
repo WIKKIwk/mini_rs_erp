@@ -370,6 +370,48 @@ async fn admin_item_detail_and_update_are_admin_only() {
 }
 
 #[tokio::test]
+async fn admin_finished_item_detail_can_request_optional_image_reference() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+    let router = build_router(state);
+
+    let plain = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/items/detail?code=MULTI-TEST",
+            &token,
+        ))
+        .await
+        .expect("detail response");
+    assert_eq!(plain.status(), StatusCode::OK);
+    assert!(json_body(plain).await.get("order_image_order_id").is_none());
+
+    let with_image = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/items/detail?code=MULTI-TEST&include_image=true",
+            &token,
+        ))
+        .await
+        .expect("detail with image response");
+    assert_eq!(with_image.status(), StatusCode::OK);
+    assert_eq!(json_body(with_image).await["order_image_order_id"], "");
+
+    let raw = router
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/items/detail?code=ITEM-001&include_image=true",
+            &token,
+        ))
+        .await
+        .expect("raw item response");
+    assert_eq!(raw.status(), StatusCode::OK);
+    assert!(json_body(raw).await.get("order_image_order_id").is_none());
+}
+
+#[tokio::test]
 async fn admin_item_delete_returns_conflict_while_item_is_in_active_order() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;

@@ -178,6 +178,12 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         PostgresProductionMapStore::maps_by_lifecycle_statuses(self, statuses).await
     }
 
+    async fn raw_material_assignment_maps(
+        &self,
+    ) -> Result<Vec<ProductionMapDefinition>, ProductionMapError> {
+        PostgresProductionMapStore::raw_material_assignment_maps(self).await
+    }
+
     async fn production_order_lifecycles(
         &self,
         order_ids: &[String],
@@ -897,6 +903,13 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         &self,
     ) -> Result<Vec<RawMaterialAssignment>, ProductionMapError> {
         PostgresProductionMapStore::raw_material_assignments(self).await
+    }
+
+    async fn raw_material_assignment_by_barcode(
+        &self,
+        barcode: &str,
+    ) -> Result<Option<RawMaterialAssignment>, ProductionMapError> {
+        PostgresProductionMapStore::raw_material_assignment_by_barcode(self, barcode).await
     }
 
     async fn put_raw_material_assignment(

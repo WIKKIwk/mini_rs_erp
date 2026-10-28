@@ -290,6 +290,14 @@ pub trait ProductionMapStorePort: Send + Sync {
     ) -> StoreResult<Vec<ProductionMapDefinition>> {
         self.maps().await
     }
+    async fn raw_material_assignment_maps(&self) -> StoreResult<Vec<ProductionMapDefinition>> {
+        Ok(self.maps_by_lifecycle_statuses(&[
+            ProductionOrderLifecycleStatus::Released,
+            ProductionOrderLifecycleStatus::InProgress,
+        ]).await?.into_iter()
+            .filter(|map| map.id.trim().starts_with("zakaz-"))
+            .collect())
+    }
     async fn maps_by_lifecycle_statuses(
         &self,
         statuses: &[ProductionOrderLifecycleStatus],
@@ -1068,6 +1076,10 @@ pub trait ProductionMapStorePort: Send + Sync {
     // Raw material assignment persistence. Apparatus material rules are
     // canonical runtime projections and have no independent store API.
     async fn raw_material_assignments(&self) -> StoreResult<Vec<RawMaterialAssignment>>;
+    async fn raw_material_assignment_by_barcode(&self, barcode: &str) -> StoreResult<Option<RawMaterialAssignment>> {
+        Ok(self.raw_material_assignments().await?.into_iter()
+            .find(|assignment| assignment.barcode.trim().eq_ignore_ascii_case(barcode.trim())))
+    }
     async fn raw_material_assignments_for_order(&self, order_id: &str) -> StoreResult<Vec<RawMaterialAssignment>> {
         Ok(self.raw_material_assignments().await?.into_iter()
             .filter(|assignment| assignment.order_id.trim() == order_id.trim()).collect())

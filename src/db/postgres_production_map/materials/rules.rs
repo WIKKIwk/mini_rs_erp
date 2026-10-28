@@ -22,6 +22,32 @@ pub(super) async fn load_raw_material_assignments_for_order(
     load_raw_material_assignments_scoped(pool, Some(&[order_id.trim().to_string()])).await
 }
 
+pub(super) async fn load_raw_material_assignment_by_barcode(
+    pool: &PgPool,
+    barcode: &str,
+) -> Result<Option<RawMaterialAssignment>, ProductionMapError> {
+    // The lower(barcode) unique index covers the canonical assignment key.
+    let row = sqlx::query_as::<_, (String, serde_json::Value)>(
+        "SELECT canonical_apparatus_id, payload_json
+         FROM mini_raw_material_assignments
+         WHERE lower(barcode) = lower($1)
+           AND canonical_apparatus_id IS NOT NULL
+           AND EXISTS (
+               SELECT 1 FROM mini_apparatus master
+               WHERE master.id = mini_raw_material_assignments.canonical_apparatus_id
+           )",
+    )
+    .bind(barcode.trim())
+    .fetch_optional(pool)
+    .await
+    .map_err(|error| {
+        tracing::warn!(%error, "raw material assignment lookup failed");
+        ProductionMapError::StoreFailed
+    })?;
+    row.map(|(id, payload)| raw_material_assignment_from_payload(id, payload))
+        .transpose()
+}
+
 pub(super) async fn load_raw_material_assignments_for_orders(
     pool: &PgPool, order_ids: &[String],
 ) -> Result<Vec<RawMaterialAssignment>, ProductionMapError> {

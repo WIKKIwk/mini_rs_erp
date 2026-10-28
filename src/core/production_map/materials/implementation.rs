@@ -13,7 +13,7 @@ use super::service_maps::compile_saved_maps;
 use super::{
     ApparatusQueueActionResult, OrderControlState, OrderRunStatus, PreparedApparatusQueueAction,
     ProductionMapError, ProductionMapSaved, ProductionMapService, ProductionQrRawMaterial,
-    ProductionOrderLifecycleStatus, QueueActionActor, QueueProgressInput, chain,
+    QueueActionActor, QueueProgressInput, chain,
 };
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -177,28 +177,15 @@ impl ProductionMapService {
     pub async fn raw_material_assignment_orders(
         &self,
     ) -> Result<Vec<ProductionMapSaved>, ProductionMapError> {
-        let mut active_orders = Vec::new();
         let order_controls = self.order_control_states().await?;
-        let maps = compile_saved_maps(
-            self.store
-                .maps_by_lifecycle_statuses(&[
-                    ProductionOrderLifecycleStatus::Released,
-                    ProductionOrderLifecycleStatus::InProgress,
-                ])
-                .await?,
-        );
-        for saved in maps {
-            let order_id = saved.map.id.trim();
-            if !order_id.starts_with("zakaz-")
-                || order_controls
+        let maps = self.store.raw_material_assignment_maps().await?;
+        Ok(compile_saved_maps(maps.into_iter().filter(|map| {
+            let order_id = map.id.trim();
+            order_id.starts_with("zakaz-")
+                && order_controls
                     .get(order_id)
-                    .is_some_and(|control| control.state != OrderControlState::Active)
-            {
-                continue;
-            }
-            active_orders.push(saved);
-        }
-        Ok(active_orders)
+                    .is_none_or(|control| control.state == OrderControlState::Active)
+        })))
     }
 
     pub async fn apparatus_material_rules(
@@ -230,6 +217,15 @@ impl ProductionMapService {
         &self,
     ) -> Result<Vec<RawMaterialAssignment>, ProductionMapError> {
         self.store.raw_material_assignments().await
+    }
+
+    pub async fn raw_material_assignment_by_barcode(
+        &self,
+        barcode: &str,
+    ) -> Result<Option<RawMaterialAssignment>, ProductionMapError> {
+        self.store
+            .raw_material_assignment_by_barcode(barcode.trim())
+            .await
     }
 
     pub async fn raw_material_assignments_for_order(
@@ -378,7 +374,21 @@ impl ProductionMapService {
         let Some(map) = self.raw_map(order_id).await? else {
             return Err(ProductionMapError::MapNotFound);
         };
-        self.resolve_material_apparatus_options(&map, item_group_path)
+        self.raw_material_assignment_apparatus_options_for_map(&map, item_group_path)
+            .await
+    }
+
+    /// Resolve a candidate from the same definition already loaded for this
+    /// request, rather than performing a point read for every candidate order.
+    pub async fn raw_material_assignment_apparatus_options_for_map(
+        &self,
+        map: &super::ProductionMapDefinition,
+        item_group_path: &[String],
+    ) -> Result<Vec<String>, ProductionMapError> {
+        if map.id.trim().is_empty() || item_group_path.is_empty() {
+            return Err(ProductionMapError::RawMaterialInvalidInput);
+        }
+        self.resolve_material_apparatus_options(map, item_group_path)
             .await
     }
 

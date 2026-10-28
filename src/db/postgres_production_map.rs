@@ -147,7 +147,8 @@ use self::capacity_helpers::{
 };
 use self::catalog_helpers::{
     apply_apparatus_sequence_delta_tx, delete_map_by_id, load_apparatus_queue_states,
-    load_apparatus_sequences, load_maps, load_maps_by_lifecycle_statuses, save_apparatus_sequence,
+    load_apparatus_sequences, load_maps, load_maps_by_lifecycle_statuses,
+    load_raw_material_assignment_maps, save_apparatus_sequence,
 };
 use self::completion_helpers::{
     load_completion_request_by_event_id, load_completion_request_decisions_for_actor,
@@ -253,6 +254,12 @@ impl PostgresProductionMapStore {
         statuses: &[ProductionOrderLifecycleStatus],
     ) -> Result<Vec<ProductionMapDefinition>, ProductionMapError> {
         load_maps_by_lifecycle_statuses(&self.pool, statuses).await
+    }
+
+    async fn raw_material_assignment_maps(
+        &self,
+    ) -> Result<Vec<ProductionMapDefinition>, ProductionMapError> {
+        load_raw_material_assignment_maps(&self.pool).await
     }
 
     async fn production_order_lifecycles(
@@ -1062,6 +1069,13 @@ impl PostgresProductionMapStore {
         &self,
     ) -> Result<Vec<RawMaterialAssignment>, ProductionMapError> {
         load_raw_material_assignments(&self.pool).await
+    }
+
+    async fn raw_material_assignment_by_barcode(
+        &self,
+        barcode: &str,
+    ) -> Result<Option<RawMaterialAssignment>, ProductionMapError> {
+        material_helpers::load_raw_material_assignment_by_barcode(&self.pool, barcode).await
     }
 
     async fn put_raw_material_assignment(

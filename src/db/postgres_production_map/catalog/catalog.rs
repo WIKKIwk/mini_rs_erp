@@ -135,6 +135,27 @@ pub(super) async fn load_maps_by_lifecycle_statuses(
     pool: &PgPool,
     statuses: &[ProductionOrderLifecycleStatus],
 ) -> Result<Vec<ProductionMapDefinition>, ProductionMapError> {
+    load_maps_by_lifecycle_statuses_scoped(pool, statuses, false).await
+}
+
+pub(super) async fn load_raw_material_assignment_maps(
+    pool: &PgPool,
+) -> Result<Vec<ProductionMapDefinition>, ProductionMapError> {
+    load_maps_by_lifecycle_statuses_scoped(
+        pool,
+        &[
+            ProductionOrderLifecycleStatus::Released,
+            ProductionOrderLifecycleStatus::InProgress,
+        ],
+        true,
+    ).await
+}
+
+async fn load_maps_by_lifecycle_statuses_scoped(
+    pool: &PgPool,
+    statuses: &[ProductionOrderLifecycleStatus],
+    material_orders_only: bool,
+) -> Result<Vec<ProductionMapDefinition>, ProductionMapError> {
     if statuses.is_empty() {
         return Ok(Vec::new());
     }
@@ -146,12 +167,17 @@ pub(super) async fn load_maps_by_lifecycle_statuses(
         "SELECT map_json
          FROM mini_production_maps
          WHERE lifecycle_status = ANY($1::TEXT[])
+           AND (NOT $2::BOOLEAN OR btrim(id) LIKE 'zakaz-%')
          ORDER BY updated_at DESC",
     )
     .bind(&statuses)
+    .bind(material_orders_only)
     .fetch_all(pool)
     .await
-    .map_err(|_| ProductionMapError::StoreFailed)?;
+    .map_err(|error| {
+        tracing::warn!(%error, "production map candidate read failed");
+        ProductionMapError::StoreFailed
+    })?;
 
     Ok(rows
         .into_iter()

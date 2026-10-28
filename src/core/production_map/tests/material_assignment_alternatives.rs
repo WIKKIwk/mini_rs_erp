@@ -100,6 +100,35 @@ async fn assigned_print_is_the_only_material_option_and_rejects_other_candidates
         .await
         .expect("infer the order's selected apparatus");
     assert_eq!(assigned.apparatus_id.as_str(), PECHAT_8_ID);
+    assert_eq!(
+        service.raw_material_assignment_by_barcode(" roll-alternative ")
+            .await.unwrap().unwrap().apparatus_id.as_str(),
+        PECHAT_8_ID,
+    );
+    assert!(service.raw_material_assignment_by_barcode("other-roll")
+        .await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn raw_material_assignment_candidate_options_reuse_the_supplied_map_snapshot() {
+    let service = material_service(
+        print_alternatives_map(PECHAT_8_ID),
+        &[PECHAT_7_ID, PECHAT_8_ID, PECHAT_9_ID],
+    ).await;
+    let snapshot = print_alternatives_map(PECHAT_9_ID);
+    assert_eq!(
+        service.raw_material_assignment_apparatus_options_for_map(
+            &snapshot, &["Rulon".into()],
+        ).await.unwrap(),
+        vec![PECHAT_9_ID],
+        "candidate enumeration must use the map it already fetched",
+    );
+    assert_eq!(
+        service.raw_material_assignment_apparatus_options(ORDER_ID, &["Rulon".into()])
+            .await.unwrap(),
+        vec![PECHAT_8_ID],
+        "the persisted definition remains unchanged",
+    );
 }
 
 #[tokio::test]

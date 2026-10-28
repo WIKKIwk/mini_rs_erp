@@ -197,14 +197,11 @@ pub async fn raw_material_assignment_lookup(
     }
     let detail = lookup_raw_material_detail(&state, &principal, &query.barcode).await?;
     let mut value = serde_json::to_value(detail).unwrap_or_else(|_| serde_json::json!({}));
-    let normalized = query.barcode.trim().to_ascii_uppercase();
     let assignment = state
         .production_maps
-        .raw_material_assignments()
+        .raw_material_assignment_by_barcode(&query.barcode)
         .await
-        .map_err(production_map_error)?
-        .into_iter()
-        .find(|assignment| assignment.barcode.trim().to_ascii_uppercase() == normalized);
+        .map_err(production_map_error)?;
     if principal.role == PrincipalRole::Aparatchi {
         let assigned = state.admin.principal_assigned_apparatus(&principal).await;
         if assignment.as_ref().is_none_or(|assignment| {
