@@ -292,6 +292,8 @@ pub(super) fn qolip_error(error: QolipError) -> (StatusCode, Json<QolipErrorResp
         QolipError::SetNameConflict => conflict("qolip_set_name_conflict"),
         QolipError::AccessDenied => forbidden(),
         QolipError::QolipHistoryLocked => conflict("qolip_history_locked"),
+        QolipError::QolipInPaddon => conflict("qolip_in_paddon"),
+        QolipError::QolipArchived => conflict("qolip_archived"),
         QolipError::QolipInRework => conflict("qolip_in_rework"),
         QolipError::ReworkConflict => conflict("qolip_rework_conflict"),
         QolipError::ReworkRequestConflict => conflict("qolip_rework_request_conflict"),
@@ -421,7 +423,7 @@ pub struct QolipErrorResponse {
 }
 
 impl QolipErrorResponse {
-    fn new(error: &'static str) -> Self {
+    pub(super) fn new(error: &'static str) -> Self {
         let message = match error {
             "product_not_found" => Some("Mahsulot topilmadi. Mahsulot kodini tekshiring."),
             "qolip_store_failed" => Some("Qoliplarni yuklashda server xatosi. Qayta urinib ko‘ring."),

@@ -73,6 +73,7 @@ pub(super) async fn load(
         ), visible AS (
             SELECT * FROM sources
             WHERE btrim(qolip_code) <> ''
+              AND public.mini_qolip_storage_state(qolip_code) <> 'archived'
               AND ($3::text[] IS NULL OR lower(btrim(warehouse)) = ANY($3))
         ), products AS (
             SELECT DISTINCT ON (lower(code)) code, name FROM visible

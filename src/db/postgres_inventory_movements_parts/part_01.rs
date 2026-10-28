@@ -79,6 +79,7 @@ WITH assets AS (
     LEFT JOIN mini_inventory_transfers transfer
       ON transfer.id = stock.inventory_transfer_id
     WHERE stock.quantity > 0
+      AND public.mini_qolip_storage_state(stock.qolip_code) = ''
 )
 SELECT
     assets.asset_kind,
@@ -393,6 +394,7 @@ async fn lock_asset_tx(
                     stock.quantity::bigint * 1000000 AS qty_units,
                     'dona'::text AS uom,
                     CASE
+                        WHEN public.mini_qolip_storage_state(stock.qolip_code) <> '' THEN 'storage_unavailable'
                         WHEN btrim(stock.inventory_transfer_id) = '' THEN 'available'
                         ELSE 'transfer_reserved'
                     END AS status,

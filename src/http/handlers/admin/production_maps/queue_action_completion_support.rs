@@ -224,6 +224,8 @@ pub(super) fn qolip_queue_error(error: crate::core::qolip::QolipError) -> AdminE
         }
         crate::core::qolip::QolipError::QolipInUse => bad_request("qolip_already_in_use"),
         crate::core::qolip::QolipError::QolipInRework => conflict("qolip_in_rework"),
+        crate::core::qolip::QolipError::QolipInPaddon => conflict("qolip_in_paddon"),
+        crate::core::qolip::QolipError::QolipArchived => conflict("qolip_archived"),
         crate::core::qolip::QolipError::LocationNotFound => bad_request("qolip_location_not_found"),
         crate::core::qolip::QolipError::InsufficientStock => bad_request("insufficient_stock"),
         crate::core::qolip::QolipError::LocationIdentityMismatch => {

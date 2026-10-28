@@ -16,6 +16,7 @@ pub(super) async fn load_locations(
          FROM mini_qolip_locations
          WHERE lower(block) = lower($1)
            AND btrim(inventory_transfer_id) = ''
+           AND public.mini_qolip_storage_state(qolip_code) = ''
            AND NOT EXISTS (SELECT 1 FROM mini_qolip_reworks away
                WHERE away.qolip_code_key = lower(btrim(mini_qolip_locations.qolip_code))
                  AND away.returned_at IS NULL)
@@ -130,6 +131,7 @@ pub(super) async fn load_location_by_id(
          FROM mini_qolip_locations
          WHERE id = $1
            AND btrim(inventory_transfer_id) = ''
+           AND public.mini_qolip_storage_state(qolip_code) = ''
            AND NOT EXISTS (SELECT 1 FROM mini_qolip_reworks away
                WHERE away.qolip_code_key = lower(btrim(mini_qolip_locations.qolip_code))
                  AND away.returned_at IS NULL)",
@@ -153,6 +155,7 @@ pub(super) async fn load_location_by_qolip_code(
          FROM mini_qolip_locations
          WHERE lower(qolip_code) = lower($1)
            AND btrim(inventory_transfer_id) = ''
+           AND public.mini_qolip_storage_state(qolip_code) = ''
            AND NOT EXISTS (SELECT 1 FROM mini_qolip_reworks away
                WHERE away.qolip_code_key = lower(btrim(mini_qolip_locations.qolip_code))
                  AND away.returned_at IS NULL)

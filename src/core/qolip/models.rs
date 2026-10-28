@@ -281,6 +281,10 @@ pub enum QolipError {
     PantonLimitExceeded,
     #[error("qolip history prevents changing its identity")]
     QolipHistoryLocked,
+    #[error("qolip is stored in a paddon")]
+    QolipInPaddon,
+    #[error("qolip is archived")]
+    QolipArchived,
     #[error("qolip is in peredelka")]
     QolipInRework,
     #[error("qolip peredelka transition conflicts with current state")]

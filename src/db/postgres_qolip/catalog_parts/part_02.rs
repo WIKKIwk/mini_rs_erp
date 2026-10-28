@@ -235,6 +235,7 @@ pub(super) async fn load_products_inner(
         LEFT JOIN customers_per_item customers ON customers.item_code = lower(product.code)
         LEFT JOIN in_use_qolips in_use ON in_use.code = lower(product.qolip_code)
         WHERE (NOT $4 OR product.has_qolip_spec)
+          AND public.mini_qolip_storage_state(product.qolip_code) <> 'archived'
           AND (
             $1 = ''
             OR lower(product.code) LIKE $2

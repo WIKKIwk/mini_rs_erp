@@ -52,7 +52,11 @@ fn owner(warehouse: &str, allowed: Option<&[String]>) -> Result<(), QolipError> 
 }
 
 pub(super) fn storage_error(error: sqlx::Error) -> QolipError {
-    if error
+    if error.as_database_error().is_some_and(|error| error.message().contains("qolip_archived")) {
+        QolipError::QolipArchived
+    } else if error.as_database_error().is_some_and(|error| error.message().contains("qolip_in_paddon")) {
+        QolipError::QolipInPaddon
+    } else if error
         .as_database_error()
         .is_some_and(|error| error.message().contains("qolip_in_rework"))
     {

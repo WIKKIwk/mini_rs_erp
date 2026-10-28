@@ -181,6 +181,12 @@ pub(super) async fn reject_qolip_in_use_tx(
             .execute(&mut **tx)
             .await
             .map_err(|_| ProductionMapError::StoreFailed)?;
+        let storage_state: String = sqlx::query_scalar("SELECT public.mini_qolip_storage_state($1)")
+            .bind(&qolip_code).fetch_one(&mut **tx).await
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        if !storage_state.is_empty() {
+            return Err(ProductionMapError::QolipAlreadyInUse);
+        }
         let in_rework: bool = sqlx::query_scalar(
             "SELECT EXISTS (SELECT 1 FROM mini_qolip_reworks
              WHERE qolip_code_key = lower(btrim($1)) AND returned_at IS NULL)",
