@@ -38,9 +38,60 @@ pub struct QolipStorageQuery {
     pub archived: bool,
     #[serde(default)]
     pub status: String,
+    #[serde(default)]
+    pub warehouse: String,
+    pub from: Option<String>,
+    pub to: Option<String>,
     pub limit: Option<usize>,
     #[serde(default)]
     pub offset: usize,
+}
+impl QolipStorageQuery {
+    pub(crate) fn validate(&self) -> Result<(), QolipStorageError> {
+        if self.q.len() > 512
+            || self.code.len() > 512
+            || self.warehouse.len() > 512
+            || self.offset > 1_000_000
+            || (!self.status.is_empty()
+                && !matches!(self.status.as_str(), "open" | "all" | "returned"))
+        {
+            return Err(QolipStorageError::Invalid("qolip_storage_invalid_query"));
+        }
+        let from = self.from.as_deref().map(parse_date).transpose()?;
+        let to = self.to.as_deref().map(parse_date).transpose()?;
+        if matches!((from,to),(Some(from),Some(to)) if from>to) {
+            return Err(QolipStorageError::Invalid(
+                "qolip_storage_invalid_date_range",
+            ));
+        }
+        Ok(())
+    }
+}
+fn parse_date(value: &str) -> Result<time::Date, QolipStorageError> {
+    let invalid = || QolipStorageError::Invalid("qolip_storage_invalid_date");
+    if value.len() != 10
+        || !value.is_ascii()
+        || &value[4..5] != "-"
+        || &value[7..8] != "-"
+        || value
+            .bytes()
+            .enumerate()
+            .any(|(i, b)| i != 4 && i != 7 && !b.is_ascii_digit())
+    {
+        return Err(invalid());
+    }
+    let year = value[..4].parse::<i32>().map_err(|_| invalid())?;
+    let month = value[5..7].parse::<u8>().map_err(|_| invalid())?;
+    let day = value[8..].parse::<u8>().map_err(|_| invalid())?;
+    if !(1..=9999).contains(&year) {
+        return Err(invalid());
+    }
+    time::Date::from_calendar_date(
+        year,
+        time::Month::try_from(month).map_err(|_| invalid())?,
+        day,
+    )
+    .map_err(|_| invalid())
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -142,13 +193,7 @@ impl QolipService {
         principal: &Principal,
         admin: bool,
     ) -> Result<Value, QolipStorageError> {
-        if query.q.len() > 512
-            || query.offset > 1_000_000
-            || (!query.status.is_empty()
-                && !matches!(query.status.as_str(), "open" | "all" | "returned"))
-        {
-            return Err(QolipStorageError::Invalid("qolip_storage_invalid_query"));
-        }
+        query.validate()?;
         let allowed = self.warehouses_for_principal(principal, false).await?;
         self.store
             .storage_read(kind, query, if admin { None } else { Some(&allowed) })
@@ -211,5 +256,43 @@ mod tests {
     fn unknown_actions_and_empty_selection_fail() {
         assert!(input("delete").normalize(false).is_err());
         assert!(input("add").normalize(false).is_err());
+    }
+    #[test]
+    fn validates_archive_calendar_dates_and_order() {
+        for date in [
+            "2026-02-29",
+            "2026-13-01",
+            "0000-01-01",
+            "26-10-28",
+            "2026-1-28",
+            "2026-10-28T00:00:00Z",
+            "+026-10-28",
+            "2026-+1-28",
+            "2026-10-+8",
+            "",
+        ] {
+            let q = QolipStorageQuery {
+                from: Some(date.into()),
+                ..Default::default()
+            };
+            assert!(q.validate().is_err(), "accepted {date}");
+        }
+        let reversed = QolipStorageQuery {
+            from: Some("2026-10-29".into()),
+            to: Some("2026-10-28".into()),
+            ..Default::default()
+        };
+        assert!(matches!(
+            reversed.validate(),
+            Err(QolipStorageError::Invalid(
+                "qolip_storage_invalid_date_range"
+            ))
+        ));
+        let leap = QolipStorageQuery {
+            from: Some("2024-02-29".into()),
+            to: Some("2024-02-29".into()),
+            ..Default::default()
+        };
+        assert!(leap.validate().is_ok());
     }
 }

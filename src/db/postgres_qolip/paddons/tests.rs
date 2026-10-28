@@ -408,3 +408,112 @@ async fn postgres_concurrent_paddon_membership_and_idempotent_creation() {
     ));
     f.cleanup().await;
 }
+
+#[tokio::test]
+#[ignore = "requires isolated disposable PostgreSQL admin URL"]
+async fn postgres_archive_filters_use_tashkent_day_before_pagination() {
+    let f = Fixture::new().await;
+    let allowed = vec!["Qolip ombor".to_owned()];
+    let mut input:Action=serde_json::from_value(json!({"action":"archive","request_id":"filter-setup","qolip_codes":["Q-ONE","Q-TWO","CATALOG-ONLY"]})).unwrap();
+    input.normalize(true).unwrap();
+    action(&f.runtime, &input, true, &actor(), Some(&allowed))
+        .await
+        .unwrap();
+    for (code, at) in [
+        ("Q-ONE", "2026-10-27T19:00:00Z"),
+        ("Q-TWO", "2026-10-28T18:59:59Z"),
+        ("CATALOG-ONLY", "2026-10-28T19:00:00Z"),
+    ] {
+        sqlx::query(
+            "UPDATE mini_qolip_archive_entries SET archived_at=$2::text::timestamptz WHERE code=$1",
+        )
+        .bind(code)
+        .bind(at)
+        .execute(&f.admin)
+        .await
+        .unwrap();
+    }
+    let query = Query {
+        from: Some("2026-10-28".into()),
+        to: Some("2026-10-28".into()),
+        warehouse: "qolip ombor".into(),
+        limit: Some(1),
+        ..Default::default()
+    };
+    let page = read(&f.runtime, "archive", &query, Some(&allowed))
+        .await
+        .unwrap();
+    assert_eq!(page["entries"][0]["code"], "Q-TWO");
+    assert_eq!(page["has_more"], true);
+    let next = read(
+        &f.runtime,
+        "archive",
+        &Query {
+            offset: 1,
+            ..query.clone()
+        },
+        Some(&allowed),
+    )
+    .await
+    .unwrap();
+    assert_eq!(next["entries"][0]["code"], "Q-ONE");
+    assert_eq!(next["has_more"], false);
+    assert!(matches!(
+        read(
+            &f.runtime,
+            "archive",
+            &Query {
+                warehouse: "Other warehouse".into(),
+                ..query.clone()
+            },
+            Some(&allowed)
+        )
+        .await,
+        Err(Error::Forbidden)
+    ));
+    let next_day = read(
+        &f.runtime,
+        "archive",
+        &Query {
+            from: Some("2026-10-29".into()),
+            to: Some("2026-10-29".into()),
+            ..query.clone()
+        },
+        Some(&allowed),
+    )
+    .await
+    .unwrap();
+    assert_eq!(next_day["entries"][0]["code"], "CATALOG-ONLY");
+    let set_id: String = sqlx::query_scalar(
+        "SELECT qolip_set_id FROM mini_qolip_product_specs WHERE qolip_code='Q-ONE'",
+    )
+    .fetch_one(&f.admin)
+    .await
+    .unwrap();
+    let search = read(
+        &f.runtime,
+        "molds",
+        &Query {
+            q: format!("  {set_id}  "),
+            ..Default::default()
+        },
+        Some(&allowed),
+    )
+    .await
+    .unwrap();
+    assert_eq!(search["molds"].as_array().unwrap().len(), 3);
+    let exact = read(
+        &f.runtime,
+        "molds",
+        &Query {
+            code: " q-One ".into(),
+            ..Default::default()
+        },
+        Some(&allowed),
+    )
+    .await
+    .unwrap();
+    assert_eq!(exact["molds"].as_array().unwrap().len(), 1);
+    assert_eq!(exact["molds"][0]["qolip_code"], "Q-ONE");
+    f.cleanup().await;
+}

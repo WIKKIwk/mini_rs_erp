@@ -118,6 +118,14 @@ pub async fn read(
     query: &Query,
     allowed: Option<&[String]>,
 ) -> Result<Value, Error> {
+    query.validate()?;
+    let selected_warehouses = if query.warehouse.trim().is_empty() {
+        None
+    } else {
+        owner(query.warehouse.trim(), allowed)?;
+        Some(vec![query.warehouse.trim().to_owned()])
+    };
+    let allowed = selected_warehouses.as_deref().or(allowed);
     let mut tx = pool.begin().await.map_err(db)?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
         .execute(&mut *tx)
@@ -128,7 +136,22 @@ pub async fn read(
     let value = match kind {
         "detail" => snapshot(&mut tx, &query.code.trim().to_uppercase(), allowed).await?,
         "molds" => {
-            let mut rows = molds(&mut tx, None, allowed, query.q.trim(), limit + 1, offset).await?;
+            let codes = (!query.code.trim().is_empty()).then(|| {
+                vec![
+                    crate::core::qolip::qolip_scan_code_from_qr(&query.code)
+                        .trim()
+                        .to_lowercase(),
+                ]
+            });
+            let mut rows = molds(
+                &mut tx,
+                codes.as_deref(),
+                allowed,
+                query.q.trim(),
+                limit + 1,
+                offset,
+            )
+            .await?;
             let more = rows.len() > limit;
             rows.truncate(limit);
             json!({"ok":true,"molds":rows,"has_more":more,"next_offset":if more{Some(offset+limit)}else{None}})
@@ -140,7 +163,7 @@ pub async fn read(
             json!({"ok":true,"paddons":rows,"has_more":more,"next_offset":if more{Some(offset+limit)}else{None}})
         }
         "archive" => {
-            let mut rows:Vec<Value>=sqlx::query_scalar("SELECT to_jsonb(a) FROM mini_qolip_archive_entries a WHERE ($1='all' OR ($1='returned' AND restored_at IS NOT NULL) OR ($1='open' AND restored_at IS NULL)) AND ($2::text[] IS NULL OR lower(btrim(warehouse))=ANY($2)) AND ($3='' OR lower(code) LIKE $3 OR lower(snapshot::text) LIKE $3) ORDER BY archived_at DESC,id DESC LIMIT $4 OFFSET $5").bind(if query.status.is_empty(){"open"}else{&query.status}).bind(allowed_names(allowed)).bind(if query.q.is_empty(){String::new()}else{format!("%{}%",query.q.trim().to_lowercase())}).bind((limit+1)as i64).bind(offset as i64).fetch_all(&mut *tx).await.map_err(db)?;
+            let mut rows:Vec<Value>=sqlx::query_scalar("SELECT to_jsonb(a) FROM mini_qolip_archive_entries a WHERE ($1='all' OR ($1='returned' AND restored_at IS NOT NULL) OR ($1='open' AND restored_at IS NULL)) AND ($2::text[] IS NULL OR lower(btrim(warehouse))=ANY($2)) AND ($3='' OR lower(code) LIKE $3 OR lower(snapshot::text) LIKE $3) AND ($6::date IS NULL OR archived_at >= ($6::date::timestamp AT TIME ZONE 'Asia/Tashkent')) AND ($7::date IS NULL OR archived_at < (($7::date + 1)::timestamp AT TIME ZONE 'Asia/Tashkent')) ORDER BY archived_at DESC,id DESC LIMIT $4 OFFSET $5").bind(if query.status.is_empty(){"open"}else{&query.status}).bind(allowed_names(allowed)).bind(if query.q.is_empty(){String::new()}else{format!("%{}%",query.q.trim().to_lowercase())}).bind((limit+1)as i64).bind(offset as i64).bind(query.from.as_deref()).bind(query.to.as_deref()).fetch_all(&mut *tx).await.map_err(db)?;
             let more = rows.len() > limit;
             rows.truncate(limit);
             json!({"ok":true,"entries":rows,"has_more":more,"next_offset":if more{Some(offset+limit)}else{None}})
