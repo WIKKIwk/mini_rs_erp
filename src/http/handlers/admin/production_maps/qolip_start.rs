@@ -107,11 +107,7 @@ pub(super) async fn automatic_readiness(
         .map_err(production_map_error)?
         .ok_or_else(|| production_map_error(ProductionMapError::MapNotFound))?;
     let mut blocker = String::new();
-    let specs = match state
-        .qolip
-        .required_qolips_for_layout(&map.products, &map.product_code, &map.title)
-        .await
-    {
+    let specs = match state.qolip.required_qolips_for_production_map(&map).await {
         Ok(specs) => specs,
         Err(error) => {
             blocker = qolip_error_code(&error).to_string();
@@ -126,7 +122,7 @@ pub(super) async fn automatic_readiness(
     // alternative sets, while still returning individual member statuses.
     if let Err(error) = state
         .qolip
-        .require_qolips_available_for_layout(&map.products, &map.product_code, &map.title)
+        .require_qolips_available_for_production_map(&map)
         .await
     {
         if matches!(error, crate::core::qolip::QolipError::QolipInRework) {
@@ -250,6 +246,7 @@ fn qolip_error_code(error: &crate::core::qolip::QolipError) -> &'static str {
         QolipInRework => "qolip_in_rework",
         QolipCodeNotFound => "qolip_code_not_found",
         QolipCodeMismatch => "qolip_code_mismatch",
+        ComboQolipRequired => "combo_qolip_required",
         MissingQolipCode => "qolip_scan_required",
         ProductNotFound => "product_not_found",
         CheckoutRequired => "qolip_checkout_required",

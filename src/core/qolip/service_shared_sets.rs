@@ -1,4 +1,35 @@
 impl QolipService {
+    /// Named combos own their tooling by catalog revision. Their output SKUs
+    /// remain separate products and do not contribute their individual molds.
+    pub async fn required_qolips_for_production_map(
+        &self,
+        map: &crate::core::production_map::ProductionMapDefinition,
+    ) -> Result<Vec<QolipProductSpec>, QolipError> {
+        let Some(combo) = &map.combo else {
+            return self.required_qolips_for_layout(&map.products, &map.product_code, &map.title).await;
+        };
+        if combo.item_code != map.product_code {
+            return Err(QolipError::QolipCodeMismatch);
+        }
+        let specs = self.required_qolips_for_order(&combo.item_code, &combo.name).await?;
+        if specs.is_empty() { return Err(QolipError::ComboQolipRequired); }
+        Ok(specs)
+    }
+
+    pub async fn require_qolips_available_for_production_map(
+        &self,
+        map: &crate::core::production_map::ProductionMapDefinition,
+    ) -> Result<(), QolipError> {
+        if let Some(combo) = &map.combo {
+            if combo.item_code != map.product_code {
+                return Err(QolipError::QolipCodeMismatch);
+            }
+            self.require_qolips_available_for_layout(&[], &combo.item_code, &combo.name).await
+        } else {
+            self.require_qolips_available_for_layout(&map.products, &map.product_code, &map.title).await
+        }
+    }
+
     /// Peredelka belongs to a physical mold code. Every order containing that
     /// code is incomplete, including when another alternative set is intact.
     pub async fn require_qolips_available_for_layout(

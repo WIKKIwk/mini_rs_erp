@@ -71,6 +71,19 @@ pub async fn calculate_orders_route(
         Method::POST => {
             let template: CalculateOrderTemplate = serde_json::from_slice(&body)
                 .map_err(|_| bad_request("invalid_json", "invalid json"))?;
+            super::admin::validate_combo_template(&state, &template)
+                .await
+                .map_err(|(status, Json(error))| {
+                    let code = match error.error.as_str() {
+                        "combo_reference_mismatch" => "combo_reference_mismatch",
+                        "combo_not_found" => "combo_not_found",
+                        "combo_store_unavailable" => "combo_store_unavailable",
+                        "combo_store_failed" => "combo_store_failed",
+                        _ => "combo_invalid",
+                    };
+                    let detail = error.message.clone().unwrap_or(error.error);
+                    (status, Json(CalculateErrorResponse::new(code, detail)))
+                })?;
             if !template.source_map_id.trim().is_empty() && !template.item_code.trim().is_empty() {
                 let existing = state
                     .calculate_orders

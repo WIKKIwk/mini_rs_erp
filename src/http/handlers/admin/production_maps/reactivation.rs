@@ -87,9 +87,7 @@ pub async fn production_map_reactivation(
             .await
             .map_err(production_map_error)?
             .ok_or_else(|| production_map_error(ProductionMapError::MapNotFound))?;
-        state.qolip.require_qolips_available_for_layout(
-            &map.products, &map.product_code, &map.title,
-        ).await.map_err(qolip_queue_error)?;
+        state.qolip.require_qolips_available_for_production_map(&map).await.map_err(qolip_queue_error)?;
         if target.batch_id.is_empty() {
             let mut codes = session
                 .payload_json

@@ -67,6 +67,7 @@ fn alternative_node_with_label(
 
 fn hotlunch_map() -> ProductionMapDefinition {
     ProductionMapDefinition {
+        combo: None,
         products: Vec::new(),
         print_val_size_mm: None,
         id: "zakaz-hot".to_string(),

@@ -6,6 +6,7 @@ pub mod authz;
 pub mod backup_doctor;
 pub mod calculate_materials;
 pub mod calculate_orders;
+pub mod combo;
 pub mod order_image_cache;
 pub mod chat;
 pub mod chat_media;

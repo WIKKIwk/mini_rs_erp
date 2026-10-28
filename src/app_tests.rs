@@ -279,6 +279,7 @@ async fn app_state_admin_catalog_fails_closed_without_postgres() {
 
 fn calculate_order_template(code: &str) -> CalculateOrderTemplate {
     CalculateOrderTemplate {
+        combo: None,
         products: Vec::new(),
         variant_id: String::new(),
         production_options: None,
@@ -321,6 +322,7 @@ fn calculate_order_template(code: &str) -> CalculateOrderTemplate {
 
 fn test_production_map(id: &str, order_number: &str) -> ProductionMapDefinition {
     ProductionMapDefinition {
+        combo: None,
         products: Vec::new(),
         print_val_size_mm: None,
         id: id.to_string(),

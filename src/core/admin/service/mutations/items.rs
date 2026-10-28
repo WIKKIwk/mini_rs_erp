@@ -14,6 +14,14 @@ impl AdminService {
         item_group: &str,
         customer_ref: &str,
     ) -> Result<SupplierItem, AdminPortError> {
+        if item_group
+            .trim()
+            .eq_ignore_ascii_case(crate::core::combo::COMBO_ITEM_GROUP)
+        {
+            return Err(AdminPortError::InvalidInput(
+                "combo_catalog_reserved".into(),
+            ));
+        }
         let customer_ref = customer_ref.trim();
         let groups = self.item_group_tree().await?;
         let is_finished_goods = item_group_requires_customer(item_group, &groups);

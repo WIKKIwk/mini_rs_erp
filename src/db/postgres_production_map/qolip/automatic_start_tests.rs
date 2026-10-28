@@ -82,6 +82,30 @@ async fn automatic_fingerprint_and_common_product_binding_are_rechecked_at_commi
             .await
             .unwrap();
     }
+    let reference = serde_json::json!({"id":"combo-master","item_code":"ITEM",
+        "name":"Combined","revision":1,"layout_fingerprint":"a".repeat(64)});
+    sqlx::raw_sql("CREATE TEMP TABLE mini_combo_revisions(item_code text,reference_json jsonb) ON COMMIT DROP;
+        DELETE FROM mini_qolip_effective_product_molds WHERE item_code_key='second';")
+        .execute(&mut *tx).await.unwrap();
+    sqlx::query("INSERT INTO mini_combo_revisions VALUES ('ITEM',$1)")
+        .bind(&reference)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE mini_production_maps SET map_json=jsonb_set(map_json,'{combo}',$1)")
+        .bind(&reference)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    validate_automatic_qolip_set_tx(&mut tx, &session)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE mini_production_maps SET map_json=jsonb_set(map_json,'{combo,item_code}','\"CHILD\"')")
+        .execute(&mut *tx).await.unwrap();
+    assert_eq!(
+        validate_automatic_qolip_set_tx(&mut tx, &session).await,
+        Err(ProductionMapError::QolipCodeMismatch)
+    );
     tx.rollback().await.unwrap();
     pool.close().await;
 }

@@ -120,6 +120,9 @@ pub(super) fn finished_product(
     batch: &OrderProgressBatch,
 ) -> Result<(String, String), ProductionMapError> {
     if map.products.is_empty() {
+        if map.combo.is_some() {
+            return Err(ProductionMapError::ProgressInputInvalid);
+        }
         return Ok((map.product_code.clone(), map.title.clone()));
     }
     let lanes = payload_lanes(&batch.payload_json);
@@ -259,5 +262,24 @@ mod tests {
         assert!(cut_counts(&map, "cut2", &[lanes[0].clone(), lanes[3].clone()]).is_err());
         let mut roll = batch();
         assert!(apply_output_layout(&mut roll, &map, &[], true, Some(0), Some(1)).is_err());
+    }
+
+    #[test]
+    fn combo_outputs_keep_child_sku_and_never_fall_back_to_parent_stock() {
+        let mut map = map();
+        map.combo = Some(crate::core::combo::ComboReference {
+            id: "combo-master".into(),
+            item_code: "COMBO-SKU".into(),
+            name: "Combined run".into(),
+            revision: 1,
+            layout_fingerprint: "a".repeat(64),
+        });
+        map.product_code = "COMBO-SKU".into();
+        map.title = "Combined run".into();
+        let mut output = batch();
+        apply_output_layout(&mut output, &map, &[], false, Some(2), Some(1)).unwrap();
+        assert_eq!(finished_product(&map, &output).unwrap().0, "SKU-2");
+        map.products.clear();
+        assert!(finished_product(&map, &output).is_err());
     }
 }

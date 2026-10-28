@@ -93,6 +93,7 @@ mod queue_action_control_wait;
 mod progress_qr_order_control;
 mod production_map_save_order;
 mod multi_product_orders;
+mod combos;
 mod order_edit;
 mod order_alerts;
 mod order_alerts_chat;

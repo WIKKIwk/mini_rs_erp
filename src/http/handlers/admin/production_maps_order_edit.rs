@@ -104,6 +104,10 @@ pub async fn production_map_order_edit(
             crate::core::order_edit::OrderEditError::Conflict,
         ));
     }
+    super::combos::validate_combo_template(&state, &input.template).await?;
+    if current.template.combo.is_some() && input.template.combo.is_none() {
+        return Err(conflict("combo_reference_required"));
+    }
     let mut template = if input.template.products.is_empty() {
         crate::core::calculate_orders::hydrate_template_layers(input.template)
     } else { crate::core::calculate_orders::hydrate_template_dimensions(input.template) };

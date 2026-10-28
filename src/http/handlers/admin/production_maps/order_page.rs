@@ -569,9 +569,7 @@ pub(super) async fn read_detail(
         let created_at = state.production_orders.order_created_at_unix(order_id)
             .await.map_err(|_| server_error("Buyurtma ochilgan vaqt yuklanmadi"))?;
         let map = &projected.maps[0].map;
-        let qolip_in_rework = match state.qolip.require_qolips_available_for_layout(
-            &map.products, &map.product_code, &map.title,
-        ).await {
+        let qolip_in_rework = match state.qolip.require_qolips_available_for_production_map(&map).await {
             Ok(()) => Some(false),
             Err(crate::core::qolip::QolipError::QolipInRework) => Some(true),
             Err(error) => {

@@ -312,6 +312,7 @@ pub(super) fn qolip_error(error: QolipError) -> (StatusCode, Json<QolipErrorResp
         QolipError::MissingQolipCode => bad_request("qolip_code_required"),
         QolipError::QolipCodeNotFound => bad_request("qolip_code_not_found"),
         QolipError::QolipCodeMismatch => bad_request("qolip_code_mismatch"),
+        QolipError::ComboQolipRequired => bad_request("combo_qolip_required"),
         QolipError::QolipCodeConflict => conflict("qolip_code_conflict"),
         QolipError::PantonLimitExceeded => bad_request("panton_limit_exceeded"),
         QolipError::QolipInUse => (

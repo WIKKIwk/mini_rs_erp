@@ -331,6 +331,9 @@ async fn validate_automatic_common_set_tx(
 ) -> Result<(), ProductionMapError> {
     let map: serde_json::Value = sqlx::query_scalar("SELECT map_json FROM mini_production_maps WHERE id=$1")
         .bind(&session.order_id).fetch_one(&mut **tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
+    if combo_primary_revision_tx(tx, &map, primary).await? {
+        return Ok(());
+    }
     let products = map.get("products").and_then(serde_json::Value::as_array).into_iter().flatten()
         .filter_map(|product| product.get("item_code").and_then(serde_json::Value::as_str))
         .map(|code| code.trim().to_lowercase()).filter(|code| !code.is_empty() && !code.eq_ignore_ascii_case(primary))
@@ -351,4 +354,25 @@ async fn validate_automatic_common_set_tx(
         if codes != expected || (has_base && !selected_base) { return Err(ProductionMapError::QolipSetChanged); }
     }
     Ok(())
+}
+
+/// Only a canonical immutable combo revision may replace the legacy common-set
+/// policy. A JSON flag or a forged parent SKU is never enough to skip children.
+pub(super) async fn combo_primary_revision_tx(
+    tx: &mut Transaction<'_, Postgres>, map: &serde_json::Value, primary: &str,
+) -> Result<bool, ProductionMapError> {
+    let Some(value) = map.get("combo").filter(|value| !value.is_null()) else { return Ok(false); };
+    let reference: crate::core::combo::ComboReference = serde_json::from_value(value.clone())
+        .map_err(|_| ProductionMapError::QolipCodeMismatch)?;
+    if reference.item_code != primary || reference.revision < 1
+        || map.get("products").and_then(serde_json::Value::as_array).is_none_or(Vec::is_empty) {
+        return Err(ProductionMapError::QolipCodeMismatch);
+    }
+    let canonical = sqlx::query_scalar::<_, serde_json::Value>(
+        "SELECT reference_json FROM mini_combo_revisions WHERE item_code=$1",
+    ).bind(primary).fetch_optional(&mut **tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
+    if canonical != Some(serde_json::to_value(reference).map_err(|_| ProductionMapError::QolipCodeMismatch)?) {
+        return Err(ProductionMapError::QolipCodeMismatch);
+    }
+    Ok(true)
 }

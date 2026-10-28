@@ -273,6 +273,8 @@ pub enum QolipError {
     QolipCodeNotFound,
     #[error("qolip code does not match item")]
     QolipCodeMismatch,
+    #[error("combo_qolip_required")]
+    ComboQolipRequired,
     #[error("qolip code already exists")]
     QolipCodeConflict,
     #[error("all 100 Panton colors are already assigned")]

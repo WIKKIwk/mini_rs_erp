@@ -7,6 +7,8 @@ use crate::core::quantity::deserialize_optional_integer_count;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProductionMapDefinition {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub combo: Option<crate::core::combo::ComboReference>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub products: Vec<crate::core::order_layout::OrderProduct>,
     pub id: String,

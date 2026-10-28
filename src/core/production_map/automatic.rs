@@ -341,6 +341,7 @@ impl Graph {
             "order_number": t.order_number, "product_code": t.item_code,
             "title": t.product, "customer_name": t.customer, "image_id": t.image_id,
             "products": t.products,
+            "combo": t.combo,
             "nodes": [{"id":"start","kind":"start","title":"Start","x":420,"y":32}]
         }))
         .expect("static production map shape");

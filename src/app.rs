@@ -1,6 +1,5 @@
 use std::sync::Arc;
 use std::time::Instant;
-
 use crate::ai::werka_search::WerkaAiSearchService;
 use crate::config::{AppConfig, DotEnvPersister};
 use crate::core::admin::monitor_hub::SystemMonitorHub;
@@ -64,11 +63,9 @@ mod builders;
 mod order_sheets;
 mod postgres_pool;
 mod session_security;
-
 use self::admin_catalog_overlay::build_admin_catalog_ports;
 use self::builders::*;
 use self::order_sheets::*;
-
 #[derive(Clone)]
 pub struct AppState {
     #[cfg_attr(not(test), allow(dead_code))]
@@ -89,6 +86,7 @@ pub struct AppState {
     pub factory_locations: FactoryLocationService,
     pub inventory_movements: InventoryMovementService,
     pub calculate_orders: Arc<dyn CalculateOrderStorePort>,
+    pub combos: Option<crate::db::postgres_combo::PostgresComboStore>,
     pub order_image_cache: Arc<crate::core::order_image_cache::OrderImageCache>,
     pub calculate_materials: Arc<dyn CalculateMaterialStorePort>,
     pub training_workspace: Option<PostgresTrainingWorkspaceStore>,
@@ -268,6 +266,7 @@ impl AppState {
         let customer = CustomerService::new();
         let inventory_movements = build_inventory_movement_service();
         let calculate_orders = build_calculate_order_store();
+        let combos = werka_pool.as_ref().map(|pool| crate::db::postgres_combo::PostgresComboStore::new(pool.clone()));
         let calculate_materials = build_calculate_material_store();
         let training_workspace = build_training_workspace_store();
         let order_sheets = discover_order_sheet_sink();
@@ -341,6 +340,7 @@ impl AppState {
             factory_locations,
             inventory_movements,
             calculate_orders,
+            combos,
             order_image_cache: Arc::new(crate::core::order_image_cache::OrderImageCache::default()),
             calculate_materials,
             training_workspace,

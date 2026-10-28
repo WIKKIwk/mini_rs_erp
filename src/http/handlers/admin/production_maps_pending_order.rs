@@ -32,6 +32,7 @@ async fn complete_pending_order(
         template.image_mime = image.image_mime;
         template.image_size_bytes = image.image_size_bytes;
     }
+    validate_multi_product_customer(state, &template).await?;
     validate_template(&template).map_err(calculate_order_error)?;
     input.map.id = pending.id.clone();
     input.map.code = template.order_number.clone();

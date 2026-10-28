@@ -134,6 +134,9 @@ async fn prepare_qolips_for_bosma_start(
     } else {
         input.materials.qolip_codes.clone()
     };
+    let combo_requirements = if map.combo.is_some() {
+        Some(state.qolip.required_qolips_for_production_map(&map).await.map_err(qolip_queue_error)?)
+    } else { None };
     if qolip_codes.is_empty() {
         return Err(if input.action == queue_state::ApparatusQueueAction::Resume {
             production_map_error(ProductionMapError::QolipCodeMismatch)
@@ -141,11 +144,10 @@ async fn prepare_qolips_for_bosma_start(
             bad_request("qolip_scan_required")
         });
     }
-    let required_qolips = state
-        .qolip
-        .required_qolips_for_layout(&map.products, &map.product_code, &map.title)
-        .await
-        .map_err(qolip_queue_error)?;
+    let required_qolips = match combo_requirements {
+        Some(specs) => specs,
+        None => state.qolip.required_qolips_for_production_map(&map).await.map_err(qolip_queue_error)?,
+    };
     let mut preparations = Vec::with_capacity(qolip_codes.len());
     for qolip_code in &qolip_codes {
         reject_qolip_in_use(state, apparatus, &input.order_id, qolip_code).await?;
@@ -214,6 +216,7 @@ pub(super) fn qolip_queue_error(error: crate::core::qolip::QolipError) -> AdminE
         crate::core::qolip::QolipError::MissingQolipCode => bad_request("qolip_scan_required"),
         crate::core::qolip::QolipError::QolipCodeNotFound => bad_request("qolip_code_not_found"),
         crate::core::qolip::QolipError::QolipCodeMismatch => bad_request("qolip_code_mismatch"),
+        crate::core::qolip::QolipError::ComboQolipRequired => bad_request("combo_qolip_required"),
         crate::core::qolip::QolipError::ProductNotFound => bad_request("product_not_found"),
         crate::core::qolip::QolipError::CheckoutRequired => bad_request("qolip_checkout_required"),
         crate::core::qolip::QolipError::CheckoutAssignedToAnotherWorker => {

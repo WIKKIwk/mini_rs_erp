@@ -147,6 +147,7 @@ pub(super) fn apply_order_rezka_kadr_count(
     cut_apparatus_ids: &std::collections::BTreeSet<ApparatusId>,
 ) -> Result<(), AdminError> {
     map.products = template.products.clone();
+    map.combo = template.combo.clone();
     let frame_count = template.frame_count.round();
     if !template.frame_count.is_finite()
         || frame_count <= 0.0
@@ -284,6 +285,7 @@ pub(super) fn apply_authoritative_calculation(
         .ok_or_else(|| bad_request("calculate result is empty"))?;
     map.width_mm = Some(response.width_mm);
     map.products = template.products.clone();
+    map.combo = template.combo.clone();
     map.print_val_size_mm = template.print_val_size_mm;
     map.order_kg = Some(response.kg);
     // The legacy map field carries the production target, including waste.
@@ -296,6 +298,7 @@ pub(super) async fn validate_multi_product_customer(
     state: &AppState,
     template: &CalculateOrderTemplate,
 ) -> Result<(), AdminError> {
+    super::combos::validate_combo_template(state, template).await?;
     if template.products.is_empty() { return Ok(()); }
     crate::core::order_layout::validate_products(&template.products).map_err(|e| bad_request(&e))?;
     if template.customer_ref.trim().is_empty() {

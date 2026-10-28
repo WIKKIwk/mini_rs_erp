@@ -11,6 +11,52 @@ use super::ports::QolipStorePort;
 use super::service::QolipService;
 
 #[tokio::test]
+async fn named_combo_uses_only_its_revision_tooling_not_component_molds() {
+    use crate::core::production_map::ProductionMapDefinition;
+    let store = std::sync::Arc::new(MemoryQolipStore::new());
+    let products = crate::core::order_layout::tests::products()[..2].to_vec();
+    let mut catalog = products.iter().map(|p| QolipProduct {
+        code: p.item_code.clone(), name: p.product.clone(),
+        item_group: "Tayyor mahsulot".into(), ..Default::default()
+    }).collect::<Vec<_>>();
+    for code in ["COMBO-R1", "COMBO-R2"] {
+        catalog.push(QolipProduct { code: code.into(), name: "Mixed layout".into(),
+            item_group: "Kombo".into(), ..Default::default() });
+    }
+    store.seed_products(catalog).await;
+    let spec = |item: &str, code: &str, set: &str| QolipProductSpec {
+        item_code: item.into(), item_name: if item.starts_with("COMBO") { "Mixed layout".into() }
+            else { products.iter().find(|p| p.item_code == item).unwrap().product.clone() },
+        item_group: if item.starts_with("COMBO") { "Kombo".into() } else { "Tayyor mahsulot".into() },
+        warehouse: "Molds".into(), qolip_set_id: set.into(), qolip_code: code.into(),
+        color: "BLACK".into(), size: 650, ..Default::default()
+    };
+    for (index, product) in products.iter().enumerate() {
+        store.put_product_spec(spec(&product.item_code, &format!("CHILD-{index}"), &format!("child-set-{index}")))
+            .await.unwrap();
+    }
+    let mut map: ProductionMapDefinition = serde_json::from_value(serde_json::json!({
+        "id":"zakaz-combo-tooling", "product_code":"COMBO-R1", "title":"Mixed layout", "products":products,
+        "combo":{"id":"combo-master", "item_code":"COMBO-R1", "name":"Mixed layout", "revision":1,"layout_fingerprint":"test-layout"},
+        "nodes":[],"edges":[]
+    })).unwrap();
+    let service = QolipService::new(store.clone());
+    assert_eq!(service.required_qolips_for_production_map(&map).await,
+        Err(QolipError::ComboQolipRequired), "child molds cannot satisfy a named combo");
+    store.put_product_spec(spec("COMBO-R1", "COMBO-MOLD", "combo-set")).await.unwrap();
+    let required = service.required_qolips_for_production_map(&map).await.unwrap();
+    assert_eq!(required.iter().map(|s| s.qolip_code.as_str()).collect::<Vec<_>>(), vec!["COMBO-MOLD"]);
+    map.combo.as_mut().unwrap().item_code = "COMBO-R2".into();
+    map.combo.as_mut().unwrap().revision = 2;
+    map.product_code = "COMBO-R2".into();
+    assert_eq!(service.required_qolips_for_production_map(&map).await, Err(QolipError::ComboQolipRequired),
+        "a revised layout cannot borrow an earlier revision's molds");
+    map.combo = None;
+    assert_eq!(service.required_qolips_for_production_map(&map).await, Err(QolipError::QolipCodeMismatch),
+        "legacy multi-product layouts retain the existing common-set policy");
+}
+
+#[tokio::test]
 async fn multi_product_requires_a_complete_shared_mold_set() {
     let store = std::sync::Arc::new(MemoryQolipStore::new());
     let products = crate::core::order_layout::tests::products()[..2].to_vec();

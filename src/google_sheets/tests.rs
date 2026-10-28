@@ -11,6 +11,7 @@ use crate::core::production_map::{
 #[test]
 fn order_sheet_row_matches_legacy_excel_columns() {
     let map = ProductionMapDefinition {
+        combo: None,
         products: Vec::new(),
         print_val_size_mm: None,
         id: "zakaz-7775".to_string(),
@@ -85,6 +86,7 @@ fn order_sheet_row_matches_legacy_excel_columns() {
 #[test]
 fn order_sheet_row_marks_flexo_orders_with_f() {
     let map = ProductionMapDefinition {
+        combo: None,
         products: Vec::new(),
         print_val_size_mm: None,
         id: "zakaz-1123".to_string(),
@@ -158,6 +160,7 @@ fn test_map(
     apparatus_id: &str,
 ) -> ProductionMapDefinition {
     ProductionMapDefinition {
+        combo: None,
         products: Vec::new(),
         print_val_size_mm: None,
         id: id.to_string(),

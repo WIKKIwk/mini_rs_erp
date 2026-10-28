@@ -64,6 +64,8 @@ struct TaskRow {
     order_number: String,
     title: String,
     product_code: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    combo: Option<crate::core::combo::ComboReference>,
     customer_name: String,
     image_id: String,
     /// Index in the checked canonical prefix, before task/search filtering.
@@ -428,6 +430,7 @@ fn row(
             map.title.trim().to_string()
         },
         product_code: map.product_code.clone(),
+        combo: map.combo.clone(),
         customer_name: customer_name.to_string(),
         image_id: map.image_id.clone(),
         position,

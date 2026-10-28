@@ -9,6 +9,16 @@ use super::normalize::normalize_branch;
 use crate::core::apparatus_standard::ApparatusId;
 
 pub(super) fn validate_map(map: &ProductionMapDefinition) -> Result<(), ProductionMapError> {
+    if let Some(combo) = &map.combo {
+        if map.products.is_empty()
+            || combo.revision < 1
+            || combo.id.is_empty()
+            || map.product_code != combo.item_code
+            || map.title != combo.name
+        {
+            return Err(ProductionMapError::ProgressInputInvalid);
+        }
+    }
     crate::core::order_layout::validate_products(&map.products)
         .map_err(|_| ProductionMapError::ProgressInputInvalid)?;
     if map

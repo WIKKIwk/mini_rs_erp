@@ -273,6 +273,7 @@ mod tests {
     fn order_notification_contains_core_order_fields() {
         let notification = TelegramOrderNotification::from_order(
             ProductionMapDefinition {
+                combo: None,
                 products: Vec::new(),
                 print_val_size_mm: None,
                 id: "zakaz-2731".to_string(),

@@ -50,6 +50,7 @@ mod tests {
 
     fn laminatsiya_training_map() -> ProductionMapDefinition {
         ProductionMapDefinition {
+            combo: None,
             products: Vec::new(),
             print_val_size_mm: None,
             id: "training-laminatsiya-1".to_string(),

@@ -10,6 +10,8 @@ pub use image_reference::OrderImageLookup;
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 pub struct CalculateOrderTemplate {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub combo: Option<super::combo::ComboReference>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub products: Vec<crate::core::order_layout::OrderProduct>,
     /// Explicit independent variants opt out of legacy business-key merging.
@@ -210,6 +212,8 @@ pub trait CalculateOrderStorePort: Send + Sync {
 }
 
 pub fn validate_template(template: &CalculateOrderTemplate) -> Result<(), CalculateOrderError> {
+    super::combo::validate_reference(template)
+        .map_err(|error| CalculateOrderError::InvalidInput(error.to_string()))?;
     if !template.variant_id.is_empty() && template.variant_id.trim() != template.id.trim() {
         return Err(CalculateOrderError::IdentityConflict);
     }
@@ -438,6 +442,11 @@ pub fn hydrate_template_dimensions(mut template: CalculateOrderTemplate) -> Calc
         template.item_code = template.products[0].item_code.trim().to_string();
         template.product = crate::core::order_layout::title(&template.products);
         template.name = template.product.clone();
+        if let Some(combo) = &template.combo {
+            template.item_code = combo.item_code.clone();
+            template.product = combo.name.clone();
+            template.name = combo.name.clone();
+        }
         return template;
     }
     let frame_size_valid =

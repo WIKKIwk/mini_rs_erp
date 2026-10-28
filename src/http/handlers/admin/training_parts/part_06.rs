@@ -287,6 +287,9 @@ pub async fn training_production_maps(
         }
         Method::PUT => {
             let map: ProductionMapDefinition = parse_json(&body)?;
+            super::combos::validate_combo_map_catalog_identity(&state, &map).await?;
+            let previous = store.map(&map.id).await.map_err(training_workspace_error)?;
+            super::combos::validate_combo_map_update(&map, previous.as_ref().map(|saved| &saved.map))?;
             let saved = store
                 .save_map(map)
                 .await

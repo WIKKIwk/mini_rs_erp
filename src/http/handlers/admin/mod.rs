@@ -1,4 +1,7 @@
 mod calculate_materials;
+mod combos;
+pub use combos::combos;
+pub(crate) use combos::validate_combo_template;
 mod app_update_settings;
 pub use app_update_settings::app_update_settings;
 mod customers;

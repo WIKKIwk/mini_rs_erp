@@ -1,5 +1,6 @@
 fn catalog_routes() -> Router<AppState> {
     Router::new()
+        .route("/v1/mobile/admin/combos", any(admin::combos))
         .route(
             "/v1/mobile/admin/role-assignments",
             any(admin::role_assignments),

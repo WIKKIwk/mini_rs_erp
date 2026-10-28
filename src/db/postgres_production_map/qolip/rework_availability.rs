@@ -29,11 +29,14 @@ pub(super) async fn require_order_qolips_available_tx(
     if !product_code.trim().is_empty() {
         products.insert(product_code.trim().to_lowercase());
     }
+    let named_combo =
+        super::qolip_session_helpers::combo_primary_revision_tx(tx, &map, &product_code).await?;
     for product in map
         .get("products")
         .and_then(serde_json::Value::as_array)
         .into_iter()
         .flatten()
+        .filter(|_| !named_combo)
     {
         if let Some(code) = product.get("item_code").and_then(serde_json::Value::as_str)
             && !code.trim().is_empty()
@@ -198,6 +201,43 @@ mod tests {
         require_order_qolips_available_tx(&mut tx, "mixed-order")
             .await
             .unwrap();
+        tx.rollback().await.unwrap();
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires MINI_ERP_TEST_ADMIN_DATABASE_URL on a disposable PostgreSQL server"]
+    async fn named_combo_checks_own_molds_without_children_rework() {
+        let pool = pool().await;
+        let mut tx = pool.begin().await.unwrap();
+        fixture(&mut tx).await;
+        let reference = serde_json::json!({"id":"combo-master","item_code":"COMBO",
+            "name":"Combined","revision":1,"layout_fingerprint":"a".repeat(64)});
+        sqlx::raw_sql("CREATE TEMP TABLE mini_combo_revisions(item_code text,reference_json jsonb) ON COMMIT DROP;
+            INSERT INTO mini_qolip_effective_product_molds VALUES ('combo','combo-mold'),('child','child-mold');
+            INSERT INTO mini_qolip_reworks VALUES ('child-mold',NULL);")
+            .execute(&mut *tx).await.unwrap();
+        sqlx::query("INSERT INTO mini_combo_revisions VALUES ('COMBO',$1)")
+            .bind(&reference)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO mini_production_maps VALUES ('named','COMBO',$1)")
+            .bind(serde_json::json!({"combo":reference,"products":[{"item_code":"CHILD"}]}))
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        require_order_qolips_available_tx(&mut tx, "named")
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO mini_qolip_reworks VALUES ('combo-mold',NULL)")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        assert_eq!(
+            require_order_qolips_available_tx(&mut tx, "named").await,
+            Err(ProductionMapError::QolipInRework)
+        );
         tx.rollback().await.unwrap();
         pool.close().await;
     }

@@ -245,6 +245,10 @@ pub async fn production_maps(
             )
             .await?;
             let mut input: ProductionMapDefinition = parse_json(&body)?;
+            let previous_combo = state.production_maps.raw_map(&input.id).await
+                .map_err(production_map_error)?;
+            super::combos::validate_combo_map_catalog_identity(&state, &input).await?;
+            super::combos::validate_combo_map_update(&input, previous_combo.as_ref())?;
             assign_order_number_if_missing(&state, &mut input)
                 .await
                 .map_err(production_map_error)?;
@@ -332,6 +336,7 @@ pub async fn production_map_auto_open(
         return Err(method_not_allowed());
     }
     let ProductionMapAutoOpenRequest { mut template } = parse_json(&body)?;
+    super::combos::validate_combo_template(&state, &template).await?;
     if !template.products.is_empty() {
         template = crate::core::calculate_orders::hydrate_template_dimensions(template);
     }
@@ -383,18 +388,27 @@ async fn save_production_map_with_order(
     principal: &Principal,
     mut input: ProductionMapSaveWithOrderRequest,
 ) -> Result<Response, AdminError> {
+    if input.map.combo.is_some() && input.template.is_none() {
+        return Err(bad_request("combo_template_required"));
+    }
     if let Some(template) = input.template.take() {
+        super::combos::validate_combo_template(state, &template).await?;
+        if input.map.combo.is_some() && input.map.combo != template.combo {
+            return Err(conflict("combo_reference_mismatch"));
+        }
         let template = if template.products.is_empty() { template } else {
             crate::core::calculate_orders::hydrate_template_dimensions(template)
         };
         validate_multi_product_customer(state, &template).await?;
         input.map.products = template.products.clone();
+        input.map.combo = template.combo.clone();
         if !template.products.is_empty() {
             input.map.product_code = template.item_code.clone();
             input.map.title = template.product.clone();
         }
         input.template = Some(template);
     }
+    super::combos::validate_combo_map_catalog_identity(state, &input.map).await?;
     if !input.pending_order_id.is_empty() {
         return complete_pending_order(state, principal, input).await;
     }
@@ -455,6 +469,9 @@ async fn save_production_map_with_order(
         .raw_map(&map_id)
         .await
         .map_err(production_map_error)?;
+    if previous.as_ref().is_some_and(|map| map.combo.is_some()) && input.map.combo.is_none() {
+        return Err(conflict("combo_reference_required"));
+    }
     if previous.is_none()
         && (is_sheet_order_map(&input.map) || fork_template)
         && let Some(template) = input.template.as_ref()

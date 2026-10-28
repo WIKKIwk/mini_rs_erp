@@ -16,12 +16,15 @@ pub async fn training_production_map_save_with_order(
     }
 
     let mut input: TrainingMapSaveWithOrderRequest = parse_json(&body)?;
+    super::combos::validate_combo_template(&state, &input.template).await?;
+    input.map.combo = input.template.combo.clone();
     if !input.template.products.is_empty() {
         input.template = crate::core::calculate_orders::hydrate_template_dimensions(input.template);
         super::production_maps::validate_multi_product_customer(&state, &input.template).await?;
         input.map.product_code = input.template.item_code.clone();
         input.map.title = input.template.product.clone();
     }
+    super::combos::validate_combo_map_catalog_identity(&state, &input.map).await?;
     validate_template(&input.template).map_err(training_calculate_error)?;
     input.map.print_val_size_mm = input.template.print_val_size_mm;
     input.map.customer_name = input.template.customer.trim().to_string();
