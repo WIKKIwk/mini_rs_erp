@@ -360,14 +360,6 @@ impl QolipService {
         if qolip_code.is_empty() {
             return Err(QolipError::MissingQolipCode);
         }
-        // Availability is checked separately from product composition. Hiding
-        // stored molds from location reads must not activate catalog-only starts.
-        let states = self.store.qolip_storage_states(&[qolip_code.to_owned()]).await?;
-        match states.get(&qolip_code.to_lowercase()).map(String::as_str) {
-            Some("archived") => return Err(QolipError::QolipArchived),
-            Some("paddon") => return Err(QolipError::QolipInPaddon),
-            _ => {},
-        }
         let mut spec = self
             .store
             .product_spec_by_qolip_code(qolip_code)
@@ -385,6 +377,14 @@ impl QolipService {
             && candidate.qolip_code.eq_ignore_ascii_case(&spec.qolip_code))
             .ok_or(QolipError::QolipCodeMismatch)?;
         spec.is_extension = candidate.is_extension;
+        // Availability is checked separately from product composition. Hiding
+        // stored molds from location reads must not activate catalog-only starts.
+        let states = self.store.qolip_storage_states(&[qolip_code.to_owned()]).await?;
+        match states.get(&qolip_code.to_lowercase()).map(String::as_str) {
+            Some("archived") => return Err(QolipError::QolipArchived),
+            Some("paddon") => return Err(QolipError::QolipInPaddon),
+            _ => {},
+        }
         let existing_checkout = self.store.open_checkout_by_qolip_code(qolip_code).await?;
         let location = self.store.location_by_qolip_code(qolip_code).await?;
         if let Some(checkout) = &existing_checkout {
