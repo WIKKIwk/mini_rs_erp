@@ -1,0 +1,144 @@
+{
+  "synthetic": true,
+  "host": {
+    "platform": "macOS-27.2-arm64-arm-64bit",
+    "machine": "arm64",
+    "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+    "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)",
+    "machdep.cpu.brand_string": "Apple M4",
+    "hw.ncpu": "10",
+    "hw.memsize": "17179869184",
+    "hw.model": "Mac16,10"
+  },
+  "source_head": "f29993c85cbe1a27ac8cee8e36212b8a980fcd72",
+  "tracked_diff_sha256": "c8d67bde71cffb8fbccab9783ba581453709135561c090f36bbc92ff720bfc57",
+  "cargo_lock_sha256": "2eeb0acf36c722083b433e3872b8770f9b6c8820f3fea1549b60dcd94a3fd86b",
+  "load_updates": 1024,
+  "source_sha256": {
+    "Cargo.toml": "5701485fa2a48b6d2b2b85adbcea2a6281f560486a46cfa377c938c57bc290f1",
+    "src/http/json_research.rs": "8fa38f4e84fff83bc830bf53e8052b738af4b84eb62b3a4b446aad4e0e8e0260",
+    "tools/benchmarks/qualify_json_codec.py": "11e70d72c86c39cbd078a684311bb51157a2cc88ad6dc0ed708d67f45f39312e",
+    "examples/json_codec_research/fixture.rs": "bd72ff8d3ceaa44355ad367319b6c33ad73d3786bb86d9fdb899bd0bc66db093",
+    "tests/json_codec_research.rs": "0c85cb2fd5c89fba6c79f330bc02eaa3bec5b0859104e7695a612cf0f20e3a36",
+    "tests/json_codec_qualification.rs": "11282f1ceadaa990e137aa53b8b327d10226dfb454133e10936ef4773a4445e1",
+    "tests/active_paddon_snapshot_cache.rs": "c2dccffff979231a7d34b45db3043f1a62e07b78c40313be60caabc2d761acf3",
+    "tests/worker_queue_window.rs": "0b995f9475c690cc42a2da52bc6deefd2a4473d9d07e2036fb03f25c9fb6d3d6",
+    "tests/json_codec_stream_load.rs": "3ad53ce988b14d6348a37c8a69235a0a089500398972f17a7bc152d98ea1d15a",
+    "tests/worker_queue_window/http_compression.rs": "e8782fd3487a87cdde36268f22b2f754fa1a11204690cc92e13c94181ecfe964",
+    "tests/worker_queue_window/orders_list.rs": "d275ad40dc163ba1a210e3ef4aa4581dfa1673ab1fbded92b076ae41d0672b30",
+    "tests/worker_queue_window/page_stream.rs": "86b58dbe1dddeee4682f7bce85ceabc156312833d3643231cc06f98d642a5c4b",
+    "tests/worker_queue_window/sequence_list.rs": "67392062349c27da41971b9f36527025c541acce7755601e6fe6a2d59a1506d5",
+    "tests/worker_queue_window/sequence_positions.rs": "a59b36837659dc9220abce718f3b225909b7dad818d7fd72be25ee3c345328ee",
+    "tests/worker_queue_window/worker_detail.rs": "ca1de764b9b20848f5e4089f9455879611df1f5a98fa4de1aef70d119ebb8b5e",
+    "tests/worker_queue_window/worker_list.rs": "6f96a491dd5a7341a86053928a66f6380c845ba306e9ef22f96dae8795471553"
+  },
+  "binaries": {
+    "json_codec_research": "3acb9bd7aa6a39c98188280eb0ad2a0c1f34d093c098ed1ca6de8da7430b9ab3",
+    "active_paddon_snapshot_cache": "d2b7ecc91cf528d82b58cff4408d0d27de5396560541b43e4b0287d4156c7bf6",
+    "json_codec_stream_load": "42f1037c44ee89840bfb9ea620e085af3bf6abd419e16d600a3b961c72286146",
+    "json_codec_qualification": "d4b774030faaca035d0457f8bdaeab7e4ad314e1ba025db2caa2bb3d7aeeecc7",
+    "worker_queue_window": "9af922f603cb23fd606c1bff419614b5b6a5e2c0ebf27dce230643a2d5e9bfad"
+  },
+  "runs": [
+    {
+      "profile": "serde_json",
+      "test": "json_codec_research",
+      "exit_code": 0,
+      "wall_seconds": 0.259783875,
+      "peak_rss_bytes": 7110656,
+      "passed": 8,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "profile": "serde_json",
+      "test": "json_codec_qualification",
+      "exit_code": 0,
+      "wall_seconds": 1.2169905,
+      "peak_rss_bytes": 14401536,
+      "passed": 8,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "profile": "serde_json",
+      "test": "active_paddon_snapshot_cache",
+      "exit_code": 0,
+      "wall_seconds": 0.6153974579999999,
+      "peak_rss_bytes": 25018368,
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "profile": "serde_json",
+      "test": "worker_queue_window",
+      "exit_code": 0,
+      "wall_seconds": 2.652914833,
+      "peak_rss_bytes": 48103424,
+      "passed": 36,
+      "failed": 0,
+      "ignored": 1
+    },
+    {
+      "profile": "serde_json",
+      "test": "json_codec_stream_load",
+      "exit_code": 0,
+      "wall_seconds": 22.95364825,
+      "peak_rss_bytes": 105398272,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "profile": "sonic_encode",
+      "test": "json_codec_research",
+      "exit_code": 0,
+      "wall_seconds": 0.012233291000001145,
+      "peak_rss_bytes": 7159808,
+      "passed": 8,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "profile": "sonic_encode",
+      "test": "json_codec_qualification",
+      "exit_code": 0,
+      "wall_seconds": 0.29209658300000285,
+      "peak_rss_bytes": 13959168,
+      "passed": 8,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "profile": "sonic_encode",
+      "test": "active_paddon_snapshot_cache",
+      "exit_code": 0,
+      "wall_seconds": 0.21512820899999952,
+      "peak_rss_bytes": 25444352,
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "profile": "sonic_encode",
+      "test": "worker_queue_window",
+      "exit_code": 0,
+      "wall_seconds": 2.290798583000001,
+      "peak_rss_bytes": 47513600,
+      "passed": 36,
+      "failed": 0,
+      "ignored": 1
+    },
+    {
+      "profile": "sonic_encode",
+      "test": "json_codec_stream_load",
+      "exit_code": 0,
+      "wall_seconds": 26.235312958999998,
+      "peak_rss_bytes": 103268352,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    }
+  ]
+}

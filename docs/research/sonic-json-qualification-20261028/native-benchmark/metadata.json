@@ -1,0 +1,41 @@
+{
+  "schema": 1,
+  "synthetic": true,
+  "host": {
+    "platform": "macOS-27.2-arm64-arm-64bit",
+    "machine": "arm64",
+    "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+    "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)",
+    "machdep.cpu.brand_string": "Apple M4",
+    "hw.ncpu": "10",
+    "hw.memsize": "17179869184",
+    "hw.model": "Mac16,10"
+  },
+  "binary_sha256": "1981cb0d1cd14bb1b03884fdeebe2a765fd6dd491aa64822cbc234b588e794ca",
+  "build_flags": "release; -C target-cpu=native; jobs=4; sonic-rs=0.5.10 features=sanitize; sonic-json-research,verification",
+  "source_head": "f29993c85cbe1a27ac8cee8e36212b8a980fcd72",
+  "tracked_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "cargo_lock_sha256": "2eeb0acf36c722083b433e3872b8770f9b6c8820f3fea1549b60dcd94a3fd86b",
+  "parameters": {
+    "orders": [
+      20,
+      285,
+      1000
+    ],
+    "samples": 31,
+    "batch": 10,
+    "repeats": 3,
+    "profiles": [
+      "serde_json",
+      "sonic_encode"
+    ]
+  },
+  "research_source_sha256": {
+    "examples/json_codec_research.rs": "d0b77bb617895e817a5ff65392ff8deca61e3ba4437f2ab8e5ca91c8d84914c3",
+    "src/http/json_research.rs": "8fa38f4e84fff83bc830bf53e8052b738af4b84eb62b3a4b446aad4e0e8e0260",
+    "tools/benchmarks/json_codec_research.py": "c862cb8889d4646762cdffdc357b8bc744e1f5a3c2d46505c84972d93d9b1396",
+    "examples/json_codec_research/fixture.rs": "bd72ff8d3ceaa44355ad367319b6c33ad73d3786bb86d9fdb899bd0bc66db093",
+    "examples/json_codec_research/micro.rs": "49529f62d7133e5adccfe562f8b31e78a574cedfcb8dbea80acfb25b574c00b5",
+    "examples/json_codec_research/routes.rs": "b57db1b02a564740cf5e9314d27a2ca35d70d3e789c7438cebe46175029d39b0"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "target": "x86_64-unknown-linux-gnu",
+  "features": [
+    "sonic-json"
+  ],
+  "research_decoder_compiled": false,
+  "command": "cargo zigbuild --release --locked --target x86_64-unknown-linux-gnu --bin mini_rs_erp --features sonic-json",
+  "exit_code": 0,
+  "rustflags": "",
+  "build_jobs": 2,
+  "release_debug": 0,
+  "binary_sha256": "4a1d414cd6ed77192e31d6ef7ca0d93833fed1c5e4fc1ac195e0dbb64d9cecfa",
+  "binary_bytes": 65094368,
+  "file": "target/debian-production/x86_64-unknown-linux-gnu/release/mini_rs_erp: ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, for GNU/Linux 2.0.0, stripped",
+  "runtime_executed": false,
+  "codec_source_sha256": "8fa38f4e84fff83bc830bf53e8052b738af4b84eb62b3a4b446aad4e0e8e0260",
+  "cargo_lock_sha256": "2eeb0acf36c722083b433e3872b8770f9b6c8820f3fea1549b60dcd94a3fd86b",
+  "deployed": false,
+  "remote_runtime_check": "SSH connection to the configured host timed out before authentication"
+}

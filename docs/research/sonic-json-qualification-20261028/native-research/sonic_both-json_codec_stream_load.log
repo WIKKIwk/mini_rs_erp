@@ -1,0 +1,25 @@
+
+running 1 test
+{"legacy_snapshots_checked":1024,"orders":285,"page_deltas_checked":1024,"reconnections":32,"stalled_readers":1,"synthetic":true,"update_p50_us":22347,"update_p95_us":33610,"updates":1024,"wall_ms":25177,"worker_deltas_checked":8192,"workers":8}
+test independent_workers_keep_scopes_replay_and_progress_with_a_stalled_reader ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 25.30s
+
+       25.30 real        46.56 user         1.83 sys
+           104775680  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+                6983  page reclaims
+                   4  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+               10415  messages sent
+               80265  messages received
+                   0  signals received
+                  34  voluntary context switches
+              302572  involuntary context switches
+        597292226660  instructions retired
+        173118962368  cycles elapsed
+            70320824  peak memory footprint

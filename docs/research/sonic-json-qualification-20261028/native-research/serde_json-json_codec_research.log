@@ -1,0 +1,31 @@
+
+running 8 tests
+test external_input_is_validated_and_trailing_payloads_are_rejected ... ok
+test deep_known_and_ignored_fields_keep_the_baseline_depth_behavior ... ok
+test http_success_and_serialization_error_keep_status_and_content_type ... ok
+test numeric_rounding_keeps_the_current_serde_json_behavior ... ok
+test research_is_explicit_and_encoder_decoder_are_independent ... ok
+test real_map_count_validation_and_nonfinite_output_match_the_baseline ... ok
+test serde_contract_and_duplicate_key_semantics_are_preserved ... ok
+test snapshot_delta_strings_and_quantities_keep_their_json_meaning ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+        0.44 real         0.00 user         0.00 sys
+             7421952  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+                 668  page reclaims
+                   0  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+                   0  voluntary context switches
+                  29  involuntary context switches
+            39771563  instructions retired
+            16972221  cycles elapsed
+             2245112  peak memory footprint

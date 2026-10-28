@@ -1,0 +1,35 @@
+{
+  "runtime_platforms_executed": [
+    "aarch64-apple-darwin"
+  ],
+  "runtime_profiles": 5,
+  "passed_test_results": 285,
+  "failed": 0,
+  "ignored_manual_cpu_experiments": 5,
+  "paired_byte_identical_encodings": 256,
+  "stream_updates_per_profile": 1024,
+  "worker_deltas_per_profile": 8192,
+  "linux_cross_build": "passed",
+  "linux_runtime_executed": false,
+  "github_ci_executed": false,
+  "default_encoder": "serde_json",
+  "deployed_by_this_task": false,
+  "codec_source_sha256": "8fa38f4e84fff83bc830bf53e8052b738af4b84eb62b3a4b446aad4e0e8e0260",
+  "codec_source_commit": "f29993c85cbe1a27ac8cee8e36212b8a980fcd72",
+  "repository_hygiene": {
+    "exit_code": 1,
+    "finding_lines": 233,
+    "scope": "legacy and unrelated source; focused codec, harness and test formatting passed"
+  },
+  "benchmark_runs": 32,
+  "production_stream_speedup_established": false,
+  "longer_confirmation": {
+    "samples_per_case": 101,
+    "repeats_per_profile": 4,
+    "balanced_profile_order": true,
+    "http_full_identity_time_change_percent": -14.44,
+    "worker_1_time_change_percent": 4.67,
+    "worker_8_time_change_percent": 0.12,
+    "page_stream_time_change_percent": -7.48
+  }
+}

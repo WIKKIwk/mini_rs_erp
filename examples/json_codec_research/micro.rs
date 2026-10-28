@@ -1,6 +1,8 @@
 use std::{hint::black_box, time::Instant};
 
-use mini_rs_erp::{core::production_map::ProductionMapDefinition, http::json_research::Engine};
+#[cfg(feature = "sonic-json-research")]
+use mini_rs_erp::core::production_map::ProductionMapDefinition;
+use mini_rs_erp::http::json_research::Engine;
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -35,6 +37,7 @@ pub fn encode<T: Serialize + ?Sized>(name: &str, input: &T, options: &Options) -
         "samples":options.samples,"batch":options.batch})
 }
 
+#[cfg(feature = "sonic-json-research")]
 pub fn decode(name: &str, input: &[u8], options: &Options) -> Value {
     let expected: ProductionMapDefinition = Engine::SerdeJson.from_slice(input).unwrap();
     let candidate: ProductionMapDefinition = Engine::SonicRs.from_slice(input).unwrap();
@@ -64,6 +67,7 @@ pub fn decode(name: &str, input: &[u8], options: &Options) -> Value {
 /// A deterministic numerical compatibility probe, not production traffic or a
 /// count of real calculation errors. Raw Sonic is reported separately from
 /// the guarded request decoder actually installed in the Router.
+#[cfg(feature = "sonic-json-research")]
 pub fn numeric_probe() -> Value {
     let mut seed = 123456789u64;
     let (mut raw_mismatches, mut integrated_mismatches) = (0, 0);

@@ -1,0 +1,194 @@
+{
+  "synthetic": true,
+  "host": {
+    "platform": "macOS-27.2-arm64-arm-64bit",
+    "machine": "arm64",
+    "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+    "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)",
+    "machdep.cpu.brand_string": "Apple M4",
+    "hw.ncpu": "10",
+    "hw.memsize": "17179869184",
+    "hw.model": "Mac16,10"
+  },
+  "source_head": "21fdd630b28eea00dac38687040dc27432aef8d9",
+  "tracked_diff_sha256": "1708e475fcb898a64ed34e5888a3f862c1e07a8813af7b3d3cfbe1ae0f0ddea1",
+  "cargo_lock_sha256": "2eeb0acf36c722083b433e3872b8770f9b6c8820f3fea1549b60dcd94a3fd86b",
+  "load_updates": 1024,
+  "source_sha256": {
+    "Cargo.toml": "517f9d890f155c2ad1227c8274781233e33b60eae78f4c9d6ec8ff0aeaa3a4e0",
+    "src/http/json_research.rs": "8fa38f4e84fff83bc830bf53e8052b738af4b84eb62b3a4b446aad4e0e8e0260",
+    "tools/benchmarks/qualify_json_codec.py": "11e70d72c86c39cbd078a684311bb51157a2cc88ad6dc0ed708d67f45f39312e",
+    "examples/json_codec_research/fixture.rs": "bd72ff8d3ceaa44355ad367319b6c33ad73d3786bb86d9fdb899bd0bc66db093",
+    "tests/json_codec_research.rs": "0c85cb2fd5c89fba6c79f330bc02eaa3bec5b0859104e7695a612cf0f20e3a36",
+    "tests/json_codec_qualification.rs": "11282f1ceadaa990e137aa53b8b327d10226dfb454133e10936ef4773a4445e1",
+    "tests/active_paddon_snapshot_cache.rs": "c2dccffff979231a7d34b45db3043f1a62e07b78c40313be60caabc2d761acf3",
+    "tests/worker_queue_window.rs": "4055db57c22ab891d514533f3441dba6c7104eadba4d896e469feb4ff134b779",
+    "tests/json_codec_stream_load.rs": "3ad53ce988b14d6348a37c8a69235a0a089500398972f17a7bc152d98ea1d15a",
+    "tests/worker_queue_window/http_compression.rs": "e8782fd3487a87cdde36268f22b2f754fa1a11204690cc92e13c94181ecfe964",
+    "tests/worker_queue_window/orders_list.rs": "d275ad40dc163ba1a210e3ef4aa4581dfa1673ab1fbded92b076ae41d0672b30",
+    "tests/worker_queue_window/page_stream.rs": "86b58dbe1dddeee4682f7bce85ceabc156312833d3643231cc06f98d642a5c4b",
+    "tests/worker_queue_window/sequence_list.rs": "67392062349c27da41971b9f36527025c541acce7755601e6fe6a2d59a1506d5",
+    "tests/worker_queue_window/sequence_positions.rs": "a59b36837659dc9220abce718f3b225909b7dad818d7fd72be25ee3c345328ee",
+    "tests/worker_queue_window/worker_detail.rs": "ca1de764b9b20848f5e4089f9455879611df1f5a98fa4de1aef70d119ebb8b5e",
+    "tests/worker_queue_window/worker_list.rs": "c14bcca3fd653959f1bd48c6ec24507e108e7153f7f8e2a73a1e6d3d797068e5"
+  },
+  "binaries": {
+    "worker_queue_window": "6cfff12f71b73bad98e1fe32568ccebc276064b5f47cc723540083b81271509d",
+    "json_codec_research": "04202bba6f954c6a5ea01a1f5a549f52270ad30271294e42e460a018116bb348",
+    "active_paddon_snapshot_cache": "7a5046563eb4df044fe68cb5445f3d01bfc791b58e404b3fadfb6072f8828379",
+    "json_codec_qualification": "67d2921fb91c19e76c2262cdc5716a5897ed3249fbc4a8b1846bafa7d20de759",
+    "json_codec_stream_load": "c853c58b63cf2deaf7bd45c509aeee7166153e44ceeff1d19f0a1644a298d700"
+  },
+  "runs": [
+    {
+      "profile": "serde_json",
+      "test": "json_codec_research",
+      "exit_code": 0,
+      "wall_seconds": 0.448236167,
+      "peak_rss_bytes": 7421952,
+      "passed": 8,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "profile": "serde_json",
+      "test": "json_codec_qualification",
+      "exit_code": 0,
+      "wall_seconds": 1.274499708,
+      "peak_rss_bytes": 13828096,
+      "passed": 8,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "profile": "serde_json",
+      "test": "active_paddon_snapshot_cache",
+      "exit_code": 0,
+      "wall_seconds": 0.6318323330000002,
+      "peak_rss_bytes": 25460736,
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "profile": "serde_json",
+      "test": "worker_queue_window",
+      "exit_code": 0,
+      "wall_seconds": 2.6472965829999997,
+      "peak_rss_bytes": 47824896,
+      "passed": 36,
+      "failed": 0,
+      "ignored": 1
+    },
+    {
+      "profile": "serde_json",
+      "test": "json_codec_stream_load",
+      "exit_code": 0,
+      "wall_seconds": 21.616396167,
+      "peak_rss_bytes": 103890944,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "profile": "sonic_encode",
+      "test": "json_codec_research",
+      "exit_code": 0,
+      "wall_seconds": 0.007223083000003072,
+      "peak_rss_bytes": 7471104,
+      "passed": 8,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "profile": "sonic_encode",
+      "test": "json_codec_qualification",
+      "exit_code": 0,
+      "wall_seconds": 0.2142227080000012,
+      "peak_rss_bytes": 14319616,
+      "passed": 8,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "profile": "sonic_encode",
+      "test": "active_paddon_snapshot_cache",
+      "exit_code": 0,
+      "wall_seconds": 0.04087245799999906,
+      "peak_rss_bytes": 25247744,
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "profile": "sonic_encode",
+      "test": "worker_queue_window",
+      "exit_code": 0,
+      "wall_seconds": 2.008364083,
+      "peak_rss_bytes": 49250304,
+      "passed": 36,
+      "failed": 0,
+      "ignored": 1
+    },
+    {
+      "profile": "sonic_encode",
+      "test": "json_codec_stream_load",
+      "exit_code": 0,
+      "wall_seconds": 20.493022459000002,
+      "peak_rss_bytes": 103219200,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "profile": "sonic_both",
+      "test": "json_codec_research",
+      "exit_code": 0,
+      "wall_seconds": 0.011135207999998897,
+      "peak_rss_bytes": 7389184,
+      "passed": 8,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "profile": "sonic_both",
+      "test": "json_codec_qualification",
+      "exit_code": 0,
+      "wall_seconds": 0.22272654199999664,
+      "peak_rss_bytes": 14385152,
+      "passed": 8,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "profile": "sonic_both",
+      "test": "active_paddon_snapshot_cache",
+      "exit_code": 0,
+      "wall_seconds": 0.10038725000000426,
+      "peak_rss_bytes": 25509888,
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "profile": "sonic_both",
+      "test": "worker_queue_window",
+      "exit_code": 0,
+      "wall_seconds": 2.1452967919999963,
+      "peak_rss_bytes": 49856512,
+      "passed": 36,
+      "failed": 0,
+      "ignored": 1
+    },
+    {
+      "profile": "sonic_both",
+      "test": "json_codec_stream_load",
+      "exit_code": 0,
+      "wall_seconds": 25.31239333300001,
+      "peak_rss_bytes": 104775680,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    }
+  ]
+}

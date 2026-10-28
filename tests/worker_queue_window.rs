@@ -218,11 +218,19 @@ async fn window_is_bounded_revision_scoped_searchable_and_refills_over_websocket
     assert_eq!(five["visible_order_ids"][CUT].as_array().unwrap().len(), 5);
     assert_eq!(five["sequences"][CUT][0], "zakaz-000");
     assert!(five["visible_order_ids"].get(OTHER).is_none());
-    assert!(five.get("sequence_positions_by_apparatus").is_none(), "old clients keep their wire contract");
-    let (_, positions) = f.get("worker_scope=true&queue_limit=5&queue_positions=true").await;
-    assert_eq!(positions["sequence_positions_by_apparatus"], json!({CUT: {
-        "zakaz-000":1, "zakaz-001":2, "zakaz-002":3, "zakaz-003":4, "zakaz-004":5
-    }}));
+    assert!(
+        five.get("sequence_positions_by_apparatus").is_none(),
+        "old clients keep their wire contract"
+    );
+    let (_, positions) = f
+        .get("worker_scope=true&queue_limit=5&queue_positions=true")
+        .await;
+    assert_eq!(
+        positions["sequence_positions_by_apparatus"],
+        json!({CUT: {
+            "zakaz-000":1, "zakaz-001":2, "zakaz-002":3, "zakaz-003":4, "zakaz-004":5
+        }})
+    );
     assert_ne!(positions["scope"], five["scope"]);
     let (_, legacy) = f.get("worker_scope=true").await;
     assert_eq!(
@@ -290,8 +298,14 @@ async fn window_is_bounded_revision_scoped_searchable_and_refills_over_websocket
         .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(search["visible_order_ids"][CUT], json!(["zakaz-059"]));
-    assert_eq!(search["sequence_positions_by_apparatus"], json!({CUT:{"zakaz-059":60}}));
-    assert_eq!(all_search["sequence_positions_by_apparatus"], search["sequence_positions_by_apparatus"]);
+    assert_eq!(
+        search["sequence_positions_by_apparatus"],
+        json!({CUT:{"zakaz-059":60}})
+    );
+    assert_eq!(
+        all_search["sequence_positions_by_apparatus"],
+        search["sequence_positions_by_apparatus"]
+    );
     assert_ne!(five["scope"], search["scope"]);
     for query in [
         "worker_scope=true&queue_limit=1",
@@ -363,7 +377,12 @@ async fn window_is_bounded_revision_scoped_searchable_and_refills_over_websocket
     let delta = ws_json(&mut socket).await;
     assert_eq!(delta["type"], "state_delta", "{delta}");
     assert_eq!(delta["scope"], five["scope"]);
-    assert!(delta["patch"].get("sequence_positions_by_apparatus").is_none(), "old client delta compatibility");
+    assert!(
+        delta["patch"]
+            .get("sequence_positions_by_apparatus")
+            .is_none(),
+        "old client delta compatibility"
+    );
     assert_eq!(
         delta["patch"]["visible_order_ids"]["upsert"][CUT],
         json!([
@@ -423,7 +442,9 @@ async fn window_is_bounded_revision_scoped_searchable_and_refills_over_websocket
             .unwrap()
             .contains(&json!("start"))
     );
-    let (_, strict) = f.get("worker_scope=true&queue_limit=5&queue_positions=true").await;
+    let (_, strict) = f
+        .get("worker_scope=true&queue_limit=5&queue_positions=true")
+        .await;
     assert_eq!(
         strict["visible_order_ids"][CUT].as_array().unwrap().len(),
         5
@@ -436,8 +457,10 @@ async fn window_is_bounded_revision_scoped_searchable_and_refills_over_websocket
             .contains(&json!("zakaz-059")),
         "a running job beyond the strict queue window must remain accessible"
     );
-    assert_eq!(strict["sequence_positions_by_apparatus"][CUT]["zakaz-059"], 59,
-        "active pinning preserves the pre-window rank after the completed order leaves");
+    assert_eq!(
+        strict["sequence_positions_by_apparatus"][CUT]["zakaz-059"], 59,
+        "active pinning preserves the pre-window rank after the completed order leaves"
+    );
     use mini_rs_erp::core::apparatus_standard::{
         ApparatusId, ApparatusOperationalPolicies, CanonicalApparatusPatch,
         CanonicalCommandMetadata, QueueDiscipline,
@@ -638,8 +661,11 @@ async fn free_queue_order_is_shared_by_admin_workers_and_live_updates() {
         .get("worker_scope=true&queue_limit=5&queue_search=zakaz-055&queue_positions=true")
         .await;
     assert_eq!(search["visible_order_ids"][CUT], json!(["zakaz-055"]));
-    assert_eq!(search["sequence_positions_by_apparatus"], json!({CUT:{"zakaz-055":4}}),
-        "free-pick rank follows shared display order, not the stored manual sequence");
+    assert_eq!(
+        search["sequence_positions_by_apparatus"],
+        json!({CUT:{"zakaz-055":4}}),
+        "free-pick rank follows shared display order, not the stored manual sequence"
+    );
     let (_, after_reads) = f.get_as(&admin_token, "").await;
     for field in [
         "rev",

@@ -1,0 +1,31 @@
+
+running 8 tests
+test configuration_child ... ok
+test encoding::numeric_bit_patterns_match_serde ... ok
+test encoding::parallel_encoding_keeps_buffers_and_output_independent ... ok
+test encoding::serde_representations_map_keys_and_errors_match ... ok
+test encoding::simd_string_tails_at_unreadable_page_boundaries ... ok
+test encoding::nested_unicode_payloads_are_byte_identical ... ok
+test startup_settings_are_validated_without_mutating_the_parent_environment ... ok
+test invalid_encoder_stops_the_actual_server_before_database_bootstrap ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.03s
+
+        1.27 real         0.29 user         0.04 sys
+            13828096  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+                8751  page reclaims
+                   0  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+                  21  voluntary context switches
+                2269  involuntary context switches
+          4694068733  instructions retired
+          1100622900  cycles elapsed
+             8962552  peak memory footprint

@@ -7,6 +7,40 @@ request parsing are documented in [the research report](sonic-json-research.md).
 
 Both build profiles default to Serde. No deployment or remote push is included.
 
+Status: the encoder is hardened and passes the local qualification below.
+It remains opt-in. Linux execution, CI execution and a staging run have not
+been completed, so this is not a production-readiness certification.
+
+## Executed results, 2026-10-28
+
+- Research and encoder-only builds passed 57 tests in each of five runtime
+  configurations: 285 successful test results, zero failures. Each profile also
+  leaves one unrelated, explicitly manual 20,000-iteration gzip CPU experiment
+  ignored. Every profile completed the extended 1,024-update stream test.
+- Default and encoder-only production server feature graphs passed locked
+  release checks. The actual encoder-only Linux x86_64 server cross-build passed
+  with portable CPU flags and an ELF binary/hash recorded in the artifacts.
+  Its runtime was not exercised: SSH to the configured host timed out.
+- The encoder-only benchmark compiled the research decoder out. On Apple M4,
+  285 orders, median of three runs: full snapshot serialization was 0.905 to
+  0.703 ms; HTTP identity 4.510 to 3.694 ms; gzip 7.624 to 7.086 ms. A 20-row
+  worker response saved only 5.6 microseconds. All 256 paired payload encodings
+  across both benchmark builds were byte-identical.
+- Stream results vary. The first encoder-only page-stream aggregate was 17%
+  slower. A longer confirmation (101 samples/case, four balanced repeats) then
+  measured page streams 7.5% faster, one worker stream 4.7% slower and eight
+  worker streams effectively unchanged (+0.1%). Full HTTP responses stayed
+  14–18% faster and gzip around 7% faster. These loopback results do not establish
+  a general production stream improvement. Slower cases remain in the results.
+- Focused formatting, Python compilation and whitespace checks passed. The
+  repository-wide hygiene check still reports legacy/unrelated formatting and
+  file-size findings; it is not reported as green or fixed by this work.
+
+The [qualification artifacts](research/sonic-json-qualification-20261028/README.md)
+contain raw samples, process output, build/source/binary hashes and the complete
+scope of verification. The earlier research benchmark and the encoder-only
+confirmation use separate binaries; comparisons are always within one binary.
+
 ## Hardening
 
 - `sonic-json` includes only the optional encoder. Selecting Sonic decoding
@@ -17,7 +51,10 @@ Both build profiles default to Serde. No deployment or remote push is included.
   upstream `src/util/string.rs` showed that normal optimized tail handling can
   load past a string's allocation while remaining inside a mapped page. This
   feature copies the bounded tail before SIMD loading instead. It applies in
-  release builds too, and its cost is included in the new measurements.
+  release builds too, and its cost is included in the new measurements. The
+  [upstream README](https://github.com/cloudwego/sonic-rs) recommends leaving it
+  off for production speed; here the bounded-read behavior is an intentional
+  tradeoff, rather than assuming those faster tail loads are required.
 - `MINI_ERP_JSON_ENCODER` selects the response/stream encoder. The old
   `MINI_ERP_RESEARCH_JSON_ENCODER` remains supported; conflicting selections,
   unknown names, non-UTF-8 settings and unsupported features fail startup before
@@ -42,6 +79,10 @@ snapshot. It checks 1,024 worker deltas, 128 page deltas, 128 legacy snapshots,
 four reconnect/replay cycles, actor cursor isolation, unrelated-apparatus
 isolation and continued progress while a reader is stalled. This is a bounded
 load regression, not a long-duration production soak.
+
+`--load-updates 1024` extends each isolated run to 8,192 worker deltas, 1,024
+page deltas, 1,024 legacy snapshots and 32 reconnects. The local qualification
+uses this setting; CI keeps the shorter 128-update default.
 
 Existing HTTP/gzip, queue window, pagination, replay, detail authorization and
 active-paddon cache suites run in separate processes for each codec profile.
@@ -68,6 +109,10 @@ python3 tools/benchmarks/qualify_json_codec.py \
   --artifacts target/json-codec-artifacts.jsonl \
   --output garbage/json-codec-qualification --profiles serde_json sonic_encode
 ```
+
+The benchmark example also builds with `sonic-json,verification`. Use
+`--profiles serde_json sonic_encode` with its Python runner for this build; the
+`sonic_both` profile requires the explicitly experimental decoder feature.
 
 The runner removes inherited app/database settings and uses a fresh temporary
 working directory for each executable. Test fixtures use memory stores and

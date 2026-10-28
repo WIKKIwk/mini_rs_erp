@@ -1,0 +1,32 @@
+[
+  {
+    "name": "default-server",
+    "command": [
+      "cargo",
+      "check",
+      "--release",
+      "--locked",
+      "--lib",
+      "--bin",
+      "mini_rs_erp"
+    ],
+    "exit_code": 0,
+    "wall_seconds": 37.7200105
+  },
+  {
+    "name": "encoder-server",
+    "command": [
+      "cargo",
+      "check",
+      "--release",
+      "--locked",
+      "--lib",
+      "--bin",
+      "mini_rs_erp",
+      "--features",
+      "sonic-json"
+    ],
+    "exit_code": 0,
+    "wall_seconds": 50.559995541
+  }
+]

@@ -83,18 +83,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &options,
     ));
     cases.push(micro::encode("typed_map_list", &snapshot.maps, &options));
-    let map = fixture::map(0, 0);
-    cases.push(micro::decode(
-        "production_map_request",
-        &serde_json::to_vec(&map)?,
-        &options,
-    ));
-    cases.push(micro::decode(
-        "integer_map_request",
-        br#"{"id":"research","product_code":"P-001","title":"Packaging label","roll_count":12}"#,
-        &options,
-    ));
-    cases.push(micro::numeric_probe());
+    #[cfg(feature = "sonic-json-research")]
+    {
+        let map = fixture::map(0, 0);
+        cases.push(micro::decode(
+            "production_map_request",
+            &serde_json::to_vec(&map)?,
+            &options,
+        ));
+        cases.push(micro::decode(
+            "integer_map_request",
+            br#"{"id":"research","product_code":"P-001","title":"Packaging label","roll_count":12}"#,
+            &options,
+        ));
+        cases.push(micro::numeric_probe());
+    }
     cases.extend(routes::http(&fixture, &options).await);
     cases.extend(routes::websockets(&fixture, &options).await);
     cases.push(routes::request_decode(&fixture, &options).await);
@@ -102,6 +105,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "{}",
         json!({"schema":1,"synthetic":true,"production_measurement":false,
         "arch":std::env::consts::ARCH,"encoder":codecs.encoder.name(),"decoder":codecs.decoder.name(),
+        "research_decoder_compiled":cfg!(feature="sonic-json-research"),
         "target_features":{"neon":cfg!(target_feature="neon"),"avx2":cfg!(target_feature="avx2")},
         "orders":options.orders,"samples":options.samples,"batch":options.batch,"cases":cases})
     );

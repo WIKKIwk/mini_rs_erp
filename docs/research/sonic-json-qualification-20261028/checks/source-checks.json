@@ -1,0 +1,51 @@
+[
+  {
+    "name": "focused-rustfmt",
+    "command": [
+      "rustfmt",
+      "--edition",
+      "2024",
+      "--check",
+      "--config",
+      "skip_children=true",
+      "src/http/json_research.rs",
+      "tests/json_codec_research.rs",
+      "tests/json_codec_qualification.rs",
+      "tests/json_codec_stream_load.rs",
+      "tests/worker_queue_window.rs",
+      "tests/worker_queue_window/worker_list.rs",
+      "examples/json_codec_research.rs",
+      "examples/json_codec_research/micro.rs"
+    ],
+    "exit_code": 0
+  },
+  {
+    "name": "python-compile",
+    "command": [
+      "python3",
+      "-m",
+      "py_compile",
+      "tools/benchmarks/json_codec_research.py",
+      "tools/benchmarks/qualify_json_codec.py"
+    ],
+    "exit_code": 0
+  },
+  {
+    "name": "whitespace",
+    "command": [
+      "git",
+      "diff",
+      "--check"
+    ],
+    "exit_code": 0
+  },
+  {
+    "name": "workflow-yaml",
+    "command": [
+      "ruby",
+      "-e",
+      "require \"yaml\"; x=YAML.load_file(\".github/workflows/json-codec.yml\"); abort \"matrix missing\" unless x.fetch(\"jobs\").fetch(\"linux\").fetch(\"strategy\").fetch(\"matrix\").fetch(\"include\").size == 4; puts \"Workflow YAML parsed; four matrix entries present\""
+    ],
+    "exit_code": 0
+  }
+]

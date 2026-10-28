@@ -1,0 +1,7 @@
+sonic-rs v0.5.10
+├── sonic-rs feature "default"
+│   └── mini_rs_erp v1.0.0 (/Users/wikki/Desktop/Accord_project/mini_rs_erp)
+│       ├── mini_rs_erp feature "default" (command-line)
+│       └── mini_rs_erp feature "sonic-json" (command-line)
+└── sonic-rs feature "sanitize"
+    └── mini_rs_erp v1.0.0 (/Users/wikki/Desktop/Accord_project/mini_rs_erp) (*)

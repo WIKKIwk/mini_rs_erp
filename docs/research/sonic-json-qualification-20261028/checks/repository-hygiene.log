@@ -1,0 +1,233 @@
+rustfmt: crates/mini_rs_apparatus_contract/src/canonical_aasx/tests.rs
+rustfmt: crates/mini_rs_apparatus_contract/src/projector.rs
+rustfmt: crates/mini_rs_gscale_domain/src/service_tests.rs
+rustfmt: src/app/builders.rs
+rustfmt: src/app.rs
+rustfmt: src/config/tests.rs
+rustfmt: src/config.rs
+rustfmt: src/core/admin/ports.rs
+rustfmt: src/core/admin/service/mod.rs
+rustfmt: src/core/apparatus_standard/service/mod.rs
+rustfmt: src/core/apparatus_standard/service/tests.rs
+rustfmt: src/core/calculate_orders.rs
+rustfmt: src/core/formula/calculation.rs
+rustfmt: src/core/formula.rs
+rustfmt: src/core/mini_orders.rs
+rustfmt: src/core/mod.rs
+rustfmt: src/core/order_edit/material_tests.rs
+rustfmt: src/core/order_edit.rs
+rustfmt: src/core/preparation.rs
+rustfmt: src/core/production_map/astatka/bosma.rs
+rustfmt: src/core/production_map/astatka/lamination_shift.rs
+rustfmt: src/core/production_map/astatka/service.rs
+rustfmt: src/core/production_map/automatic/tests.rs
+rustfmt: src/core/production_map/automatic.rs
+rustfmt: src/core/production_map/catalog/definition.rs
+rustfmt: src/core/production_map/catalog/memory_store.rs
+rustfmt: src/core/production_map/catalog/service.rs
+rustfmt: src/core/production_map/chain/mod.rs
+rustfmt: src/core/production_map/chain/tests.rs
+rustfmt: src/core/production_map/errors.rs
+rustfmt: src/core/production_map/layer_remainder.rs
+rustfmt: src/core/production_map/materials/implementation.rs
+rustfmt: src/core/production_map/memory_store/queue.rs
+rustfmt: src/core/production_map/memory_store/state.rs
+rustfmt: src/core/production_map/memory_store.rs
+rustfmt: src/core/production_map/mod.rs
+rustfmt: src/core/production_map/order_control/service.rs
+rustfmt: src/core/production_map/paddon/service.rs
+rustfmt: src/core/production_map/prepared_queue_action.rs
+rustfmt: src/core/production_map/print_preflight.rs
+rustfmt: src/core/production_map/progress_session/progress.rs
+rustfmt: src/core/production_map/progress_session/progress_status.rs
+rustfmt: src/core/production_map/progress_session/service_completion.rs
+rustfmt: src/core/production_map/progress_session/service_progress.rs
+rustfmt: src/core/production_map/progress_session/service_progress_metrics.rs
+rustfmt: src/core/production_map/progress_session/service_progress_support.rs
+rustfmt: src/core/production_map/queue/actions.rs
+rustfmt: src/core/production_map/queue/apparatus.rs
+rustfmt: src/core/production_map/queue/rezka_output_report.rs
+rustfmt: src/core/production_map/queue/sequence.rs
+rustfmt: src/core/production_map/queue/service.rs
+rustfmt: src/core/production_map/queue/snapshot_tolerance.rs
+rustfmt: src/core/production_map/queue_state/tests.rs
+rustfmt: src/core/production_map/reactivation.rs
+rustfmt: src/core/production_map/service.rs
+rustfmt: src/core/production_map/service_admin_pages.rs
+rustfmt: src/core/production_map/service_audit.rs
+rustfmt: src/core/production_map/service_display_order.rs
+rustfmt: src/core/production_map/service_worker_snapshot_tests.rs
+rustfmt: src/core/production_map/store_port.rs
+rustfmt: src/core/production_map/tests/cooperative_visibility.rs
+rustfmt: src/core/production_map/tests/material_assignment_alternatives.rs
+rustfmt: src/core/production_map/tests/order_control.rs
+rustfmt: src/core/production_map/tests/print_preflight.rs
+rustfmt: src/core/production_map/tests/service_flow.rs
+rustfmt: src/core/production_map/transfer/service.rs
+rustfmt: src/core/production_map/wip/service.rs
+rustfmt: src/core/qolip/catalog.rs
+rustfmt: src/core/qolip/models.rs
+rustfmt: src/core/qolip/ports.rs
+rustfmt: src/core/qolip/service.rs
+rustfmt: src/core/qolip/service_tests.rs
+rustfmt: src/core/qolip.rs
+rustfmt: src/db/mod.rs
+rustfmt: src/db/postgres_auth.rs
+rustfmt: src/db/postgres_calculate_order.rs
+rustfmt: src/db/postgres_mini_order/order_edit/tests.rs
+rustfmt: src/db/postgres_mini_order/order_edit.rs
+rustfmt: src/db/postgres_mini_order.rs
+rustfmt: src/db/postgres_preparation/formula_shares.rs
+rustfmt: src/db/postgres_preparation/saved_formulas.rs
+rustfmt: src/db/postgres_preparation.rs
+rustfmt: src/db/postgres_production_map/catalog/catalog.rs
+rustfmt: src/db/postgres_production_map/layer_remainder.rs
+rustfmt: src/db/postgres_production_map/lifecycle.rs
+rustfmt: src/db/postgres_production_map/lifecycle_tests.rs
+rustfmt: src/db/postgres_production_map/materials/rules.rs
+rustfmt: src/db/postgres_production_map/order_control/helpers.rs
+rustfmt: src/db/postgres_production_map/order_control/postgres_tests.rs
+rustfmt: src/db/postgres_production_map/order_query/helpers.rs
+rustfmt: src/db/postgres_production_map/paddon/active.rs
+rustfmt: src/db/postgres_production_map/paddon/helpers.rs
+rustfmt: src/db/postgres_production_map/paddon/movement.rs
+rustfmt: src/db/postgres_production_map/paddon/output_assignment.rs
+rustfmt: src/db/postgres_production_map/progress/helpers.rs
+rustfmt: src/db/postgres_production_map/qolip/alternative_sets_tests.rs
+rustfmt: src/db/postgres_production_map/qolip/session_helpers.rs
+rustfmt: src/db/postgres_production_map/reactivation.rs
+rustfmt: src/db/postgres_production_map/stage_execution.rs
+rustfmt: src/db/postgres_production_map/wip_service_stress_tests.rs
+rustfmt: src/db/postgres_production_map.rs
+rustfmt: src/db/postgres_qolip/catalog_locations.rs
+rustfmt: src/db/postgres_qolip/checkouts.rs
+rustfmt: src/db/postgres_qolip/management.rs
+rustfmt: src/db/postgres_qolip/product_transfer.rs
+rustfmt: src/db/postgres_qolip/shared_sets.rs
+rustfmt: src/db/postgres_qolip.rs
+rustfmt: src/db/tests/calculate_order.rs
+rustfmt: src/db/tests/mini_order.rs
+rustfmt: src/db/tests/paddon_apparatus_scope.rs
+rustfmt: src/db/tests/paddon_delete.rs
+rustfmt: src/db/tests/paddon_movement.rs
+rustfmt: src/db/tests/paddon_print_lock.rs
+rustfmt: src/db/tests/paddon_unlock.rs
+rustfmt: src/db/tests/production_map.rs
+rustfmt: src/db/tests/rezka_output_paddon.rs
+rustfmt: src/db/tests.rs
+rustfmt: src/http/admin_route_tests/active_paddon.rs
+rustfmt: src/http/admin_route_tests/fakes/admin_read.rs
+rustfmt: src/http/admin_route_tests/order_edit.rs
+rustfmt: src/http/admin_route_tests/order_pages.rs
+rustfmt: src/http/admin_route_tests/paddon_qr_print.rs
+rustfmt: src/http/admin_route_tests/paddon_unlock.rs
+rustfmt: src/http/admin_route_tests/paddon_visibility.rs
+rustfmt: src/http/admin_route_tests/production_map_canonical_snapshot.rs
+rustfmt: src/http/admin_route_tests/production_map_save_order.rs
+rustfmt: src/http/admin_route_tests/qolip_exact_product_lookup.rs
+rustfmt: src/http/admin_route_tests/queue_history.rs
+rustfmt: src/http/admin_route_tests/queue_progress/bosma.rs
+rustfmt: src/http/admin_route_tests/queue_progress/resume_after_freeze.rs
+rustfmt: src/http/admin_route_tests/queue_progress/rezka.rs
+rustfmt: src/http/admin_route_tests/queue_progress/wip.rs
+rustfmt: src/http/admin_route_tests/raw_materials/assignment_flow.rs
+rustfmt: src/http/admin_route_tests/raw_materials/stock_and_rolls.rs
+rustfmt: src/http/admin_route_tests.rs
+rustfmt: src/http/handlers/admin/mod.rs
+rustfmt: src/http/handlers/admin/production_maps/astatka.rs
+rustfmt: src/http/handlers/admin/production_maps/completion.rs
+rustfmt: src/http/handlers/admin/production_maps/helpers.rs
+rustfmt: src/http/handlers/admin/production_maps/live_delta.rs
+rustfmt: src/http/handlers/admin/production_maps/order_page.rs
+rustfmt: src/http/handlers/admin/production_maps/order_page_list.rs
+rustfmt: src/http/handlers/admin/production_maps/order_scan_bootstrap.rs
+rustfmt: src/http/handlers/admin/production_maps/paddons.rs
+rustfmt: src/http/handlers/admin/production_maps/page_live.rs
+rustfmt: src/http/handlers/admin/production_maps/print_preflight.rs
+rustfmt: src/http/handlers/admin/production_maps/progress_qr.rs
+rustfmt: src/http/handlers/admin/production_maps/qolip_validation.rs
+rustfmt: src/http/handlers/admin/production_maps/queue_actions.rs
+rustfmt: src/http/handlers/admin/production_maps/raw_materials.rs
+rustfmt: src/http/handlers/admin/production_maps/reactivation.rs
+rustfmt: src/http/handlers/admin/production_maps/wip.rs
+rustfmt: src/http/handlers/admin/production_maps/worker_snapshot.rs
+rustfmt: src/http/handlers/admin/production_maps.rs
+rustfmt: src/http/handlers/admin/system/inventory_movements.rs
+rustfmt: src/http/handlers/admin/system/roles.rs
+rustfmt: src/http/handlers/admin/system.rs
+rustfmt: src/http/handlers/calculate.rs
+rustfmt: src/http/handlers/chat/directory.rs
+rustfmt: src/http/handlers/chat/realtime.rs
+rustfmt: src/http/handlers/preparation.rs
+rustfmt: src/http/handlers/qolip/management.rs
+rustfmt: src/http/handlers/qolip/order_products.rs
+rustfmt: src/http/handlers/qolip/product_transfer.rs
+rustfmt: src/http/handlers/qolip/shared_sets.rs
+rustfmt: src/http/handlers/qolip/support.rs
+rustfmt: src/http/handlers/qolip.rs
+rustfmt: src/http/router.rs
+rustfmt: src/store/admin_store/access_ports.rs
+rustfmt: src/store/calculate_order_store/template_helpers.rs
+rustfmt: src/store/calculate_order_store.rs
+rustfmt: src/main.rs
+rustfmt: tests/active_paddon_snapshot_cache.rs
+rustfmt: tests/lamination_layer_remainder.rs
+rustfmt: tests/layer_remainder_wip.rs
+rustfmt: tests/order_scan_bootstrap.rs
+rustfmt: tests/preparation_formula_orders.rs
+rustfmt: tests/preparation_formula_sets.rs
+rustfmt: tests/preparation_screw_shares.rs
+rustfmt: tests/rezka_wip_completion_waste.rs
+rustfmt: tests/temporary_pause.rs
+rustfmt: tests/temporary_pause_postgres.rs
+rustfmt: tests/work_reactivation.rs
+rustfmt: tests/worker_queue_window/sequence_positions.rs
+size: src/app.rs: 553 > 550 lines
+size: src/core/inventory_movements_parts/part_01.rs: 511 > 500 lines
+size: src/core/inventory_movements_parts/part_02.rs: 549 > 500 lines
+size: src/core/preparation.rs: 647 > 553 lines
+size: src/core/production_map/catalog/service.rs: 951 > 849 lines
+size: src/core/production_map/chain/mod.rs: 728 > 699 lines
+size: src/core/production_map/materials/implementation.rs: 1032 > 1030 lines
+size: src/core/production_map/memory_store/queue.rs: 641 > 626 lines
+size: src/core/production_map/order_control/service.rs: 1049 > 946 lines
+size: src/core/production_map/progress_session/progress.rs: 1238 > 1223 lines
+size: src/core/production_map/progress_session/service_progress.rs: 2866 > 2788 lines
+size: src/core/production_map/progress_session/service_progress_support.rs: 1420 > 1274 lines
+size: src/core/production_map/queue/execution.rs: 1260 > 1259 lines
+size: src/core/production_map/queue/service.rs: 1567 > 1493 lines
+size: src/core/production_map/service.rs: 1121 > 834 lines
+size: src/core/production_map/service_audit.rs: 918 > 907 lines
+size: src/core/production_map/store_port.rs: 1246 > 1113 lines
+size: src/core/production_map/transfer/service.rs: 564 > 552 lines
+size: src/core/system_doctor/domain.rs: 593 > 500 lines
+size: src/core/system_doctor/wifi/linux.rs: 550 > 500 lines
+size: src/core/system_doctor/wifi.rs: 733 > 500 lines
+size: src/db/postgres_mini_order.rs: 519 > 500 lines
+size: src/db/postgres_parts/part_01.rs: 863 > 750 lines
+size: src/db/postgres_preparation.rs: 2091 > 2067 lines
+size: src/db/postgres_production_map/layer_remainder.rs: 914 > 500 lines
+size: src/db/postgres_production_map/materials/rules.rs: 589 > 564 lines
+size: src/db/postgres_production_map/order_control/helpers.rs: 725 > 575 lines
+size: src/db/postgres_production_map/order_query/helpers.rs: 761 > 709 lines
+size: src/db/postgres_production_map/progress/helpers.rs: 833 > 821 lines
+size: src/db/postgres_production_map/reactivation.rs: 1032 > 500 lines
+size: src/db/postgres_production_map/realtime.rs: 566 > 500 lines
+size: src/db/postgres_production_map/stage_execution.rs: 573 > 500 lines
+size: src/db/postgres_production_map.rs: 1574 > 1500 lines
+size: src/db/postgres_qolip/catalog_parts/part_02.rs: 571 > 505 lines
+size: src/http/handlers/admin/mod.rs: 550 > 536 lines
+size: src/http/handlers/admin/production_maps/completion.rs: 659 > 556 lines
+size: src/http/handlers/admin/production_maps/helpers.rs: 632 > 618 lines
+size: src/http/handlers/admin/production_maps/live_delta.rs: 1117 > 500 lines
+size: src/http/handlers/admin/production_maps/order_page.rs: 810 > 500 lines
+size: src/http/handlers/admin/production_maps/order_page_list.rs: 1112 > 500 lines
+size: src/http/handlers/admin/production_maps/page_live.rs: 760 > 500 lines
+size: src/http/handlers/admin/production_maps/supply_tasks.rs: 640 > 500 lines
+size: src/http/handlers/admin/production_maps_parts/part_01.rs: 683 > 601 lines
+size: src/http/handlers/admin/production_maps_parts/part_02.rs: 520 > 500 lines
+size: src/http/handlers/admin/system/inventory_live.rs: 561 > 500 lines
+size: src/http/handlers/chat/directory.rs: 728 > 500 lines
+size: src/http/handlers/preparation/orders.rs: 1152 > 500 lines
+size: src/http/handlers/preparation.rs: 696 > 638 lines
+size: src/telegram/service_parts/part_02.rs: 694 > 691 lines

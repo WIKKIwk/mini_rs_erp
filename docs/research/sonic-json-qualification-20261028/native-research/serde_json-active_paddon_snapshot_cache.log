@@ -1,0 +1,27 @@
+
+running 4 tests
+test rejected_selection_preserves_selection_and_snapshot ... ok
+test production_map_mutation_still_invalidates_and_rebuilds ... ok
+test selection_set_change_repeat_clear_leave_shared_snapshot_untouched ... ok
+test selection_is_scoped_by_actor_role_reference_and_apparatus ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+        0.62 real         0.02 user         0.01 sys
+            25460736  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+                2185  page reclaims
+                   4  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+                  28  voluntary context switches
+                 179  involuntary context switches
+           261938594  instructions retired
+           148469024  cycles elapsed
+            10896008  peak memory footprint

@@ -1,0 +1,77 @@
+
+running 37 tests
+test all_window_keeps_the_workers_complete_history ... ok
+test free_queue_order_is_shared_by_admin_workers_and_live_updates ... ok
+test page_stream::http_compression::identity_query_skips_only_scoped_admin_http_compression_and_preserves_payload_identity ... ok
+test page_stream::http_compression::report_actual_tcp_gzip8_vs_identity_same_admin_payload_and_bandwidth_break_even ... ok
+test page_stream::http_compression::transport_codec_cpu_experiment ... ignored, explicit transport CPU experiment; 20000 codec iterations
+test page_stream::http_compression::report_simulated_bandwidth_over_actual_tcp_without_touching_host_network ... ok
+test page_stream::notification_stream_omits_maps_and_suppresses_unrelated_revisions ... ok
+test page_stream::orders_list::orders_identity_diagnostic_keeps_scope_and_data_while_default_compression_stays_gzip ... ok
+test page_stream::orders_list::orders_live_colour_membership_and_intake_deltas_match_http_and_reconnect ... ok
+test page_stream::orders_list::orders_projection_preserves_paging_labels_but_omits_full_authority_and_pending_templates ... ok
+test page_stream::orders_list::orders_projection_rejects_cross_view_scope_and_worker_access_and_detail_is_single_order ... ok
+test page_stream::orders_list::orders_summary_wire_size_is_smaller_than_legacy_full_page ... ok
+test page_stream::page_stream_filters_search_and_updates_both_transfer_panes ... ok
+test page_stream::page_stream_preserves_two_page_boundary_colours_order_and_recovery ... ok
+test page_stream::page_stream_rejects_worker_and_foreign_cursor_and_supports_shared_admin_sessions ... ok
+test page_stream::sequence_list::admin_detail_is_explicit_single_order_canonical_and_legacy_scoped_get_stays_small ... ok
+test page_stream::sequence_list::empty_queue_has_valid_selected_authority_and_free_pick_rows_cannot_drag ... ok
+test page_stream::sequence_list::report_slim_page_wire_size_and_warm_http_cost ... ok
+test page_stream::sequence_list::slim_bootstrap_preserves_order_paging_policy_and_isolates_schema_and_accounts ... ok
+test page_stream::sequence_list::slim_stream_matches_http_after_colour_checkpoint_reorder_and_reconnect ... ok
+test page_stream::sequence_list::slim_unfiltered_page_skips_off_page_customer_and_calculation_archive_reads ... ok
+test page_stream::worker_list::worker_detail_checks_assignment_actual_order_membership_and_returns_one_canonical_order ... ok
+test page_stream::worker_list::worker_detail_history_fallback_requires_persisted_assigned_apparatus_history ... ok
+test page_stream::worker_list::worker_list_http_matches_existing_windows_ranks_and_cursors_without_domain_records ... ok
+test page_stream::worker_list::worker_list_live_state_and_graph_label_deltas_are_small_scoped_and_replayable ... ok
+test page_stream::worker_list::worker_list_pins_active_order_and_preserves_free_pick_search_semantics ... ok
+test page_stream::worker_list::worker_list_preserves_temporary_pause_display_through_http_and_live_resume ... ok
+test page_stream::worker_list::worker_list_wire_size_comparison_uses_same_twenty_orders ... ok
+test sequence_positions::free_pick_search_keeps_display_rank_through_activity_deltas_and_reconnects ... ok
+test sequence_positions::worker_search_positions_are_independent_per_apparatus_and_assignment_scoped ... ok
+test sequence_positions::worker_search_positions_number_after_visibility_and_exclude_frozen_rows ... ok
+test sequence_positions::worker_search_positions_only_delta_is_sparse_replayable_and_epoch_scoped ... ok
+test window_is_bounded_revision_scoped_searchable_and_refills_over_websocket ... ok
+test worker_detail::worker_detail_cold_read_materializes_one_order_before_its_queue_peers ... ok
+test worker_detail::worker_detail_does_not_publish_authority_after_assignment_changes_during_read ... ok
+test worker_detail::worker_detail_matches_full_worker_controls_across_queue_states_and_policies ... ok
+test worker_detail::worker_detail_retries_a_changed_revision_before_publishing_its_program ... ok
+
+test result: ok. 36 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 2.00s
+
+http_transport case=sequence20 fixture=60_orders gzip_level=8 gzip_bytes=999 identity_bytes=5251 tcp_gzip_median_ms=0.2122 tcp_identity_median_ms=0.1654 client_inflate_parse_gzip_ms=0.0263 client_parse_identity_ms=0.0186 identity_break_even_mbps=726.98
+http_transport_model case=sequence20 bandwidth_mbps=1 gzip_ms=8.2042 identity_ms=42.1734 identity_minus_gzip_ms=33.9692
+http_transport_model case=sequence20 bandwidth_mbps=5 gzip_ms=1.8106 identity_ms=8.5670 identity_minus_gzip_ms=6.7564
+http_transport_model case=sequence20 bandwidth_mbps=20 gzip_ms=0.6118 identity_ms=2.2658 identity_minus_gzip_ms=1.6540
+http_transport_model case=sequence20 bandwidth_mbps=100 gzip_ms=0.2921 identity_ms=0.5855 identity_minus_gzip_ms=0.2934
+http_transport case=detail1 fixture=60_orders gzip_level=8 gzip_bytes=1153 identity_bytes=4351 tcp_gzip_median_ms=0.1650 tcp_identity_median_ms=0.1335 client_inflate_parse_gzip_ms=0.0208 client_parse_identity_ms=0.0130 identity_break_even_mbps=810.06
+http_transport_model case=detail1 bandwidth_mbps=1 gzip_ms=9.3890 identity_ms=34.9415 identity_minus_gzip_ms=25.5524
+http_transport_model case=detail1 bandwidth_mbps=5 gzip_ms=2.0098 identity_ms=7.0951 identity_minus_gzip_ms=5.0852
+http_transport_model case=detail1 bandwidth_mbps=20 gzip_ms=0.6262 identity_ms=1.8739 identity_minus_gzip_ms=1.2476
+http_transport_model case=detail1 bandwidth_mbps=100 gzip_ms=0.2573 identity_ms=0.4815 identity_minus_gzip_ms=0.2243
+SIMULATED_NETWORK_REAL_TCP case=sequence20 bandwidth_mbps=5 chunk_bytes=1024 samples_each=20 gzip_body_bytes=1007 identity_body_bytes=5257 gzip_median_ms=3.8356 identity_median_ms=9.7414 identity_minus_gzip_ms=5.9058
+SIMULATED_NETWORK_REAL_TCP case=detail1 bandwidth_mbps=5 chunk_bytes=1024 samples_each=20 gzip_body_bytes=1156 identity_body_bytes=4357 gzip_median_ms=3.9450 identity_median_ms=8.5678 identity_minus_gzip_ms=4.6228
+SIMULATED_NETWORK_REAL_TCP case=sequence20 bandwidth_mbps=20 chunk_bytes=1024 samples_each=20 gzip_body_bytes=1007 identity_body_bytes=5257 gzip_median_ms=2.8261 identity_median_ms=3.2717 identity_minus_gzip_ms=0.4456
+SIMULATED_NETWORK_REAL_TCP case=detail1 bandwidth_mbps=20 chunk_bytes=1024 samples_each=20 gzip_body_bytes=1156 identity_body_bytes=4357 gzip_median_ms=1.6235 identity_median_ms=3.8762 identity_minus_gzip_ms=2.2527
+orders_list_v1 fixture=61_orders page=20 full_raw=40687 slim_raw=3817 full_gzip=2370 slim_gzip=795
+sequence_list_v1 fixture=60_orders page=20 full_raw=41004 slim_raw=5245 full_gzip=2446 slim_gzip=1014 warm_full_median_us=376 warm_slim_median_us=89
+worker_list_v1 fixture=60_orders page=20 full_raw=40539 slim_raw=6344 full_gzip8=2139 slim_gzip8=1056
+        2.00 real         0.55 user         0.15 sys
+            49250304  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+                4025  page reclaims
+                 109  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                1054  messages sent
+               21605  messages received
+                   0  signals received
+                 726  voluntary context switches
+                3679  involuntary context switches
+          8409184325  instructions retired
+          2600830714  cycles elapsed
+            28902048  peak memory footprint
