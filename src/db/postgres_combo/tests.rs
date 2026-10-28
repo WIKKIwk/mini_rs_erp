@@ -8,6 +8,8 @@ use crate::db::postgres::{
 };
 use crate::db::postgres_admin_catalog::PostgresAdminCatalogStore;
 
+mod qolip_tests;
+
 fn template() -> CalculateOrderTemplate {
     crate::core::calculate_orders::hydrate_template_dimensions(CalculateOrderTemplate {
         customer_ref: "combo-customer".into(),
@@ -88,6 +90,7 @@ async fn combo_catalog_persists_revisions_and_runtime_guards() {
     assert_eq!(detail.item_group, "Kombo");
     assert!(detail.is_finished_goods);
     assert_eq!(detail.customers[0].ref_, "combo-customer");
+    qolip_tests::assert_combo_mold_attachment(&admin, &runtime, &first).await;
     let mut quantity = initial.clone();
     quantity.kg = 600.0;
     quantity.waste_percent = 7.0;

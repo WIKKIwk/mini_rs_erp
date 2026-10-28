@@ -20,6 +20,8 @@ pub(super) async fn save_product_spec_tx(
     if exists {
         return Err(QolipError::QolipCodeConflict);
     }
+    // Combo revisions are immutable. Their first mold code is derived from
+    // the spec rows by load_products_inner instead of caching it on the item.
     sqlx::query(
         "UPDATE mini_items item
          SET payload_json = jsonb_set(
@@ -39,6 +41,7 @@ pub(super) async fn save_product_spec_tx(
              ),
              updated_at = now()
          WHERE lower(item.code) = lower($1)
+           AND item.payload_json->>'kind' IS DISTINCT FROM 'combo'
            AND COALESCE(btrim(item.payload_json->>'qolip_first_code'), '') = ''",
     )
     .bind(spec.item_code.trim())
