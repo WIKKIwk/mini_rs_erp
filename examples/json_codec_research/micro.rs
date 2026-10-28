@@ -90,7 +90,10 @@ pub fn numeric_probe() -> Value {
         }
     }
     assert_eq!(integrated_mismatches, 0);
+    let negative_zero: f64 = Engine::SonicRs.from_slice(b"-0").unwrap();
+    assert_eq!(negative_zero.to_bits(), (-0.0f64).to_bits());
     json!({"case":"numeric_compatibility_probe","kind":"compatibility","inputs":10000,
         "raw_sonic_float_bit_mismatches":raw_mismatches,
-        "integrated_decoder_float_bit_mismatches":integrated_mismatches,"examples":examples})
+        "integrated_decoder_float_bit_mismatches":integrated_mismatches,
+        "negative_zero_preserved":negative_zero.to_bits()==(-0.0f64).to_bits(),"examples":examples})
 }

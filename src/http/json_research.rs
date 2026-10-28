@@ -154,10 +154,8 @@ fn needs_serde_parser(body: &[u8]) -> bool {
                     }
                 }
                 b'.' | b'e' | b'E' if number => return true,
-                b'-' => {
-                    number = true;
-                    number_digits = 0;
-                }
+                // Sonic also treats the valid integer token -0 differently.
+                b'-' => return true,
                 _ => {
                     number = false;
                     number_digits = 0;

@@ -33,13 +33,14 @@ Two concrete differences prevent an unconditional parser replacement:
    known unbounded recursion paths. A depth fix was merged after this release:
    [upstream PR 247](https://github.com/cloudwego/sonic-rs/pull/247).
 2. The current `serde_json` dependency does not enable `float_roundtrip`. Raw
-   Sonic can round some numeric literals to a different final f64 bit. The
+   Sonic can round some numeric literals to a different final f64 bit and loses
+   the sign when deserializing the valid integer token `-0` as f64. The
    harness includes a deterministic 10,000-number comparison and reports raw
    Sonic separately from the installed request decoder. These inputs are
    synthetic; mismatch counts are not production error rates.
 
 The experimental decoder first scans structure while respecting quoted strings
-and escapes. At 128 levels, on a decimal/exponent literal, or at 19 integer
+and escapes. At 128 levels, on a negative/decimal/exponent literal, or at 19 integer
 digits it delegates to the existing Serde parser. This preserves its depth,
 ignored-field and numeric behavior. Otherwise it uses the checked Sonic parser.
 The guard and fallback are included in decoder timings; slower outcomes count.
