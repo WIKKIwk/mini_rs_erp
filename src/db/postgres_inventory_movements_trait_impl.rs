@@ -19,6 +19,15 @@ impl InventoryMovementStorePort for PostgresInventoryMovementStore {
         PostgresInventoryMovementStore::assets(self, actor, query).await
     }
 
+    async fn list_order_assignments(
+        &self,
+        actor: &InventoryActor,
+        barcodes: &[String],
+        assigned_apparatus: &[String],
+    ) -> Result<Vec<InventoryOrderAssignment>, InventoryMovementError> {
+        list_metadata::list_order_assignments(self, actor, barcodes, assigned_apparatus).await
+    }
+
     async fn relocate(
         &self,
         actor: &InventoryActor,

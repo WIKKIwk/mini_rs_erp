@@ -166,6 +166,17 @@ pub struct RawMaterialStatePlacement {
     pub apparatus: Vec<String>,
 }
 
+/// The small assignment badge carried by an explicitly requested inventory list.
+/// Execution validation and editable details remain separate read/write paths.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct InventoryOrderAssignment {
+    #[serde(skip_serializing)]
+    pub barcode: String,
+    pub order_id: String,
+    pub order_label: String,
+    pub order_control: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InventoryTransferLine {
     pub asset_kind: InventoryAssetKind,
@@ -214,6 +225,8 @@ pub struct InventoryAssetQuery {
     /// regardless of who last placed the asset there.
     #[serde(default)]
     pub current_user_states_only: bool,
+    #[serde(default)]
+    pub include_order_assignment: bool,
     #[serde(default = "default_asset_limit")]
     pub limit: usize,
     #[serde(default)]
@@ -436,6 +449,17 @@ pub trait InventoryMovementStorePort: Send + Sync {
         actor: &InventoryActor,
         query: &InventoryAssetQuery,
     ) -> Result<Vec<InventoryAsset>, InventoryMovementError>;
+
+    async fn list_order_assignments(
+        &self,
+        _actor: &InventoryActor,
+        _barcodes: &[String],
+        _assigned_apparatus: &[String],
+    ) -> Result<Vec<InventoryOrderAssignment>, InventoryMovementError> {
+        // An unsupported repository must not turn unknown assignments into
+        // confirmed empty badges used by destructive actions.
+        Err(InventoryMovementError::StoreFailed)
+    }
 
     async fn relocate(
         &self,

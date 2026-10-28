@@ -32,12 +32,55 @@ pub async fn inventory_assets(
     if method != Method::GET {
         return Err(method_not_allowed());
     }
-    state
+    let include_order_assignment =
+        query.include_order_assignment && actor.principal.role == PrincipalRole::MaterialTaminotchi;
+    if include_order_assignment {
+        require_capability(&state, &actor.principal, Capability::RawMaterialAssign).await?;
+    }
+    let assets = state
         .inventory_movements
         .assets(&actor, query)
         .await
-        .map(json_response)
-        .map_err(inventory_error)
+        .map_err(inventory_error)?;
+    if !include_order_assignment {
+        return Ok(json_response(assets));
+    }
+    let barcodes = assets
+        .iter()
+        .filter(|asset| asset.kind == InventoryAssetKind::RawMaterial)
+        .map(|asset| asset.identifier.clone())
+        .collect::<Vec<_>>();
+    let assigned_apparatus = state
+        .admin
+        .principal_assigned_apparatus(&actor.principal)
+        .await;
+    let assignments = state
+        .inventory_movements
+        .list_order_assignments(&actor, &barcodes, &assigned_apparatus)
+        .await
+        .map_err(inventory_error)?
+        .into_iter()
+        .map(|assignment| (assignment.barcode.trim().to_ascii_uppercase(), assignment))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let rows = assets
+        .iter()
+        .map(|asset| InventoryAssetListRow {
+            asset,
+            order_assignment: if asset.kind == InventoryAssetKind::RawMaterial {
+                assignments.get(&asset.identifier.trim().to_ascii_uppercase())
+            } else {
+                None
+            },
+        })
+        .collect::<Vec<_>>();
+    Ok(json_response(rows))
+}
+
+#[derive(serde::Serialize)]
+struct InventoryAssetListRow<'a> {
+    #[serde(flatten)]
+    asset: &'a crate::core::inventory_movements::InventoryAsset,
+    order_assignment: Option<&'a crate::core::inventory_movements::InventoryOrderAssignment>,
 }
 
 pub async fn inventory_relocations(
