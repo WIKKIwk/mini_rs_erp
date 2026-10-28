@@ -142,6 +142,7 @@ impl RpsBatchStorePort for PostgresRpsBatchStore {
                          'printer', '',
                          'print_mode', '',
                          'quantity_source', 'receipt',
+                         'order_assignment', receipt.payload_json->'order_assignment',
                          'manual_qty_kg', 0,
                          'tare_enabled', false,
                          'tare_kg', 0,

@@ -9,6 +9,8 @@ use crate::core::text::trim_owned;
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct RpsBatchStartRequest {
     #[serde(default)]
+    pub preparation_formula: Option<crate::core::preparation::PreparationFormulaReference>,
+    #[serde(default)]
     pub order_id: String,
     #[serde(default)]
     pub apparatus: String,

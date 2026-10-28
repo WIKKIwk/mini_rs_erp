@@ -34,6 +34,22 @@ pub(super) async fn normalize_material_batch_item(
     }
     request.order_assignment = receipt_order_assignment(state, principal, &request.order_id, &request.apparatus,
         &request.item_code, &request.warehouse, request.width_mm, request.micron).await?;
+    if let Some(reference) = &request.preparation_formula {
+        if principal.role != PrincipalRole::TayyorlovMasteri
+            || !state.admin.principal_has_capability(principal, crate::core::authz::Capability::PreparationAccess).await {
+            return Err(MaterialCatalogError::Forbidden);
+        }
+        let store = state.preparation.as_ref().ok_or(MaterialCatalogError::ReadFailed)?;
+        let snapshot = store.formula_print_snapshot(
+            &principal.ref_, &request.order_id, &request.item_code, reference,
+        ).await.map_err(|error| match error {
+            crate::core::preparation::PreparationError::StoreFailed => MaterialCatalogError::ReadFailed,
+            crate::core::preparation::PreparationError::Forbidden => MaterialCatalogError::Forbidden,
+            _ => MaterialCatalogError::OrderAssignment(error.to_string()),
+        })?;
+        let assignment = request.order_assignment.as_mut().ok_or(MaterialCatalogError::Forbidden)?;
+        assignment["preparation_formula"] = snapshot;
+    }
     Ok(())
 }
 
@@ -49,17 +65,17 @@ pub(super) async fn normalize_material_batch_update_item(
     }
     // Older clients omit order fields during batch edits. Never silently erase
     // the server-owned commitment in that case.
+    let current = state.rps_batch.state(principal).await.map_err(|_| MaterialCatalogError::ReadFailed)?;
+    let previous = (current.batch.id == request.batch_id).then_some(current.batch.order_assignment).flatten();
     if request.order_id.trim().is_empty() {
-        let current = state.rps_batch.state(principal).await.map_err(|_| MaterialCatalogError::ReadFailed)?;
-        if current.batch.id == request.batch_id {
-            if let Some(link) = current.batch.order_assignment {
-                request.order_id = link["order_id"].as_str().unwrap_or_default().into();
-                request.apparatus = link["apparatus"].as_str().unwrap_or_default().into();
-            }
+        if let Some(link) = &previous {
+            request.order_id = link["order_id"].as_str().unwrap_or_default().into();
+            request.apparatus = link["apparatus"].as_str().unwrap_or_default().into();
         }
     }
     request.order_assignment = receipt_order_assignment(state, principal, &request.order_id, &request.apparatus,
         &request.item_code, &request.warehouse, request.width_mm, request.micron).await?;
+    preserve_preparation_formula(previous.as_ref(), &mut request.order_assignment)?;
     Ok(())
 }
 
@@ -73,8 +89,28 @@ pub(super) async fn normalize_material_receipt_item(
         request.item_code = item.code;
         request.item_name = item.name;
     }
+    let previous = request.order_assignment.take();
     request.order_assignment = receipt_order_assignment(state, principal, &request.order_id, &request.apparatus,
         &request.item_code, &request.warehouse, request.width_mm, request.micron).await?;
+    preserve_preparation_formula(previous.as_ref(), &mut request.order_assignment)?;
+    Ok(())
+}
+
+fn preserve_preparation_formula(
+    previous: Option<&serde_json::Value>,
+    assignment: &mut Option<serde_json::Value>,
+) -> Result<(), MaterialCatalogError> {
+    let Some(previous) = previous else { return Ok(()) };
+    let Some(snapshot) = previous.get("preparation_formula").filter(|value| value.is_object()) else {
+        return Ok(());
+    };
+    let next = assignment.as_mut().ok_or(MaterialCatalogError::Forbidden)?;
+    if ["order_id", "item_code"].iter().any(|key| previous.get(key) != next.get(key)) {
+        return Err(MaterialCatalogError::OrderAssignment(
+            "Shnek formulasi bog‘langan batchda buyurtma yoki homashyoni almashtirib bo‘lmaydi. Avval batchni to‘xtating".into(),
+        ));
+    }
+    next["preparation_formula"] = snapshot.clone();
     Ok(())
 }
 
@@ -180,6 +216,23 @@ pub(super) fn requires_material_dimensions(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn batch_recipe_is_retained_and_cannot_follow_another_order_or_material() {
+        let previous = serde_json::json!({"order_id":"order-1","item_code":"PE PR",
+            "preparation_formula":{"variant_id":"LG","formulas":[{"name":"A","share_percent":"100"}]}});
+        let mut next = Some(serde_json::json!({"order_id":"order-1","item_code":"PE PR","apparatus":"new-apparatus"}));
+        assert!(preserve_preparation_formula(Some(&previous), &mut next).is_ok());
+        assert_eq!(next.as_ref().unwrap()["preparation_formula"], previous["preparation_formula"]);
+        for key in ["order_id", "item_code"] {
+            let mut switched = next.clone();
+            switched.as_mut().unwrap()[key] = serde_json::json!("different");
+            assert!(preserve_preparation_formula(Some(&previous), &mut switched).is_err());
+        }
+        assert!(serde_json::from_value::<RpsBatchStartRequest>(serde_json::json!({
+            "preparation_formula":{"material_id":"pe-pr","variant_id":"LG","formulas":[]}
+        })).is_err(), "the client cannot supply recipe contents");
+    }
 
     fn item(group: &str) -> SupplierItem {
         SupplierItem {

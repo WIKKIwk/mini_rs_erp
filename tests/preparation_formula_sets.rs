@@ -121,6 +121,8 @@ async fn run_checks(pool: &PgPool, options: PgConnectOptions) {
     sqlx::raw_sql(include_str!("../migrations/postgres/0160_preparation_formula_variants.sql"))
         .execute(pool).await.unwrap();
 
+    sqlx::raw_sql(include_str!("../migrations/postgres/0175_preparation_formula_codes.sql"))
+        .execute(pool).await.unwrap();
     let runtime = PgPoolOptions::new()
         .after_connect(|connection, _| {
             Box::pin(async move {
@@ -144,6 +146,15 @@ async fn run_checks(pool: &PgPool, options: PgConnectOptions) {
     assert_eq!(set["product_title"], "Classic qurt 7 gr");
     assert_eq!(set["order_codes"], json!(["0261", "0262"]));
     assert_eq!(set["formulas"].as_array().unwrap().len(), 2);
+    let original_code = set["formulas"].as_array().unwrap().iter()
+        .find(|f| f["name"] == "A").unwrap()["formula_code"].as_str().unwrap().to_owned();
+    assert!(original_code.starts_with("9503") && original_code.len() == 12);
+    assert_eq!(sqlx::query_scalar::<_, i64>("SELECT count(DISTINCT formula_code) FROM mini_preparation_formulas")
+        .fetch_one(pool).await.unwrap(), 3);
+    assert!(sqlx::query("UPDATE mini_preparation_formulas SET formula_code='950399999999' WHERE formula_code=$1")
+        .bind(&original_code).execute(&runtime).await.is_err());
+    assert!(sqlx::query("INSERT INTO mini_preparation_formulas(owner_ref,product_code,material_id,name,lines,formula_code) VALUES ('prep-2','P','mat-a','Duplicate','[]',$1)")
+        .bind(&original_code).execute(&runtime).await.is_err());
     assert_eq!(sqlx::query_scalar::<_, i64>("SELECT count(DISTINCT set_id) FROM mini_preparation_formulas WHERE owner_ref='prep-1' AND product_code='P'")
         .fetch_one(pool).await.unwrap(), 1);
     let foreign = store.formula_sets("prep-2").await.unwrap();
@@ -210,14 +221,18 @@ async fn run_checks(pool: &PgPool, options: PgConnectOptions) {
         .as_str()
         .unwrap()
         .to_owned();
-    store
+    let updated = store
         .upsert_formula(&actor("prep-1"), formula("P", "A", &material))
         .await
         .unwrap();
-    store
+    assert_eq!(updated["formula_code"], original_code);
+    let added = store
         .upsert_formula(&actor("prep-1"), formula("P", "B", &material))
         .await
         .unwrap();
+    assert_ne!(added["formula_code"], original_code);
+    let listed = store.list_formulas("prep-1", "P", "mat-a").await.unwrap();
+    assert_eq!(listed["formulas"][0]["formula_code"], original_code);
     let sets = store.formula_sets("prep-1").await.unwrap();
     assert_eq!(sets["sets"][0]["set_id"], id);
     assert_eq!(sets["sets"][0]["name"], "Qurt maxsus");
@@ -234,10 +249,11 @@ async fn run_checks(pool: &PgPool, options: PgConnectOptions) {
     assert_eq!(saved["sets"][0]["set_id"], id);
     assert_eq!(saved["sets"][0]["order_codes"], json!([]));
     assert_eq!(saved["sets"][0]["formulas"].as_array().unwrap().len(), 3);
-    store
+    let updated = store
         .update_saved_formula(&actor("prep-1"), formula("P", "A", &material))
         .await
         .unwrap();
+    assert_eq!(updated["formula_code"], original_code);
     store
         .rename_formula_set("prep-1", rename(&id, "Qurt saqlangan"))
         .await
@@ -256,28 +272,31 @@ async fn run_checks(pool: &PgPool, options: PgConnectOptions) {
     );
     sqlx::query("INSERT INTO mini_preparation_material_responsibilities(principal_role,principal_ref,material_id,material_name) VALUES ('tayyorlov_masteri','prep-1','mat-a','Mat A')")
         .execute(pool).await.unwrap();
-    store
+    let recreated = store
         .upsert_formula(&actor("prep-1"), formula("P", "A", &material))
         .await
         .unwrap();
+    assert_ne!(recreated["formula_code"], original_code);
     let restored = store.formula_sets("prep-1").await.unwrap();
     assert_eq!(restored["sets"][0]["set_id"], id);
     assert_eq!(restored["sets"][0]["name"], "Qurt saqlangan");
 
     // Exercise the database trigger directly, bypassing the service's owner lock.
     let insert = "INSERT INTO mini_preparation_formulas(owner_ref,product_code,material_id,material_name,name,lines)
-                  VALUES ('prep-1','CONCURRENT','mat-a','Mat A',$1,'[]') RETURNING set_id";
+                  VALUES ('prep-1','CONCURRENT','mat-a','Mat A',$1,'[]') RETURNING set_id,formula_code";
     let (first, second) = tokio::join!(
-        sqlx::query_scalar::<_, String>(insert)
+        sqlx::query_as::<_, (String, String)>(insert)
             .bind("A")
             .fetch_one(&runtime),
-        sqlx::query_scalar::<_, String>(insert)
+        sqlx::query_as::<_, (String, String)>(insert)
             .bind("B")
             .fetch_one(&runtime),
     );
     let first = first.unwrap();
-    assert_eq!(first, second.unwrap());
-    assert_ne!(first, id);
+    let second = second.unwrap();
+    assert_eq!(first.0, second.0);
+    assert_ne!(first.1, second.1);
+    assert_ne!(first.0, id);
     let all = store.formula_sets("prep-1").await.unwrap();
     assert_eq!(all["sets"].as_array().unwrap().len(), 2);
     assert!(

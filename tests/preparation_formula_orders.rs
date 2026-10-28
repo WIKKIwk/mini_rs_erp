@@ -117,6 +117,8 @@ async fn run_checks(pool: &PgPool, options: PgConnectOptions) {
           ('t3','test','UNRELATED','Unrelated','Product','unrelated','{\"source_map_id\":\"different-order\",\"layers\":[{\"material_id\":\"mat-a\"}]}'),
           ('t4','test','TEMPLATE','Saved product template','Product','template','{\"source_map_id\":\"template-o1\",\"layers\":[{\"material_id\":\"mat-a\"}]}');")
         .execute(pool).await.unwrap();
+    sqlx::raw_sql(include_str!("../migrations/postgres/0175_preparation_formula_codes.sql"))
+        .execute(pool).await.unwrap();
     let runtime = PgPoolOptions::new()
         .after_connect(|conn, _| {
             Box::pin(async move {

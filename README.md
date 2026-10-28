@@ -21,6 +21,15 @@ provides the operator and administrative interface.
 Integrations include GScale/RPS weighing and label printing, internal messaging,
 Firebase push notifications, Telegram workflows, and Android update distribution.
 
+When a preparation master starts a receipt from a screw formula, the RPS batch
+captures the server's complete recipe, including its variant identity, screw
+shares and ingredient percentages. The frozen copy travels in
+`order_assignment.preparation_formula` in the batch and each GScale receipt's
+`payload_json`; stock and the receipt event also retain `preparation_formula`.
+Later formula edits or deletion do not change earlier roll recipes. Batch
+history exposes the saved copy to the mobile Print history details. These fields
+use the existing JSONB storage and require no additional database migration.
+
 ## Architecture
 
 The service is implemented in Rust using Axum, Tokio, and SQLx.

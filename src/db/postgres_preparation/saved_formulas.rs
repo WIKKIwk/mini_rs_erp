@@ -32,7 +32,7 @@ impl PostgresPreparationStore {
         -> Result<Value, PreparationError> {
         let (code, material) = saved_scope(product_code, material_id)?;
         let formulas: Vec<Value> = sqlx::query_scalar(
-            "SELECT jsonb_build_object('name',name,'lines',lines,'share_percent',share_percent::text,'variant_id',variant_id)
+            "SELECT jsonb_build_object('formula_code',formula_code,'name',name,'lines',lines,'share_percent',share_percent::text,'variant_id',variant_id)
              FROM mini_preparation_formulas
              WHERE owner_ref=$1 AND product_code=$2 AND material_id=$3
              AND variant_id=COALESCE(NULLIF($4,''),(SELECT id FROM mini_preparation_formula_variants
@@ -100,10 +100,10 @@ impl PostgresPreparationStore {
         // Lock ingredient rows before the formula, like catalog rename/delete.
         // UPDATE-only plus the affected-row check prevents resurrecting a formula
         // that was deleted while its ingredients were being resolved.
-        let share: Option<Option<String>> = sqlx::query_scalar(
+        let saved: Option<(String, Option<String>)> = sqlx::query_as(
             "UPDATE mini_preparation_formulas SET lines=$5,updated_at=now()
             WHERE owner_ref=$1 AND product_code=$2 AND material_id=$3 AND name=$4 AND variant_id=$6
-            RETURNING share_percent::text",
+            RETURNING formula_code,share_percent::text",
         )
         .bind(&actor.ref_)
         .bind(code)
@@ -113,14 +113,14 @@ impl PostgresPreparationStore {
         .bind(&variant)
         .fetch_optional(&mut *tx)
         .await?;
-        let Some(share) = share else {
+        let Some((formula_code, share)) = saved else {
             return Err(PreparationError::Invalid(
                 "Formula topilmadi. Ro‘yxatni yangilang",
             ));
         };
         tx.commit().await?;
         Ok(
-            json!({"product_code":code,"material_id":material,"material_name":material_name_saved,
+            json!({"formula_code":formula_code,"product_code":code,"material_id":material,"material_name":material_name_saved,
             "name":name,"lines":payload,"share_percent":share,"variant_id":variant}),
         )
     }

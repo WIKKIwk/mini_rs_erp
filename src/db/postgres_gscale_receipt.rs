@@ -118,6 +118,7 @@ async fn upsert_raw_material_stock_tx(
     .bind(serde_json::json!({
         "source_receipt_id": row.name.trim(),
         "source": "mini_gscale_receipts_submit",
+        "preparation_formula": row.payload_json["order_assignment"]["preparation_formula"],
         "item_name": row_item_name(row),
         "width_mm": row.width_mm,
         "micron": row.micron,
@@ -179,6 +180,7 @@ fn receipt_event_draft(
         correlation_id: None,
         payload_json: serde_json::json!({
             "receipt_id": row.name.trim(),
+            "preparation_formula": row.payload_json["order_assignment"]["preparation_formula"],
             "source_receipt_id": row.name.trim(),
             "width_mm": row.width_mm,
             "micron": row.micron,

@@ -11,6 +11,7 @@ mod formula_sets;
 mod saved_formulas;
 mod formula_shares;
 mod formula_variants;
+mod formula_print_snapshot;
 pub(crate) mod orders;
 mod order_customers;
 
@@ -1113,14 +1114,14 @@ impl PostgresPreparationStore {
                 json!({"item_code": code, "name": material, "percent": decimal_text(*percent)})
             })
             .collect();
-        let share: Option<String> = sqlx::query_scalar(
+        let (formula_code, share): (String, Option<String>) = sqlx::query_as(
             "INSERT INTO mini_preparation_formulas(owner_ref, product_code, material_id, material_name, name, lines, updated_at, variant_id, share_percent)
              VALUES ($1,$2,$3,$4,$5,$6,now(),$7, CASE WHEN NOT EXISTS (
                  SELECT 1 FROM mini_preparation_formulas WHERE owner_ref=$1
                  AND product_code=$2 AND lower(material_id)=lower($3) AND variant_id=$7) THEN 100 ELSE NULL END)
              ON CONFLICT (owner_ref, product_code, material_id, variant_id, name)
              DO UPDATE SET material_name = EXCLUDED.material_name, lines = EXCLUDED.lines, updated_at = now()
-             RETURNING share_percent::text",
+             RETURNING formula_code,share_percent::text",
         )
         .bind(&actor.ref_)
         .bind(&product_code)
@@ -1133,7 +1134,7 @@ impl PostgresPreparationStore {
         .await?;
         tx.commit().await?;
         Ok(
-            json!({"product_code": product_code, "material_id": material_id,
+            json!({"formula_code":formula_code,"product_code": product_code, "material_id": material_id,
             "material_name": scope_material_name, "name": name, "lines": payload, "share_percent": share, "variant_id":variant}),
         )
     }
@@ -1159,7 +1160,7 @@ impl PostgresPreparationStore {
         }
         let formulas_value: Value = sqlx::query_scalar(
             "SELECT COALESCE(jsonb_agg(f ORDER BY lower(f->>'name'), f->>'name') FILTER (WHERE f IS NOT NULL), '[]'::jsonb)
-             FROM (SELECT jsonb_build_object('name', name, 'lines', lines, 'share_percent', share_percent::text, 'variant_id',variant_id) AS f
+             FROM (SELECT jsonb_build_object('formula_code',formula_code,'name', name, 'lines', lines, 'share_percent', share_percent::text, 'variant_id',variant_id) AS f
                    FROM mini_preparation_formulas
                    WHERE owner_ref=$1 AND product_code=$2 AND lower(material_id)=lower($3)
                    AND variant_id=COALESCE(NULLIF($4,''),(SELECT id FROM mini_preparation_formula_variants
@@ -1995,10 +1996,20 @@ async fn order_matches_responsibility(
     owner: &str,
     order_id: &str,
 ) -> Result<bool, PreparationError> {
+    order_matches_material_responsibility(tx, owner, order_id, "").await
+}
+
+async fn order_matches_material_responsibility(
+    tx: &mut Transaction<'_, Postgres>,
+    owner: &str,
+    order_id: &str,
+    material_id: &str,
+) -> Result<bool, PreparationError> {
     let matched: bool = sqlx::query_scalar(
         "SELECT EXISTS (
            SELECT 1 FROM mini_preparation_material_responsibilities r
            WHERE r.principal_role = 'tayyorlov_masteri' AND r.principal_ref = $1
+             AND ($3 = '' OR lower(r.material_id) = lower($3))
              AND (
                EXISTS (
                  SELECT 1 FROM mini_order_products p
@@ -2032,6 +2043,7 @@ async fn order_matches_responsibility(
     )
     .bind(owner)
     .bind(order_id)
+    .bind(material_id)
     .fetch_one(&mut **tx)
     .await?;
     Ok(matched)

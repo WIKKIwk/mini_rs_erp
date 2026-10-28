@@ -66,7 +66,7 @@ impl PostgresPreparationStore {
                 .execute(&mut *tx).await?;
         }
         let formulas: Vec<Value> = sqlx::query_scalar(
-            "SELECT jsonb_build_object('name',name,'lines',lines,'share_percent',share_percent::text,'variant_id',variant_id)
+            "SELECT jsonb_build_object('formula_code',formula_code,'name',name,'lines',lines,'share_percent',share_percent::text,'variant_id',variant_id)
              FROM mini_preparation_formulas WHERE owner_ref=$1 AND product_code=$2 AND material_id=$3 AND variant_id=$4
              ORDER BY lower(name),name",
         ).bind(owner).bind(code).bind(material).bind(&variant).fetch_all(&mut *tx).await?;

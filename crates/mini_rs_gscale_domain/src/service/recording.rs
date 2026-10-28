@@ -41,7 +41,7 @@ pub(super) async fn record_confirmed_material_receipt(
     let existing_draft = receipt_store.material_receipt_by_barcode(&epc).await
         .map_err(|error| GscaleServiceError::StoreWrite(error.to_string()))?;
     if let Some(draft) = &existing_draft {
-        for key in ["order_id", "apparatus", "item_code", "assigned_by_ref"] {
+        for key in ["order_id", "apparatus", "item_code", "assigned_by_ref", "preparation_formula"] {
             if draft.order_assignment.as_ref().and_then(|value| value.get(key))
                 != job.order_assignment.as_ref().and_then(|value| value.get(key)) {
                 return Err(GscaleServiceError::InvalidInput("client_print_epc_already_used".into()));

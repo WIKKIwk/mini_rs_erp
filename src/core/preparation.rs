@@ -236,6 +236,15 @@ pub struct FormulaLine {
     pub item_code: String,
     pub percent: String,
 }
+
+/// A client selects a recipe; its contents are always loaded by the server.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreparationFormulaReference {
+    pub material_id: String,
+    #[serde(default)]
+    pub variant_id: String,
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FormulaUpsert {
