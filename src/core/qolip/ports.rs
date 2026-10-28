@@ -9,6 +9,12 @@ use super::models::{
 
 #[async_trait]
 pub trait QolipStorePort: Send + Sync {
+    async fn qolip_storage_states(&self, _codes: &[String]) -> Result<std::collections::BTreeMap<String, String>, QolipError> {
+        Ok(std::collections::BTreeMap::new())
+    }
+    async fn storage_read(&self, _kind: &str, _query: &super::QolipStorageQuery, _allowed: Option<&[String]>) -> Result<serde_json::Value, super::QolipStorageError> { Err(super::QolipStorageError::Store) }
+    async fn storage_action(&self, _input: &super::QolipStorageAction, _archive: bool, _principal: &Principal, _allowed: Option<&[String]>) -> Result<serde_json::Value, super::QolipStorageError> { Err(super::QolipStorageError::Store) }
+
     async fn active_rework_codes(&self, _codes: &[String]) -> Result<Vec<String>, QolipError> { Ok(Vec::new()) }
     async fn reworks(&self, _status: &str, _allowed: Option<&[String]>) -> Result<Vec<super::QolipRework>, QolipError> { Err(QolipError::StoreFailed) }
     async fn send_reworks(&self, _input: &super::QolipReworkSend, _principal: &Principal, _allowed: Option<&[String]>) -> Result<Vec<super::QolipRework>, QolipError> { Err(QolipError::StoreFailed) }

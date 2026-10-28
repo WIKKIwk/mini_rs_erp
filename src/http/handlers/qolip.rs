@@ -14,6 +14,8 @@ use crate::core::qolip::{
 };
 use crate::core::warehouses::{WarehouseDeleteRequest, WarehouseUpsert};
 
+mod paddons;
+pub use paddons::{paddons,paddon_detail,paddon_molds,paddon_action,archive,archive_action,paddon_qr_print};
 mod support;
 mod order_products;
 mod product_transfer;

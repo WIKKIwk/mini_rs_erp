@@ -33,3 +33,6 @@ pub use management::{QolipManagedSet, QolipMoldDraft, QolipSetCreate, QolipSetEd
 pub(crate) use shared_sets::candidate_codes;
 pub use reworks::{QolipRework, QolipReworkSend, QolipReworkReturn};
 pub use mileage::{QolipMileage, QolipMileageCycle};
+
+pub mod paddons;
+pub use paddons::{QolipStorageAction,QolipStorageQuery,QolipStorageError};

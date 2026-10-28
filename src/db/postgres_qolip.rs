@@ -7,6 +7,7 @@ use crate::core::qolip::{
     QolipProduct, QolipProductSpec, QolipStorePort,
 };
 
+pub(crate) mod paddons;
 mod catalog;
 mod catalog_page;
 mod cell_qr;
@@ -52,6 +53,15 @@ impl PostgresQolipStore {
 
 #[async_trait]
 impl QolipStorePort for PostgresQolipStore {
+    async fn qolip_storage_states(&self, codes: &[String]) -> Result<std::collections::BTreeMap<String, String>, QolipError> {
+        let rows = sqlx::query_as::<_, (String, String)>(
+            "SELECT lower(btrim(code)), public.mini_qolip_storage_state(code) FROM unnest($1::text[]) code WHERE public.mini_qolip_storage_state(code) <> ''"
+        ).bind(codes).fetch_all(&self.pool).await.map_err(reworks::storage_error)?;
+        Ok(rows.into_iter().collect())
+    }
+    async fn storage_read(&self,kind:&str,query:&crate::core::qolip::QolipStorageQuery,allowed:Option<&[String]>) -> Result<serde_json::Value,crate::core::qolip::QolipStorageError> { paddons::read(&self.pool,kind,query,allowed).await }
+    async fn storage_action(&self,input:&crate::core::qolip::QolipStorageAction,archive:bool,principal:&Principal,allowed:Option<&[String]>) -> Result<serde_json::Value,crate::core::qolip::QolipStorageError> { paddons::action(&self.pool,input,archive,principal,allowed).await }
+
     async fn active_rework_codes(&self, codes: &[String]) -> Result<Vec<String>, QolipError> { reworks::active_codes(&self.pool, codes).await }
     async fn reworks(&self, status: &str, allowed: Option<&[String]>) -> Result<Vec<crate::core::qolip::QolipRework>, QolipError> { reworks::list(&self.pool, status, allowed).await }
     async fn send_reworks(&self, input: &crate::core::qolip::QolipReworkSend, principal: &Principal, allowed: Option<&[String]>) -> Result<Vec<crate::core::qolip::QolipRework>, QolipError> { reworks::send(&self.pool, input, principal, allowed).await }
