@@ -79,7 +79,7 @@ pub use suppliers::{
 pub use system::{
     MAX_AASX_UPLOAD_BYTES, apparatus, apparatus_aasx, apparatus_collection, apparatus_collections,
     apparatus_detail, apparatus_options, capabilities, factory_location,
-    factory_location_apparatus, factory_locations, inventory_assets, inventory_locations,
+    factory_location_apparatus, factory_locations, inventory_assets, inventory_locations, inventory_live,
     inventory_relocations, inventory_relocations_batch, inventory_returns_batch,
     inventory_transfer_action, inventory_transfers, items_bulk_move_group, reset_orders,
     role_assignments, roles, system_backup_create, system_backup_download, system_backup_import,

@@ -9,6 +9,10 @@ fn inventory_and_system_routes() -> Router<AppState> {
             any(admin::inventory_assets),
         )
         .route(
+            "/v1/mobile/admin/inventory/live",
+            get(admin::inventory_live),
+        )
+        .route(
             "/v1/mobile/admin/inventory/relocations",
             any(admin::inventory_relocations),
         )

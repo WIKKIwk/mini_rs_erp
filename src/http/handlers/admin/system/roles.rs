@@ -44,7 +44,10 @@ pub async fn roles(
             require_capability(&state, &principal, Capability::RoleCapabilityManage).await?;
             let input: RoleDefinitionUpsert = parse_json(&body)?;
             match state.admin.upsert_role_definition(input).await {
-                Ok(role) => Ok(json_response(role)),
+                Ok(role) => {
+                    state.warehouse_events.invalidate_inventory();
+                    Ok(json_response(role))
+                },
                 Err(AdminPortError::InvalidInput(message)) => Err(bad_request(message)),
                 Err(_) => Err(server_error("admin role save failed")),
             }
@@ -85,7 +88,10 @@ pub async fn role_assignments(
             require_capability(&state, &principal, Capability::RoleCapabilityManage).await?;
             let input: RoleAssignmentUpsert = parse_json(&body)?;
             match state.admin.upsert_role_assignment(input).await {
-                Ok(assignment) => Ok(json_response(assignment)),
+                Ok(assignment) => {
+                    state.warehouse_events.invalidate_inventory();
+                    Ok(json_response(assignment))
+                },
                 Err(AdminPortError::InvalidInput(message)) => Err(bad_request(message)),
                 Err(_) => Err(server_error("admin role assignment save failed")),
             }

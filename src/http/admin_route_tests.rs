@@ -83,6 +83,7 @@ mod factory_locations;
 mod flexo_edge_allowance;
 mod fakes;
 mod inventory_movements;
+mod inventory_live;
 mod item_groups;
 mod opening_wip;
 mod print_val;

@@ -6,6 +6,7 @@ mod catalog;
 mod emergency_reset;
 mod factory_locations;
 mod inventory_movements;
+mod inventory_live;
 mod monitor;
 mod roles;
 mod warehouses;
@@ -27,6 +28,7 @@ pub use inventory_movements::{
     inventory_assets, inventory_locations, inventory_relocations, inventory_relocations_batch,
     inventory_returns_batch, inventory_transfer_action, inventory_transfers,
 };
+pub use inventory_live::inventory_live;
 pub use monitor::{
     start_system_doctor,
     system_backup_create, system_backup_download, system_backup_import, system_monitor,

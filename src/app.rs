@@ -298,6 +298,9 @@ impl AppState {
         let scale_driver = build_scale_driver(&config);
         let raw_material_split_printer = scale_driver.clone();
         let warehouse_events = WarehouseEventHub::new();
+        if let Some(pool) = werka_pool.as_ref() {
+            crate::db::postgres_inventory_live::start_listener(pool.clone(), warehouse_events.clone());
+        }
         let system_monitor_hub = SystemMonitorHub::new();
         let backup_doctor = BackupDoctor::from_env();
         backup_doctor.start_scheduler();

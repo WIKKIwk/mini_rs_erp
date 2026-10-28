@@ -32,6 +32,14 @@ pub async fn inventory_assets(
     if method != Method::GET {
         return Err(method_not_allowed());
     }
+    Ok(json_response(inventory_asset_rows(&state, &actor, query).await?))
+}
+
+pub(super) async fn inventory_asset_rows(
+    state: &AppState,
+    actor: &InventoryActor,
+    query: InventoryAssetQuery,
+) -> Result<InventoryAssetRows, AdminError> {
     let include_order_assignment =
         query.include_order_assignment && actor.principal.role == PrincipalRole::MaterialTaminotchi;
     if include_order_assignment {
@@ -43,7 +51,7 @@ pub async fn inventory_assets(
         .await
         .map_err(inventory_error)?;
     if !include_order_assignment {
-        return Ok(json_response(assets));
+        return Ok(InventoryAssetRows::Plain(assets));
     }
     let barcodes = assets
         .iter()
@@ -54,7 +62,7 @@ pub async fn inventory_assets(
         .admin
         .principal_assigned_apparatus(&actor.principal)
         .await;
-    let assignments = state
+    let mut assignments = state
         .inventory_movements
         .list_order_assignments(&actor, &barcodes, &assigned_apparatus)
         .await
@@ -63,24 +71,31 @@ pub async fn inventory_assets(
         .map(|assignment| (assignment.barcode.trim().to_ascii_uppercase(), assignment))
         .collect::<std::collections::BTreeMap<_, _>>();
     let rows = assets
-        .iter()
-        .map(|asset| InventoryAssetListRow {
-            asset,
-            order_assignment: if asset.kind == InventoryAssetKind::RawMaterial {
-                assignments.get(&asset.identifier.trim().to_ascii_uppercase())
+        .into_iter()
+        .map(|asset| {
+            let order_assignment = if asset.kind == InventoryAssetKind::RawMaterial {
+                assignments.remove(&asset.identifier.trim().to_ascii_uppercase())
             } else {
                 None
-            },
+            };
+            InventoryAssetListRow { asset, order_assignment }
         })
         .collect::<Vec<_>>();
-    Ok(json_response(rows))
+    Ok(InventoryAssetRows::WithAssignments(rows))
 }
 
 #[derive(serde::Serialize)]
-struct InventoryAssetListRow<'a> {
+#[serde(untagged)]
+pub(super) enum InventoryAssetRows {
+    Plain(Vec<crate::core::inventory_movements::InventoryAsset>),
+    WithAssignments(Vec<InventoryAssetListRow>),
+}
+
+#[derive(serde::Serialize)]
+pub(super) struct InventoryAssetListRow {
     #[serde(flatten)]
-    asset: &'a crate::core::inventory_movements::InventoryAsset,
-    order_assignment: Option<&'a crate::core::inventory_movements::InventoryOrderAssignment>,
+    asset: crate::core::inventory_movements::InventoryAsset,
+    order_assignment: Option<crate::core::inventory_movements::InventoryOrderAssignment>,
 }
 
 pub async fn inventory_relocations(
@@ -227,7 +242,7 @@ pub async fn inventory_transfer_action(
     Ok(json_response(transfer))
 }
 
-async fn inventory_actor(
+pub(super) async fn inventory_actor(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<InventoryActor, AdminError> {
