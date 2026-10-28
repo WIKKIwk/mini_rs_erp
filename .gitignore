@@ -3,6 +3,7 @@ target-docker-amd64/
 __pycache__/
 *.py[cod]
 /.env
+.DS_Store
 
 /data/
 /garbage/
