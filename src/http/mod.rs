@@ -1,5 +1,6 @@
 mod archive_pdf;
 pub mod handlers;
+pub mod json_research;
 pub mod router;
 pub mod ws;
 

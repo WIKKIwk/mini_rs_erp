@@ -22,6 +22,7 @@ resolver = "3"
 default = []
 mcp-readonly-prototype = []
 projection-research = []
+sonic-json-research = ["dep:sonic-rs"]
 verification = ["dep:tower"]
 
 [dependencies]
@@ -56,6 +57,7 @@ ring = "0.17.14"
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls", "stream"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sonic-rs = { version = "=0.5.10", optional = true }
 sha2 = "0.10"
 socket2 = "0.6"
 sqlx = { version = "0.8", default-features = false, features = ["derive", "postgres", "runtime-tokio-rustls"] }
