@@ -1,0 +1,66 @@
+name: JSON codec qualification
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'Cargo.*'
+      - 'src/**'
+      - 'tests/**'
+      - 'examples/json_codec_research/**'
+      - 'tools/benchmarks/**'
+      - '.github/workflows/json-codec.yml'
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux:
+    name: Linux x86_64 / ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: default
+            features: verification
+            profiles: serde_json
+            rustflags: ''
+          - name: encoder-portable
+            features: sonic-json,verification
+            profiles: serde_json sonic_encode
+            rustflags: ''
+          - name: encoder-native
+            features: sonic-json,verification
+            profiles: serde_json sonic_encode
+            rustflags: '-C target-cpu=native'
+          - name: experimental-decoder
+            features: sonic-json-research,verification
+            profiles: serde_json sonic_encode sonic_both
+            rustflags: ''
+    env:
+      CARGO_PROFILE_RELEASE_DEBUG: '0'
+      CARGO_BUILD_JOBS: '2'
+      RUSTFLAGS: ${{ matrix.rustflags }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: json-codec-${{ matrix.name }}
+      - name: Compile release tests with locked dependencies
+        run: |
+          cargo test --release --locked --features '${{ matrix.features }}' \
+            --test json_codec_research --test json_codec_qualification \
+            --test active_paddon_snapshot_cache --test worker_queue_window \
+            --test json_codec_stream_load --no-run --message-format=json > codec-artifacts.jsonl
+      - name: Verify isolated codec and stream profiles
+        run: |
+          python3 tools/benchmarks/qualify_json_codec.py --artifacts codec-artifacts.jsonl \
+            --output codec-qualification --profiles ${{ matrix.profiles }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: json-codec-${{ matrix.name }}
+          path: |
+            codec-artifacts.jsonl
+            codec-qualification

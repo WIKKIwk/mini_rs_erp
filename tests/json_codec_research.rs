@@ -9,10 +9,18 @@ use serde_json::{Value, json};
 
 fn engines() -> Vec<Engine> {
     let mut engines = vec![Engine::SerdeJson];
-    if cfg!(feature = "sonic-json-research") {
+    if cfg!(feature = "sonic-json") {
         engines.push(Engine::SonicRs);
     }
     engines
+}
+
+fn decoders() -> Vec<Engine> {
+    if cfg!(feature = "sonic-json-research") {
+        engines()
+    } else {
+        vec![Engine::SerdeJson]
+    }
 }
 
 #[test]
@@ -20,7 +28,7 @@ fn research_is_explicit_and_encoder_decoder_are_independent() {
     assert_eq!(Settings::from_names("", "").unwrap(), Settings::default());
     assert!(Settings::from_names("auto", "serde_json").is_err());
     assert!(Settings::from_names("serde_json", "unknown").is_err());
-    if cfg!(feature = "sonic-json-research") {
+    if cfg!(feature = "sonic-json") {
         assert_eq!(
             Settings::from_names("sonic_rs", "serde_json").unwrap(),
             Settings {
@@ -28,6 +36,11 @@ fn research_is_explicit_and_encoder_decoder_are_independent() {
                 decoder: Engine::SerdeJson,
             }
         );
+    } else {
+        assert!(Settings::from_names("sonic_rs", "serde_json").is_err());
+        assert!(Engine::SonicRs.to_vec(&json!({})).is_err());
+    }
+    if cfg!(feature = "sonic-json-research") {
         assert_eq!(
             Settings::from_names("serde_json", "sonic_rs").unwrap(),
             Settings {
@@ -36,9 +49,8 @@ fn research_is_explicit_and_encoder_decoder_are_independent() {
             }
         );
     } else {
-        assert!(Settings::from_names("sonic_rs", "serde_json").is_err());
         assert!(Settings::from_names("serde_json", "sonic_rs").is_err());
-        assert!(Engine::SonicRs.to_vec(&json!({})).is_err());
+        assert!(Engine::SonicRs.from_slice::<Value>(b"{}").is_err());
     }
 }
 
@@ -62,7 +74,9 @@ fn snapshot_delta_strings_and_quantities_keep_their_json_meaning() {
         let bytes = engine.to_vec(&payload).unwrap();
         assert_eq!(text.as_bytes(), bytes);
         assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap(), payload);
-        assert_eq!(engine.from_slice::<Value>(&bytes).unwrap(), payload);
+        for decoder in decoders() {
+            assert_eq!(decoder.from_slice::<Value>(&bytes).unwrap(), payload);
+        }
     }
 }
 
@@ -81,7 +95,7 @@ struct Request {
 fn serde_contract_and_duplicate_key_semantics_are_preserved() {
     let body = br#"{"order":"zakaz-001","quantities":[1,250],"metadata":{"a":1,"a":2}}"#;
     let expected: Request = serde_json::from_slice(body).unwrap();
-    for engine in engines() {
+    for engine in decoders() {
         assert_eq!(engine.from_slice::<Request>(body).unwrap(), expected);
         let serialized = engine.to_vec(&expected).unwrap();
         assert_eq!(engine.from_slice::<Request>(&serialized).unwrap(), expected);
@@ -118,7 +132,7 @@ fn external_input_is_validated_and_trailing_payloads_are_rejected() {
         br#"{"a":01}"#,
         br#"{"a":1e999}"#,
     ];
-    for engine in engines() {
+    for engine in decoders() {
         for input in invalid {
             assert!(
                 engine.from_slice::<Value>(input).is_err(),
@@ -146,7 +160,7 @@ fn deep_known_and_ignored_fields_keep_the_baseline_depth_behavior() {
         let ignored = format!(r#"{{"ignored":{nested},"order_id":"001"}}"#);
         let baseline = serde_json::from_str::<Value>(&nested);
         let baseline_ignored = serde_json::from_str::<Ignoring>(&ignored);
-        for engine in engines() {
+        for engine in decoders() {
             assert_eq!(
                 engine.from_slice::<Value>(nested.as_bytes()).is_ok(),
                 baseline.is_ok()
@@ -166,7 +180,7 @@ fn real_map_count_validation_and_nonfinite_output_match_the_baseline() {
     for count in ["7", "7.0", "7.25", "-1", "18446744073709551615"] {
         let body = format!(r#"{{"id":"001","product_code":"P","title":"T","roll_count":{count}}}"#);
         let baseline = serde_json::from_str::<ProductionMapDefinition>(&body);
-        for engine in engines() {
+        for engine in decoders() {
             let parsed = engine.from_slice::<ProductionMapDefinition>(body.as_bytes());
             assert_eq!(
                 parsed.is_ok(),
@@ -211,7 +225,7 @@ fn numeric_rounding_keeps_the_current_serde_json_behavior() {
         "4.9406564584124654e-324",
     ] {
         let expected: f64 = serde_json::from_str(raw).unwrap();
-        for engine in engines() {
+        for engine in decoders() {
             let actual: f64 = engine.from_slice(raw.as_bytes()).unwrap();
             assert_eq!(
                 actual.to_bits(),
@@ -223,7 +237,7 @@ fn numeric_rounding_keeps_the_current_serde_json_behavior() {
     }
     // Escaped quotes and numeric-looking strings do not confuse the guard.
     let body = br#"{"order_id":"digits 12345678901234567890 and \"[e.\"","quantities":[7]}"#;
-    for engine in engines() {
+    for engine in decoders() {
         assert_eq!(
             engine.from_slice::<Request>(body).unwrap(),
             serde_json::from_slice::<Request>(body).unwrap()

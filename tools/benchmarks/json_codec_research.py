@@ -96,6 +96,7 @@ def main() -> None:
     parser.add_argument("--samples", type=int, default=31)
     parser.add_argument("--batch", type=int, default=10)
     parser.add_argument("--repeats", type=int, default=3)
+    parser.add_argument("--profiles", nargs="+", choices=list(PROFILES), default=list(PROFILES))
     parser.add_argument("--build-flags", default="unspecified")
     args = parser.parse_args()
     binary, output = args.binary.resolve(), args.output.resolve()
@@ -106,12 +107,13 @@ def main() -> None:
                 "build_flags": args.build_flags, "source_head": command("git", "rev-parse", "HEAD"),
                 "tracked_diff_sha256": hashlib.sha256(subprocess.check_output(["git", "diff", "--binary"], cwd=ROOT)).hexdigest(),
                 "cargo_lock_sha256": digest(ROOT / "Cargo.lock"),
-                "parameters": {"orders": args.orders, "samples": args.samples, "batch": args.batch, "repeats": args.repeats}}
+                "parameters": {"orders": args.orders, "samples": args.samples, "batch": args.batch,
+                               "repeats": args.repeats, "profiles": args.profiles}}
     research_sources = [ROOT / "examples/json_codec_research.rs", ROOT / "src/http/json_research.rs", Path(__file__).resolve()]
     research_sources.extend(sorted((ROOT / "examples/json_codec_research").glob("*.rs")))
     metadata["research_source_sha256"] = {str(path.relative_to(ROOT)): digest(path) for path in research_sources}
     (output / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
-    profiles = list(PROFILES)
+    profiles = args.profiles
     runs = []
     for orders in args.orders:
         for repeat in range(args.repeats):

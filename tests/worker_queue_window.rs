@@ -479,15 +479,24 @@ async fn all_window_keeps_the_workers_complete_history() {
     let _guard = FIXTURE_LOCK.lock().await;
     let f = Fixture::new().await;
     for index in 0..61 {
-        let (order_id, actor_ref) = if index < 60 {
-            (format!("zakaz-{index:03}"), "window-worker")
+        let (order_id, actor_ref, apparatus) = if index < 60 {
+            // History belongs to the assigned apparatus across worker shifts.
+            (
+                format!("zakaz-{index:03}"),
+                if index == 59 {
+                    "previous-shift"
+                } else {
+                    "window-worker"
+                },
+                CUT,
+            )
         } else {
-            ("zakaz-unrelated".into(), "other-worker")
+            ("zakaz-unrelated".into(), "other-worker", OTHER)
         };
         f.store
             .append_apparatus_queue_action_event(ApparatusQueueActionEvent {
                 event_id: format!("history-{index}"),
-                apparatus: CUT.into(),
+                apparatus: apparatus.into(),
                 order_id,
                 stage_node_id: "work".into(),
                 action: queue_state::ApparatusQueueAction::Complete,
@@ -499,7 +508,7 @@ async fn all_window_keeps_the_workers_complete_history() {
                     ref_: actor_ref.into(),
                     display_name: "Worker".into(),
                 },
-                assigned_apparatus: vec![CUT.into()],
+                assigned_apparatus: vec![apparatus.into()],
                 payload_json: json!({}),
             })
             .await

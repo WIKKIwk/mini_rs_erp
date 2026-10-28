@@ -2,8 +2,13 @@
 
 Experimental, opt-in comparison of `serde_json` 1.0.149 and `sonic-rs` 0.5.10.
 Production performance has not been established. Both codec switches default to
-`serde_json`; the Sonic dependency is excluded unless `sonic-json-research` is
-enabled. No deployment is part of this research.
+`serde_json`; the Sonic dependency is excluded unless `sonic-json` or
+`sonic-json-research` is enabled. No deployment is part of this research.
+
+The subsequent encoder qualification uses Sonic's `sanitize` feature and an
+encoder-only build option. See [production preparation](sonic-json-production.md).
+The original results below describe the earlier, unsanitized research binary;
+they are historical measurements, not timings of the hardened encoder.
 
 ## Boundaries
 
@@ -54,6 +59,11 @@ Build with `--features sonic-json-research`, then choose independently:
 export MINI_ERP_RESEARCH_JSON_ENCODER=sonic_rs
 export MINI_ERP_RESEARCH_JSON_DECODER=serde_json
 ```
+
+When using the legacy research encoder variable, omit `MINI_ERP_JSON_ENCODER`;
+conflicting old/new encoder settings fail startup. The production candidate uses
+`--features sonic-json` and `MINI_ERP_JSON_ENCODER=sonic_rs`, which cannot enable
+Sonic request decoding.
 
 Both accept `serde_json` or `sonic_rs`. Omitted values select Serde. Unknown
 values and selecting Sonic without its Cargo feature fail startup. Settings

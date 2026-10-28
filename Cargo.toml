@@ -22,7 +22,8 @@ resolver = "3"
 default = []
 mcp-readonly-prototype = []
 projection-research = []
-sonic-json-research = ["dep:sonic-rs"]
+sonic-json = ["dep:sonic-rs"]
+sonic-json-research = ["sonic-json"]
 verification = ["dep:tower"]
 
 [dependencies]
@@ -57,7 +58,7 @@ ring = "0.17.14"
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls", "stream"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sonic-rs = { version = "=0.5.10", optional = true }
+sonic-rs = { version = "=0.5.10", optional = true, features = ["sanitize"] }
 sha2 = "0.10"
 socket2 = "0.6"
 sqlx = { version = "0.8", default-features = false, features = ["derive", "postgres", "runtime-tokio-rustls"] }
@@ -74,6 +75,7 @@ rusqlite = { version = "0.32", features = ["bundled", "collation"] }
 webp = "0.3"
 
 [dev-dependencies]
+libc = "0.2"
 axum = { version = "0.8", features = ["ws"] }
 mini_rs_apparatus_contract = { path = "crates/mini_rs_apparatus_contract", features = ["test-support"] }
 mini_rs_gscale_domain = { path = "crates/mini_rs_gscale_domain", features = ["test-support"] }

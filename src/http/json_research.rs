@@ -1,7 +1,7 @@
-//! Opt-in JSON codec research at the HTTP/WebSocket boundary.
+//! Optional JSON encoding at the HTTP/WebSocket boundary.
 //!
 //! Persistent JSON, fingerprints, cursors and the serde_json DOM stay outside
-//! this boundary. A normal build and an unconfigured research build use Serde.
+//! this boundary. Defaults use Serde; Sonic decoding remains research-only.
 use std::sync::OnceLock;
 
 use axum::Json;
@@ -13,6 +13,7 @@ use crate::error::AppError;
 
 pub const ENCODER_ENV: &str = "MINI_ERP_RESEARCH_JSON_ENCODER";
 pub const DECODER_ENV: &str = "MINI_ERP_RESEARCH_JSON_DECODER";
+pub const OUTPUT_ENCODER_ENV: &str = "MINI_ERP_JSON_ENCODER";
 static SETTINGS: OnceLock<Settings> = OnceLock::new();
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -32,11 +33,13 @@ pub struct Settings {
 pub enum Error {
     #[error(transparent)]
     Serde(#[from] serde_json::Error),
-    #[cfg(feature = "sonic-json-research")]
+    #[cfg(feature = "sonic-json")]
     #[error(transparent)]
     Sonic(#[from] sonic_rs::Error),
-    #[error("sonic_rs requires the sonic-json-research Cargo feature")]
+    #[error("sonic_rs encoding requires the sonic-json Cargo feature")]
     FeatureDisabled,
+    #[error("sonic_rs decoding requires the sonic-json-research Cargo feature")]
+    ResearchDecoderDisabled,
 }
 
 impl Engine {
@@ -47,10 +50,10 @@ impl Engine {
         }
     }
 
-    fn configured(key: &'static str, value: &str) -> Result<Self, AppError> {
+    fn configured(key: &'static str, value: &str, enabled: bool) -> Result<Self, AppError> {
         match value {
             "" | "serde_json" => Ok(Self::SerdeJson),
-            "sonic_rs" if cfg!(feature = "sonic-json-research") => Ok(Self::SonicRs),
+            "sonic_rs" if enabled => Ok(Self::SonicRs),
             _ => Err(AppError::InvalidConfig {
                 key,
                 value: value.into(),
@@ -62,11 +65,11 @@ impl Engine {
         match self {
             Self::SerdeJson => Ok(serde_json::to_vec(value)?),
             Self::SonicRs => {
-                #[cfg(feature = "sonic-json-research")]
+                #[cfg(feature = "sonic-json")]
                 {
                     Ok(sonic_rs::to_vec(value)?)
                 }
-                #[cfg(not(feature = "sonic-json-research"))]
+                #[cfg(not(feature = "sonic-json"))]
                 {
                     Err(Error::FeatureDisabled)
                 }
@@ -78,11 +81,11 @@ impl Engine {
         match self {
             Self::SerdeJson => Ok(serde_json::to_string(value)?),
             Self::SonicRs => {
-                #[cfg(feature = "sonic-json-research")]
+                #[cfg(feature = "sonic-json")]
                 {
                     Ok(sonic_rs::to_string(value)?)
                 }
-                #[cfg(not(feature = "sonic-json-research"))]
+                #[cfg(not(feature = "sonic-json"))]
                 {
                     Err(Error::FeatureDisabled)
                 }
@@ -106,7 +109,7 @@ impl Engine {
                 }
                 #[cfg(not(feature = "sonic-json-research"))]
                 {
-                    Err(Error::FeatureDisabled)
+                    Err(Error::ResearchDecoderDisabled)
                 }
             }
         }
@@ -180,36 +183,59 @@ fn needs_serde_parser(body: &[u8]) -> bool {
 impl Settings {
     pub fn from_names(encoder: &str, decoder: &str) -> Result<Self, AppError> {
         Ok(Self {
-            encoder: Engine::configured(ENCODER_ENV, encoder)?,
-            decoder: Engine::configured(DECODER_ENV, decoder)?,
+            encoder: Engine::configured(ENCODER_ENV, encoder, cfg!(feature = "sonic-json"))?,
+            decoder: Engine::configured(
+                DECODER_ENV,
+                decoder,
+                cfg!(feature = "sonic-json-research"),
+            )?,
         })
     }
 }
 
 fn configured_from_env() -> Result<Settings, AppError> {
     let read = |key| match std::env::var(key) {
-        Ok(value) => Ok(value),
-        Err(std::env::VarError::NotPresent) => Ok(String::new()),
+        Ok(value) => Ok(Some(value)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
         Err(std::env::VarError::NotUnicode(_)) => Err(AppError::InvalidConfig {
             key,
             value: "non-UTF-8 value".into(),
         }),
     };
-    Settings::from_names(&read(ENCODER_ENV)?, &read(DECODER_ENV)?)
+    let encoder = read(OUTPUT_ENCODER_ENV)?;
+    let legacy = read(ENCODER_ENV)?;
+    let decoder = read(DECODER_ENV)?.unwrap_or_default();
+    let enabled = cfg!(feature = "sonic-json");
+    let selected = match (encoder, legacy) {
+        (Some(value), legacy) => {
+            let selected = Engine::configured(OUTPUT_ENCODER_ENV, &value, enabled)?;
+            if let Some(legacy) = legacy {
+                if Engine::configured(ENCODER_ENV, &legacy, enabled)? != selected {
+                    return Err(AppError::InvalidConfig {
+                        key: ENCODER_ENV,
+                        value: format!("conflicts with {OUTPUT_ENCODER_ENV}"),
+                    });
+                }
+            }
+            selected
+        }
+        (None, legacy) => Engine::configured(ENCODER_ENV, &legacy.unwrap_or_default(), enabled)?,
+    };
+    Ok(Settings {
+        encoder: selected,
+        decoder: Engine::configured(DECODER_ENV, &decoder, cfg!(feature = "sonic-json-research"))?,
+    })
 }
 
 pub fn initialize_from_env() -> Result<Settings, AppError> {
     let configured = configured_from_env()?;
-    if let Some(current) = SETTINGS.get() {
-        if *current != configured {
-            return Err(AppError::Storage(
-                "JSON research settings already initialized".into(),
-            ));
-        }
-    } else {
-        SETTINGS
-            .set(configured)
-            .map_err(|_| AppError::Storage("JSON research settings already initialized".into()))?;
+    if *SETTINGS.get_or_init(|| configured) != configured {
+        return Err(AppError::Storage(
+            "JSON codec settings already initialized".into(),
+        ));
+    }
+    if configured.decoder == Engine::SonicRs {
+        tracing::warn!("experimental Sonic request decoding enabled; not production-qualified");
     }
     tracing::info!(
         encoder = configured.encoder.name(),
@@ -220,7 +246,7 @@ pub fn initialize_from_env() -> Result<Settings, AppError> {
 }
 
 pub fn settings() -> Settings {
-    *SETTINGS.get_or_init(|| configured_from_env().expect("invalid JSON research configuration"))
+    *SETTINGS.get_or_init(|| configured_from_env().expect("invalid JSON codec configuration"))
 }
 
 pub fn to_string<T: Serialize + ?Sized>(value: &T) -> Result<String, Error> {

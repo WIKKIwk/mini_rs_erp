@@ -271,13 +271,13 @@ async fn worker_detail_checks_assignment_actual_order_membership_and_returns_one
 }
 
 #[tokio::test]
-async fn worker_detail_history_fallback_requires_this_actors_persisted_history() {
+async fn worker_detail_history_fallback_requires_persisted_assigned_apparatus_history() {
     let _guard = FIXTURE_LOCK.lock().await;
     let f = Fixture::new().await;
     let query = format!("worker_scope=true&detail=true&apparatus={CUT}&order_id=zakaz-unrelated");
-    let record = |event: &str, actor: &str| ApparatusQueueActionEvent {
+    let record = |event: &str, actor: &str, apparatus: &str| ApparatusQueueActionEvent {
         event_id: event.into(),
-        apparatus: OTHER.into(),
+        apparatus: apparatus.into(),
         order_id: "zakaz-unrelated".into(),
         stage_node_id: "work".into(),
         action: queue_state::ApparatusQueueAction::Pause,
@@ -289,17 +289,24 @@ async fn worker_detail_history_fallback_requires_this_actors_persisted_history()
             ref_: actor.into(),
             display_name: actor.into(),
         },
-        assigned_apparatus: vec![OTHER.into()],
+        assigned_apparatus: vec![apparatus.into()],
         payload_json: json!({}),
     };
     f.store
-        .append_apparatus_queue_action_event(record("someone-else", "other-worker"))
+        .append_apparatus_queue_action_event(record("someone-else", "other-worker", OTHER))
         .await
         .unwrap();
     f.state.production_maps.notify_live();
     assert_eq!(f.get(&query).await.0, StatusCode::NOT_FOUND);
     f.store
-        .append_apparatus_queue_action_event(record("own-history", "window-worker"))
+        .append_apparatus_queue_action_event(record("own-history", "window-worker", OTHER))
+        .await
+        .unwrap();
+    f.state.production_maps.notify_live();
+    // Own history on an unassigned apparatus cannot authorize this CUT detail.
+    assert_eq!(f.get(&query).await.0, StatusCode::NOT_FOUND);
+    f.store
+        .append_apparatus_queue_action_event(record("assigned-history", "previous-shift", CUT))
         .await
         .unwrap();
     f.state.production_maps.notify_live();

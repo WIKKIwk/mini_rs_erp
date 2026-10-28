@@ -2276,6 +2276,7 @@ dependencies = [
  "hyper-util",
  "image",
  "jsonwebtoken",
+ "libc",
  "mini_rs_apparatus_contract",
  "mini_rs_domain_types",
  "mini_rs_gscale_domain",
