@@ -25,7 +25,7 @@ pub async fn production_map_move_batch(
     }
 }
 
-/// Transfers a paused, already-started order to a compatible replacement
+/// Transfers a paused or unfrozen, requeued order to a compatible replacement
 /// apparatus together with its queue/session/progress/material state.
 pub async fn production_map_apparatus_transfer(
     State(state): State<AppState>,
@@ -59,7 +59,7 @@ pub async fn production_map_apparatus_transfer(
             "transfer_id": result.transfer.transfer_id,
             "saved": result.saved,
             "order_status": result.order_status,
-            "queue_state": "paused",
+            "queue_state": result.transfer.queue_state.as_str(),
             "session_id": result.transfer.session_id,
             "progress_batch_id": result.transfer.progress_batch_id,
             "material_barcodes": result.transfer.material_barcodes,

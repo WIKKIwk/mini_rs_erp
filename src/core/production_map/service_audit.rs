@@ -749,6 +749,9 @@ fn audit_transfers(
         }
         if transfer.session.order_id.trim() != order_id
             || transfer.session.status != OrderRunStatus::Paused
+            || !matches!(transfer.queue_state, ApparatusQueueOrderState::Paused | ApparatusQueueOrderState::Pending)
+            || (transfer.queue_state == ApparatusQueueOrderState::Pending
+                && !transfer.session.is_requeued_at_tail())
             || !queue_state::apparatus_ids_match(
                 &transfer.session.apparatus,
                 &transfer.to_apparatus,
@@ -761,14 +764,20 @@ fn audit_transfers(
                 "transfer receipt session must remain paused on the target apparatus",
             ));
         }
-        if transfer.progress_batch.order_id.trim() != order_id
-            || transfer.progress_batch.status != OrderProgressBatchStatus::Paused
-            || !queue_state::apparatus_ids_match(
-                &transfer.progress_batch.apparatus,
-                &transfer.to_apparatus,
-            )
-            || transfer.progress_batch.batch_id.trim() != transfer.progress_batch_id.trim()
-        {
+        let progress_matches = match &transfer.progress_batch {
+            Some(batch) => {
+                batch.order_id.trim() == order_id
+                    && batch.status == OrderProgressBatchStatus::Paused
+                    && queue_state::apparatus_ids_match(&batch.apparatus, &transfer.to_apparatus)
+                    && batch.batch_id.trim() == transfer.progress_batch_id.trim()
+            }
+            None => {
+                transfer.progress_batch_id.is_empty()
+                    && transfer.queue_state == ApparatusQueueOrderState::Pending
+                    && transfer.session.is_requeued_at_tail()
+            }
+        };
+        if !progress_matches {
             violations.push(ProductionWorkflowAuditViolation::new(
                 "apparatus_transfer_progress_mismatch",
                 order_id,
@@ -784,13 +793,13 @@ fn audit_transfers(
             source_state,
             Some(ApparatusQueueOrderState::InProgress | ApparatusQueueOrderState::Paused)
         )
-            || target_state != Some(ApparatusQueueOrderState::Paused)
+            || target_state != Some(transfer.queue_state)
         {
             violations.push(ProductionWorkflowAuditViolation::new(
                 "apparatus_transfer_queue_mismatch",
                 order_id,
                 transfer_id,
-                "transfer receipt must leave the source free and the target paused",
+                "transfer receipt must leave the source free and preserve the target queue state",
             ));
         }
     }

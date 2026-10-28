@@ -205,17 +205,24 @@ pub struct ProductionMapApparatusTransferRecord {
     pub actor: QueueActionActor,
     pub session_id: String,
     pub progress_batch_id: String,
+    #[serde(default = "default_transfer_queue_state")]
+    pub queue_state: queue_state::ApparatusQueueOrderState,
     #[serde(default)]
     pub material_barcodes: Vec<String>,
     pub map: ProductionMapDefinition,
     pub session: OrderRunSession,
-    pub progress_batch: OrderProgressBatch,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress_batch: Option<OrderProgressBatch>,
     /// Parent WIP records whose next-apparatus pointer changed with the
     /// transfer. Keeping these in the receipt makes replay/audit able to
     /// reconstruct the complete lineage change, not only the paused batch.
     #[serde(default)]
     pub progress_batch_updates: Vec<OrderProgressBatch>,
     pub created_at_unix: i64,
+}
+
+fn default_transfer_queue_state() -> queue_state::ApparatusQueueOrderState {
+    queue_state::ApparatusQueueOrderState::Paused
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

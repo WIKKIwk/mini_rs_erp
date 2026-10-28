@@ -131,7 +131,7 @@ pub struct ProductionMapApparatusTransferWrite {
     pub to_states: QueueStateMap,
     pub target_apparatus_id: String,
     pub session: OrderRunSession,
-    pub progress_batch: OrderProgressBatch,
+    pub progress_batch: Option<OrderProgressBatch>,
     pub progress_batch_updates: Vec<OrderProgressBatch>,
     pub raw_material_assignments: Vec<RawMaterialAssignment>,
 }

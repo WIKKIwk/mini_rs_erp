@@ -44,6 +44,8 @@ mod wip_route_continuity;
 mod progress_qr_lineage;
 #[path = "temporary_pause_latency.rs"]
 mod temporary_pause_latency;
+#[path = "requeued_transfer.rs"]
+mod requeued_transfer;
 #[path = "service_flow_rezka_astatka.rs"]
 mod rezka_astatka;
 
@@ -944,7 +946,7 @@ async fn paused_order_can_transfer_between_compatible_pechat_apparatuses_atomica
     assert_eq!(result.transfer.to_apparatus, to);
     assert_eq!(result.transfer.progress_batch_id, batch.batch_id);
     assert_eq!(result.transfer.session.apparatus, to);
-    assert_eq!(result.transfer.progress_batch.apparatus, to);
+    assert_eq!(result.transfer.progress_batch.as_ref().unwrap().apparatus, to);
     let reservation = service
         .apparatus_capacity_snapshot()
         .await
@@ -1003,7 +1005,7 @@ async fn paused_order_can_transfer_between_compatible_pechat_apparatuses_atomica
             &[to.to_string()],
             actor.clone(),
             QueueProgressInput {
-                qr_payload: result.transfer.progress_batch.qr_payload.clone(),
+                qr_payload: result.transfer.progress_batch.as_ref().unwrap().qr_payload.clone(),
                 ..QueueProgressInput::default()
             },
         )

@@ -295,6 +295,14 @@ pub struct OrderRunSession {
 }
 
 impl OrderRunSession {
+    pub(crate) fn is_requeued_at_tail(&self) -> bool {
+        self.status == OrderRunStatus::Paused
+            && self.payload_json
+                .get("requeued_at_tail")
+                .and_then(serde_json::Value::as_bool)
+                == Some(true)
+    }
+
     pub fn qolip_reacquisition_required(&self) -> bool {
         self.payload_json
             .get("qolip_released_on_freeze")

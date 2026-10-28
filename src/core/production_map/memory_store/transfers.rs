@@ -49,7 +49,7 @@ pub(super) async fn commit_apparatus_transfer(
         .and_then(|states| states.get(order_id))
         .map(|state| state.trim().to_string());
     match source_state.as_deref() {
-        Some("paused") => {}
+        Some("paused" | "pending") => {}
         Some("frozen") => return Err(ProductionMapError::OrderFrozen),
         Some("completed") => return Err(ProductionMapError::OrderAlreadyCompleted),
         _ => return Err(ProductionMapError::ApparatusTransferOrderNotPaused),
@@ -97,19 +97,38 @@ pub(super) async fn commit_apparatus_transfer(
     {
         return Err(ProductionMapError::ApparatusTransferSessionMismatch);
     }
+    if (source_state.as_deref() == Some("pending") && !current_session.is_requeued_at_tail())
+        || source_state.as_deref() != Some(write.record.queue_state.as_str())
+    {
+        return Err(ProductionMapError::ApparatusTransferOrderNotPaused);
+    }
 
-    let current_batch = store
-        .order_progress_batches
-        .read()
-        .await
-        .get(write.record.progress_batch_id.trim())
-        .cloned()
-        .ok_or(ProductionMapError::ApparatusTransferProgressNotFound)?;
-    if current_batch.order_id.trim() != order_id
-        || current_batch.session_id.trim() != write.record.session_id.trim()
-        || !queue_state::apparatus_ids_match(&current_batch.apparatus, from)
-        || current_batch.action != queue_state::ApparatusQueueAction::Pause
-        || current_batch.status != OrderProgressBatchStatus::Paused
+    if let Some(batch) = &write.progress_batch {
+        let current_batch = store
+            .order_progress_batches
+            .read()
+            .await
+            .get(write.record.progress_batch_id.trim())
+            .cloned()
+            .ok_or(ProductionMapError::ApparatusTransferProgressNotFound)?;
+        if current_batch.order_id.trim() != order_id
+            || current_batch.session_id.trim() != write.record.session_id.trim()
+            || !queue_state::apparatus_ids_match(&current_batch.apparatus, from)
+            || current_batch.action != queue_state::ApparatusQueueAction::Pause
+            || current_batch.status != OrderProgressBatchStatus::Paused
+            || batch.batch_id != current_batch.batch_id
+        {
+            return Err(ProductionMapError::ApparatusTransferProgressMismatch);
+        }
+    } else if source_state.as_deref() != Some("pending")
+        || !current_session.is_requeued_at_tail()
+        || !write.record.progress_batch_id.is_empty()
+        || store.order_progress_batches.read().await.values().any(|batch| {
+            batch.session_id == current_session.session_id
+                && batch.apparatus == from
+                && batch.action == queue_state::ApparatusQueueAction::Pause
+                && batch.status == OrderProgressBatchStatus::Paused
+        })
     {
         return Err(ProductionMapError::ApparatusTransferProgressMismatch);
     }
@@ -206,10 +225,12 @@ pub(super) async fn commit_apparatus_transfer(
         write.session.session_id.trim().to_string(),
         write.session.clone(),
     );
-    store.order_progress_batches.write().await.insert(
-        write.progress_batch.batch_id.trim().to_string(),
-        write.progress_batch.clone(),
-    );
+    if let Some(batch) = &write.progress_batch {
+        store.order_progress_batches.write().await.insert(
+            batch.batch_id.trim().to_string(),
+            batch.clone(),
+        );
+    }
     for update in &write.progress_batch_updates {
         store
             .order_progress_batches

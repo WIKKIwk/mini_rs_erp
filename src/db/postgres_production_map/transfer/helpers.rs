@@ -14,6 +14,10 @@ use super::transaction_locks::{
     lock_order_and_apparatuses_tx, lock_schedule_reservation_tx, lock_transfer_idempotency_tx,
 };
 
+#[cfg(test)]
+#[path = "tests.rs"]
+mod tests;
+
 
 pub(super) async fn load_apparatus_transfer_by_idempotency_key(
     pool: &PgPool,
@@ -147,7 +151,10 @@ pub(super) async fn commit_apparatus_transfer(
     .bind(write.record.actor.ref_.trim())
     .bind(write.record.actor.display_name.trim())
     .bind(write.record.session_id.trim())
-    .bind(write.record.progress_batch_id.trim())
+    .bind(
+        (!write.record.progress_batch_id.trim().is_empty())
+            .then_some(write.record.progress_batch_id.trim()),
+    )
     .bind(
         serde_json::to_value(&write.record.material_barcodes)
             .map_err(|_| ProductionMapError::StoreFailed)?,
@@ -187,6 +194,7 @@ pub(super) async fn commit_apparatus_transfer(
         from_apparatus,
         to_apparatus,
         &write.record.order_id,
+        write.record.queue_state.as_str(),
     )
     .await?;
     transfer_raw_material_assignments_tx(
@@ -198,7 +206,9 @@ pub(super) async fn commit_apparatus_transfer(
     )
     .await?;
     put_order_run_session_tx(&mut tx, &write.session).await?;
-    put_order_progress_batch_tx(&mut tx, &write.progress_batch).await?;
+    if let Some(batch) = &write.progress_batch {
+        put_order_progress_batch_tx(&mut tx, batch).await?;
+    }
     for batch in &write.progress_batch_updates {
         put_order_progress_batch_tx(&mut tx, batch).await?;
     }
@@ -393,6 +403,7 @@ async fn transfer_queue_state_tx(
     from_apparatus: &str,
     to_apparatus: &str,
     order_id: &str,
+    state: &str,
 ) -> Result<(), ProductionMapError> {
     let removed = sqlx::query(
         "DELETE FROM mini_queue_states
@@ -409,10 +420,11 @@ async fn transfer_queue_state_tx(
     sqlx::query(
         "INSERT INTO mini_queue_states
             (apparatus, canonical_apparatus_id, order_id, state, updated_at)
-         VALUES (COALESCE((SELECT name FROM mini_apparatus WHERE id = $1), $1), $1, $2, 'paused', now())",
+         VALUES (COALESCE((SELECT name FROM mini_apparatus WHERE id = $1), $1), $1, $2, $3, now())",
     )
     .bind(to_apparatus)
     .bind(order_id.trim())
+    .bind(state)
     .execute(&mut **tx)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
@@ -436,7 +448,7 @@ async fn verify_transfer_preconditions(
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
     match source_state.as_deref() {
-        Some("paused") => {}
+        Some("paused" | "pending") => {}
         Some("frozen") => return Err(ProductionMapError::OrderFrozen),
         Some("completed") => return Err(ProductionMapError::OrderAlreadyCompleted),
         _ => return Err(ProductionMapError::ApparatusTransferOrderNotPaused),
@@ -489,8 +501,8 @@ async fn verify_transfer_preconditions(
         return Err(ProductionMapError::ApparatusTransferTargetConflict);
     }
 
-    let session = sqlx::query_as::<_, (String, String, String)>(
-        "SELECT canonical_apparatus_id, order_id, status
+    let session = sqlx::query_as::<_, (String, String, String, serde_json::Value)>(
+        "SELECT canonical_apparatus_id, order_id, status, payload_json
          FROM mini_order_run_sessions
          WHERE session_id = $1
          FOR UPDATE",
@@ -506,25 +518,53 @@ async fn verify_transfer_preconditions(
     {
         return Err(ProductionMapError::ApparatusTransferSessionMismatch);
     }
-
-    let batch = sqlx::query_as::<_, (String, String, String, String, String)>(
-        "SELECT canonical_apparatus_id, order_id, session_id, action, status
-         FROM mini_progress_batches
-         WHERE batch_id = $1
-         FOR UPDATE",
-    )
-    .bind(write.record.progress_batch_id.trim())
-    .fetch_optional(&mut **tx)
-    .await
-    .map_err(|_| ProductionMapError::StoreFailed)?
-    .ok_or(ProductionMapError::ApparatusTransferProgressNotFound)?;
-    if batch.1.trim() != write.record.order_id.trim()
-        || batch.2.trim() != write.record.session_id.trim()
-        || batch.0.trim() != write.record.from_apparatus.trim()
-        || batch.3 != "pause"
-        || batch.4 != "paused"
+    let requeued = session.3.get("requeued_at_tail")
+        .and_then(serde_json::Value::as_bool) == Some(true);
+    if (source_state.as_deref() == Some("pending") && !requeued)
+        || source_state.as_deref() != Some(write.record.queue_state.as_str())
     {
-        return Err(ProductionMapError::ApparatusTransferProgressMismatch);
+        return Err(ProductionMapError::ApparatusTransferOrderNotPaused);
+    }
+
+    if let Some(expected_batch) = &write.progress_batch {
+        let batch = sqlx::query_as::<_, (String, String, String, String, String)>(
+            "SELECT canonical_apparatus_id, order_id, session_id, action, status
+             FROM mini_progress_batches
+             WHERE batch_id = $1
+             FOR UPDATE",
+        )
+        .bind(write.record.progress_batch_id.trim())
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?
+        .ok_or(ProductionMapError::ApparatusTransferProgressNotFound)?;
+        if batch.1.trim() != write.record.order_id.trim()
+            || batch.2.trim() != write.record.session_id.trim()
+            || batch.0.trim() != write.record.from_apparatus.trim()
+            || batch.3 != "pause"
+            || batch.4 != "paused"
+            || expected_batch.batch_id.trim() != write.record.progress_batch_id.trim()
+        {
+            return Err(ProductionMapError::ApparatusTransferProgressMismatch);
+        }
+    } else {
+        let has_paused_batch = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM mini_progress_batches
+             WHERE session_id = $1 AND canonical_apparatus_id = $2
+               AND action = 'pause' AND status = 'paused')",
+        )
+        .bind(write.record.session_id.trim())
+        .bind(write.record.from_apparatus.trim())
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+        if source_state.as_deref() != Some("pending")
+            || !requeued
+            || !write.record.progress_batch_id.is_empty()
+            || has_paused_batch
+        {
+            return Err(ProductionMapError::ApparatusTransferProgressMismatch);
+        }
     }
     for update in &write.progress_batch_updates {
         let update_order_id = sqlx::query_scalar::<_, String>(

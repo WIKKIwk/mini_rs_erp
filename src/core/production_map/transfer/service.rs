@@ -98,7 +98,10 @@ impl ProductionMapService {
             .get(&order_id)
             .and_then(|state| queue_state::ApparatusQueueOrderState::parse(state));
         match source_state {
-            Some(queue_state::ApparatusQueueOrderState::Paused) => {}
+            Some(
+                queue_state::ApparatusQueueOrderState::Paused
+                | queue_state::ApparatusQueueOrderState::Pending,
+            ) => {}
             Some(queue_state::ApparatusQueueOrderState::Frozen) => {
                 return Err(ProductionMapError::OrderFrozen);
             }
@@ -130,6 +133,15 @@ impl ProductionMapService {
         {
             return Err(ProductionMapError::ApparatusTransferSessionMismatch);
         }
+        let requeued = source_state == Some(queue_state::ApparatusQueueOrderState::Pending);
+        if requeued && !source_session.is_requeued_at_tail() {
+            return Err(ProductionMapError::ApparatusTransferOrderNotPaused);
+        }
+        let target_state = if requeued {
+            queue_state::ApparatusQueueOrderState::Pending
+        } else {
+            queue_state::ApparatusQueueOrderState::Paused
+        };
 
         let progress_batches = self.store.progress_batches_for_order(&order_id).await?;
         let paused_batches = progress_batches
@@ -141,14 +153,12 @@ impl ProductionMapService {
                     && batch.apparatus.trim() == from_id
             })
             .collect::<Vec<_>>();
-        if paused_batches.len() != 1 {
+        if paused_batches.len() > 1 || (paused_batches.is_empty() && !requeued) {
             return Err(ProductionMapError::ApparatusTransferProgressMismatch);
         }
-        let mut progress_batch = paused_batches
-            .into_iter()
-            .next()
-            .cloned()
-            .ok_or(ProductionMapError::ApparatusTransferProgressNotFound)?;
+        // An issue freeze can stop work before any output exists. Move its
+        // retained session without inventing a WIP batch or production quantity.
+        let mut progress_batch = paused_batches.into_iter().next().cloned();
 
         let transfer_id = format!("apparatus-transfer:{idempotency_key}");
         let now = unix_seconds();
@@ -170,31 +180,36 @@ impl ProductionMapService {
         }
         session.payload_json["last_apparatus_transfer"] = transfer_payload.clone();
 
-        progress_batch.apparatus = to_id.clone();
-        progress_batch.current_apparatus = to_id.clone();
-        progress_batch.current_location = if target_display.is_empty() {
-            String::new()
-        } else {
-            format!("{target_display} chiqim")
-        };
-        if apparatus_ids_match(&progress_batch.used_by_apparatus, &from_id) {
-            progress_batch.used_by_apparatus = to_id.clone();
+        if let Some(batch) = &mut progress_batch {
+            batch.apparatus = to_id.clone();
+            batch.current_apparatus = to_id.clone();
+            batch.current_location = if target_display.is_empty() {
+                String::new()
+            } else {
+                format!("{target_display} chiqim")
+            };
+            if apparatus_ids_match(&batch.used_by_apparatus, &from_id) {
+                batch.used_by_apparatus = to_id.clone();
+            }
+            if apparatus_ids_match(&batch.processed_by_apparatus, &from_id) {
+                batch.processed_by_apparatus = to_id.clone();
+            }
+            if !batch.payload_json.is_object() {
+                batch.payload_json = serde_json::json!({});
+            }
+            batch.payload_json["last_apparatus_transfer"] = transfer_payload;
+            batch.refresh_status_detail();
         }
-        if apparatus_ids_match(&progress_batch.processed_by_apparatus, &from_id) {
-            progress_batch.processed_by_apparatus = to_id.clone();
-        }
-        if !progress_batch.payload_json.is_object() {
-            progress_batch.payload_json = serde_json::json!({});
-        }
-        progress_batch.payload_json["last_apparatus_transfer"] = transfer_payload;
-        progress_batch.refresh_status_detail();
 
         let mut progress_batch_updates = Vec::new();
-        if !progress_batch.parent_batch_id.trim().is_empty() {
+        if let Some(batch) = progress_batch
+            .as_ref()
+            .filter(|batch| !batch.parent_batch_id.trim().is_empty())
+        {
             let Some(mut parent_batch) = progress_batches
                 .iter()
                 .find(|candidate| {
-                    candidate.batch_id.trim() == progress_batch.parent_batch_id.trim()
+                    candidate.batch_id.trim() == batch.parent_batch_id.trim()
                 })
                 .cloned()
             else {
@@ -222,9 +237,7 @@ impl ProductionMapService {
         from_states.remove(&order_id);
         to_states.insert(
             order_id.clone(),
-            queue_state::ApparatusQueueOrderState::Paused
-                .as_str()
-                .to_string(),
+            target_state.as_str().to_string(),
         );
         let mut from_sequence = sequences.get(&from_id).cloned().unwrap_or_default();
         from_sequence.retain(|id| id.trim() != order_id);
@@ -262,7 +275,11 @@ impl ProductionMapService {
             reason: reason.to_string(),
             actor,
             session_id: session.session_id.clone(),
-            progress_batch_id: progress_batch.batch_id.clone(),
+            progress_batch_id: progress_batch
+                .as_ref()
+                .map(|batch| batch.batch_id.clone())
+                .unwrap_or_default(),
+            queue_state: target_state,
             material_barcodes,
             map: updated_map.clone(),
             session: session.clone(),
