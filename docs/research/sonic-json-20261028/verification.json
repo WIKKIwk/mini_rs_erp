@@ -1,0 +1,74 @@
+[
+  {
+    "profile": "serde_json",
+    "suite": "json_codec_research",
+    "exit_code": 0,
+    "source_head": "241081cd9dc11021955731577b56380185343d3e",
+    "isolated_temporary_cwd": true,
+    "binary_sha256": "1a060f99293825cc9c93b5d6cf3580ba015e747387e8cae4ba742e4d4262aed7",
+    "log": "verification-serde_json-json_codec_research.txt",
+    "passed": 8,
+    "failed": 0,
+    "ignored": 0
+  },
+  {
+    "profile": "serde_json",
+    "suite": "active_paddon_snapshot_cache",
+    "exit_code": 0,
+    "source_head": "241081cd9dc11021955731577b56380185343d3e",
+    "isolated_temporary_cwd": true,
+    "binary_sha256": "12581232555049742c1f68178cbb1e4422cee14e4317d439aa1107b50936dad4",
+    "log": "verification-serde_json-active_paddon_snapshot_cache.txt",
+    "passed": 4,
+    "failed": 0,
+    "ignored": 0
+  },
+  {
+    "profile": "serde_json",
+    "suite": "worker_queue_window",
+    "exit_code": 101,
+    "source_head": "241081cd9dc11021955731577b56380185343d3e",
+    "isolated_temporary_cwd": true,
+    "binary_sha256": "3eea7ff156fad6e42ea3165b108c528841a90c4ad917713f9ea2010d6da98243",
+    "log": "verification-serde_json-worker_queue_window.txt",
+    "passed": 34,
+    "failed": 2,
+    "ignored": 1
+  },
+  {
+    "profile": "sonic_both",
+    "suite": "json_codec_research",
+    "exit_code": 0,
+    "source_head": "241081cd9dc11021955731577b56380185343d3e",
+    "isolated_temporary_cwd": true,
+    "binary_sha256": "1a060f99293825cc9c93b5d6cf3580ba015e747387e8cae4ba742e4d4262aed7",
+    "log": "verification-sonic_both-json_codec_research.txt",
+    "passed": 8,
+    "failed": 0,
+    "ignored": 0
+  },
+  {
+    "profile": "sonic_both",
+    "suite": "active_paddon_snapshot_cache",
+    "exit_code": 0,
+    "source_head": "241081cd9dc11021955731577b56380185343d3e",
+    "isolated_temporary_cwd": true,
+    "binary_sha256": "12581232555049742c1f68178cbb1e4422cee14e4317d439aa1107b50936dad4",
+    "log": "verification-sonic_both-active_paddon_snapshot_cache.txt",
+    "passed": 4,
+    "failed": 0,
+    "ignored": 0
+  },
+  {
+    "profile": "sonic_both",
+    "suite": "worker_queue_window",
+    "exit_code": 101,
+    "source_head": "241081cd9dc11021955731577b56380185343d3e",
+    "isolated_temporary_cwd": true,
+    "binary_sha256": "3eea7ff156fad6e42ea3165b108c528841a90c4ad917713f9ea2010d6da98243",
+    "log": "verification-sonic_both-worker_queue_window.txt",
+    "passed": 34,
+    "failed": 2,
+    "ignored": 1
+  }
+]

@@ -1,0 +1,63 @@
+[
+  {
+    "check": "default-server",
+    "command": [
+      "cargo",
+      "check",
+      "--release",
+      "--locked",
+      "--bin",
+      "mini_rs_erp"
+    ],
+    "exit_code": 0,
+    "seconds": 35.247990125,
+    "log": "check-default-server.txt"
+  },
+  {
+    "check": "sonic-server",
+    "command": [
+      "cargo",
+      "check",
+      "--release",
+      "--locked",
+      "--features",
+      "sonic-json-research",
+      "--bin",
+      "mini_rs_erp"
+    ],
+    "exit_code": 0,
+    "seconds": 30.865542082999994,
+    "log": "check-sonic-server.txt"
+  },
+  {
+    "check": "focused-rustfmt",
+    "command": [
+      "rustfmt",
+      "--edition",
+      "2024",
+      "--check",
+      "--config",
+      "skip_children=true",
+      "src/http/json_research.rs",
+      "tests/json_codec_research.rs",
+      "examples/json_codec_research.rs",
+      "examples/json_codec_research/fixture.rs",
+      "examples/json_codec_research/micro.rs",
+      "examples/json_codec_research/routes.rs"
+    ],
+    "exit_code": 0,
+    "seconds": 0.05922420800000339,
+    "log": "check-focused-rustfmt.txt"
+  },
+  {
+    "check": "diff",
+    "command": [
+      "git",
+      "diff",
+      "--check"
+    ],
+    "exit_code": 0,
+    "seconds": 0.010420082999999636,
+    "log": "check-diff.txt"
+  }
+]

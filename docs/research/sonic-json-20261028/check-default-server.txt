@@ -1,0 +1,17 @@
+    Checking mini_rs_erp v1.0.0 (/Users/wikki/Desktop/Accord_project/mini_rs_erp)
+warning: unused import: `queue_state`
+ --> src/core/production_map/queue/apparatus.rs:4:20
+  |
+4 | use super::{chain, queue_state};
+  |                    ^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `super::*`
+ --> src/core/production_map/capacity/scheduler.rs:3:5
+  |
+3 | use super::*;
+  |     ^^^^^^^^
+
+warning: `mini_rs_erp` (lib) generated 2 warnings (run `cargo fix --lib -p mini_rs_erp` to apply 2 suggestions)
+    Finished `release` profile [optimized] target(s) in 35.21s
