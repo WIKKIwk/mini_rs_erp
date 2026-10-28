@@ -219,11 +219,11 @@ fn required_ref_item<'a>(
 }
 
 fn parse_json<T: DeserializeOwned>(body: &[u8]) -> Result<T, AdminError> {
-    serde_json::from_slice(body).map_err(|_| bad_request("invalid json"))
+    crate::http::json_research::from_slice(body).map_err(|_| bad_request("invalid json"))
 }
 
 fn json_response<T: Serialize>(value: T) -> Response {
-    Json(value).into_response()
+    crate::http::json_research::response(value)
 }
 
 fn with_admin_profile_avatar_proxy(

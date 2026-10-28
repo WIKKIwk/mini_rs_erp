@@ -96,6 +96,12 @@ impl Engine {
             Self::SonicRs => {
                 #[cfg(feature = "sonic-json-research")]
                 {
+                    // Preserve existing numeric rounding and depth behavior.
+                    // The guard is included in decoder benchmarks. No unchecked
+                    // parsing and no sonic_rs::Value are used on external input.
+                    if needs_serde_parser(body) {
+                        return Ok(serde_json::from_slice(body)?);
+                    }
                     Ok(sonic_rs::from_slice(body)?)
                 }
                 #[cfg(not(feature = "sonic-json-research"))]
@@ -122,6 +128,57 @@ impl Engine {
     }
 }
 
+#[cfg(feature = "sonic-json-research")]
+fn needs_serde_parser(body: &[u8]) -> bool {
+    let (mut quoted, mut escaped, mut depth) = (false, false, 0usize);
+    let mut number_digits = 0usize;
+    let mut number = false;
+    for &byte in body {
+        if quoted {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                quoted = false;
+            }
+        } else {
+            match byte {
+                b'0'..=b'9' => {
+                    number = true;
+                    number_digits += 1;
+                    // Beyond this range a JSON integer can overflow u64/i64
+                    // and enter the libraries' different float parsing paths.
+                    if number_digits >= 19 {
+                        return true;
+                    }
+                }
+                b'.' | b'e' | b'E' if number => return true,
+                b'-' => {
+                    number = true;
+                    number_digits = 0;
+                }
+                _ => {
+                    number = false;
+                    number_digits = 0;
+                }
+            }
+            match byte {
+                b'"' => quoted = true,
+                b'[' | b'{' => {
+                    depth += 1;
+                    if depth >= 128 {
+                        return true;
+                    }
+                }
+                b']' | b'}' => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+        }
+    }
+    false
+}
+
 impl Settings {
     pub fn from_names(encoder: &str, decoder: &str) -> Result<Self, AppError> {
         Ok(Self {
@@ -131,7 +188,7 @@ impl Settings {
     }
 }
 
-pub fn initialize_from_env() -> Result<Settings, AppError> {
+fn configured_from_env() -> Result<Settings, AppError> {
     let read = |key| match std::env::var(key) {
         Ok(value) => Ok(value),
         Err(std::env::VarError::NotPresent) => Ok(String::new()),
@@ -140,7 +197,11 @@ pub fn initialize_from_env() -> Result<Settings, AppError> {
             value: "non-UTF-8 value".into(),
         }),
     };
-    let configured = Settings::from_names(&read(ENCODER_ENV)?, &read(DECODER_ENV)?)?;
+    Settings::from_names(&read(ENCODER_ENV)?, &read(DECODER_ENV)?)
+}
+
+pub fn initialize_from_env() -> Result<Settings, AppError> {
+    let configured = configured_from_env()?;
     if let Some(current) = SETTINGS.get() {
         if *current != configured {
             return Err(AppError::Storage(
@@ -161,7 +222,7 @@ pub fn initialize_from_env() -> Result<Settings, AppError> {
 }
 
 pub fn settings() -> Settings {
-    SETTINGS.get().copied().unwrap_or_default()
+    *SETTINGS.get_or_init(|| configured_from_env().expect("invalid JSON research configuration"))
 }
 
 pub fn to_string<T: Serialize + ?Sized>(value: &T) -> Result<String, Error> {

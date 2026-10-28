@@ -3,6 +3,7 @@ use crate::core::production_map::{
     CompletedQueueOrder, CompletionRequestDecisionNotification, CompletionRequestNotification,
     ProductionMapLiveEvent, ProductionMapLiveSnapshot,
 };
+use crate::http::json_research;
 use crate::http::ws::{Message, Utf8Bytes, WebSocket};
 use serde::Serialize;
 use serde_json::{Map, Value, json};
@@ -364,7 +365,7 @@ fn view_patch(before: &LiveView, after: &LiveView) -> Map<String, Value> {
 }
 
 async fn send(socket: &mut WebSocket, value: Value) -> bool {
-    match serde_json::to_string(&value) {
+    match json_research::to_string(&value) {
         Ok(json) => send_text(socket, json).await,
         Err(_) => false,
     }
@@ -493,7 +494,7 @@ async fn refresh_feed(
             return None;
         }
         let patch = if window.worker_list {
-            serde_json::to_string(&worker_list::patch(before, &next)).expect("worker list patch serialization").into()
+            json_research::to_string(&worker_list::patch(before, &next)).expect("worker list patch serialization").into()
         } else {
             let common = state.production_state_live.snapshot_patch_for_protocol(&before.snapshot, &next.snapshot, data.compact);
             super::live_hub::join_patch(&common, &personal_patch(before, &next))

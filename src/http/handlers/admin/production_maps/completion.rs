@@ -1,4 +1,5 @@
 use super::*;
+use crate::http::json_research;
 use crate::http::ws::{Message, WebSocket, WebSocketUpgrade};
 use tokio::time::{Duration, timeout};
 
@@ -253,7 +254,7 @@ async fn production_map_live_socket(
                             if paged {
                                 payload["snapshot_rev"] = service.snapshot_revision().into();
                             }
-                            if let Ok(json) = serde_json::to_string(&payload) {
+                            if let Ok(json) = json_research::to_string(&payload) {
                                 if !send_production_map_live_message(&mut socket, Message::Text(json.into())).await {
                                     break;
                                 }
@@ -291,7 +292,7 @@ async fn production_map_live_socket(
             _ = heartbeat.tick() => {
                 if paged && require_paged_live_capability(&state, &principal).await.is_err() {
                     let _ = send_production_map_live_message(&mut socket,
-                        Message::Text(serde_json::json!({"ok": false, "error": "forbidden"}).to_string().into())).await;
+                        Message::Text(json_research::value_to_string(&serde_json::json!({"ok": false, "error": "forbidden"})).into())).await;
                     break;
                 }
                 // The transport owns native Ping/Pong deadlines. This timer
@@ -327,7 +328,7 @@ async fn send_production_map_live_snapshot(
             "rev": state.production_maps.snapshot_revision(),
         });
         *last_payload_initialized = true;
-        return send_production_map_live_message(socket, Message::Text(payload.to_string().into()))
+        return send_production_map_live_message(socket, Message::Text(json_research::value_to_string(&payload).into()))
             .await;
     }
     let service = &state.production_maps;
@@ -345,7 +346,7 @@ async fn send_production_map_live_snapshot(
                         "ok": false,
                         "error": error.to_string(),
                     });
-                    return match serde_json::to_string(&payload) {
+                    return match json_research::to_string(&payload) {
                         Ok(json) => {
                             send_production_map_live_message(socket, Message::Text(json.into()))
                                 .await
@@ -415,7 +416,7 @@ async fn send_production_map_live_snapshot(
                 "completion_requests": completion_requests,
                 "completion_request_decisions": completion_request_decisions,
             });
-            match serde_json::to_string(&payload) {
+            match json_research::to_string(&payload) {
                 Ok(json) => {
                     let fingerprint = live_payload_fingerprint(&json);
                     if *last_payload_initialized && fingerprint == *last_payload_fingerprint {
@@ -439,7 +440,7 @@ async fn send_production_map_live_snapshot(
                 "ok": false,
                 "error": error.to_string(),
             });
-            match serde_json::to_string(&payload) {
+            match json_research::to_string(&payload) {
                 Ok(json) => {
                     send_production_map_live_message(socket, Message::Text(json.into())).await
                 }

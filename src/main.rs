@@ -27,6 +27,7 @@ async fn main() -> Result<(), error::AppError> {
         .init();
 
     let mut config = AppConfig::from_env()?;
+    mini_rs_erp::http::json_research::initialize_from_env()?;
     let bind_addr = config.bind_addr;
     let postgres_pool = connect_and_migrate_required()
         .await

@@ -612,7 +612,7 @@ fn list_response(query: &OrderListQuery, payload: Value) -> Response {
     {
         StatusCode::NOT_MODIFIED.into_response()
     } else {
-        Json(payload).into_response()
+        crate::http::json_research::response(payload)
     };
     let response_headers = response.headers_mut();
     response_headers.insert(
@@ -717,7 +717,7 @@ pub async fn order_detail(
             "preparation_order_not_available",
         ));
     }
-    Ok(Json(payload).into_response())
+    Ok(crate::http::json_research::response(payload))
 }
 
 pub async fn order_list_live(
@@ -748,7 +748,9 @@ pub async fn order_list_live(
 async fn send(socket: &mut WebSocket, value: Value) -> bool {
     timeout(
         READ_TIMEOUT,
-        socket.send(Message::Text(value.to_string().into())),
+        socket.send(Message::Text(
+            crate::http::json_research::value_to_string(&value).into(),
+        )),
     )
     .await
     .is_ok_and(|result| result.is_ok())

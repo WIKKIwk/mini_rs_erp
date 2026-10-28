@@ -1,6 +1,7 @@
 //! Shared, bounded live projections of the exact HTTP admin windows.
 //! Domain ordering, visibility and action permissions stay in `order_page`.
 use super::*;
+use crate::http::json_research;
 use crate::http::ws::{Message, WebSocket};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, VecDeque};
@@ -169,10 +170,9 @@ impl PageLiveHub {
                     return Ok(frame.clone());
                 }
             }
-            let frame: Arc<str> = json!({"ok":true,"type":"notifications_snapshot",
+            let frame: Arc<str> = json_research::value_to_string(&json!({"ok":true,"type":"notifications_snapshot",
                 "epoch":state.production_maps.snapshot_epoch(),"rev":revision,
-                "completion_requests":data})
-            .to_string()
+                "completion_requests":data}))
             .into();
             *cached = Some((revision, data, frame.clone()));
             return Ok(frame);
@@ -278,7 +278,7 @@ async fn read_window(
             {
                 break;
             }
-            bytes += serde_json::to_vec(&page)
+            bytes += json_research::to_vec(&page)
                 .map_err(|_| bad_request("invalid_page_live_state"))?
                 .len();
             if bytes > MAX_WINDOW_BYTES {
@@ -401,11 +401,10 @@ async fn prepared(before: &Window, after: &Window, id: &str) -> Arc<str> {
             .collect::<Vec<_>>();
         payload["changes"] = json!(changes);
     }
-    let mut frame = payload.to_string();
+    let mut frame = json_research::value_to_string(&payload);
     if frame.len() > MAX_DELTA_BYTES {
-        frame = json!({"ok":true,"type":"page_window_resync","window":id,
-            "epoch":after.epoch,"rev":after.revision,"version":after.version})
-        .to_string();
+        frame = json_research::value_to_string(&json!({"ok":true,"type":"page_window_resync","window":id,
+            "epoch":after.epoch,"rev":after.revision,"version":after.version}));
     }
     let frame: Arc<str> = frame.into();
     if cached.len() < 8
@@ -463,7 +462,7 @@ async fn update(
             }
             Err(error) => {
                 drop(feed);
-                let _ = send(socket, &json!(error.1.0).to_string()).await;
+                let _ = send(socket, &json_research::value_to_string(&json!(error.1.0))).await;
                 return UpdateStatus::Closed;
             }
         };
@@ -482,10 +481,9 @@ async fn update(
             if initial
                 && !send(
                     socket,
-                    &json!({"ok":true,"type":"page_window_ready",
+                    &json_research::value_to_string(&json!({"ok":true,"type":"page_window_ready",
                 "window":sub.request.id,"epoch":current.epoch,"rev":current.revision,
-                "version":current.version,"resync":false})
-                    .to_string(),
+                "version":current.version,"resync":false})),
                 )
                 .await
             {
@@ -494,10 +492,9 @@ async fn update(
         } else {
             if !send(
                 socket,
-                &json!({"ok":true,"type":"page_window_ready",
+                &json_research::value_to_string(&json!({"ok":true,"type":"page_window_ready",
                 "window":sub.request.id,"epoch":current.epoch,"rev":current.revision,
-                "version":current.version,"resync":sub.request.version != current.version})
-                .to_string(),
+                "version":current.version,"resync":sub.request.version != current.version})),
             )
             .await
             {
@@ -568,7 +565,7 @@ pub(super) async fn socket(
             },
             _ = heartbeat.tick() => {
                 if super::completion::require_paged_live_capability(&state, &principal).await.is_err() {
-                    let _ = send(&mut socket, &json!({"ok":false,"error":"forbidden"}).to_string()).await;
+                    let _ = send(&mut socket, &json_research::value_to_string(&json!({"ok":false,"error":"forbidden"}))).await;
                     break;
                 }
             }
@@ -591,17 +588,16 @@ pub(super) async fn notifications_socket(
             match state.production_page_live.notifications(&state).await {
                 Ok(frame) => frame,
                 Err(error) => {
-                    let _ = send(&mut socket, &json!(error.1.0).to_string()).await;
+                    let _ = send(&mut socket, &json_research::value_to_string(&json!(error.1.0))).await;
                     break;
                 }
             }
         } else {
             // Preserve legacy role filtering: only Admin receives requests.
             previous.clone().unwrap_or_else(|| {
-                json!({"ok":true,
+                json_research::value_to_string(&json!({"ok":true,
                 "type":"notifications_snapshot","epoch":state.production_maps.snapshot_epoch(),
-                "rev":state.production_maps.snapshot_revision(),"completion_requests":[]})
-                .to_string()
+                "rev":state.production_maps.snapshot_revision(),"completion_requests":[]}))
                 .into()
             })
         };
@@ -623,7 +619,7 @@ pub(super) async fn notifications_socket(
             },
             _ = heartbeat.tick() => {
                 if super::completion::require_any_live_capability(&state, &principal).await.is_err() {
-                    let _ = send(&mut socket, &json!({"ok":false,"error":"forbidden"}).to_string()).await;
+                    let _ = send(&mut socket, &json_research::value_to_string(&json!({"ok":false,"error":"forbidden"}))).await;
                     break;
                 }
             }

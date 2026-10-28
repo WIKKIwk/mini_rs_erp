@@ -516,7 +516,9 @@ fn delta(before: &TaskWindow, after: &TaskWindow) -> Value {
 async fn send(socket: &mut WebSocket, value: Value) -> bool {
     timeout(
         READ_TIMEOUT,
-        socket.send(Message::Text(value.to_string().into())),
+        socket.send(Message::Text(
+            crate::http::json_research::value_to_string(&value).into(),
+        )),
     )
     .await
     .is_ok_and(|result| result.is_ok())

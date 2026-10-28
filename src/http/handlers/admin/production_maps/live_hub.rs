@@ -1,6 +1,7 @@
 use super::live_delta::{LiveView, snapshot_patch_for_protocol};
 use super::live_feed::{LiveHistory, PreparedDelta};
 use crate::core::production_map::ProductionMapLiveSnapshot;
+use crate::http::json_research;
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex, Weak};
@@ -170,7 +171,7 @@ impl StateLiveHub {
             return entry.patch.clone();
         }
         let patch: Arc<str> =
-            serde_json::to_string(&snapshot_patch_for_protocol(before, after, compact))
+            json_research::to_string(&snapshot_patch_for_protocol(before, after, compact))
                 .expect("snapshot patch serialization")
                 .into();
         if patch.len() > MAX_CACHED_PATCH_BYTES {
@@ -194,7 +195,7 @@ pub(super) fn join_patch(common: &Arc<str>, personal: &Map<String, Value>) -> Ar
     if personal.is_empty() {
         return common.clone();
     }
-    let personal = serde_json::to_string(personal).expect("personal patch serialization");
+    let personal = json_research::to_string(personal).expect("personal patch serialization");
     if common.as_ref() == "{}" {
         return personal.into();
     }
