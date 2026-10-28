@@ -244,6 +244,8 @@ fn qolip_error_code(error: &crate::core::qolip::QolipError) -> &'static str {
     use crate::core::qolip::QolipError::*;
     match error {
         QolipInRework => "qolip_in_rework",
+        QolipInPaddon => "qolip_in_paddon",
+        QolipArchived => "qolip_archived",
         QolipCodeNotFound => "qolip_code_not_found",
         QolipCodeMismatch => "qolip_code_mismatch",
         ComboQolipRequired => "combo_qolip_required",
