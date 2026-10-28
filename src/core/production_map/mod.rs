@@ -18,6 +18,8 @@ mod materials_support;
 #[cfg(any(test, feature = "verification"))]
 mod memory_store;
 mod opening_wip;
+mod participants;
+pub use participants::StageParticipant;
 pub mod output_stats;
 pub(crate) mod layer_remainder;
 pub use layer_remainder::{LaminationSettings, LayerRemainderInput, LayerRemainderSource, LayerRemainderRecord, LayerRemainderRawStock};

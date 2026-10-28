@@ -53,6 +53,8 @@ mod output_stats;
 pub use output_stats::production_map_output_stats;
 mod order_control;
 mod order_scan_bootstrap;
+mod participants;
+pub use participants::production_map_stage_participants;
 mod rezka_output_report;
 mod order_alerts;
 pub use order_alerts::production_map_order_alert;

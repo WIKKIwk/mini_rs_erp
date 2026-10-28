@@ -6,6 +6,38 @@ use crate::core::production_map::{ProductionMapStorePort, queue_state};
 
 const PAGE_APPARATUS: &str = "apparatus:default:bosma_8";
 
+#[tokio::test]
+async fn stage_participants_is_admin_only_and_scoped_to_the_order_stage() {
+    use crate::core::production_map::{OrderRunSession, ProductionMapStorePort};
+    let mut state = test_state();
+    let store = Arc::new(MemoryProductionMapStore::new());
+    state.production_maps = production_map_service_with_store(&state, store.clone());
+    state.production_maps.upsert_map(serde_json::from_str(&pechat_order_map_json(
+        "zakaz-participants", "Order", "0103", PAGE_APPARATUS,
+    )).unwrap()).await.unwrap();
+    store.put_order_run_session(serde_json::from_value::<OrderRunSession>(serde_json::json!({
+        "session_id":"participant-run", "apparatus":PAGE_APPARATUS,
+        "order_id":"zakaz-participants", "stage_node_id":"apparatus", "status":"active",
+        "worker_role":"aparatchi", "worker_ref":"worker-1", "worker_display_name":"Ali",
+        "started_at_unix":1, "updated_at_unix":2, "payload_json":{}
+    })).unwrap()).await.unwrap();
+    let admin = session(&state, PrincipalRole::Admin).await;
+    let worker = session(&state, PrincipalRole::Aparatchi).await;
+    let router = build_router(state);
+    let url = format!("/v1/mobile/admin/production-maps/stage-participants?order_id=zakaz-participants&stage_node_id=apparatus&apparatus={PAGE_APPARATUS}");
+    let response = router.clone().oneshot(request("GET", &url, &admin)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+    assert_eq!(json_body(response).await["participants"], serde_json::json!([
+        {"display_name":"Ali", "started":false, "state":"working"}
+    ]));
+    let forbidden = router.clone().oneshot(request("GET", &url, &worker)).await.unwrap();
+    assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+    let wrong_stage = url.replace("stage_node_id=apparatus", "stage_node_id=other");
+    let missing = router.oneshot(request("GET", &wrong_stage, &admin)).await.unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+}
+
 struct OrderCreationTimeSink {
     reads: Mutex<Vec<String>>,
 }

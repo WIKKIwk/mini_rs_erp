@@ -3,6 +3,7 @@ fn production_routes() -> Router<AppState> {
         .route("/v1/mobile/admin/production-maps/qolip-start-settings", any(admin::production_maps::production_map_qolip_start_settings))
         .route("/v1/mobile/admin/production-maps/output-stats", get(admin::production_maps::production_map_output_stats))
         .route("/v1/mobile/admin/production-maps/order-page", get(admin::production_map_order_page))
+        .route("/v1/mobile/admin/production-maps/stage-participants", get(admin::production_maps::production_map_stage_participants))
         .route("/v1/mobile/admin/production-maps/closed-order", get(admin::production_map_closed_order_detail))
         .route("/v1/mobile/admin/production-maps/reactivation/preview", post(admin::production_map_reactivation_preview))
         .route("/v1/mobile/admin/production-maps/reactivation", post(admin::production_map_reactivation))
