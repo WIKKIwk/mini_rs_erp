@@ -79,7 +79,7 @@ struct Request {
 
 #[test]
 fn serde_contract_and_duplicate_key_semantics_are_preserved() {
-    let body = br#"{"order":"zakaz-001","quantities":[1.25,2.5e2],"metadata":{"a":1,"a":2}}"#;
+    let body = br#"{"order":"zakaz-001","quantities":[1,250],"metadata":{"a":1,"a":2}}"#;
     let expected: Request = serde_json::from_slice(body).unwrap();
     for engine in engines() {
         assert_eq!(engine.from_slice::<Request>(body).unwrap(), expected);

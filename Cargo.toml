@@ -98,3 +98,8 @@ required-features = ["mcp-readonly-prototype"]
 name = "admin_projection_research"
 path = "examples/admin_projection_research.rs"
 required-features = ["projection-research"]
+
+[[example]]
+name = "json_codec_research"
+path = "examples/json_codec_research.rs"
+required-features = ["sonic-json-research", "verification"]
