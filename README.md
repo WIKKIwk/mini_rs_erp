@@ -69,6 +69,31 @@ All selected items move together or none move. Membership history records the
 authenticated actor; WIP identity, quantities, and lineage remain intact.
 Free movement also requires unlocked paddons on the legacy add/remove routes.
 
+### Named combo production
+
+A named combo is a planning catalog identity in the `Kombo` finished-product
+subgroup. Its ordered component SKUs remain the finished outputs. Combo masters
+have immutable layout revisions; each revision has its own catalog code and
+tooling assignment. Changing only the order quantity reuses the revision.
+Changing the layout, artwork or printing specification creates a new revision
+whose molds must be assigned explicitly. Existing orders retain their revision.
+
+`POST /v1/mobile/admin/combos` accepts `name`, an optional existing `combo_id`,
+and a Calculate `template`. It atomically saves the catalog item, customer link
+and revision and returns `combo`. Repeating the same save reuses the revision.
+`GET /v1/mobile/admin/combos?item_code=...` reads the exact revision. Tooling-only
+readers receive the physical layout without private calculation fields.
+
+Order templates and maps carry an optional `combo` reference. The server checks
+that reference against its stored revision before accepting an order. Named
+combos use their own molds; existing unnamed multi-product orders retain their
+common-set policy. Missing combo tooling blocks printing with
+`combo_qolip_required`. Cutting and warehouse receipt retain each component's
+SKU and QR lineage. Combo catalog codes cannot be received as finished stock.
+
+Migration `0169_combo_catalog` adds these records and stock guards without
+rewriting existing orders or mold assignments.
+
 ## Setup
 
 Requirements:

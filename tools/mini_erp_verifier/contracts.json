@@ -1,8 +1,8 @@
 {
   "protocol": 1,
   "route_snapshot": {
-    "count": 344,
-    "sha256": "039294d76d37be43ffa33440c9c3c70196f5ba57e95fc38afe98662be6c62b48"
+    "count": 345,
+    "sha256": "4208b9ad3f227e266ed2c322fdbf7036d0c3cedc9c5939c174700026ce76fb28"
   },
   "access_matrices": [
     {
@@ -98,6 +98,42 @@
     }
   ],
   "cases": [
+    {
+      "name": "combo_catalog_anonymous_read_is_unauthorized",
+      "request": {"method": "GET", "uri": "/v1/mobile/admin/combos?item_code=COMBO"},
+      "expect": {"status": 401}
+    },
+    {
+      "name": "combo_catalog_anonymous_write_is_unauthorized",
+      "request": {"method": "POST", "uri": "/v1/mobile/admin/combos", "body": {}},
+      "expect": {"status": 401}
+    },
+    {
+      "name": "combo_catalog_supplier_cannot_read",
+      "request": {"method": "GET", "uri": "/v1/mobile/admin/combos?item_code=COMBO", "role": "supplier"},
+      "expect": {"status": 403}
+    },
+    {
+      "name": "combo_catalog_qolipchi_cannot_create",
+      "request": {"method": "POST", "uri": "/v1/mobile/admin/combos", "role": "qolipchi", "body": {}},
+      "expect": {"status": 403}
+    },
+    {
+      "name": "combo_catalog_admin_malformed_request_is_rejected",
+      "request": {"method": "POST", "uri": "/v1/mobile/admin/combos", "role": "admin", "body": {}},
+      "expect": {"status": 400}
+    },
+    {
+      "name": "combo_catalog_rejects_reference_without_matching_master",
+      "request": {
+        "method": "POST", "uri": "/v1/mobile/admin/combos", "role": "admin",
+        "body": {
+          "name": "Forged combo",
+          "template": {"combo": {"id": "forged", "item_code": "COMBO", "name": "Forged combo", "revision": 1, "layout_fingerprint": "forged"}}
+        }
+      },
+      "expect": {"status": 409, "body": {"error": "combo_reference_mismatch"}}
+    },
     {"name":"output_stats_requires_auth","request":{"method":"GET","uri":"/v1/mobile/admin/production-maps/output-stats?from=2026-10-18T19:00:00Z&to=2026-10-25T19:00:00Z&bucket=day&timezone=Asia%2FTashkent"},"expect":{"status":401}},
     {"name":"output_stats_denies_supplier","request":{"method":"GET","uri":"/v1/mobile/admin/production-maps/output-stats?from=2026-10-18T19:00:00Z&to=2026-10-25T19:00:00Z&bucket=day&timezone=Asia%2FTashkent","role":"supplier"},"expect":{"status":403}},
     {"name":"output_stats_requires_interval","request":{"method":"GET","uri":"/v1/mobile/admin/production-maps/output-stats","role":"admin"},"expect":{"status":400,"body":{"error":"output_stats_invalid_from"}}},
