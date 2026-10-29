@@ -263,3 +263,36 @@ async fn sales_creates_only_customers_and_finished_products() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
+
+#[tokio::test]
+async fn sales_order_creation_catalog_requests_pass_authorization() {
+    let state = test_state();
+    let sales = session_for(&state, PrincipalRole::SalesManager, "sales-catalog").await;
+    let app = build_router(state);
+    for path in [
+        "/v1/mobile/admin/customers/detail?ref=CUST-001",
+        "/v1/mobile/admin/items/detail?code=MULTI-ONE",
+    ] {
+        let response = app.clone().oneshot(request("GET", path, &sales)).await.unwrap();
+        let status = response.status();
+        let body = json_body(response).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {body}");
+        if path.contains("items/detail") {
+            assert_eq!(body["customers"][0]["ref"], "CUST-001");
+        }
+    }
+    let calculate = r#"{"product":"Sales product","kg":100,"frame_product_size_mm":500,"frame_count":1,"layers":[{"material":"pet","micron":"12"}]}"#;
+    let response = app.clone().oneshot(request_with_body("POST", "/v1/mobile/calculate", &sales, calculate)).await.unwrap();
+    let status = response.status();
+    assert_eq!(status, StatusCode::OK, "calculate: {}", json_body(response).await);
+    let response = app.clone().oneshot(request("GET", "/v1/mobile/admin/combos?item_code=COMBO-R1", &sales)).await.unwrap();
+    let status = response.status();
+    let body = json_body(response).await;
+    // The fixture has no combo database; reaching its unavailable-store error
+    // proves that sales passed both the scope and the combo-read authorization.
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "combo read: {body}");
+    assert_eq!(body["error"], "combo_store_unavailable");
+    let response = app.oneshot(request_with_body("POST", "/v1/mobile/admin/production-maps/auto-open", &sales, r#"{"template":{}}"#)).await.unwrap();
+    let status = response.status();
+    assert_ne!(status, StatusCode::FORBIDDEN, "auto-open: {}", json_body(response).await);
+}

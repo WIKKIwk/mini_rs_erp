@@ -155,7 +155,12 @@ pub async fn combos(
                 || state
                     .admin
                     .principal_has_capability(&principal, Capability::ProductionMapManage)
-                    .await;
+                    .await
+                || (principal.role == PrincipalRole::SalesManager
+                    && state
+                        .admin
+                        .principal_has_capability(&principal, Capability::ProductionOrderCreate)
+                        .await);
             if !full {
                 // Match the Qolip catalog's no-mold identity visibility: a mold
                 // warehouse assignment is necessary even before tooling exists.
