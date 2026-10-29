@@ -1,6 +1,85 @@
 use super::*;
 
 #[tokio::test]
+async fn preparation_reprint_is_limited_to_own_submitted_receipts() {
+    use crate::core::apparatus_standard::CanonicalApparatusService;
+    use crate::db::postgres::{apply_foundation_migration, apply_postgres_migrations_through_version, postgres_test_database_options};
+    use crate::db::postgres_canonical_apparatus::PostgresCanonicalApparatusRepository;
+    use crate::db::postgres_gscale_receipt::PostgresGscaleReceiptStore;
+    use crate::db::postgres_preparation::PostgresPreparationStore;
+    use std::sync::Arc;
+
+    let url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://wikki@127.0.0.1:5432/postgres".into());
+    let admin = sqlx::PgPool::connect(&url).await.unwrap();
+    let db = format!("mini_rs_erp_test_prep_reprint_{:016x}", rand::random::<u64>());
+    sqlx::query(&format!(r#"CREATE DATABASE "{db}""#)).execute(&admin).await.unwrap();
+    let seed = sqlx::PgPool::connect_with(postgres_test_database_options(&url, &db)).await.unwrap();
+    apply_postgres_migrations_through_version(&seed, "0121").await.unwrap();
+    CanonicalApparatusService::new(Arc::new(PostgresCanonicalApparatusRepository::new(seed.clone())))
+        .bootstrap_factory_defaults().await.unwrap();
+    apply_foundation_migration(&seed).await.unwrap();
+    sqlx::raw_sql(r#"
+        INSERT INTO mini_warehouses(id,name) VALUES ('reprint-w','Other warehouse');
+        INSERT INTO mini_items(code,name,item_group) VALUES ('REPRINT-PE','PE PR','Rulon');
+        INSERT INTO mini_gscale_receipts(name,status,item_code,warehouse,qty,barcode,payload_json)
+        VALUES ('receipt-own','submitted','REPRINT-PE','Other warehouse',23,'QR-OWN',
+                   '{"item_name":"PE PR","actor_role":"tayyorlov_masteri","actor_ref":"prep-reprint"}'),
+               ('receipt-other','submitted','REPRINT-PE','Other warehouse',17,'QR-OTHER',
+                   '{"item_name":"PE PR","actor_role":"tayyorlov_masteri","actor_ref":"other-master"}'),
+               ('receipt-draft','draft','REPRINT-PE','Other warehouse',12,'QR-DRAFT',
+                   '{"item_name":"PE PR","actor_role":"tayyorlov_masteri","actor_ref":"prep-reprint"}');
+        INSERT INTO mini_raw_material_stock(id,warehouse,item_code,item_name,barcode,qty,uom,status,source_receipt_id)
+        VALUES ('raw:own','Other warehouse','REPRINT-PE','PE PR','QR-OWN',23,'kg','available','receipt-own'),
+               ('raw:other','Other warehouse','REPRINT-PE','PE PR','QR-OTHER',17,'kg','available','receipt-other'),
+               ('raw:draft','Other warehouse','REPRINT-PE','PE PR','QR-DRAFT',12,'kg','available','receipt-draft');
+    "#).execute(&seed).await.unwrap();
+    let runtime = sqlx::postgres::PgPoolOptions::new()
+        .after_connect(|connection, _| Box::pin(async move {
+            sqlx::query("SET ROLE mini_rs_erp").execute(connection).await?;
+            Ok(())
+        }))
+        .connect_with(postgres_test_database_options(&url, &db)).await.unwrap();
+    let mut state = test_state();
+    state.preparation = Some(PostgresPreparationStore::new(runtime.clone()));
+    state.gscale = GscaleService::new().with_receipt_store(Arc::new(PostgresGscaleReceiptStore::new(runtime.clone())));
+    let own = session_for(&state, PrincipalRole::TayyorlovMasteri, "prep-reprint").await;
+    let other = session_for(&state, PrincipalRole::TayyorlovMasteri, "other-master").await;
+    let router = build_router(state.clone());
+    let prepared = router.clone().oneshot(request_with_body("POST",
+        "/v1/mobile/admin/raw-material-stock/reprint/prepare", &own,
+        r#"{"barcode":"QR-OWN","order_id":"zakaz-original"}"#)).await.unwrap();
+    assert_eq!(prepared.status(), StatusCode::OK);
+    let body = json_body(prepared).await;
+    assert_eq!(body["print"]["epc"], "QR-OWN");
+    assert_eq!(body["print"]["gross_qty"], 23.0);
+    assert_eq!(body["stock"]["source_receipt_id"], "receipt-own");
+    let confirm = serde_json::json!({"barcode":"QR-OWN","reprint_id":body["reprint_id"]}).to_string();
+    for (token, expected) in [(&other, StatusCode::FORBIDDEN), (&own, StatusCode::OK)] {
+        let response = router.clone().oneshot(request_with_body("POST",
+            "/v1/mobile/admin/raw-material-stock/reprint/confirm", token, &confirm)).await.unwrap();
+        assert_eq!(response.status(), expected);
+    }
+    for barcode in ["QR-OTHER", "QR-DRAFT"] {
+        let response = router.clone().oneshot(request_with_body("POST",
+            "/v1/mobile/admin/raw-material-stock/reprint/prepare", &own,
+            &serde_json::json!({"barcode":barcode}).to_string())).await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+    let quantity: (i64, String) = sqlx::query_as(
+        "SELECT count(*), max(qty)::text FROM mini_raw_material_stock WHERE barcode='QR-OWN'",
+    ).fetch_one(&seed).await.unwrap();
+    assert_eq!(quantity.0, 1);
+    assert!(quantity.1.starts_with("23"));
+    drop(router);
+    drop(state);
+    runtime.close().await;
+    seed.close().await;
+    sqlx::query(&format!(r#"DROP DATABASE "{db}" WITH (FORCE)"#)).execute(&admin).await.unwrap();
+    admin.close().await;
+}
+
+#[tokio::test]
 async fn preparation_production_journal_requires_master_capability_and_valid_paging() {
     let state = test_state();
     let admin = session(&state, PrincipalRole::Admin).await;

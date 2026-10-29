@@ -12,6 +12,23 @@ const BATCH_JSON: &str = "jsonb_build_object('batch_id',b.batch_id,'order_id',b.
     'preparation_formula',b.preparation_formula)";
 
 impl PostgresPreparationStore {
+    pub async fn owns_submitted_production_receipt(
+        &self,
+        owner: &str,
+        barcode: &str,
+    ) -> Result<bool, PreparationError> {
+        Ok(sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM mini_gscale_receipts
+             WHERE lower(barcode) = lower($2) AND status = 'submitted'
+               AND payload_json->>'actor_role' = 'tayyorlov_masteri'
+               AND payload_json->>'actor_ref' = $1)",
+        )
+        .bind(owner.trim())
+        .bind(barcode.trim())
+        .fetch_one(&self.pool)
+        .await?)
+    }
+
     pub async fn production_journal_orders(
         &self,
         owner: &str,

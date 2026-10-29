@@ -108,6 +108,10 @@ async fn require_material_reprint_capabilities(
     if principal.role.is_admin_workspace_manager() {
         return Ok(());
     }
+    if principal.role == PrincipalRole::TayyorlovMasteri {
+        require_capability(state, principal, Capability::PreparationAccess).await?;
+        return require_capability(state, principal, Capability::GscalePrint).await;
+    }
     if principal.role != PrincipalRole::MaterialTaminotchi {
         return Err(forbidden());
     }
@@ -122,6 +126,12 @@ async fn reprintable_material_stock(
     order_id: &str,
 ) -> Result<RawMaterialStockEntry, AdminError> {
     let stock = material_stock_in_scope(state, principal, barcode).await?;
+    if principal.role == PrincipalRole::TayyorlovMasteri
+        && stock.status.trim().eq_ignore_ascii_case("available")
+        && stock.reserved_order_id.trim().is_empty()
+    {
+        return Ok(stock);
+    }
     let order_id = order_id.trim();
     if !order_id.is_empty() {
         let assignments = state.production_maps.raw_material_assignments_for_order(order_id)
@@ -159,7 +169,13 @@ async fn material_stock_in_scope(
         .await
         .map_err(|_| server_error("raw material stock fetch failed"))?
         .ok_or_else(|| not_found("raw_material_stock_not_found"))?;
-    if !principal.role.is_admin_workspace_manager() {
+    if principal.role == PrincipalRole::TayyorlovMasteri {
+        let preparation = state.preparation.as_ref().ok_or_else(forbidden)?;
+        if !preparation.owns_submitted_production_receipt(&principal.ref_, barcode)
+            .await.map_err(|_| server_error("preparation receipt lookup failed"))? {
+            return Err(forbidden());
+        }
+    } else if !principal.role.is_admin_workspace_manager() {
         let warehouses = material_warehouse_scope(state, principal).await?;
         if !warehouse_in_scope(&warehouses, &stock.warehouse) {
             return Err(forbidden());
