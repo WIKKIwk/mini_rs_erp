@@ -7,6 +7,7 @@ use crate::core::auth::models::PrincipalRole;
 pub enum Capability {
     AdminAccess,
     SalesAccess,
+    BrigaderAccess,
     ProductionMapRead,
     ProductionOrderCreate,
     ProductionOrderEdit,

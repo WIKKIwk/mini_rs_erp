@@ -223,7 +223,9 @@ impl ProductionMapService {
         if batch_id.is_empty() {
             return Err(ProductionMapError::OpeningWipInvalidInput);
         }
-        if !actor.role.trim().eq_ignore_ascii_case("admin") {
+        if !actor.role.trim().eq_ignore_ascii_case("admin")
+            && !actor.role.trim().eq_ignore_ascii_case("brigader")
+        {
             return Err(ProductionMapError::OpeningWipDeleteForbidden);
         }
         let _guard = self.queue_action_guard().await;

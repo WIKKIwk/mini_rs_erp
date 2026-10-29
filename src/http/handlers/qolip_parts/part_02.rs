@@ -19,7 +19,7 @@ pub async fn checkouts(
             }
             let is_admin = state
                 .admin
-                .principal_has_capability(&principal, Capability::AdminAccess)
+                .principal_has_admin_workspace_access(&principal)
                 .await;
             let checkouts = state
                 .qolip

@@ -65,7 +65,7 @@ pub struct LinkRequest {
 
 impl LinkRequest {
     pub fn can_decide(&self, principal: &Principal) -> bool {
-        principal.role == PrincipalRole::Admin
+        principal.role.is_admin_workspace_manager()
             || (principal.role == PrincipalRole::MaterialTaminotchi
                 && principal.ref_ == self.mover_ref)
     }
@@ -283,7 +283,9 @@ impl MaterialLinkStore {
             request.finish("cancelled", "");
         }
         request.decided_by_name = principal.display_name.clone();
-        request.decided_by_role = if principal.role == PrincipalRole::Admin {
+        request.decided_by_role = if principal.role == PrincipalRole::Brigader {
+            "brigader"
+        } else if principal.role == PrincipalRole::Admin {
             "admin"
         } else {
             "material_taminotchi"

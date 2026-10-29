@@ -75,6 +75,8 @@ impl CalculateOrderStorePort for PostgresCalculateOrderStore {
              FROM mini_quick_order_templates
              WHERE owner_key = $1
                 OR ($1 LIKE 'admin:%' AND owner_key LIKE 'telegram:%')
+                OR ($1 LIKE 'admin:%' AND owner_key LIKE 'brigader:%')
+                OR ($1 LIKE 'brigader:%' AND (owner_key LIKE 'admin:%' OR owner_key LIKE 'telegram:%' OR owner_key LIKE 'brigader:%'))
                 OR ($1 LIKE 'sales_manager:%' AND owner_key LIKE 'admin:%')
              ORDER BY saved_at DESC",
         )
@@ -121,7 +123,9 @@ impl CalculateOrderStorePort for PostgresCalculateOrderStore {
             "DELETE FROM mini_quick_order_templates
              WHERE id = $2
                AND (owner_key = $1
-                    OR ($1 LIKE 'admin:%' AND owner_key LIKE 'telegram:%'))",
+                    OR ($1 LIKE 'admin:%' AND owner_key LIKE 'telegram:%')
+                OR ($1 LIKE 'admin:%' AND owner_key LIKE 'brigader:%')
+                OR ($1 LIKE 'brigader:%' AND (owner_key LIKE 'admin:%' OR owner_key LIKE 'telegram:%' OR owner_key LIKE 'brigader:%')))",
         )
         .bind(owner_key.trim())
         .bind(id.trim())
@@ -172,9 +176,11 @@ impl CalculateOrderStorePort for PostgresCalculateOrderStore {
              WHERE image_id = $2
                AND (owner_key = $1
                     OR ($1 LIKE 'admin:%' AND owner_key LIKE 'telegram:%')
-                    OR ($1 LIKE 'sales_manager:%' AND owner_key LIKE 'admin:%'
+                OR ($1 LIKE 'admin:%' AND owner_key LIKE 'brigader:%')
+                OR ($1 LIKE 'brigader:%' AND (owner_key LIKE 'admin:%' OR owner_key LIKE 'telegram:%' OR owner_key LIKE 'brigader:%'))
+                    OR ($1 LIKE 'sales_manager:%' AND (owner_key LIKE 'admin:%' OR owner_key LIKE 'brigader:%')
                         AND EXISTS (SELECT 1 FROM mini_quick_order_templates AS t
-                                    WHERE t.owner_key = image.owner_key
+                                    WHERE t.owner_key LIKE 'admin:%'
                                       AND t.payload_json->>'image_id' = image.image_id)))
              ORDER BY created_at DESC
              LIMIT 1",
@@ -250,6 +256,11 @@ pub(crate) async fn upsert_template_tx(
     if let Some(identity) = &existing {
         template.variant_id = identity.variant_id.clone();
     }
+    let write_owner = existing
+            .as_ref()
+            .map(|row| row.owner.as_str())
+            .unwrap_or(owner_key.trim())
+            .to_string();
     let saved = stamp_template(template, existing.map(|row| row.id));
     let payload = serde_json::to_value(&saved).map_err(|_| CalculateOrderError::StoreFailed)?;
     let written = sqlx::query(
@@ -267,7 +278,7 @@ pub(crate) async fn upsert_template_tx(
            AND (btrim(mini_quick_order_templates.item_code) = '' OR mini_quick_order_templates.item_code = excluded.item_code)",
     )
     .bind(&saved.id)
-    .bind(owner_key.trim())
+    .bind(&write_owner)
     .bind(&saved.code)
     .bind(&saved.name)
     .bind(&saved.item_code)

@@ -16,7 +16,7 @@ pub async fn production_map_paddon_items_transfer(
         &[Capability::AdminAccess, Capability::ApparatusQueueManage],
     )
     .await?;
-    if principal.role != PrincipalRole::Admin
+    if !principal.role.is_admin_workspace_manager()
         && (principal.role != PrincipalRole::Aparatchi
             || super::paddon_print_lock::assigned_cut_apparatuses(&state, &principal)
                 .await?

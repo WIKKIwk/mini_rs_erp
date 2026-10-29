@@ -121,6 +121,18 @@ pub(crate) struct TemplateIdentity {
     pub variant_id: String,
 }
 
+// Brigaders share the existing operational template workspace while each saved
+// row retains the identity of its original author.
+fn template_owner_can_write(owner: &str, stored_owner: &str) -> bool {
+    let owner = owner.trim();
+    owner == stored_owner
+        || (owner.starts_with("brigader:")
+            && ["admin:", "telegram:", "brigader:"]
+                .iter()
+                .any(|prefix| stored_owner.starts_with(prefix)))
+        || (owner.starts_with("admin:") && stored_owner.starts_with("brigader:"))
+}
+
 pub(crate) fn checked_template_identity(
     owner: &str,
     incoming: &CalculateOrderTemplate,
@@ -128,7 +140,7 @@ pub(crate) fn checked_template_identity(
     by_code: Option<TemplateIdentity>,
 ) -> Result<Option<TemplateIdentity>, CalculateOrderError> {
     for existing in by_id.iter().chain(by_code.iter()) {
-        if existing.owner != owner.trim()
+        if !template_owner_can_write(owner, &existing.owner)
             || (!existing.item_code.trim().is_empty()
                 && existing.item_code.trim() != incoming.item_code.trim())
         {
@@ -147,7 +159,7 @@ pub(crate) fn checked_template_read_identity(
     owner: &str, incoming: &CalculateOrderTemplate, existing: Option<TemplateIdentity>,
 ) -> Result<Option<TemplateIdentity>, CalculateOrderError> {
     if let Some(identity)=&existing {
-        let readable=identity.owner == owner.trim()
+        let readable = template_owner_can_write(owner, &identity.owner)
             || (owner.starts_with("admin:") && identity.owner.starts_with("telegram:"))
             || (owner.starts_with("sales_manager:") && identity.owner.starts_with("admin:"));
         if !readable || (!identity.item_code.trim().is_empty() && identity.item_code.trim()!=incoming.item_code.trim()) {

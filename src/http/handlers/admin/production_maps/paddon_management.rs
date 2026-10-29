@@ -31,7 +31,7 @@ pub async fn production_map_paddon_management_settings(
         Method::PUT => {
             let principal =
                 authorize_any_capability(&state, &headers, &[Capability::AdminAccess]).await?;
-            if principal.role != PrincipalRole::Admin {
+            if !principal.role.is_admin_workspace_manager() {
                 return Err(forbidden());
             }
             let input: ManagementSettingsRequest = parse_json(&body)?;

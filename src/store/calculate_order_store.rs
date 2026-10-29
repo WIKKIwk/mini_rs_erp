@@ -81,6 +81,8 @@ impl CalculateOrderStorePort for CalculateOrderStore {
                  FROM calculate_order_templates
                  WHERE owner_key = ?1
                     OR (?1 LIKE 'admin:%' AND owner_key LIKE 'telegram:%')
+                    OR (?1 LIKE 'admin:%' AND owner_key LIKE 'brigader:%')
+                    OR (?1 LIKE 'brigader:%' AND (owner_key LIKE 'admin:%' OR owner_key LIKE 'telegram:%' OR owner_key LIKE 'brigader:%'))
                     OR (?1 LIKE 'sales_manager:%' AND owner_key LIKE 'admin:%')
                  ORDER BY saved_at DESC",
             )
@@ -151,6 +153,11 @@ impl CalculateOrderStorePort for CalculateOrderStore {
         if let Some(identity) = &existing {
             incoming.variant_id = identity.variant_id.clone();
         }
+        let write_owner = existing
+            .as_ref()
+            .map(|row| row.owner.as_str())
+            .unwrap_or(owner_key.trim())
+            .to_string();
         let saved = stamp_template(incoming, existing.map(|row| row.id));
         let lower_code = normalize_key(&saved.code);
         let lower_name = normalize_key(&saved.name);
@@ -172,7 +179,7 @@ impl CalculateOrderStorePort for CalculateOrderStore {
                     OR json_extract(calculate_order_templates.payload_json,'$.item_code') = json_extract(excluded.payload_json,'$.item_code'))",
             params![
                 saved.id,
-                owner_key.trim(),
+                write_owner,
                 saved.code,
                 lower_code,
                 saved.name,
@@ -196,7 +203,9 @@ impl CalculateOrderStorePort for CalculateOrderStore {
             "DELETE FROM calculate_order_templates
              WHERE id = ?2
                AND (owner_key = ?1
-                    OR (?1 LIKE 'admin:%' AND owner_key LIKE 'telegram:%'))",
+                    OR (?1 LIKE 'admin:%' AND owner_key LIKE 'telegram:%')
+                    OR (?1 LIKE 'admin:%' AND owner_key LIKE 'brigader:%')
+                    OR (?1 LIKE 'brigader:%' AND (owner_key LIKE 'admin:%' OR owner_key LIKE 'telegram:%' OR owner_key LIKE 'brigader:%')))",
             params![owner_key.trim(), id.trim()],
         )
         .map_err(|_| CalculateOrderError::StoreFailed)?;
@@ -251,9 +260,11 @@ impl CalculateOrderStorePort for CalculateOrderStore {
              WHERE image_id = ?2
                AND (owner_key = ?1
                     OR (?1 LIKE 'admin:%' AND owner_key LIKE 'telegram:%')
-                    OR (?1 LIKE 'sales_manager:%' AND owner_key LIKE 'admin:%'
+                    OR (?1 LIKE 'admin:%' AND owner_key LIKE 'brigader:%')
+                    OR (?1 LIKE 'brigader:%' AND (owner_key LIKE 'admin:%' OR owner_key LIKE 'telegram:%' OR owner_key LIKE 'brigader:%'))
+                    OR (?1 LIKE 'sales_manager:%' AND (owner_key LIKE 'admin:%' OR owner_key LIKE 'brigader:%')
                         AND EXISTS (SELECT 1 FROM calculate_order_templates AS t
-                                    WHERE t.owner_key = image.owner_key
+                                    WHERE t.owner_key LIKE 'admin:%'
                                       AND json_extract(t.payload_json, '$.image_id') = image.image_id)))
              ORDER BY created_at DESC
              LIMIT 1",

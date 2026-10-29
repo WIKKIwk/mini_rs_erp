@@ -21,7 +21,7 @@ pub async fn production_map_qolip_start_settings(
     .await?;
     if method != Method::GET {
         require_capability(&state, &principal, Capability::AdminAccess).await?;
-        if principal.role != PrincipalRole::Admin {
+        if !principal.role.is_admin_workspace_manager() {
             return Err(forbidden());
         }
     }

@@ -30,7 +30,7 @@ async fn read(
     }
     let admin = state
         .admin
-        .principal_has_capability(&principal, Capability::AdminAccess)
+        .principal_has_admin_workspace_access(&principal)
         .await;
     Ok(Json(
         state
@@ -88,7 +88,7 @@ async fn action(
         serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json"))?;
     let admin = state
         .admin
-        .principal_has_capability(&principal, Capability::AdminAccess)
+        .principal_has_admin_workspace_access(&principal)
         .await;
     let mut response = state
         .qolip
@@ -130,7 +130,7 @@ pub async fn paddon_qr_print(
     let code = input.qolip_code.trim().to_uppercase();
     if code.is_empty() { return Err(bad_request("qolip_code_required")); }
     let qr_payload = format!("qolip-paddon:{code}");
-    let admin = state.admin.principal_has_capability(&principal, Capability::AdminAccess).await;
+    let admin = state.admin.principal_has_admin_workspace_access(&principal).await;
     let detail = state.qolip.storage_read("detail", &QolipStorageQuery {
         code: code.clone(), ..Default::default()
     }, &principal, admin).await.map_err(storage_error)?;

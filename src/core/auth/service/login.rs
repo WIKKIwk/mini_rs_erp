@@ -78,7 +78,7 @@ impl AuthService {
                 self.login_system_user_by_role(&normalized_phone, code, role)
                     .await
             }
-            PrincipalRole::HomashyoRezkachi | PrincipalRole::SalesManager => {
+            PrincipalRole::HomashyoRezkachi | PrincipalRole::SalesManager | PrincipalRole::Brigader => {
                 self.login_system_user_by_role(&normalized_phone, code, role)
                     .await
             }
@@ -212,6 +212,8 @@ impl AuthService {
             Ok(PrincipalRole::Qolipchi)
         } else if trimmed.starts_with("80") {
             Ok(PrincipalRole::Boyoqchi)
+        } else if trimmed.starts_with("93") {
+            Ok(PrincipalRole::Brigader)
         } else if trimmed.starts_with("92") {
             Ok(PrincipalRole::SalesManager)
         } else if trimmed.starts_with("91") {

@@ -17,6 +17,13 @@ pub enum PrincipalRole {
     TayyorlovMasteri,
     HomashyoRezkachi,
     SalesManager,
+    Brigader,
+}
+
+impl PrincipalRole {
+    pub fn is_admin_workspace_manager(self) -> bool {
+        matches!(self, Self::Admin | Self::Brigader)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

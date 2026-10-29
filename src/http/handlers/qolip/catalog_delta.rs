@@ -9,7 +9,7 @@ pub(super) async fn affected_codes(
 ) -> Result<Vec<String>, QolipError> {
     let is_admin = state
         .admin
-        .principal_has_capability(principal, Capability::AdminAccess)
+        .principal_has_admin_workspace_access(principal)
         .await;
     let mut visible = Vec::new();
     for code in state.qolip.catalog_codes_for_molds(molds).await? {
@@ -51,7 +51,7 @@ async fn read(
         .collect::<std::collections::BTreeSet<_>>();
     let is_admin = state
         .admin
-        .principal_has_capability(principal, Capability::AdminAccess)
+        .principal_has_admin_workspace_access(principal)
         .await;
     let images = state
         .qolip

@@ -82,7 +82,7 @@ impl ProductionMapService {
         enabled: bool,
         actor: &QueueActionActor,
     ) -> Result<QolipStartSettings, ProductionMapError> {
-        if actor.role != "admin" || actor.ref_.trim().is_empty() {
+        if !matches!(actor.role.as_str(), "admin" | "brigader") || actor.ref_.trim().is_empty() {
             return Err(ProductionMapError::QueueActionNotAllowed);
         }
         // Serialize in-memory starts and policy changes as well as using the

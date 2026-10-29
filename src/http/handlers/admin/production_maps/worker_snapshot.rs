@@ -261,7 +261,7 @@ pub(super) async fn read_detail(
     state: &AppState, principal: &Principal, apparatus: &str, order_id: &str,
 ) -> Result<Response, AdminError> {
     let can_read = state.admin.principal_has_capability(principal, Capability::ApparatusQueueRead).await
-        || state.admin.principal_has_capability(principal, Capability::AdminAccess).await
+        || state.admin.principal_has_admin_workspace_access(principal).await
         || state.admin.principal_has_capability(principal, Capability::ProductionMapManage).await;
     if !can_read { return Err(forbidden()); }
     for _ in 0..3 {

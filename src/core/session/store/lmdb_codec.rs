@@ -132,6 +132,7 @@ fn encode_role(role: &PrincipalRole) -> u8 {
         PrincipalRole::TayyorlovMasteri => 9,
         PrincipalRole::HomashyoRezkachi => 10,
         PrincipalRole::SalesManager => 11,
+        PrincipalRole::Brigader => 12,
     }
 }
 
@@ -148,6 +149,7 @@ fn decode_role(role: u8) -> Result<PrincipalRole, BoxedError> {
         9 => Ok(PrincipalRole::TayyorlovMasteri),
         10 => Ok(PrincipalRole::HomashyoRezkachi),
         11 => Ok(PrincipalRole::SalesManager),
+        12 => Ok(PrincipalRole::Brigader),
         _ => Err("invalid stored session principal role".into()),
     }
 }
@@ -187,4 +189,13 @@ fn sales_manager_session_codec_uses_a_new_discriminator_without_reassigning_exis
     assert_eq!(decode_role(11).unwrap(), PrincipalRole::SalesManager);
     assert_eq!(decode_role(10).unwrap(), PrincipalRole::HomashyoRezkachi);
     assert_eq!(decode_role(9).unwrap(), PrincipalRole::TayyorlovMasteri);
+}
+
+#[cfg(test)]
+#[test]
+fn brigader_session_codec_preserves_existing_role_discriminators() {
+    assert_eq!(encode_role(&PrincipalRole::Brigader), 12);
+    assert_eq!(decode_role(12).unwrap(), PrincipalRole::Brigader);
+    assert_eq!(encode_role(&PrincipalRole::SalesManager), 11);
+    assert_eq!(encode_role(&PrincipalRole::Admin), 3);
 }

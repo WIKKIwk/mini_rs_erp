@@ -12,7 +12,7 @@ pub async fn rename_set(
         return Err(method_not_allowed());
     }
     let is_admin = state.admin
-        .principal_has_capability(&principal, Capability::AdminAccess).await;
+        .principal_has_admin_workspace_access(&principal).await;
     let input: crate::core::qolip::QolipSetRename =
         serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json"))?;
     let set = state.qolip.rename_set(&input, &principal, is_admin)
@@ -32,7 +32,7 @@ pub async fn create_set(
         return Err(method_not_allowed());
     }
     let is_admin = state.admin
-        .principal_has_capability(&principal, Capability::AdminAccess).await;
+        .principal_has_admin_workspace_access(&principal).await;
     let input: crate::core::qolip::QolipSetCreate =
         serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json"))?;
     let set = state.qolip.create_set(&input, &principal, is_admin)
@@ -50,7 +50,7 @@ pub async fn sets(
     ensure_qolip_access(&state, &principal).await?;
     let is_admin = state
         .admin
-        .principal_has_capability(&principal, Capability::AdminAccess)
+        .principal_has_admin_workspace_access(&principal)
         .await;
     match method {
         Method::GET => {
@@ -93,7 +93,7 @@ pub async fn product_molds(
     }
     let is_admin = state
         .admin
-        .principal_has_capability(&principal, Capability::AdminAccess)
+        .principal_has_admin_workspace_access(&principal)
         .await;
     let input: crate::core::qolip::QolipProductMoldEdits =
         serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json"))?;

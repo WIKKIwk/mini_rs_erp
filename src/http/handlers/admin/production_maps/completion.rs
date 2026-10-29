@@ -31,7 +31,7 @@ pub async fn production_map_live(
     }
     let principal = authenticated_principal_for_live(&state, &headers, &query.token).await?;
     require_any_live_capability(&state, &principal).await?;
-    let include_completion_requests = matches!(principal.role, PrincipalRole::Admin);
+    let include_completion_requests = principal.role.is_admin_workspace_manager();
     let delta_enabled = query.protocol.as_deref() == Some("delta");
     let compact_state_delta = query.protocol.as_deref() == Some("state_delta_v2");
     let state_delta_enabled =

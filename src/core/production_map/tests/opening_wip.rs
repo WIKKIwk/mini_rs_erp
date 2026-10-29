@@ -843,7 +843,14 @@ async fn opening_wip_delete_voids_only_unused_batches_and_cancels_last_intake() 
         .expect("opening WIP");
 
     let first = service
-        .delete_opening_wip_batch(&opening.batches[0].batch_id, admin_actor())
+        .delete_opening_wip_batch(
+            &opening.batches[0].batch_id,
+            QueueActionActor {
+                role: "brigader".to_string(),
+                ref_: "brigader_opening_wip".to_string(),
+                display_name: "Brigader".to_string(),
+            },
+        )
         .await
         .expect("delete first unused batch");
     assert_eq!(first.batch.wip_status, OpeningWipBatchStatus::Void);

@@ -119,7 +119,7 @@ pub async fn production_map_wip_batches(
     let limit = positive_int(query.limit.as_deref(), 100).min(500);
     let can_view_all = state
         .admin
-        .principal_has_capability(&principal, Capability::AdminAccess)
+        .principal_has_admin_workspace_access(&principal)
         .await
         || state
             .admin

@@ -157,7 +157,7 @@ impl ProductionMapService {
         required: bool,
         actor: &QueueActionActor,
     ) -> Result<LaminationSettings, ProductionMapError> {
-        if actor.role != "admin" || actor.ref_.trim().is_empty() {
+        if !matches!(actor.role.as_str(), "admin" | "brigader") || actor.ref_.trim().is_empty() {
             return Err(ProductionMapError::QueueActionNotAllowed);
         }
         let settings = self.store.update_lamination_settings(required, actor).await?;

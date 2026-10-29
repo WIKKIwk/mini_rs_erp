@@ -35,7 +35,9 @@ pub async fn system_monitor_live(
     ws: WebSocketUpgrade,
 ) -> Result<Response, AdminError> {
     let principal = authenticated_principal_for_live(&state, &headers, &query.token).await?;
-    require_capability(&state, &principal, Capability::AdminAccess).await?;
+    if !state.admin.principal_has_capability(&principal, Capability::AdminAccess).await {
+        return Err(forbidden());
+    }
     Ok(ws
         .on_upgrade(move |socket| system_monitor_live_socket(state, socket))
         .into_response())

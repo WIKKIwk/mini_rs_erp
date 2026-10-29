@@ -90,7 +90,7 @@ pub async fn production_map_opening_wip(
         Method::GET => {
             let can_view_all = state
                 .admin
-                .principal_has_capability(&principal, Capability::AdminAccess)
+                .principal_has_admin_workspace_access(&principal)
                 .await
                 || state
                     .admin
@@ -124,7 +124,7 @@ pub async fn production_map_opening_wip(
         Method::DELETE => {
             if !state
                 .admin
-                .principal_has_capability(&principal, Capability::AdminAccess)
+                .principal_has_admin_workspace_access(&principal)
                 .await
             {
                 return Err(forbidden());
@@ -260,7 +260,7 @@ pub async fn production_map_opening_wip_lookup(
     let apparatus_id = apparatus.id.to_string();
     let can_view_all = state
         .admin
-        .principal_has_capability(&principal, Capability::AdminAccess)
+        .principal_has_admin_workspace_access(&principal)
         .await
         || state
             .admin

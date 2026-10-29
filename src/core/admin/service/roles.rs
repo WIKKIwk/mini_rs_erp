@@ -86,6 +86,30 @@ impl AdminService {
             .map_err(|_| AdminPortError::LookupFailed)
     }
 
+    /// Administrative components reused by the closed brigader workspace.
+    /// This is intentionally separate from AdminAccess: advertised grants and
+    /// non-HTTP integrations must never treat a brigader as a system admin.
+    pub async fn principal_has_admin_workspace_access(&self, principal: &Principal) -> bool {
+        self.principal_has_capability(principal, Capability::AdminAccess)
+            .await
+            || (principal.role == PrincipalRole::Brigader
+                && self
+                    .principal_has_capability(principal, Capability::BrigaderAccess)
+                    .await)
+    }
+
+    pub async fn principal_has_capability_for_admin_workspace(
+        &self,
+        principal: &Principal,
+        capability: Capability,
+    ) -> bool {
+        if capability == Capability::AdminAccess {
+            self.principal_has_admin_workspace_access(principal).await
+        } else {
+            self.principal_has_capability(principal, capability).await
+        }
+    }
+
     pub async fn principal_has_capability(
         &self,
         principal: &Principal,
@@ -94,9 +118,13 @@ impl AdminService {
         if !matches!(self.principal_is_active(principal).await, Ok(true)) {
             return false;
         }
-        // Sales is a fixed system workspace: a custom assignment cannot grant
-        // stock, queue, lifecycle, administration or other operational powers.
-        if principal.role == PrincipalRole::SalesManager && !has_capability(principal, capability) {
+        // Fixed system workspaces cannot gain powers outside their catalog
+        // through a custom role assignment.
+        if matches!(
+            principal.role,
+            PrincipalRole::SalesManager | PrincipalRole::Brigader
+        ) && !has_capability(principal, capability)
+        {
             return false;
         }
         match self.principal_assigned_role(principal).await {
@@ -122,8 +150,13 @@ impl AdminService {
             return Vec::new();
         }
         match self.principal_assigned_role(principal).await {
-            Ok(Some(role)) if principal.role == PrincipalRole::SalesManager => {
-                let allowed = capability_codes_for_role(PrincipalRole::SalesManager);
+            Ok(Some(role))
+                if matches!(
+                    principal.role,
+                    PrincipalRole::SalesManager | PrincipalRole::Brigader
+                ) =>
+            {
+                let allowed = capability_codes_for_role(principal.role);
                 role.capability_codes
                     .into_iter()
                     .filter(|code| allowed.contains(code))

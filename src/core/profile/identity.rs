@@ -136,6 +136,7 @@ fn principal_role_key(role: &PrincipalRole) -> &'static str {
         PrincipalRole::TayyorlovMasteri => "tayyorlov_masteri",
         PrincipalRole::HomashyoRezkachi => "homashyo_rezkachi",
         PrincipalRole::SalesManager => "sales_manager",
+        PrincipalRole::Brigader => "brigader",
         PrincipalRole::MaterialTaminotchi => "material_taminotchi",
         PrincipalRole::Admin => "admin",
     }
@@ -173,6 +174,8 @@ fn canonical_role_key(value: &str) -> Option<&'static str> {
     .any(|role| value.eq_ignore_ascii_case(role))
     {
         Some("material_taminotchi")
+    } else if value.eq_ignore_ascii_case("brigader") {
+        Some("brigader")
     } else if value.eq_ignore_ascii_case("sales_manager") {
         Some("sales_manager")
     } else if value.eq_ignore_ascii_case("admin") {
@@ -193,6 +196,16 @@ mod tests {
         assert_eq!(
             identity.lookup_keys(),
             vec!["sales_manager:sales_manager_1"]
+        );
+    }
+
+    #[test]
+    fn brigader_uses_an_independent_profile_vault_identity() {
+        let identity = ProfileIdentity::new("brigader", "brigader_1").unwrap();
+        assert_eq!(identity.vault_key(), "brigader:brigader_1");
+        assert_eq!(
+            identity.lookup_keys(),
+            vec!["brigader:brigader_1"]
         );
     }
 

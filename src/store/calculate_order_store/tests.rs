@@ -559,3 +559,89 @@ async fn sales_can_read_admin_templates_and_their_images_without_mutating_them()
     assert!(store.list("admin:one").await.unwrap().contains(&admin));
     assert!(matches!(store.validate_read_identity("sales_manager:one", &other).await, Err(CalculateOrderError::IdentityConflict)));
 }
+
+#[tokio::test]
+async fn brigader_quick_orders_share_admin_telegram_and_staff_templates_without_reassigning_owners() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = CalculateOrderStore::new(dir.path().join("orders.sqlite"));
+    let mut shared = Vec::new();
+    for (owner, code) in [
+        ("admin:admin", "ADMIN"),
+        ("telegram:manager", "TELEGRAM"),
+        ("brigader:another", "BRIGADER"),
+    ] {
+        let image = store.save_image(owner, CalculateOrderImage {
+            image_id: format!("image-{code}"), body: vec![1, 2, 3], ..Default::default()
+        }).await.unwrap();
+        let template = store.upsert(owner, CalculateOrderTemplate {
+            image_id: image.image_id.clone(), item_code: code.into(), ..test_template(code)
+        }).await.unwrap();
+        shared.push((owner, template, image));
+    }
+    let private = store.upsert("customer:private", CalculateOrderTemplate {
+        item_code: "PRIVATE".into(), ..test_template("PRIVATE")
+    }).await.unwrap();
+    let rows = store.list("brigader:current").await.unwrap();
+    assert_eq!(rows.len(), shared.len());
+    for (owner, template, image) in &shared {
+        assert!(rows.contains(template));
+        assert_eq!(store.get_image("brigader:current", &image.image_id).await.unwrap(), Some(image.clone()));
+        if owner.starts_with("brigader:") {
+            assert_eq!(store.get_image("admin:admin", &image.image_id).await.unwrap(), Some(image.clone()));
+        }
+        store.validate_read_identity("brigader:current", template).await.unwrap();
+        store.validate_identity("brigader:current", template).await.unwrap();
+        let mut edited = template.clone();
+        edited.name = format!("Edited {}", template.name);
+        let saved = store.upsert("brigader:current", edited.clone()).await.unwrap();
+        assert_eq!(saved.id, template.id);
+        assert_eq!(saved.name, edited.name);
+        let stored_owner: String = store.conn.lock().unwrap().query_row(
+            "SELECT owner_key FROM calculate_order_templates WHERE id = ?1",
+            params![&saved.id], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(&stored_owner, owner);
+        edited.item_code = "CHANGED-SKU".into();
+        assert!(matches!(store.upsert("brigader:current", edited).await, Err(CalculateOrderError::IdentityConflict)));
+    }
+    // A new image uploaded while a Brigader edits an Admin template keeps the
+    // uploader's owner, and remains visible to Sales through that Admin template.
+    let replacement_image = store.save_image("brigader:current", CalculateOrderImage {
+        image_id: "brigader-admin-replacement".into(), body: vec![5, 6], ..Default::default()
+    }).await.unwrap();
+    let mut admin_with_replacement = shared[0].1.clone();
+    admin_with_replacement.image_id = replacement_image.image_id.clone();
+    store.upsert("brigader:current", admin_with_replacement).await.unwrap();
+    assert_eq!(store.get_image("sales_manager:viewer", &replacement_image.image_id).await.unwrap(), Some(replacement_image));
+    store.save_image("brigader:current", CalculateOrderImage {
+        image_id: "brigader-unlinked".into(), body: vec![7], ..Default::default()
+    }).await.unwrap();
+    for image_id in ["brigader-unlinked", shared[2].2.image_id.as_str()] {
+        assert!(store.get_image("sales_manager:viewer", image_id).await.unwrap().is_none());
+    }
+    let own = store.upsert("brigader:current", CalculateOrderTemplate {
+        item_code: "NEW-STAFF".into(), ..test_template("NEW-STAFF")
+    }).await.unwrap();
+    let own_owner: String = store.conn.lock().unwrap().query_row(
+        "SELECT owner_key FROM calculate_order_templates WHERE id = ?1",
+        params![&own.id], |row| row.get(0),
+    ).unwrap();
+    assert_eq!(own_owner, "brigader:current");
+    assert!(store.list("admin:admin").await.unwrap().contains(&own));
+    let mut admin_edit = own.clone();
+    admin_edit.name = "Admin edited staff template".into();
+    store.upsert("admin:admin", admin_edit.clone()).await.unwrap();
+    assert!(store.list("brigader:current").await.unwrap().iter().any(|row| row.id == own.id && row.name == admin_edit.name));
+    assert_eq!(store.conn.lock().unwrap().query_row(
+        "SELECT owner_key FROM calculate_order_templates WHERE id = ?1",
+        params![&own.id], |row| row.get::<_, String>(0),
+    ).unwrap(), "brigader:current");
+    assert!(!store.list("brigader:current").await.unwrap().contains(&private));
+    assert!(matches!(store.upsert("brigader:current", private.clone()).await, Err(CalculateOrderError::IdentityConflict)));
+    store.delete("brigader:current", &private.id).await.unwrap();
+    assert!(store.list("customer:private").await.unwrap().contains(&private));
+    for (owner, template, _) in shared {
+        store.delete("brigader:current", &template.id).await.unwrap();
+        assert!(!store.list(owner).await.unwrap().iter().any(|row| row.id == template.id));
+    }
+}

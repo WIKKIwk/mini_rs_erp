@@ -94,7 +94,7 @@ pub(crate) fn paddon_unlock_actor_allowed(
     actor: &crate::core::production_map::QueueActionActor,
 ) -> bool {
     !actor.ref_.trim().is_empty()
-        && (actor.role == "admin"
+        && (matches!(actor.role.as_str(), "admin" | "brigader")
             || free_movement_enabled
             || (actor.role == "aparatchi" && locked_by_ref.trim() == actor.ref_.trim()))
 }

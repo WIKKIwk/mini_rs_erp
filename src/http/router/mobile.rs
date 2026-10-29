@@ -1,4 +1,5 @@
 mod admin;
+mod brigader;
 mod core;
 mod sales;
 
@@ -15,6 +16,10 @@ pub(super) fn routes(state: AppState) -> Router {
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             sales::enforce_scope,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            brigader::enforce_scope,
         ))
         .with_state(state)
 }

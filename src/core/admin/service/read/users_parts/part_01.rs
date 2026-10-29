@@ -300,6 +300,7 @@ impl AdminService {
                 PrincipalRole::TayyorlovMasteri => "Tayyorlov masteri",
                 PrincipalRole::HomashyoRezkachi => "Homashyo rezkachisi",
                 PrincipalRole::SalesManager => "Sotuv manageri",
+                PrincipalRole::Brigader => "Brigader",
                 _ => "System user",
             };
             entries.push(AdminUserListEntry {

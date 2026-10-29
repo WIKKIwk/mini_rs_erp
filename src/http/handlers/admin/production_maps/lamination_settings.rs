@@ -30,7 +30,7 @@ pub async fn production_map_lamination_settings(
         }
         Method::PUT => {
             let principal = authorize_capability(&state, &headers, Capability::AdminAccess).await?;
-            if principal.role != PrincipalRole::Admin {
+            if !principal.role.is_admin_workspace_manager() {
                 return Err(forbidden());
             }
             let input: LaminationSettingsRequest = parse_json(&body)?;

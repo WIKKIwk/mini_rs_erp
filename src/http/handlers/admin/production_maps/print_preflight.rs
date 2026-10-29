@@ -49,7 +49,7 @@ pub async fn production_map_print_preflight(
     }
     let is_admin = state
         .admin
-        .principal_has_capability(&principal, Capability::AdminAccess)
+        .principal_has_admin_workspace_access(&principal)
         .await;
     let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
     if !is_admin

@@ -150,7 +150,7 @@ pub async fn combos(
             .await?;
             let full = state
                 .admin
-                .principal_has_capability(&principal, Capability::AdminAccess)
+                .principal_has_admin_workspace_access(&principal)
                 .await
                 || state
                     .admin

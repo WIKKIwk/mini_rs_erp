@@ -154,7 +154,7 @@ async fn layer_remainder_scope(
     }
     if !state
         .admin
-        .principal_has_capability(principal, Capability::AdminAccess)
+        .principal_has_admin_workspace_access(principal)
         .await
         && !state
             .admin

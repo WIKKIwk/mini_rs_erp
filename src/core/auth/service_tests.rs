@@ -796,3 +796,51 @@ async fn sales_manager_login_uses_its_numeric_passport_prefix_and_rejects_blocke
         }
     }
 }
+
+#[tokio::test]
+async fn brigader_login_uses_its_numeric_passport_prefix_and_rejects_blocked_or_removed_accounts()
+ {
+    use crate::core::system_users::{MemorySystemUserStore, SystemUserService, SystemUserUpsert};
+    let users = Arc::new(SystemUserService::new(Arc::new(
+        MemorySystemUserStore::new(),
+    )));
+    let user = users
+        .upsert_user(SystemUserUpsert {
+            id: "brigader_test".into(),
+            role: PrincipalRole::Brigader,
+            name: "Brigader".into(),
+            phone: "+998901112292".into(),
+        })
+        .await
+        .unwrap();
+    for (blocked, removed) in [(false, false), (true, false), (false, true)] {
+        let states = Arc::new(FakeStateLookup {
+            states: BTreeMap::from([(
+                user.id.clone(),
+                AdminAccessState {
+                    custom_code: "931234567890".into(),
+                    blocked,
+                    removed,
+                },
+            )]),
+        });
+        let auth = AuthService::new(&config()).with_system_user_dependencies(users.clone(), states);
+        let login = auth.login(&user.phone, "931234567890").await;
+        if blocked || removed {
+            assert_eq!(login, Err(AuthError::InvalidCredentials));
+        } else {
+            let principal = login.unwrap();
+            assert_eq!(principal.role, PrincipalRole::Brigader);
+            assert_eq!(principal.ref_, user.id);
+        }
+        for code in [
+            "93ABCDEF1234",
+            "921234567890",
+            "911234567890",
+            "901234567890",
+            "401234567890",
+        ] {
+            assert!(auth.login(&user.phone, code).await.is_err());
+        }
+    }
+}

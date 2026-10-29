@@ -8,7 +8,7 @@ pub async fn app_update_settings(
     body: Bytes,
 ) -> Result<Response, AdminError> {
     let principal = authorize_any_capability(&state, &headers, &[Capability::AdminAccess]).await?;
-    if principal.role != PrincipalRole::Admin {
+    if !principal.role.is_admin_workspace_manager() {
         return Err(forbidden());
     }
     let settings = match method {

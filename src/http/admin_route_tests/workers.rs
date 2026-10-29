@@ -1020,3 +1020,94 @@ async fn replacement_worker_with_same_name_does_not_inherit_old_history() {
     assert_eq!(old_history.len(), 1);
     assert_eq!(old_history[0].actor_ref, "worker_history_old");
 }
+
+#[tokio::test]
+async fn brigader_cannot_alias_builtin_account_credentials_through_native_user_ids() {
+    let state = test_state();
+    let brigader = session_for(&state, PrincipalRole::Brigader, "brigader-native").await;
+    let app = build_router(state.clone());
+    for reserved in ["admin", "werka", "material_taminotchi"] {
+        for method in ["POST", "PUT"] {
+            for (path, body) in [
+                (
+                    "/v1/mobile/admin/system-users",
+                    serde_json::json!({
+                        "id": reserved, "role": "brigader", "name": "Alias", "phone": "+998901112293"
+                    }),
+                ),
+                (
+                    "/v1/mobile/admin/workers",
+                    serde_json::json!({
+                        "id": reserved, "name": "Alias", "level": "Brigader"
+                    }),
+                ),
+            ] {
+                let response = app
+                    .clone()
+                    .oneshot(request_with_body(
+                        method,
+                        path,
+                        &brigader,
+                        &body.to_string(),
+                    ))
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    response.status(),
+                    StatusCode::FORBIDDEN,
+                    "{method} {path} {reserved}"
+                );
+            }
+        }
+        for (method, path) in [
+            ("GET", "/v1/mobile/admin/system-users/detail"),
+            ("POST", "/v1/mobile/admin/system-users/code/regenerate"),
+            ("GET", "/v1/mobile/admin/workers/detail"),
+            ("GET", "/v1/mobile/admin/workers/profile-detail"),
+            ("POST", "/v1/mobile/admin/workers/code/regenerate"),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(request(method, &format!("{path}?id={reserved}"), &brigader))
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::FORBIDDEN,
+                "{method} {path} {reserved}"
+            );
+        }
+    }
+    assert!(
+        state
+            .system_users
+            .users_by_ids(&["admin".into()])
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        state
+            .workers
+            .workers_by_ids(&["admin".into()])
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let response = app
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/system-users",
+            &brigader,
+            r#"{"role":"brigader","name":"Real Brigader","phone":"+998901112293"}"#,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        json_body(response).await["id"]
+            .as_str()
+            .unwrap()
+            .starts_with("brigader_")
+    );
+}

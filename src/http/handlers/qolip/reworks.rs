@@ -27,7 +27,7 @@ pub async fn reworks(
     }
     let admin = state
         .admin
-        .principal_has_capability(&principal, Capability::AdminAccess)
+        .principal_has_admin_workspace_access(&principal)
         .await;
     let entries = state
         .qolip
@@ -52,7 +52,7 @@ pub async fn send_reworks(
         serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json"))?;
     let admin = state
         .admin
-        .principal_has_capability(&principal, Capability::AdminAccess)
+        .principal_has_admin_workspace_access(&principal)
         .await;
     let entries = state
         .qolip
@@ -78,7 +78,7 @@ pub async fn return_reworks(
         serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json"))?;
     let admin = state
         .admin
-        .principal_has_capability(&principal, Capability::AdminAccess)
+        .principal_has_admin_workspace_access(&principal)
         .await;
     let entries = state
         .qolip

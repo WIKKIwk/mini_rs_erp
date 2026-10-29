@@ -25,7 +25,7 @@ pub async fn calculate_route(
     let principal = authenticated_principal(&state, &headers).await?;
     let can_admin = state
         .admin
-        .principal_has_capability(&principal, Capability::AdminAccess)
+        .principal_has_admin_workspace_access(&principal)
         .await;
     let can_production_map = state
         .admin
@@ -270,7 +270,7 @@ async fn authorize_calculate_admin(
     let principal = authenticated_principal(state, headers).await?;
     let can_admin = state
         .admin
-        .principal_has_capability(&principal, Capability::AdminAccess)
+        .principal_has_admin_workspace_access(&principal)
         .await;
     let can_production_map = state
         .admin
@@ -301,6 +301,7 @@ fn principal_owner_key(principal: &Principal) -> String {
         PrincipalRole::TayyorlovMasteri => "tayyorlov_masteri",
         PrincipalRole::HomashyoRezkachi => "homashyo_rezkachi",
         PrincipalRole::SalesManager => "sales_manager",
+        PrincipalRole::Brigader => "brigader",
         PrincipalRole::MaterialTaminotchi => "material_taminotchi",
         PrincipalRole::Admin => "admin",
     };

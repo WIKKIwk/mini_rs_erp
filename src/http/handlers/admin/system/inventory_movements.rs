@@ -250,7 +250,7 @@ pub(super) async fn inventory_actor(
         authorize_capability(state, headers, Capability::InventoryMovementManage).await?;
     let is_admin = state
         .admin
-        .principal_has_capability(&principal, Capability::AdminAccess)
+        .principal_has_admin_workspace_access(&principal)
         .await;
     let assigned_warehouses = state
         .warehouses

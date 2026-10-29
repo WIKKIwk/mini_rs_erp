@@ -79,7 +79,8 @@ pub async fn workers(
     Query(query): Query<WorkersQuery>,
     body: Bytes,
 ) -> Result<Response, AdminError> {
-    authorize_capability(&state, &headers, Capability::AdminAccess).await?;
+    let principal = authorize_capability(&state, &headers, Capability::AdminAccess).await?;
+    super::system_users::require_brigader_identity_target(&principal, query.id.as_deref())?;
     if !matches!(
         method,
         Method::GET | Method::POST | Method::PUT | Method::DELETE
@@ -106,6 +107,7 @@ pub async fn workers(
         }
         Method::POST => {
             let input: WorkerUpsert = parse_json(&body)?;
+            super::system_users::require_brigader_identity_target(&principal, Some(&input.id))?;
             state
                 .workers
                 .upsert_worker(input)
@@ -115,6 +117,7 @@ pub async fn workers(
         }
         Method::PUT => {
             let input: WorkerUpsert = parse_json(&body)?;
+            super::system_users::require_brigader_identity_target(&principal, Some(&input.id))?;
             if !input.name.trim().is_empty()
                 && input.level.trim().is_empty()
                 && input.phone.trim().is_empty()
@@ -179,7 +182,8 @@ pub async fn worker_delete_check(
     headers: HeaderMap,
     Query(query): Query<WorkerIdQuery>,
 ) -> Result<Response, AdminError> {
-    authorize_capability(&state, &headers, Capability::AdminAccess).await?;
+    let principal = authorize_capability(&state, &headers, Capability::AdminAccess).await?;
+    super::system_users::require_brigader_identity_target(&principal, query.id.as_deref())?;
     if method != Method::GET {
         return Err(method_not_allowed());
     }

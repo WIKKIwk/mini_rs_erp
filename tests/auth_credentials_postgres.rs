@@ -152,6 +152,7 @@ async fn postgres_credential_cutover_and_all_login_roles() {
         (7, PrincipalRole::TayyorlovMasteri, "90"),
         (8, PrincipalRole::HomashyoRezkachi, "91"),
         (12, PrincipalRole::SalesManager, "92"),
+        (13, PrincipalRole::Brigader, "93"),
     ] {
         let phone = format!("+9989012345{index:02}");
         let user = system_users

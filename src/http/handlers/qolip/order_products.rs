@@ -48,7 +48,7 @@ pub async fn order_products(
         .iter()
         .filter_map(|(_, code)| code.clone())
         .collect::<Vec<_>>();
-    let is_admin = state.admin.principal_has_capability(&principal, Capability::AdminAccess).await;
+    let is_admin = state.admin.principal_has_admin_workspace_access(&principal).await;
     let products = if !is_admin && principal.role != crate::core::auth::models::PrincipalRole::MaterialTaminotchi {
         state.qolip.visible_order_products(&codes, &principal).await.map_err(qolip_error)?
     } else {

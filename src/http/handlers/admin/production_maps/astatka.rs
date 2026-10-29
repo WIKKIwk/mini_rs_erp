@@ -43,7 +43,7 @@ pub async fn production_map_bosma_astatka(
     let order_id = input.order_id.trim().to_string();
     if !state
         .admin
-        .principal_has_capability(&principal, Capability::AdminAccess)
+        .principal_has_admin_workspace_access(&principal)
         .await
     {
         let assigned = state.admin.principal_assigned_apparatus(&principal).await;
@@ -207,7 +207,7 @@ pub async fn production_map_laminatsiya_astatka(
     }
     let is_admin = state
         .admin
-        .principal_has_capability(&principal, Capability::AdminAccess)
+        .principal_has_admin_workspace_access(&principal)
         .await;
     let assigned_apparatus = if is_admin {
         vec![input.apparatus.trim().to_string()]
@@ -331,7 +331,7 @@ pub async fn production_map_rezka_astatka(
     }
     let is_admin = state
         .admin
-        .principal_has_capability(&principal, Capability::AdminAccess)
+        .principal_has_admin_workspace_access(&principal)
         .await;
     if !is_admin {
         let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;

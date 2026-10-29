@@ -303,3 +303,28 @@ async fn sales_manager_passport_codes_are_unique_numeric_and_have_their_own_pref
     }
     assert_ne!(first.code, second.code);
 }
+
+#[tokio::test]
+async fn brigader_passport_codes_are_unique_numeric_and_have_their_own_prefix() {
+    let (admin, _, _) = fixture();
+    let user = |id: &str| crate::core::system_users::SystemUser {
+        id: id.into(),
+        role: PrincipalRole::Brigader,
+        name: "Brigader".into(),
+        phone: "+998901112292".into(),
+    };
+    let first = admin
+        .regenerate_system_user_code(user("brigader-a"))
+        .await
+        .unwrap();
+    let second = admin
+        .regenerate_system_user_code(user("brigader-b"))
+        .await
+        .unwrap();
+    for code in [&first.code, &second.code] {
+        assert!(code.starts_with("93"));
+        assert_eq!(code.len(), 12);
+        assert!(code.chars().all(|c| c.is_ascii_digit()));
+    }
+    assert_ne!(first.code, second.code);
+}

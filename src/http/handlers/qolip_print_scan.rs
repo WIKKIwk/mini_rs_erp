@@ -87,7 +87,7 @@ pub async fn cell_qr(
     }
     let is_admin = state
         .admin
-        .principal_has_capability(&principal, Capability::AdminAccess)
+        .principal_has_admin_workspace_access(&principal)
         .await;
     if !is_admin
         && state

@@ -105,7 +105,7 @@ async fn require_material_reprint_capabilities(
     state: &AppState,
     principal: &Principal,
 ) -> Result<(), AdminError> {
-    if principal.role == PrincipalRole::Admin {
+    if principal.role.is_admin_workspace_manager() {
         return Ok(());
     }
     if principal.role != PrincipalRole::MaterialTaminotchi {
@@ -159,7 +159,7 @@ async fn material_stock_in_scope(
         .await
         .map_err(|_| server_error("raw material stock fetch failed"))?
         .ok_or_else(|| not_found("raw_material_stock_not_found"))?;
-    if principal.role != PrincipalRole::Admin {
+    if !principal.role.is_admin_workspace_manager() {
         let warehouses = material_warehouse_scope(state, principal).await?;
         if !warehouse_in_scope(&warehouses, &stock.warehouse) {
             return Err(forbidden());

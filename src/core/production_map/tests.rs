@@ -1,5 +1,6 @@
 mod apparatus_resolver;
 mod audit;
+mod brigader;
 #[path = "capacity/tests.rs"]
 mod capacity;
 mod compile_run;

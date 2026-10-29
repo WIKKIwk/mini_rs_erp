@@ -48,7 +48,7 @@ pub async fn production_map_qolip_validate(
     let apparatus_id = apparatus.id.to_string();
     let is_admin = state
         .admin
-        .principal_has_capability(&principal, Capability::AdminAccess)
+        .principal_has_admin_workspace_access(&principal)
         .await;
     let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
     if !is_admin && !queue_state::apparatus_matches_assigned(&apparatus_id, &assigned_apparatus) {

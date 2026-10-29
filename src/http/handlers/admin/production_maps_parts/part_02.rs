@@ -149,7 +149,7 @@ pub async fn production_map_sequence(
                     let view = live_delta::read_view(
                         &state,
                         &principal,
-                        matches!(principal.role, PrincipalRole::Admin),
+                        principal.role.is_admin_workspace_manager(),
                         query.worker_scope,
                         None,
                         &window,

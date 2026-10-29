@@ -4,7 +4,8 @@ pub async fn worker_profile_detail(
     headers: HeaderMap,
     Query(query): Query<WorkerIdQuery>,
 ) -> Result<Response, AdminError> {
-    authorize_capability(&state, &headers, Capability::AdminAccess).await?;
+    let principal = authorize_capability(&state, &headers, Capability::AdminAccess).await?;
+    super::system_users::require_brigader_identity_target(&principal, query.id.as_deref())?;
     if method != Method::GET {
         return Err(method_not_allowed());
     }
@@ -81,7 +82,8 @@ pub async fn worker_detail(
     headers: HeaderMap,
     Query(query): Query<WorkerIdQuery>,
 ) -> Result<Response, AdminError> {
-    authorize_capability(&state, &headers, Capability::AdminAccess).await?;
+    let principal = authorize_capability(&state, &headers, Capability::AdminAccess).await?;
+    super::system_users::require_brigader_identity_target(&principal, query.id.as_deref())?;
     if method != Method::GET {
         return Err(method_not_allowed());
     }
@@ -241,7 +243,8 @@ pub async fn worker_code_regenerate(
     headers: HeaderMap,
     Query(query): Query<WorkerIdQuery>,
 ) -> Result<Response, AdminError> {
-    authorize_capability(&state, &headers, Capability::AdminAccess).await?;
+    let principal = authorize_capability(&state, &headers, Capability::AdminAccess).await?;
+    super::system_users::require_brigader_identity_target(&principal, query.id.as_deref())?;
     if method != Method::POST {
         return Err(method_not_allowed());
     }

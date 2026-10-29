@@ -15,7 +15,7 @@ pub async fn system_users(
     Query(query): Query<PageQuery>,
     body: Bytes,
 ) -> Result<Response, AdminError> {
-    authorize_capability(&state, &headers, Capability::AdminAccess).await?;
+    let principal = authorize_capability(&state, &headers, Capability::AdminAccess).await?;
     match method {
         Method::GET => {
             let role = required_system_role(query.role.as_deref())?;
@@ -32,6 +32,7 @@ pub async fn system_users(
         }
         Method::POST | Method::PUT => {
             let input: SystemUserUpsert = parse_json(&body)?;
+            require_brigader_identity_target(&principal, Some(&input.id))?;
             state
                 .system_users
                 .upsert_user(input)
@@ -49,7 +50,8 @@ pub async fn system_user_detail(
     headers: HeaderMap,
     Query(query): Query<SystemUserIdQuery>,
 ) -> Result<Response, AdminError> {
-    authorize_capability(&state, &headers, Capability::AdminAccess).await?;
+    let principal = authorize_capability(&state, &headers, Capability::AdminAccess).await?;
+    require_brigader_identity_target(&principal, query.id.as_deref())?;
     if method != Method::GET {
         return Err(method_not_allowed());
     }
@@ -74,7 +76,8 @@ pub async fn system_user_code_regenerate(
     headers: HeaderMap,
     Query(query): Query<SystemUserIdQuery>,
 ) -> Result<Response, AdminError> {
-    authorize_capability(&state, &headers, Capability::AdminAccess).await?;
+    let principal = authorize_capability(&state, &headers, Capability::AdminAccess).await?;
+    require_brigader_identity_target(&principal, query.id.as_deref())?;
     if method != Method::POST {
         return Err(method_not_allowed());
     }
@@ -124,6 +127,7 @@ fn required_system_role(value: Option<&str>) -> Result<PrincipalRole, AdminError
         "tayyorlov_masteri" => Ok(PrincipalRole::TayyorlovMasteri),
         "homashyo_rezkachi" => Ok(PrincipalRole::HomashyoRezkachi),
         "sales_manager" => Ok(PrincipalRole::SalesManager),
+        "brigader" => Ok(PrincipalRole::Brigader),
         _ => Err(bad_request("system user role is invalid")),
     }
 }
@@ -135,6 +139,7 @@ fn system_role_key(role: &PrincipalRole) -> &'static str {
         PrincipalRole::TayyorlovMasteri => "tayyorlov_masteri",
         PrincipalRole::HomashyoRezkachi => "homashyo_rezkachi",
         PrincipalRole::SalesManager => "sales_manager",
+        PrincipalRole::Brigader => "brigader",
         _ => "system_user",
     }
 }
@@ -166,4 +171,21 @@ fn system_user_error(error: SystemUserError) -> AdminError {
         SystemUserError::NotFound => not_found("system user not found"),
         SystemUserError::StoreFailed => server_error("system user store failed"),
     }
+}
+
+// Access state is keyed by directory ref across roles. A new native user must
+// never reuse a built-in account's ref to read or replace its credentials.
+pub(super) fn require_brigader_identity_target(
+    principal: &crate::core::auth::models::Principal,
+    target: Option<&str>,
+) -> Result<(), AdminError> {
+    let target = target.unwrap_or_default().trim();
+    if principal.role == PrincipalRole::Brigader
+        && ["admin", "werka", "material_taminotchi"]
+            .iter()
+            .any(|reserved| target.eq_ignore_ascii_case(reserved))
+    {
+        return Err(forbidden());
+    }
+    Ok(())
 }

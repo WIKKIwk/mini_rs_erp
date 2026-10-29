@@ -18,7 +18,7 @@ pub async fn blocks(
         Method::GET => {
             let is_admin = state
                 .admin
-                .principal_has_capability(&principal, Capability::AdminAccess)
+                .principal_has_admin_workspace_access(&principal)
                 .await;
             let blocks = state
                 .qolip
@@ -73,7 +73,7 @@ pub async fn blocks(
             }
             let is_admin = state
                 .admin
-                .principal_has_capability(&principal, Capability::AdminAccess)
+                .principal_has_admin_workspace_access(&principal)
                 .await;
             let current = managed_qolip_block(&state, &principal, &input.block, is_admin).await?;
             let warehouse =
@@ -115,7 +115,7 @@ pub async fn blocks(
                 serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json"))?;
             let is_admin = state
                 .admin
-                .principal_has_capability(&principal, Capability::AdminAccess)
+                .principal_has_admin_workspace_access(&principal)
                 .await;
             let current = managed_qolip_block(&state, &principal, &input.block, is_admin).await?;
             ensure_qolip_block_is_empty(&state, &principal, &current, is_admin).await?;
@@ -195,7 +195,7 @@ pub async fn products(
     ensure_qolip_access(&state, &principal).await?;
     let is_admin = state
         .admin
-        .principal_has_capability(&principal, Capability::AdminAccess)
+        .principal_has_admin_workspace_access(&principal)
         .await;
     let products = state
         .qolip
@@ -405,7 +405,7 @@ pub async fn locations(
                     block_query = assigned[0].name.clone();
                 } else if !state
                         .admin
-                        .principal_has_capability(&principal, Capability::AdminAccess)
+                        .principal_has_admin_workspace_access(&principal)
                         .await
                 {
                     let mut locations = Vec::new();

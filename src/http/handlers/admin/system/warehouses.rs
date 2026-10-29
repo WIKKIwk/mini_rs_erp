@@ -374,6 +374,7 @@ async fn validate_warehouse_assignee(
 ) -> Result<(), AdminError> {
     match input.principal_role {
         PrincipalRole::Werka
+        | PrincipalRole::Brigader
         | PrincipalRole::MaterialTaminotchi
         | PrincipalRole::Qolipchi
         | PrincipalRole::TayyorlovMasteri

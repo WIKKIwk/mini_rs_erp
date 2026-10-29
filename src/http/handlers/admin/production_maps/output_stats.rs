@@ -26,7 +26,7 @@ pub async fn production_map_output_stats(
     let request = OutputStatsRequest::try_from(query).map_err(report_error)?;
     let can_view_all = state
         .admin
-        .principal_has_capability(&principal, Capability::AdminAccess)
+        .principal_has_admin_workspace_access(&principal)
         .await
         || state
             .admin

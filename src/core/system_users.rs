@@ -142,7 +142,8 @@ fn validate_role(role: &PrincipalRole) -> Result<(), SystemUserError> {
         | PrincipalRole::Boyoqchi
         | PrincipalRole::TayyorlovMasteri
         | PrincipalRole::HomashyoRezkachi
-        | PrincipalRole::SalesManager => Ok(()),
+        | PrincipalRole::SalesManager
+        | PrincipalRole::Brigader => Ok(()),
         _ => Err(SystemUserError::InvalidRole),
     }
 }
@@ -155,6 +156,7 @@ fn new_system_user_id(role: &PrincipalRole) -> String {
         PrincipalRole::TayyorlovMasteri => "tayyorlov_masteri",
         PrincipalRole::HomashyoRezkachi => "homashyo_rezkachi",
         PrincipalRole::SalesManager => "sales_manager",
+        PrincipalRole::Brigader => "brigader",
         _ => "system_user",
     };
     format!("{prefix}_{}", data_encoding::HEXLOWER.encode(&bytes))
@@ -272,6 +274,50 @@ mod sales_tests {
         assert_eq!(
             users
                 .users(&PrincipalRole::SalesManager, "First", 10)
+                .await
+                .unwrap(),
+            vec![first]
+        );
+        assert!(
+            users
+                .users(&PrincipalRole::Qolipchi, "", 10)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            users.upsert_user(create("Duplicate", "998901112293")).await,
+            Err(SystemUserError::DuplicatePhone)
+        );
+    }
+}
+
+#[cfg(test)]
+mod brigader_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn brigader_gets_a_unique_native_identity_and_phone_conflicts_are_rejected() {
+        let users = SystemUserService::new(Arc::new(MemorySystemUserStore::new()));
+        let create = |name: &str, phone: &str| SystemUserUpsert {
+            id: String::new(),
+            role: PrincipalRole::Brigader,
+            name: name.into(),
+            phone: phone.into(),
+        };
+        let first = users
+            .upsert_user(create("First", "+998901112292"))
+            .await
+            .unwrap();
+        let second = users
+            .upsert_user(create("Second", "+998901112293"))
+            .await
+            .unwrap();
+        assert!(first.id.starts_with("brigader_"));
+        assert_ne!(first.id, second.id);
+        assert_eq!(
+            users
+                .users(&PrincipalRole::Brigader, "First", 10)
                 .await
                 .unwrap(),
             vec![first]

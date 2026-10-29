@@ -46,7 +46,7 @@ pub async fn production_map_active_paddon(
     let apparatus_id = apparatus.id.to_string();
     let admin = state
         .admin
-        .principal_has_capability(&principal, Capability::AdminAccess)
+        .principal_has_admin_workspace_access(&principal)
         .await;
     let assigned = state.admin.principal_assigned_apparatus(&principal).await;
     if !admin && !queue_state::apparatus_matches_assigned(&apparatus_id, &assigned) {
@@ -350,7 +350,7 @@ async fn resolve_paddon_apparatus(
     let id = apparatus.id.to_string();
     if !state
         .admin
-        .principal_has_capability(principal, Capability::AdminAccess)
+        .principal_has_admin_workspace_access(principal)
         .await
         && !state
             .admin

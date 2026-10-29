@@ -21,7 +21,7 @@ pub(super) async fn accessible_qolip_block(
     }
     if state
         .admin
-        .principal_has_capability(principal, Capability::AdminAccess)
+        .principal_has_admin_workspace_access(principal)
         .await
     {
         return Ok(None);
@@ -46,7 +46,7 @@ pub(super) async fn accessible_qolip_warehouse(
     let warehouse = warehouse.trim();
     if state
         .admin
-        .principal_has_capability(principal, Capability::AdminAccess)
+        .principal_has_admin_workspace_access(principal)
         .await
     {
         if warehouse.is_empty() {
@@ -75,7 +75,7 @@ pub(super) async fn ensure_qolip_owner_access(
 ) -> Result<(), (StatusCode, Json<QolipErrorResponse>)> {
     if state
         .admin
-        .principal_has_capability(principal, Capability::AdminAccess)
+        .principal_has_admin_workspace_access(principal)
         .await
     {
         return Ok(());
@@ -95,7 +95,7 @@ pub(super) async fn qolip_code_is_accessible(
 ) -> Result<bool, (StatusCode, Json<QolipErrorResponse>)> {
     if state
         .admin
-        .principal_has_capability(principal, Capability::AdminAccess)
+        .principal_has_admin_workspace_access(principal)
         .await
     {
         return Ok(true);
@@ -161,7 +161,7 @@ pub(super) async fn resolve_qolip_spec_warehouse(
     if input.warehouse.trim().is_empty() {
         let is_admin = state
             .admin
-            .principal_has_capability(principal, Capability::AdminAccess)
+            .principal_has_admin_workspace_access(principal)
             .await;
         let warehouses = state
             .qolip
@@ -277,7 +277,7 @@ pub(super) async fn ensure_qolip_access(
         .await
         || state
             .admin
-            .principal_has_capability(principal, Capability::AdminAccess)
+            .principal_has_admin_workspace_access(principal)
             .await
     {
         Ok(())

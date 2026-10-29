@@ -19,7 +19,7 @@ pub(in crate::http::handlers::admin) async fn authorize_any_capability(
     for capability in capabilities {
         if state
             .admin
-            .principal_has_capability(&principal, *capability)
+            .principal_has_capability_for_admin_workspace(&principal, *capability)
             .await
         {
             return Ok(principal);
@@ -40,7 +40,7 @@ pub(in crate::http::handlers::admin) async fn authorize_any_capability_or_werka(
     for capability in capabilities {
         if state
             .admin
-            .principal_has_capability(&principal, *capability)
+            .principal_has_capability_for_admin_workspace(&principal, *capability)
             .await
         {
             return Ok(principal);
@@ -56,7 +56,7 @@ pub(in crate::http::handlers::admin) async fn require_capability(
 ) -> Result<(), AdminError> {
     if state
         .admin
-        .principal_has_capability(principal, capability)
+        .principal_has_capability_for_admin_workspace(principal, capability)
         .await
     {
         Ok(())

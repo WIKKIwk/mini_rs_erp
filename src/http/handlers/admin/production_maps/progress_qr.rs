@@ -49,7 +49,7 @@ pub async fn production_map_progress_qr_lookup(
         }
         let can_manage = state
             .admin
-            .principal_has_capability(&principal, Capability::AdminAccess)
+            .principal_has_admin_workspace_access(&principal)
             .await
             || state
                 .admin
@@ -477,7 +477,7 @@ fn progress_history_scope(
 ) -> Result<(Vec<String>, String), AdminError> {
     if matches!(
         principal.role,
-        PrincipalRole::Admin | PrincipalRole::SalesManager
+        PrincipalRole::Admin | PrincipalRole::Brigader | PrincipalRole::SalesManager
     ) {
         let refs = query
             .worker_ref
@@ -502,7 +502,7 @@ fn principal_can_reprint_progress_batch(
     batch: &crate::core::production_map::OrderProgressBatch,
 ) -> bool {
     let principal_ref = principal.ref_.trim();
-    principal.role == PrincipalRole::Admin
+    principal.role.is_admin_workspace_manager()
         || principal.role == PrincipalRole::Werka
         || principal.role == PrincipalRole::Aparatchi
         || (!principal_ref.is_empty() && batch.worker_ref.trim() == principal_ref)

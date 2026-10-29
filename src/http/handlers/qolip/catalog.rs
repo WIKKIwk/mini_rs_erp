@@ -35,7 +35,7 @@ pub async fn catalog_page(
     ensure_qolip_access(&state, &principal).await?;
     let is_admin = state
         .admin
-        .principal_has_capability(&principal, Capability::AdminAccess)
+        .principal_has_admin_workspace_access(&principal)
         .await;
     let q = query.q.trim().to_lowercase();
     let limit = query.limit.unwrap_or(200).clamp(1, 200);
@@ -123,7 +123,7 @@ pub async fn catalog_detail(
         .ok_or_else(|| bad_request("invalid_product_id"))?;
     let is_admin = state
         .admin
-        .principal_has_capability(&principal, Capability::AdminAccess)
+        .principal_has_admin_workspace_access(&principal)
         .await;
     let products = state
         .qolip

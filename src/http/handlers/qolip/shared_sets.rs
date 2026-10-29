@@ -95,7 +95,7 @@ pub async fn shared_sets(
                 serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json"))?;
             let is_admin = state
                 .admin
-                .principal_has_capability(&principal, Capability::AdminAccess)
+                .principal_has_admin_workspace_access(&principal)
                 .await;
             let snapshot = state
                 .qolip
