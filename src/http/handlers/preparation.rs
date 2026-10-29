@@ -508,11 +508,28 @@ pub async fn formula_sets(
     store(&state)?.formula_sets(&actor.ref_).await.map(Json).map_err(error)
 }
 
+#[derive(Debug, Default, Deserialize)]
+pub struct FormulaCatalogQuery {
+    #[serde(default)]
+    pub product_code: String,
+    #[serde(default)]
+    pub material_id: String,
+    #[serde(default)]
+    pub order_id: String,
+}
+
 pub async fn formula_catalog(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<FormulaCatalogQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let actor = authorize(&state, &headers).await?;
+    if !query.product_code.trim().is_empty() || !query.material_id.trim().is_empty()
+        || !query.order_id.trim().is_empty() {
+        return store(&state)?.available_formula_variants(
+            &actor.ref_, &query.product_code, &query.material_id, &query.order_id,
+        ).await.map(Json).map_err(error);
+    }
     store(&state)?.formula_catalog(&actor.ref_).await.map(Json).map_err(error)
 }
 

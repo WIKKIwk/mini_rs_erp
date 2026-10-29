@@ -9,6 +9,40 @@ struct StoredFormulaLine {
 }
 
 impl PostgresPreparationStore {
+    pub async fn available_formula_variants(
+        &self,
+        owner: &str,
+        product: &str,
+        material: &str,
+        order_id: &str,
+    ) -> Result<Value, PreparationError> {
+        if order_id.trim().is_empty() {
+            return Err(PreparationError::Invalid("Buyurtma tanlanmagan"));
+        }
+        let linked = self.formula_variants_in_order(owner, product, material, false, order_id).await?;
+        let linked: BTreeSet<String> = linked["variants"].as_array().into_iter().flatten()
+            .filter_map(|entry| entry["id"].as_str().map(str::to_owned)).collect();
+        let copies: Vec<(String, Option<String>)> = sqlx::query_as(
+            "SELECT id, request_id FROM mini_preparation_formula_variants
+             WHERE owner_ref=$1 AND product_code=$2 AND material_id=$3",
+        ).bind(owner).bind(product.trim()).bind(material.trim()).fetch_all(&self.pool).await?;
+        let copies: BTreeMap<String, String> = copies.into_iter()
+            .filter_map(|(id, request)| request.map(|request| (request, id))).collect();
+        let mut catalog = self.formula_catalog(owner).await?;
+        if let Some(entries) = catalog["formulas"].as_array_mut() {
+            entries.retain(|entry| {
+                let id = entry["id"].as_str().unwrap_or_default();
+                if entry["product_code"].as_str() == Some(product.trim())
+                    && entry["material_id"].as_str() == Some(material.trim()) {
+                    return !linked.contains(id);
+                }
+                let key = reuse_request_id(product.trim(), material.trim(), id);
+                !copies.get(&key).is_some_and(|target| linked.contains(target))
+            });
+        }
+        Ok(catalog)
+    }
+
     pub async fn reuse_formula_variant(
         &self,
         owner: &str,
@@ -51,10 +85,7 @@ impl PostgresPreparationStore {
 
         // Re-selecting a recipe, concurrent taps and a lost response all refer
         // to the same copy. Keep this identity in the existing request registry.
-        let request_id = format!(
-            "reuse:{:x}",
-            Sha256::digest(json!([product, material, source]).to_string())
-        );
+        let request_id = reuse_request_id(product, material, source);
         let previous: Option<String> = sqlx::query_scalar(
             "SELECT id FROM mini_preparation_formula_variants
              WHERE owner_ref=$1 AND request_id=$2 AND product_code=$3 AND material_id=$4",
@@ -162,6 +193,10 @@ impl PostgresPreparationStore {
         tx.commit().await?;
         Ok(result)
     }
+}
+
+fn reuse_request_id(product: &str, material: &str, source: &str) -> String {
+    format!("reuse:{:x}", Sha256::digest(json!([product, material, source]).to_string()))
 }
 
 async fn variant_summary(

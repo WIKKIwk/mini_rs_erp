@@ -406,6 +406,8 @@ async fn check_recipe_reuse(
     let request = |source: &str, product: &str, material: &str| FormulaVariantReuse {
         source_variant_id: source.into(), product_code: product.into(), material_id: material.into(),
     };
+    assert!(catalog_has_variant(&store.available_formula_variants("prep-1", "TARGET", "mat-a", "order-target")
+        .await.unwrap(), source_id));
     let copied = store.reuse_formula_variant("prep-1", request(source_id, "TARGET", "mat-a")).await.unwrap();
     assert_ne!(copied["id"], source["id"]);
     assert_ne!(copied["formula_code"], source["formula_code"]);
@@ -413,14 +415,24 @@ async fn check_recipe_reuse(
     assert_eq!(copied["formula_count"], 3);
     assert_eq!(copied["shares_complete"], true);
     let copied_id = copied["id"].as_str().unwrap();
+    let available = store.available_formula_variants("prep-1", "TARGET", "mat-a", "order-target").await.unwrap();
+    assert!(!catalog_has_variant(&available, source_id));
+    assert!(!catalog_has_variant(&available, copied_id));
+    assert!(catalog_has_variant(&available, invalid_recipe));
     store.remove_formula_variant_from_order("prep-1", FormulaVariantOrderRemove {
         order_id: "order-target".into(), product_code: "TARGET".into(),
         material_id: "mat-a".into(), variant_id: copied_id.into(),
     }).await.unwrap();
+    let available = store.available_formula_variants("prep-1", "TARGET", "mat-a", "order-target").await.unwrap();
+    assert!(catalog_has_variant(&available, source_id));
+    assert!(catalog_has_variant(&available, copied_id));
     assert_eq!(store.reuse_formula_variant_in_order("prep-1",
         request(source_id, "TARGET", "mat-a"), "order-target").await.unwrap()["id"], copied["id"]);
     assert!(store.formula_variants_in_order("prep-1", "TARGET", "mat-a", false, "order-target")
         .await.unwrap()["variants"].as_array().unwrap().iter().any(|entry| entry["id"] == copied["id"]));
+    let available = store.available_formula_variants("prep-1", "TARGET", "mat-a", "order-target").await.unwrap();
+    assert!(!catalog_has_variant(&available, source_id));
+    assert!(!catalog_has_variant(&available, copied_id));
     let original = store.list_formulas_variant("prep-1", "SOURCE", "mat-a", source_id).await.unwrap();
     let target = store.list_formulas_variant("prep-1", "TARGET", "mat-a", copied_id).await.unwrap();
     for (source, target) in original["formulas"].as_array().unwrap().iter()
@@ -464,6 +476,8 @@ async fn check_order_removal(store: &PostgresPreparationStore, id: &str, foreign
         variant_id: variant.into(),
     };
     let before = store.list_saved_formulas_variant("prep-1", "P", "mat-a", id).await.unwrap();
+    assert!(!catalog_has_variant(&store.available_formula_variants("prep-1", "P", "mat-a", "order-1")
+        .await.unwrap(), id));
     for _ in 0..2 {
         assert_eq!(store.remove_formula_variant_from_order("prep-1", remove("order-1", id))
             .await.unwrap()["removed"], true);
@@ -476,6 +490,12 @@ async fn check_order_removal(store: &PostgresPreparationStore, id: &str, foreign
     let catalog = store.formula_catalog("prep-1").await.unwrap();
     let recipe = catalog["formulas"].as_array().unwrap().iter().find(|v| v["id"] == id).unwrap();
     assert_eq!(recipe["order_codes"], serde_json::json!(["O2"]));
+    assert!(catalog_has_variant(&store.available_formula_variants("prep-1", "P", "mat-a", "order-1")
+        .await.unwrap(), id));
+    assert!(!catalog_has_variant(&store.available_formula_variants("prep-1", "P", "mat-a", "order-2")
+        .await.unwrap(), id));
+    assert!(store.available_formula_variants("prep-1", "P", "mat-a", "").await.is_err());
+    assert!(store.available_formula_variants("prep-1", "P", "mat-a", "order-target").await.is_err());
     assert!(store.remove_formula_variant_from_order("prep-2", remove("order-1", id)).await.is_err());
     assert!(store.remove_formula_variant_from_order("prep-1", remove("order-1", foreign)).await.is_err());
     assert!(store.remove_formula_variant_from_order("prep-1", remove("order-target", id)).await.is_err());
@@ -486,4 +506,10 @@ async fn check_order_removal(store: &PostgresPreparationStore, id: &str, foreign
     assert_eq!(restored["id"], id);
     assert!(store.formula_variants_in_order("prep-1", "P", "mat-a", false, "order-1")
         .await.unwrap()["variants"].as_array().unwrap().iter().any(|v| v["id"] == id));
+    assert!(!catalog_has_variant(&store.available_formula_variants("prep-1", "P", "mat-a", "order-1")
+        .await.unwrap(), id));
+}
+
+fn catalog_has_variant(catalog: &serde_json::Value, id: &str) -> bool {
+    catalog["formulas"].as_array().unwrap().iter().any(|entry| entry["id"] == id)
 }
