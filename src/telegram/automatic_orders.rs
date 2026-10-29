@@ -87,6 +87,11 @@ impl AutomaticOrders {
             .complete(
                 &pending.id,
                 &owner,
+                &crate::core::production_map::QueueActionActor {
+                    role: "telegram".into(),
+                    ref_: pending.telegram_user_id.clone(),
+                    display_name: pending.manager_name.clone(),
+                },
                 PendingOrderCompletion { saved, template },
                 source,
             )

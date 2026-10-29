@@ -238,6 +238,7 @@ pub trait PendingOrderStore: Send + Sync {
         &self,
         id: &str,
         owner_key: &str,
+        created_by: &crate::core::production_map::QueueActionActor,
         completion: PendingOrderCompletion,
         template_map: ProductionMapSaved,
     ) -> Result<(PendingOrderCompletion, bool), PendingOrderError>;

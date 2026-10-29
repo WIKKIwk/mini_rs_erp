@@ -3,7 +3,7 @@ const DEFAULT_MAX_CONNECTIONS: u32 = 16;
 const DEFAULT_ACQUIRE_TIMEOUT_MS: u64 = 500;
 const MIGRATION_LOCK_KEY: i64 = 6_514_811_918_052_026_001;
 
-const POSTGRES_MIGRATIONS: [(&str, &str); 181] = [
+const POSTGRES_MIGRATIONS: [(&str, &str); 183] = [
     (
         "0001_mini_erp_foundation",
         include_str!("../../../migrations/postgres/0001_mini_erp_foundation.sql"),
@@ -737,6 +737,14 @@ const POSTGRES_MIGRATIONS: [(&str, &str); 181] = [
     (
         "0181_preparation_order_formula_exclusions",
         include_str!("../../../migrations/postgres/0181_preparation_order_formula_exclusions.sql"),
+    ),
+    (
+        "0182_production_order_creators",
+        include_str!("../../../migrations/postgres/0182_production_order_creators.sql"),
+    ),
+    (
+        "0183_legacy_order_creator_lookup",
+        include_str!("../../../migrations/postgres/0183_legacy_order_creator_lookup.sql"),
     ),
 ];
 

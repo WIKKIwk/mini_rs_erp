@@ -72,6 +72,7 @@ async fn complete_pending_order(
         .complete(
             &pending.id,
             &principal_owner_key(principal),
+            &queue_action_actor(principal),
             PendingOrderCompletion { saved, template },
             source,
         )

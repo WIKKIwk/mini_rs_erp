@@ -615,11 +615,11 @@ pub(super) async fn read_detail(
         }
         let customers = production_map_order_customers(state, &projected.maps).await;
         let templates = page_calculation_templates(state, &projected.maps).await;
-        let created_at = state
+        let creation = state
             .production_orders
-            .order_created_at_unix(order_id)
+            .order_creation_metadata(order_id)
             .await
-            .map_err(|_| server_error("Buyurtma ochilgan vaqt yuklanmadi"))?;
+            .map_err(|_| server_error("Buyurtma yaratilishi haqidagi ma’lumot yuklanmadi"))?;
         let map = &projected.maps[0].map;
         let qolip_in_rework = match state
             .qolip
@@ -637,7 +637,10 @@ pub(super) async fn read_detail(
             continue;
         }
         let mut payload = serde_json::to_value(projected).unwrap();
-        payload["maps"][0]["created_at_unix"] = serde_json::json!(created_at);
+        payload["maps"][0]["created_at_unix"] = serde_json::json!(creation.created_at_unix);
+        payload["maps"][0]["created_by"] = serde_json::json!(creation.created_by.map(|actor| {
+            serde_json::json!({"role": actor.role, "ref": actor.ref_, "display_name": actor.display_name})
+        }));
         payload["maps"][0]["qolip_in_rework"] = serde_json::json!(qolip_in_rework);
         payload["ok"] = true.into();
         payload["projection"] = "order_detail_v1".into();

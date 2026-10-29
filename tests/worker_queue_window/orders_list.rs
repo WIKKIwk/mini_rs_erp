@@ -37,6 +37,7 @@ impl PendingOrderStore for Intake {
         &self,
         _: &str,
         _: &str,
+        _: &mini_rs_erp::core::production_map::QueueActionActor,
         _: PendingOrderCompletion,
         _: ProductionMapSaved,
     ) -> Result<(PendingOrderCompletion, bool), PendingOrderError> {

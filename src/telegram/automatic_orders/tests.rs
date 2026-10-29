@@ -41,12 +41,15 @@ async fn automatic_telegram_intake_is_atomic_retry_safe_and_preserves_pending_fa
 }
 
 async fn exercise_intake(pool: sqlx::PgPool) {
-    apply_foundation_migration(&pool).await.unwrap();
+    crate::db::postgres::apply_postgres_migrations_through_version(&pool, "0121")
+        .await
+        .unwrap();
     let directory = tempfile::tempdir().unwrap();
     let apparatus = CanonicalApparatusService::new(Arc::new(
         PostgresCanonicalApparatusRepository::new(pool.clone()),
     ));
     apparatus.bootstrap_factory_defaults().await.unwrap();
+    apply_foundation_migration(&pool).await.unwrap();
     let maps = ProductionMapService::new(
         Arc::new(PostgresProductionMapStore::new(pool.clone())),
         Arc::new(CanonicalServiceApparatusResolver::new(apparatus.clone())),
@@ -122,6 +125,7 @@ async fn exercise_intake(pool: sqlx::PgPool) {
                 "mini_quick_order_images",
                 "mini_orders",
                 "mini_order_products",
+                "mini_production_order_creators",
             ] {
                 let count: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM {table}"))
                     .fetch_one(&pool)
@@ -142,6 +146,14 @@ async fn exercise_intake(pool: sqlx::PgPool) {
             assert!(result.completed, "{}", result.reason);
         }
         let order_id = format!("zakaz-{number}");
+        let creator: (String, String, String) = sqlx::query_as(
+            "SELECT role, principal_ref, display_name FROM mini_production_order_creators WHERE map_id=$1",
+        )
+        .bind(&order_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(creator, ("telegram".into(), "123".into(), "Manager".into()));
         let done = pending.get(&order_id).await.unwrap().completion.unwrap();
         assert_eq!(done.template.production_options, draft.production_options());
         assert_eq!(done.template.status, form);
@@ -180,6 +192,7 @@ async fn exercise_intake(pool: sqlx::PgPool) {
         ("mini_production_maps", 8),
         ("mini_quick_order_templates", 4),
         ("mini_orders", 4),
+        ("mini_production_order_creators", 4),
     ] {
         let count: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM {table}"))
             .fetch_one(&pool)

@@ -177,6 +177,91 @@ use crate::db::{
     postgres_production_map::PostgresProductionMapStore,
 };
 
+async fn verify_legacy_order_creators(pool: &PgPool, runtime_pool: &PgPool) {
+    sqlx::raw_sql(
+        "INSERT INTO mini_auth_accounts(principal_ref) VALUES ('admin') ON CONFLICT DO NOTHING;
+         INSERT INTO mini_auth_builtin_identities(principal_ref, phone, display_name)
+           VALUES ('admin', '+998900000001', 'Legacy admin')
+           ON CONFLICT (principal_ref) DO UPDATE SET display_name = excluded.display_name;
+         INSERT INTO mini_system_users(id, role, name, phone) VALUES
+           ('legacy-brigader', 'brigader', 'Legacy brigader', '+998900000002'),
+           ('legacy-sales', 'sales_manager', 'Legacy sales manager', '+998900000003');",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    let sink = PostgresMiniOrderSink::new(runtime_pool.clone());
+    for (role, ref_, name) in [
+        ("admin", "admin", "Legacy admin"),
+        ("brigader", "legacy-brigader", "Legacy brigader"),
+        ("sales_manager", "legacy-sales", "Legacy sales manager"),
+        ("brigader", "deleted-user", "deleted-user"),
+    ] {
+        sqlx::query("DELETE FROM mini_order_creation_receipts WHERE map_id='zakaz-1001'")
+            .execute(pool)
+            .await
+            .unwrap();
+        // More than one receipt from the same creator remains unambiguous.
+        for key in ["original", "retry"] {
+            sqlx::query("INSERT INTO mini_order_creation_receipts(owner_key,request_key,fingerprint,map_id,response_json) VALUES ($1,$2,'legacy','zakaz-1001','{}')")
+                .bind(format!("{role}:{ref_}")).bind(key).execute(pool).await.unwrap();
+        }
+        assert_eq!(
+            sink.order_creation_metadata("zakaz-1001")
+                .await
+                .unwrap()
+                .created_by,
+            Some(QueueActionActor {
+                role: role.into(),
+                ref_: ref_.into(),
+                display_name: name.into()
+            })
+        );
+        assert!(
+            sink.order_creation_metadata("zakaz-1002")
+                .await
+                .unwrap()
+                .created_by
+                .is_none(),
+            "receipts for another order must not be used"
+        );
+    }
+    sqlx::query("INSERT INTO mini_order_creation_receipts(owner_key,request_key,fingerprint,map_id,response_json) VALUES ('admin:admin','conflict','legacy','zakaz-1001','{}')")
+        .execute(pool).await.unwrap();
+    assert!(
+        sink.order_creation_metadata("zakaz-1001")
+            .await
+            .unwrap()
+            .created_by
+            .is_none(),
+        "conflicting legacy owners must not be guessed"
+    );
+    sqlx::query("INSERT INTO mini_order_creation_receipts(owner_key,request_key,fingerprint,map_id,response_json) VALUES ('brigader:legacy-brigader','snapshot-priority','legacy','zakaz-2001','{}')")
+        .execute(pool).await.unwrap();
+    assert_eq!(
+        sink.order_creation_metadata("zakaz-2001")
+            .await
+            .unwrap()
+            .created_by,
+        Some(QueueActionActor {
+            role: "admin".into(),
+            ref_: "admin".into(),
+            display_name: "Original admin".into()
+        }),
+        "the creation-time snapshot must take priority over legacy records and renamed accounts"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM mini_production_order_creators WHERE map_id='zakaz-1001'"
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap(),
+        0,
+        "legacy lookup must not write an inferred name into the snapshot"
+    );
+}
+
 #[tokio::test]
 #[ignore = "creates an isolated PostgreSQL database; requires MINI_ERP_TEST_ADMIN_DATABASE_URL"]
 async fn order_edit_postgres_atomic_save_history_and_races() {
@@ -442,11 +527,58 @@ async fn order_edit_postgres_atomic_save_history_and_races() {
             quick_template: save_quick.then_some(template.clone()),
             template,
             owner_key: "admin".into(),
+            created_by: QueueActionActor {
+                role: "admin".into(),
+                ref_: "admin".into(),
+                display_name: "Original admin".into(),
+            },
         }
     };
     let create = make_order("2001", true);
     let quick = sink.create_order_atomic(&create).await.unwrap().unwrap();
     assert_eq!(quick.source_map_id, "template-zakaz-2001");
+    let original_creation = sink.order_creation_metadata("zakaz-2001").await.unwrap();
+    assert!(original_creation.created_at_unix.is_some());
+    assert_eq!(
+        original_creation.created_by,
+        Some(create.created_by.clone())
+    );
+    // A later map save or a retried creator write must retain the original snapshot.
+    let mut edited_creation_map = create.map.clone();
+    edited_creation_map.title = "Renamed order".into();
+    let mut tx = pool.begin().await.unwrap();
+    crate::db::postgres_production_map::save_edited_map_tx(&mut tx, &edited_creation_map)
+        .await
+        .unwrap();
+    crate::db::postgres_mini_order::save_order_creator_tx(
+        &mut tx,
+        "zakaz-2001",
+        &QueueActionActor {
+            role: "brigader".into(),
+            ref_: "another-user".into(),
+            display_name: "Another name".into(),
+        },
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    let reread = PostgresMiniOrderSink::new(pool.clone())
+        .order_creation_metadata("zakaz-2001")
+        .await
+        .unwrap();
+    assert_eq!(reread.created_by, original_creation.created_by);
+    assert_eq!(reread.created_at_unix, original_creation.created_at_unix);
+    assert!(sqlx::query("UPDATE mini_production_order_creators SET display_name='Changed' WHERE map_id='zakaz-2001'")
+        .execute(&runtime_pool).await.is_err(), "runtime must not rewrite creator snapshots");
+    assert!(
+        sink.order_creation_metadata("zakaz-1001")
+            .await
+            .unwrap()
+            .created_by
+            .is_none(),
+        "legacy orders must not inherit a template author or current viewer"
+    );
+    verify_legacy_order_creators(&pool, &runtime_pool).await;
     let persisted: (String, String, i64) = sqlx::query_as(
         "SELECT o.calculation_json->>'source_map_id', o.calculation_json->>'order_number',
          (SELECT count(*) FROM mini_order_products WHERE order_id=o.id)
@@ -469,12 +601,13 @@ async fn order_edit_postgres_atomic_save_history_and_races() {
             .await
             .is_err()
     );
-    let partial: (i64, i64, i64) = sqlx::query_as(
+    let partial: (i64, i64, i64, i64) = sqlx::query_as(
         "SELECT (SELECT count(*) FROM mini_production_maps WHERE id IN ('zakaz-2002','template-zakaz-2002')),
          (SELECT count(*) FROM mini_orders WHERE id='zakaz-2002'),
-         (SELECT count(*) FROM mini_quick_order_templates WHERE id='quick-2002')",
+         (SELECT count(*) FROM mini_quick_order_templates WHERE id='quick-2002'),
+         (SELECT count(*) FROM mini_production_order_creators WHERE map_id='zakaz-2002')",
     ).fetch_one(&pool).await.unwrap();
-    assert_eq!(partial, (0, 0, 0));
+    assert_eq!(partial, (0, 0, 0, 0));
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM mini_quick_order_templates")
         .fetch_one(&pool)
         .await
@@ -497,6 +630,28 @@ async fn order_edit_postgres_atomic_save_history_and_races() {
         (true, count),
         "quick clones do not modify reusable templates"
     );
+    for (number, role) in [
+        ("2101", "admin"),
+        ("2102", "brigader"),
+        ("2103", "sales_manager"),
+    ] {
+        let mut order = make_order(number, false);
+        order.owner_key = format!("{role}:original-user");
+        order.created_by = QueueActionActor {
+            role: role.into(),
+            ref_: "original-user".into(),
+            display_name: format!("Original {role}"),
+        };
+        sink.create_order_atomic(&order).await.unwrap();
+        assert_eq!(
+            sink.order_creation_metadata(&order.map.id)
+                .await
+                .unwrap()
+                .created_by,
+            Some(order.created_by),
+            "{role} creator must persist without a retry receipt or quick template"
+        );
+    }
     let mut material_order = make_order("3001", false);
     material_order.template.layers.push(crate::core::formula::LayerInput::new("PE", "40"));
     sink.create_order_atomic(&material_order).await.unwrap();

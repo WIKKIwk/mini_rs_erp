@@ -575,6 +575,7 @@ async fn save_production_map_with_order(
                 template: snapshot.clone(),
                 quick_template,
                 owner_key: owner_key.clone(),
+                created_by: queue_action_actor(principal),
             })
             .await;
         let saved_template = match created {

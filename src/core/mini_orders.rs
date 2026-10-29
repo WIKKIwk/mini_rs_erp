@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use thiserror::Error;
 
 use crate::core::calculate_orders::CalculateOrderTemplate;
-use crate::core::production_map::{ProductionMapDefinition, ProductionMapError};
+use crate::core::production_map::{ProductionMapDefinition, ProductionMapError, QueueActionActor};
 use crate::core::werka::models::SupplierItem;
 
 /// Catalog material and thicknesses from an opened order's saved layers.
@@ -30,6 +30,14 @@ pub struct NewProductionOrder {
     pub template: CalculateOrderTemplate,
     pub quick_template: Option<CalculateOrderTemplate>,
     pub owner_key: String,
+    pub created_by: QueueActionActor,
+}
+
+/// Original creation metadata, independent of reusable templates and later edits.
+#[derive(Debug, Clone, Default)]
+pub struct OrderCreationMetadata {
+    pub created_at_unix: Option<i64>,
+    pub created_by: Option<QueueActionActor>,
 }
 
 #[derive(Clone)]
@@ -68,9 +76,11 @@ pub trait MiniOrderSink: Send + Sync {
         Err(MiniOrderError::StoreFailed)
     }
 
-    /// The production order's original creation time, unaffected by later edits.
-    async fn order_created_at_unix(&self, _order_id: &str) -> Result<Option<i64>, MiniOrderError> {
-        Ok(None)
+    async fn order_creation_metadata(
+        &self,
+        _order_id: &str,
+    ) -> Result<OrderCreationMetadata, MiniOrderError> {
+        Ok(OrderCreationMetadata::default())
     }
 
     async fn create_order_atomic(

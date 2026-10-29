@@ -44,9 +44,19 @@ struct OrderCreationTimeSink {
 
 #[async_trait]
 impl MiniOrderSink for OrderCreationTimeSink {
-    async fn order_created_at_unix(&self, order_id: &str) -> Result<Option<i64>, MiniOrderError> {
+    async fn order_creation_metadata(
+        &self,
+        order_id: &str,
+    ) -> Result<crate::core::mini_orders::OrderCreationMetadata, MiniOrderError> {
         self.reads.lock().await.push(order_id.to_string());
-        Ok(Some(1_793_083_020))
+        Ok(crate::core::mini_orders::OrderCreationMetadata {
+            created_at_unix: Some(1_793_083_020),
+            created_by: Some(crate::core::production_map::QueueActionActor {
+                role: "brigader".into(),
+                ref_: "brigader-original".into(),
+                display_name: "Original creator".into(),
+            }),
+        })
     }
 
     async fn save_order(
@@ -106,6 +116,12 @@ async fn admin_order_detail_loads_creation_time_only_for_the_requested_order() {
     assert_eq!(detail["maps"].as_array().unwrap().len(), 1);
     assert_eq!(detail["maps"][0]["map"]["id"], "zakaz-created-at");
     assert_eq!(detail["maps"][0]["created_at_unix"], 1_793_083_020_i64);
+    assert_eq!(
+        detail["maps"][0]["created_by"],
+        serde_json::json!({
+            "role": "brigader", "ref": "brigader-original", "display_name": "Original creator",
+        })
+    );
     assert_eq!(*sink.reads.lock().await, ["zakaz-created-at"]);
 }
 
@@ -180,6 +196,7 @@ impl PendingOrderStore for InvalidatingIntake {
         &self,
         _: &str,
         _: &str,
+        _: &crate::core::production_map::QueueActionActor,
         _: PendingOrderCompletion,
         _: crate::core::production_map::ProductionMapSaved,
     ) -> Result<(PendingOrderCompletion, bool), PendingOrderError> {

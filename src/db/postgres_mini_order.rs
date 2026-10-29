@@ -3,9 +3,10 @@ use sqlx::PgPool;
 
 use crate::core::calculate_orders::CalculateOrderTemplate;
 use crate::core::mini_orders::{
-    MiniOrderError, MiniOrderSink, NewProductionOrder, OrderMaterial, OrderMaterialTask,
+    MiniOrderError, MiniOrderSink, NewProductionOrder, OrderCreationMetadata, OrderMaterial,
+    OrderMaterialTask,
 };
-use crate::core::production_map::{ProductionMapDefinition, ProductionMapError};
+use crate::core::production_map::{ProductionMapDefinition, ProductionMapError, QueueActionActor};
 use crate::core::quantity::positive_erp_quantity;
 use crate::core::werka::models::SupplierItem;
 
@@ -22,17 +23,96 @@ impl PostgresMiniOrderSink {
     }
 }
 
+pub(crate) async fn save_order_creator_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    map_id: &str,
+    creator: &QueueActionActor,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO mini_production_order_creators (map_id, role, principal_ref, display_name)
+         VALUES ($1, $2, $3, $4) ON CONFLICT (map_id) DO NOTHING",
+    )
+    .bind(map_id.trim())
+    .bind(creator.role.trim())
+    .bind(creator.ref_.trim())
+    .bind(creator.display_name.trim())
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+async fn legacy_order_creator(
+    pool: &PgPool,
+    order_id: &str,
+) -> Result<Option<QueueActionActor>, MiniOrderError> {
+    // A receipt belongs to this exact order. Reusable-template owners do not.
+    // Conflicting authors are ambiguous; repeated receipts by one author agree.
+    let row = sqlx::query_as::<_, (String, String, String)>(
+        "WITH receipt_owner AS (
+             SELECT min(btrim(owner_key)) AS owner_key
+             FROM mini_order_creation_receipts WHERE map_id = $1
+             HAVING count(DISTINCT btrim(owner_key)) = 1
+         ), actor AS (
+             SELECT split_part(owner_key, ':', 1) AS role,
+                    btrim(substr(owner_key, strpos(owner_key, ':') + 1)) AS principal_ref
+             FROM receipt_owner WHERE strpos(owner_key, ':') > 0
+         )
+         SELECT actor.role, actor.principal_ref,
+                COALESCE(NULLIF(btrim(directory_user.name), ''),
+                         NULLIF(btrim(builtin.display_name), ''), actor.principal_ref)
+         FROM actor
+         LEFT JOIN mini_system_users directory_user
+           ON actor.role IN ('brigader', 'sales_manager') AND directory_user.id = actor.principal_ref
+         LEFT JOIN mini_auth_builtin_identities builtin
+           ON actor.role = 'admin' AND builtin.principal_ref = actor.principal_ref
+         WHERE actor.role IN ('admin', 'brigader', 'sales_manager')
+           AND actor.principal_ref <> ''",
+    )
+    .bind(order_id.trim())
+    .fetch_optional(pool)
+    .await
+    .map_err(|_| MiniOrderError::StoreFailed)?;
+    Ok(row.map(|(role, ref_, display_name)| QueueActionActor {
+        role,
+        ref_,
+        display_name,
+    }))
+}
+
 #[async_trait]
 impl MiniOrderSink for PostgresMiniOrderSink {
-    async fn order_created_at_unix(&self, order_id: &str) -> Result<Option<i64>, MiniOrderError> {
-        sqlx::query_scalar(
-            "SELECT EXTRACT(EPOCH FROM created_at)::bigint
-             FROM mini_production_maps WHERE id = $1",
+    async fn order_creation_metadata(
+        &self,
+        order_id: &str,
+    ) -> Result<OrderCreationMetadata, MiniOrderError> {
+        let row = sqlx::query_as::<_, (i64, Option<String>, Option<String>, Option<String>)>(
+            "SELECT EXTRACT(EPOCH FROM map.created_at)::bigint,
+                    creator.role, creator.principal_ref, creator.display_name
+             FROM mini_production_maps map
+             LEFT JOIN mini_production_order_creators creator ON creator.map_id = map.id
+             WHERE map.id = $1",
         )
         .bind(order_id.trim())
         .fetch_optional(&self.pool)
         .await
-        .map_err(|_| MiniOrderError::StoreFailed)
+        .map_err(|_| MiniOrderError::StoreFailed)?;
+        Ok(match row {
+            Some((created_at, Some(role), Some(ref_), Some(display_name))) => {
+                OrderCreationMetadata {
+                    created_at_unix: Some(created_at),
+                    created_by: Some(QueueActionActor {
+                        role,
+                        ref_,
+                        display_name,
+                    }),
+                }
+            }
+            Some((created_at, ..)) => OrderCreationMetadata {
+                created_at_unix: Some(created_at),
+                created_by: legacy_order_creator(&self.pool, order_id).await?,
+            },
+            None => OrderCreationMetadata::default(),
+        })
     }
 
     async fn save_template_map_atomic(
@@ -186,6 +266,9 @@ impl MiniOrderSink for PostgresMiniOrderSink {
             order.template_map.as_ref(),
         )
         .await?;
+        save_order_creator_tx(&mut tx, &order.map.id, &order.created_by)
+            .await
+            .map_err(|_| ProductionMapError::StoreFailed)?;
         let quick_template = if let Some(template) = &order.quick_template {
             Some(
                 super::postgres_calculate_order::upsert_template_tx(

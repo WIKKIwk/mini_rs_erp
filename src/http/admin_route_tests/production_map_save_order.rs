@@ -1,5 +1,82 @@
 use super::*;
 
+#[derive(Default)]
+struct OrderCreatorSink(Mutex<Vec<crate::core::production_map::QueueActionActor>>);
+
+#[async_trait]
+impl MiniOrderSink for OrderCreatorSink {
+    fn enabled(&self) -> bool {
+        true
+    }
+
+    async fn create_order_atomic(
+        &self,
+        order: &crate::core::mini_orders::NewProductionOrder,
+    ) -> Result<Option<CalculateOrderTemplate>, crate::core::production_map::ProductionMapError>
+    {
+        self.0.lock().await.push(order.created_by.clone());
+        Ok(None)
+    }
+
+    async fn save_order(
+        &self,
+        _: &crate::core::production_map::ProductionMapDefinition,
+        _: &CalculateOrderTemplate,
+    ) -> Result<(), MiniOrderError> {
+        unreachable!()
+    }
+}
+
+#[tokio::test]
+async fn order_creator_comes_from_the_authenticated_principal_for_all_creator_roles() {
+    for (role, code) in [
+        (PrincipalRole::Admin, "admin"),
+        (PrincipalRole::Brigader, "brigader"),
+        (PrincipalRole::SalesManager, "sales_manager"),
+    ] {
+        let mut state = test_state();
+        let sink = Arc::new(OrderCreatorSink::default());
+        state.production_orders = sink.clone();
+        let token = session_for(&state, role, "original-user").await;
+        let map: serde_json::Value = serde_json::from_str(&pechat_order_map_json(
+            "zakaz-draft-creator",
+            "Creator order",
+            "7777",
+            "apparatus:default:bosma_8",
+        ))
+        .unwrap();
+        let body = serde_json::json!({
+            "map": map,
+            "created_by": {"role":"admin", "ref":"imposter", "display_name":"Imposter"},
+            "template": {
+                "name":"Creator order", "product":"Creator order",
+                "frame_product_size_mm":635, "frame_count":1,
+                "first_layer_material":"pet", "first_layer_micron":"12"
+            }
+        });
+        let response = build_router(state)
+            .oneshot(request_with_body(
+                "PUT",
+                "/v1/mobile/admin/production-maps/with-order",
+                &token,
+                &body.to_string(),
+            ))
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = json_body(response).await;
+        assert_eq!(status, StatusCode::OK, "{code}: {body}");
+        assert_eq!(
+            *sink.0.lock().await,
+            [crate::core::production_map::QueueActionActor {
+                role: code.into(),
+                ref_: "original-user".into(),
+                display_name: "Admin".into(),
+            }]
+        );
+    }
+}
+
 #[tokio::test]
 async fn production_map_save_with_order_rejects_package_for_rulon_only() {
     for (status, expected) in [

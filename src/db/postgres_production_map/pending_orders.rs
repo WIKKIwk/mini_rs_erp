@@ -89,6 +89,7 @@ impl PendingOrderStore for PostgresPendingOrderStore {
         &self,
         id: &str,
         owner_key: &str,
+        created_by: &crate::core::production_map::QueueActionActor,
         completion: PendingOrderCompletion,
         template_map: ProductionMapSaved,
     ) -> Result<(PendingOrderCompletion, bool), PendingOrderError> {
@@ -121,6 +122,13 @@ impl PendingOrderStore for PostgresPendingOrderStore {
                 .await
                 .map_err(store_error)?;
         }
+        crate::db::postgres_mini_order::save_order_creator_tx(
+            &mut tx,
+            &completion.saved.map.id,
+            created_by,
+        )
+        .await
+        .map_err(store_error)?;
         let t = &completion.template;
         sqlx::query("INSERT INTO mini_quick_order_templates
             (id,owner_key,code,name,item_code,product_name,customer_ref,customer_name,payload_json,quick_key)
