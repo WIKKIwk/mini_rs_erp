@@ -23,7 +23,8 @@ pub struct PaddonReceiveWrite {
 pub struct PaddonSummary {
     pub id: String,
     pub code: String,
-    /// Durable producing apparatus; empty for legacy or unscoped administrative packages.
+    /// Apparatus workspace managing the container, independent of each WIP's producer.
+    /// Empty for legacy or unscoped administrative packages.
     #[serde(default)]
     pub apparatus_id: String,
     #[serde(default)]

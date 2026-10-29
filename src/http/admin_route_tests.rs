@@ -91,6 +91,7 @@ mod order_images;
 mod order_pages;
 mod output_stats;
 mod paddon_management;
+mod paddon_cross_apparatus;
 mod paddon_qr_print;
 mod paddon_unlock;
 mod paddon_visibility;

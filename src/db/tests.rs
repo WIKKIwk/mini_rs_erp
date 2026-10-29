@@ -12,6 +12,7 @@ mod production_map;
 mod rezka_output_paddon;
 mod paddon_print_lock;
 mod paddon_apparatus_scope;
+mod paddon_cross_apparatus;
 mod bosma_astatka;
 mod cooperative_stages;
 mod qolip_checkout;

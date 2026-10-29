@@ -194,11 +194,7 @@ pub async fn production_map_paddon_detail(
     if method != Method::GET {
         return Err(method_not_allowed());
     }
-    let snapshot = state
-        .production_maps
-        .paddon_snapshot(&query.code)
-        .await
-        .map_err(production_map_error)?;
+    let snapshot = snapshot_for_principal(&state, &principal, &query.code).await?;
     ensure_paddon_access(&state, &principal, &snapshot.paddon).await?;
     let can_unlock =
         super::paddon_print_lock::can_unlock_snapshot(&state, &principal, &snapshot).await?;
@@ -400,6 +396,56 @@ pub(super) async fn require_paddon_visible(
     Ok(())
 }
 
+pub(super) async fn assigned_paddon_apparatuses(
+    state: &AppState, principal: &Principal,
+) -> Result<Vec<String>, AdminError> {
+    Ok(super::paddon_print_lock::assigned_cut_apparatuses(state, principal).await?
+        .into_iter().map(|(id, _)| id).collect())
+}
+
+async fn snapshot_for_principal(
+    state: &AppState, principal: &Principal, code: &str,
+) -> Result<crate::core::production_map::PaddonSnapshot, AdminError> {
+    let result = if principal.role == PrincipalRole::Aparatchi {
+        require_paddon_visible(state, principal, code).await?;
+        let allowed = assigned_paddon_apparatuses(state, principal).await?;
+        state.production_maps.paddon_snapshot_for_apparatuses(code, &queue_action_actor(principal), &allowed).await
+    } else {
+        state.production_maps.paddon_snapshot(code).await
+    };
+    result.map_err(production_map_error)
+}
+
+pub(super) async fn refresh_mutation_candidates(
+    state: &AppState, principal: &Principal, mut snapshot: crate::core::production_map::PaddonSnapshot,
+) -> crate::core::production_map::PaddonSnapshot {
+    if principal.role == PrincipalRole::Aparatchi {
+        match snapshot_for_principal(state, principal, &snapshot.paddon.code).await {
+            Ok(current) => return current,
+            Err(_) => {
+                // Membership has already committed. Keep its result usable if
+                // the optional candidate read fails or assignments change.
+                snapshot.available_items.clear();
+                tracing::warn!("paddon candidate refresh failed after mutation");
+            }
+        }
+    }
+    snapshot
+}
+
+async fn add_items_for_principal(
+    state: &AppState, principal: &Principal, code: &str, ids: &[String],
+) -> Result<crate::core::production_map::PaddonSnapshot, AdminError> {
+    let actor = queue_action_actor(principal);
+    let result = if principal.role == PrincipalRole::Aparatchi {
+        let allowed = assigned_paddon_apparatuses(state, principal).await?;
+        state.production_maps.add_paddon_items_for_apparatuses(code, ids, &actor, &allowed).await
+    } else {
+        state.production_maps.add_paddon_items(code, ids, &actor).await
+    };
+    result.map_err(production_map_error)
+}
+
 #[derive(Default, serde::Deserialize)]
 pub struct PaddonCodeQuery {
     #[serde(default)]
@@ -511,15 +557,7 @@ pub async fn production_map_paddon_item_add(
     let input: PaddonItemRequest = parse_json(&body)?;
     require_paddon_visible(&state, &principal, &input.code).await?;
     let progress_batch_id = resolve_progress_batch_id(&state, &input).await?;
-    let snapshot = state
-        .production_maps
-        .add_paddon_item(
-            &input.code,
-            &progress_batch_id,
-            &queue_action_actor(&principal),
-        )
-        .await
-        .map_err(production_map_error)?;
+    let snapshot = add_items_for_principal(&state, &principal, &input.code, &[progress_batch_id]).await?;
     let can_unlock =
         super::paddon_print_lock::can_unlock_snapshot(&state, &principal, &snapshot).await?;
     Ok(json_response(serde_json::json!({
@@ -554,15 +592,7 @@ pub async fn production_map_paddon_items_add(
     }
     let input: PaddonItemsRequest = parse_json(&body)?;
     require_paddon_visible(&state, &principal, &input.code).await?;
-    let snapshot = state
-        .production_maps
-        .add_paddon_items(
-            &input.code,
-            &input.progress_batch_ids,
-            &queue_action_actor(&principal),
-        )
-        .await
-        .map_err(production_map_error)?;
+    let snapshot = add_items_for_principal(&state, &principal, &input.code, &input.progress_batch_ids).await?;
     let can_unlock =
         super::paddon_print_lock::can_unlock_snapshot(&state, &principal, &snapshot).await?;
     Ok(json_response(serde_json::json!({
@@ -610,6 +640,7 @@ pub async fn production_map_paddon_item_remove(
         )
         .await
         .map_err(production_map_error)?;
+    let snapshot = refresh_mutation_candidates(&state, &principal, snapshot).await;
     let can_unlock =
         super::paddon_print_lock::can_unlock_snapshot(&state, &principal, &snapshot).await?;
     Ok(json_response(serde_json::json!({
@@ -653,6 +684,7 @@ pub async fn production_map_paddon_items_remove(
         )
         .await
         .map_err(production_map_error)?;
+    let snapshot = refresh_mutation_candidates(&state, &principal, snapshot).await;
     let can_unlock =
         super::paddon_print_lock::can_unlock_snapshot(&state, &principal, &snapshot).await?;
     Ok(json_response(serde_json::json!({

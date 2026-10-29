@@ -928,6 +928,29 @@ pub trait ProductionMapStorePort: Send + Sync {
     async fn paddon_scan_snapshot(&self, _code: &str) -> StoreResult<Option<PaddonSnapshot>> {
         Ok(None)
     }
+    async fn paddon_snapshot_for_apparatuses(
+        &self, code: &str, actor: &QueueActionActor, allowed_apparatuses: &[String],
+    ) -> StoreResult<Option<PaddonSnapshot>> {
+        let mut snapshot = self.paddon_snapshot(code).await?;
+        if let Some(snapshot) = &mut snapshot {
+            if actor.role == "aparatchi" && !allowed_apparatuses.contains(&snapshot.paddon.apparatus_id) {
+                return Err(ProductionMapError::PaddonTransferForbidden);
+            }
+            snapshot.available_items.retain(|batch| allowed_apparatuses.contains(&batch.apparatus));
+        }
+        Ok(snapshot)
+    }
+    /// The apparatus scope comes from authenticated server-side assignments.
+    async fn add_paddon_items_for_apparatuses(
+        &self, _code: &str, _ids: &[String], _actor: &QueueActionActor, _allowed: &[String],
+    ) -> StoreResult<PaddonSnapshot> {
+        Err(ProductionMapError::StoreFailed)
+    }
+    async fn transfer_paddon_items_for_apparatuses(
+        &self, _input: &PaddonTransferInput, _actor: &QueueActionActor, _allowed: &[String],
+    ) -> StoreResult<()> {
+        Err(ProductionMapError::StoreFailed)
+    }
     async fn add_paddon_item(
         &self,
         _code: &str,

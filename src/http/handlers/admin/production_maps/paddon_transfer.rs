@@ -27,11 +27,13 @@ pub async fn production_map_paddon_items_transfer(
     let input: PaddonTransferInput = parse_json(&body)?;
     super::paddons::require_paddon_visible(&state, &principal, &input.source_code).await?;
     super::paddons::require_paddon_visible(&state, &principal, &input.target_code).await?;
-    let result = state
-        .production_maps
-        .transfer_paddon_items(input, &queue_action_actor(&principal))
-        .await
-        .map_err(production_map_error)?;
+    let actor = queue_action_actor(&principal);
+    let result = if principal.role == PrincipalRole::Aparatchi {
+        let allowed = super::paddons::assigned_paddon_apparatuses(&state, &principal).await?;
+        state.production_maps.transfer_paddon_items_for_apparatuses(input, &actor, &allowed).await
+    } else {
+        state.production_maps.transfer_paddon_items(input, &actor).await
+    }.map_err(production_map_error)?;
     Ok(json_response(serde_json::json!({
         "ok": true,
         "source_code": result.source_code,

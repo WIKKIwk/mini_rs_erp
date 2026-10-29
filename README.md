@@ -98,6 +98,14 @@ All selected items move together or none move. Membership history records the
 authenticated actor; WIP identity, quantities, and lineage remain intact.
 Free movement also requires unlocked paddons on the legacy add/remove routes.
 
+A worker assigned to several cutting machines can move WIPs between those
+machines' paddons, or reattach an unassigned roll to another assigned machine's
+paddon. The API validates both container workspaces and every roll's original
+producing machine against the worker's current cutting assignments. The roll's
+producer, worker, session, QR and quantities remain unchanged; the paddon's
+apparatus identifies the workspace managing the container. Visibility,
+ownership, free movement, seal and warehouse receipt restrictions still apply.
+
 ### Named combo production
 
 A named combo is a planning catalog identity in the `Kombo` finished-product

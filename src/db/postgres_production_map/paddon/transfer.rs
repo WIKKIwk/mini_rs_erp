@@ -16,6 +16,7 @@ pub(super) async fn transfer(
     pool: &PgPool,
     input: &PaddonTransferInput,
     actor: &QueueActionActor,
+    allowed: Option<&[String]>,
 ) -> Result<(), ProductionMapError> {
     let mut tx = pool
         .begin()
@@ -69,7 +70,11 @@ pub(super) async fn transfer(
         .iter()
         .find(|p| p.code == input.target_code)
         .ok_or(ProductionMapError::PaddonNotFound)?;
-    if actor.role == "aparatchi" && source.apparatus_id != target.apparatus_id {
+    if let Some(allowed) = allowed {
+        for p in &paddons {
+            super::paddon_movement::ensure_apparatus_access(actor, &p.apparatus_id, &target.apparatus_id, Some(allowed))?;
+        }
+    } else if actor.role == "aparatchi" && source.apparatus_id != target.apparatus_id {
         return Err(ProductionMapError::PaddonTransferForbidden);
     }
     let mut batch_ids = input.progress_batch_ids.clone();
@@ -77,6 +82,11 @@ pub(super) async fn transfer(
     let mut memberships = Vec::with_capacity(batch_ids.len());
     for batch_id in &batch_ids {
         super::paddon_movement::lock_movable_roll(&mut tx, batch_id).await?;
+        if allowed.is_some() && actor.role == "aparatchi" {
+            let origin: Option<String> = sqlx::query_scalar("SELECT canonical_apparatus_id FROM mini_progress_batches WHERE batch_id=$1")
+                .bind(batch_id).fetch_one(&mut *tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
+            super::paddon_movement::ensure_apparatus_access(actor, origin.as_deref().unwrap_or_default(), &target.apparatus_id, allowed)?;
+        }
         // Verify the named source after taking the locks; stale requests may not
         // pull a roll out of a third pallet or attach a previously removed roll.
         let item_id = sqlx::query_scalar::<_, String>(

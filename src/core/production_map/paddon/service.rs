@@ -31,6 +31,18 @@ impl ProductionMapService {
         input: PaddonTransferInput,
         actor: &QueueActionActor,
     ) -> Result<PaddonTransferInput, ProductionMapError> {
+        self.transfer_paddon_items_with_scope(input, actor, None).await
+    }
+
+    pub async fn transfer_paddon_items_for_apparatuses(
+        &self, input: PaddonTransferInput, actor: &QueueActionActor, allowed: &[String],
+    ) -> Result<PaddonTransferInput, ProductionMapError> {
+        self.transfer_paddon_items_with_scope(input, actor, Some(allowed)).await
+    }
+
+    async fn transfer_paddon_items_with_scope(
+        &self, input: PaddonTransferInput, actor: &QueueActionActor, allowed: Option<&[String]>,
+    ) -> Result<PaddonTransferInput, ProductionMapError> {
         let source_code = input.source_code.trim();
         let target_code = input.target_code.trim();
         if source_code.is_empty()
@@ -48,7 +60,11 @@ impl ProductionMapService {
             target_code: target_code.to_string(),
             progress_batch_ids: normalize_paddon_batch_ids(&input.progress_batch_ids)?,
         };
-        self.store.transfer_paddon_items(&input, actor).await?;
+        if let Some(allowed) = allowed {
+            self.store.transfer_paddon_items_for_apparatuses(&input, actor, allowed).await?;
+        } else {
+            self.store.transfer_paddon_items(&input, actor).await?;
+        }
         self.notify_live();
         Ok(input)
     }
@@ -238,6 +254,23 @@ impl ProductionMapService {
             .paddon_scan_snapshot(code)
             .await?
             .ok_or(ProductionMapError::PaddonNotFound)
+    }
+
+    pub async fn paddon_snapshot_for_apparatuses(
+        &self, code: &str, actor: &QueueActionActor, allowed: &[String],
+    ) -> Result<PaddonSnapshot, ProductionMapError> {
+        self.store.paddon_snapshot_for_apparatuses(code.trim(), actor, allowed).await?
+            .ok_or(ProductionMapError::PaddonNotFound)
+    }
+
+    pub async fn add_paddon_items_for_apparatuses(
+        &self, code: &str, ids: &[String], actor: &QueueActionActor, allowed: &[String],
+    ) -> Result<PaddonSnapshot, ProductionMapError> {
+        if code.trim().is_empty() { return Err(ProductionMapError::PaddonInvalidInput); }
+        let ids = normalize_paddon_batch_ids(ids)?;
+        let snapshot = self.store.add_paddon_items_for_apparatuses(code.trim(), &ids, actor, allowed).await?;
+        self.notify_live();
+        Ok(snapshot)
     }
 
     pub async fn add_paddon_item(

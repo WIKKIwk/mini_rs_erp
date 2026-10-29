@@ -72,6 +72,7 @@ pub async fn production_map_paddon_unlock(
         .paddon_snapshot(&input.code)
         .await
         .map_err(production_map_error)?;
+    let snapshot = super::paddons::refresh_mutation_candidates(&state, &principal, snapshot).await;
     let can_unlock = can_unlock_snapshot(&state, &principal, &snapshot).await?;
     Ok(json_response(serde_json::json!({
         "ok": true, "paddon": snapshot.paddon, "items": snapshot.items,

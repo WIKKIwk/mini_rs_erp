@@ -30,6 +30,7 @@ struct PaddonRow {
 struct PaddonLockRow {
     id: String,
     apparatus_id: String,
+    created_by_ref: String,
     receipt_json: Option<serde_json::Value>,
     locked: bool,
 }
@@ -84,13 +85,14 @@ pub(super) async fn load_paddon_summary(
     pool: &PgPool,
     code: &str,
 ) -> Result<Option<PaddonSummary>, ProductionMapError> {
-    Ok(load_snapshot_by_code(pool, code, false).await?.map(|s| s.paddon))
+    Ok(load_snapshot_by_code(pool, code, false, None).await?.map(|s| s.paddon))
 }
 
 async fn load_snapshot_by_code(
     pool: &PgPool,
     code: &str,
     include_available_items: bool,
+    scope: Option<(&QueueActionActor, &[String])>,
 ) -> Result<Option<PaddonSnapshot>, ProductionMapError> {
     let Some(mut paddon) = load_raw_summary_by_code(pool, code).await? else {
         return Ok(None);
@@ -116,13 +118,20 @@ async fn load_snapshot_by_code(
             .map(|b| (b, corrections.get(&b.batch_id).copied())),
     );
     let receipt = super::paddon_receipts::load(pool, code).await?;
-    let free_movement_enabled = super::paddon_management::load(pool).await?.free_movement_enabled;
+    let settings = super::paddon_management::load(pool).await?;
+    let free_movement_enabled = settings.free_movement_enabled;
+    if let Some((actor, allowed)) = scope {
+        super::paddon_movement::ensure_apparatus_access(actor, &paddon.apparatus_id, &paddon.apparatus_id, Some(allowed))?;
+        super::paddon_movement::ensure_visible(actor, &paddon.created_by_ref, settings.worker_visibility_enabled)?;
+    }
     let can_manage_items = receipt.is_none() && paddon.locked_at_unix.is_none();
     if let Some(receipt) = receipt {
         paddon.total_gross_kg = receipt.paddon.total_gross_kg;
         paddon.total_net_kg = receipt.paddon.total_net_kg;
     }
-    let mut available_items = if include_available_items && can_manage_items && free_movement_enabled {
+    let mut available_items = if let Some((actor, allowed)) = scope.filter(|_| include_available_items && can_manage_items) {
+        super::paddon_movement::load_available_scoped(pool, &paddon.id, actor, allowed, &settings).await?
+    } else if include_available_items && can_manage_items && free_movement_enabled {
         super::paddon_movement::load_available(pool, &paddon.id, &paddon.apparatus_id).await?
     } else if include_available_items && can_manage_items {
         let mut query = WipProgressBatchQuery::new("", "", "", None, false, "", 500);
@@ -131,7 +140,7 @@ async fn load_snapshot_by_code(
     } else {
         Vec::new()
     };
-    if !paddon.apparatus_id.is_empty() {
+    if scope.is_none() && !paddon.apparatus_id.is_empty() {
         available_items.retain(|item| item.apparatus == paddon.apparatus_id);
     }
     Ok(Some(PaddonSnapshot {
@@ -266,14 +275,20 @@ pub(super) async fn load_paddon_snapshot(
     pool: &PgPool,
     code: &str,
 ) -> Result<Option<PaddonSnapshot>, ProductionMapError> {
-    load_snapshot_by_code(pool, code, true).await
+    load_snapshot_by_code(pool, code, true, None).await
+}
+
+pub(super) async fn load_scoped_snapshot(
+    pool: &PgPool, code: &str, actor: &QueueActionActor, allowed: &[String],
+) -> Result<Option<PaddonSnapshot>, ProductionMapError> {
+    load_snapshot_by_code(pool, code, true, Some((actor, allowed))).await
 }
 
 pub(super) async fn load_paddon_scan_snapshot(
     pool: &PgPool,
     code: &str,
 ) -> Result<Option<PaddonSnapshot>, ProductionMapError> {
-    load_snapshot_by_code(pool, code, false).await
+    load_snapshot_by_code(pool, code, false, None).await
 }
 
 async fn lock_paddon(
@@ -282,7 +297,7 @@ async fn lock_paddon(
     allow_printed: bool,
 ) -> Result<PaddonLockRow, ProductionMapError> {
     let row = sqlx::query_as::<_, PaddonLockRow>(
-        "SELECT id, apparatus_id, receipt_json, locked_at IS NOT NULL AS locked
+        "SELECT id, apparatus_id, created_by_ref, receipt_json, locked_at IS NOT NULL AS locked
          FROM mini_paddons
          WHERE code = $1
          FOR UPDATE",
@@ -321,16 +336,29 @@ pub(super) async fn add_paddon_items(
     progress_batch_ids: &[String],
     actor: &QueueActionActor,
 ) -> Result<PaddonSnapshot, ProductionMapError> {
+    add_paddon_items_with_scope(pool, code, progress_batch_ids, actor, None).await
+}
+
+pub(super) async fn add_paddon_items_with_scope(
+    pool: &PgPool, code: &str, progress_batch_ids: &[String],
+    actor: &QueueActionActor, allowed: Option<&[String]>,
+) -> Result<PaddonSnapshot, ProductionMapError> {
     let mut tx = pool
         .begin()
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
     if super::paddon_management::lock_enabled(&mut tx).await? {
-        super::paddon_movement::move_items(&mut tx, code, progress_batch_ids, actor).await?;
+        super::paddon_movement::move_items(&mut tx, code, progress_batch_ids, actor, allowed).await?;
         tx.commit().await.map_err(|_| ProductionMapError::StoreFailed)?;
-        return load_snapshot_by_code(pool, code, true).await?.ok_or(ProductionMapError::PaddonNotFound);
+        return load_snapshot_by_code(pool, code, true, allowed.map(|ids| (actor, ids))).await?.ok_or(ProductionMapError::PaddonNotFound);
     }
     let paddon = lock_paddon(&mut tx, code, false).await?;
+    if let Some(allowed) = allowed {
+        super::paddon_movement::ensure_apparatus_access(actor, &paddon.apparatus_id, &paddon.apparatus_id, Some(allowed))?;
+        let visible: bool = sqlx::query_scalar("SELECT worker_visibility_enabled FROM mini_paddon_management_settings WHERE singleton")
+            .fetch_one(&mut *tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
+        super::paddon_movement::ensure_visible(actor, &paddon.created_by_ref, visible)?;
+    }
     let mut changed = false;
     let mut batch_ids: Vec<_> = progress_batch_ids.iter().map(|id| id.trim()).collect();
     batch_ids.sort_unstable();
@@ -347,10 +375,7 @@ pub(super) async fn add_paddon_items(
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?
         .ok_or(ProductionMapError::ProgressBatchNotFound)?;
-        if actor.role == "aparatchi" && !paddon.apparatus_id.is_empty()
-            && batch_apparatus.as_deref() != Some(paddon.apparatus_id.as_str()) {
-            return Err(ProductionMapError::PaddonInvalidInput);
-        }
+        super::paddon_movement::ensure_apparatus_access(actor, batch_apparatus.as_deref().unwrap_or_default(), &paddon.apparatus_id, allowed)?;
         let active_paddon = sqlx::query_scalar::<_, String>(
             "SELECT paddon_id
              FROM mini_paddon_items
@@ -405,7 +430,7 @@ pub(super) async fn add_paddon_items(
     tx.commit()
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
-    load_snapshot_by_code(pool, code, true)
+    load_snapshot_by_code(pool, code, true, allowed.map(|ids| (actor, ids)))
         .await?
         .ok_or(ProductionMapError::PaddonNotFound)
 }
@@ -474,7 +499,7 @@ pub(super) async fn remove_paddon_items(
     tx.commit()
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
-    load_snapshot_by_code(pool, code, true)
+    load_snapshot_by_code(pool, code, true, None)
         .await?
         .ok_or(ProductionMapError::PaddonNotFound)
 }

@@ -833,7 +833,26 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         input: &crate::core::production_map::PaddonTransferInput,
         actor: &QueueActionActor,
     ) -> Result<(), ProductionMapError> {
-        paddon_transfer::transfer(&self.pool, input, actor).await
+        paddon_transfer::transfer(&self.pool, input, actor, None).await
+    }
+
+    async fn paddon_snapshot_for_apparatuses(
+        &self, code: &str, actor: &QueueActionActor, allowed: &[String],
+    ) -> Result<Option<PaddonSnapshot>, ProductionMapError> {
+        paddon_helpers::load_scoped_snapshot(&self.pool, code, actor, allowed).await
+    }
+
+    async fn add_paddon_items_for_apparatuses(
+        &self, code: &str, ids: &[String], actor: &QueueActionActor, allowed: &[String],
+    ) -> Result<PaddonSnapshot, ProductionMapError> {
+        paddon_helpers::add_paddon_items_with_scope(&self.pool, code, ids, actor, Some(allowed)).await
+    }
+
+    async fn transfer_paddon_items_for_apparatuses(
+        &self, input: &crate::core::production_map::PaddonTransferInput,
+        actor: &QueueActionActor, allowed: &[String],
+    ) -> Result<(), ProductionMapError> {
+        paddon_transfer::transfer(&self.pool, input, actor, Some(allowed)).await
     }
 
     async fn remove_paddon_item(
