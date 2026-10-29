@@ -39,6 +39,8 @@ pub struct QolipStorageQuery {
     #[serde(default)]
     pub status: String,
     #[serde(default)]
+    pub view: String,
+    #[serde(default)]
     pub warehouse: String,
     pub from: Option<String>,
     pub to: Option<String>,
@@ -52,6 +54,7 @@ impl QolipStorageQuery {
             || self.code.len() > 512
             || self.warehouse.len() > 512
             || self.offset > 1_000_000
+            || (!self.view.is_empty() && self.view != "molds")
             || (!self.status.is_empty()
                 && !matches!(self.status.as_str(), "open" | "all" | "returned"))
         {

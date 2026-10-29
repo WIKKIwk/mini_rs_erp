@@ -49,6 +49,28 @@ fn owner(warehouse: &str, allowed: Option<&[String]>) -> Result<(), Error> {
     }
 }
 const PADDON_SELECT: &str = "SELECT to_jsonb(p) || jsonb_build_object('locked',p.locked_at IS NOT NULL,'archived',p.archived_at IS NOT NULL,'archive_entry_id',(SELECT a.id FROM mini_qolip_archive_entries a WHERE a.kind='paddon' AND a.code=p.code AND a.restored_at IS NULL),'item_count',(SELECT count(*) FROM mini_qolip_paddon_members m WHERE m.paddon_code=p.code AND m.removed_at IS NULL),'total_quantity',(SELECT COALESCE(sum(GREATEST(COALESCE((SELECT sum(l.quantity) FROM mini_qolip_locations l WHERE lower(btrim(l.qolip_code))=m.qolip_code_key),0),1)),0) FROM mini_qolip_paddon_members m WHERE m.paddon_code=p.code AND m.removed_at IS NULL)) FROM mini_qolip_paddons p";
+const ARCHIVE_SELECT: &str = "SELECT to_jsonb(a) FROM mini_qolip_archive_entries a WHERE ($1='all' OR ($1='returned' AND restored_at IS NOT NULL) OR ($1='open' AND restored_at IS NULL)) AND ($2::text[] IS NULL OR lower(btrim(warehouse))=ANY($2)) AND ($3='' OR lower(code) LIKE $3 OR lower(snapshot::text) LIKE $3) AND ($6::date IS NULL OR archived_at >= ($6::date::timestamp AT TIME ZONE 'Asia/Tashkent')) AND ($7::date IS NULL OR archived_at < (($7::date + 1)::timestamp AT TIME ZONE 'Asia/Tashkent')) ORDER BY archived_at DESC,id DESC LIMIT $4 OFFSET $5";
+const ARCHIVE_MOLDS_SELECT: &str = r#"
+WITH archive AS (
+ SELECT a.* FROM mini_qolip_archive_entries a
+ WHERE ($1='all' OR ($1='returned' AND restored_at IS NOT NULL) OR ($1='open' AND restored_at IS NULL))
+ AND ($2::text[] IS NULL OR lower(btrim(warehouse))=ANY($2))
+ AND ($6::date IS NULL OR archived_at >= ($6::date::timestamp AT TIME ZONE 'Asia/Tashkent'))
+ AND ($7::date IS NULL OR archived_at < (($7::date + 1)::timestamp AT TIME ZONE 'Asia/Tashkent'))
+), molds AS (
+ SELECT to_jsonb(a) AS entry, a.archived_at, a.id, a.code AS mold_code
+ FROM archive a WHERE a.kind='qolip'
+ UNION ALL
+ SELECT to_jsonb(a) || jsonb_build_object('kind','paddon_mold','parent_paddon_code',a.code,
+   'code',item->>'qolip_code','snapshot',item), a.archived_at, a.id, item->>'qolip_code'
+ FROM archive a CROSS JOIN LATERAL jsonb_array_elements(
+   CASE WHEN jsonb_typeof(a.snapshot->'items')='array' THEN a.snapshot->'items' ELSE '[]'::jsonb END) item
+ WHERE a.kind='paddon' AND COALESCE(item->>'qolip_code','') <> ''
+)
+SELECT entry FROM molds
+WHERE ($3='' OR lower(mold_code) LIKE $3 OR lower((entry->'snapshot')::text) LIKE $3 OR lower(COALESCE(entry->>'parent_paddon_code','')) LIKE $3)
+ORDER BY archived_at DESC,id DESC,lower(mold_code),mold_code LIMIT $4 OFFSET $5
+"#;
 const MOLD_SELECT: &str = r#"SELECT s.payload_json || jsonb_build_object(
 'qolip_code',s.qolip_code,'qolip_set_id',COALESCE(s.qolip_set_id,''),'item_code',s.item_code,'item_name',s.item_name,'item_group',s.item_group,'size',s.size,
 'warehouse',COALESCE(s.payload_json->>'warehouse',''),'color',COALESCE(s.payload_json->>'color',''),
@@ -163,7 +185,30 @@ pub async fn read(
             json!({"ok":true,"paddons":rows,"has_more":more,"next_offset":if more{Some(offset+limit)}else{None}})
         }
         "archive" => {
-            let mut rows:Vec<Value>=sqlx::query_scalar("SELECT to_jsonb(a) FROM mini_qolip_archive_entries a WHERE ($1='all' OR ($1='returned' AND restored_at IS NOT NULL) OR ($1='open' AND restored_at IS NULL)) AND ($2::text[] IS NULL OR lower(btrim(warehouse))=ANY($2)) AND ($3='' OR lower(code) LIKE $3 OR lower(snapshot::text) LIKE $3) AND ($6::date IS NULL OR archived_at >= ($6::date::timestamp AT TIME ZONE 'Asia/Tashkent')) AND ($7::date IS NULL OR archived_at < (($7::date + 1)::timestamp AT TIME ZONE 'Asia/Tashkent')) ORDER BY archived_at DESC,id DESC LIMIT $4 OFFSET $5").bind(if query.status.is_empty(){"open"}else{&query.status}).bind(allowed_names(allowed)).bind(if query.q.is_empty(){String::new()}else{format!("%{}%",query.q.trim().to_lowercase())}).bind((limit+1)as i64).bind(offset as i64).bind(query.from.as_deref()).bind(query.to.as_deref()).fetch_all(&mut *tx).await.map_err(db)?;
+            let sql = if query.view == "molds" {
+                ARCHIVE_MOLDS_SELECT
+            } else {
+                ARCHIVE_SELECT
+            };
+            let mut rows: Vec<Value> = sqlx::query_scalar(sql)
+                .bind(if query.status.is_empty() {
+                    "open"
+                } else {
+                    &query.status
+                })
+                .bind(allowed_names(allowed))
+                .bind(if query.q.is_empty() {
+                    String::new()
+                } else {
+                    format!("%{}%", query.q.trim().to_lowercase())
+                })
+                .bind((limit + 1) as i64)
+                .bind(offset as i64)
+                .bind(query.from.as_deref())
+                .bind(query.to.as_deref())
+                .fetch_all(&mut *tx)
+                .await
+                .map_err(db)?;
             let more = rows.len() > limit;
             rows.truncate(limit);
             json!({"ok":true,"entries":rows,"has_more":more,"next_offset":if more{Some(offset+limit)}else{None}})

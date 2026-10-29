@@ -174,6 +174,47 @@ async fn postgres_paddon_archive_roundtrip_retry_inspection_and_snapshots() {
     ));
     let first = change(&f, "archive", "archive-1", code, 3, &[]).await;
     assert_eq!(first["paddon"]["archived"], true);
+    let mold_view = Query {
+        view: "molds".into(),
+        limit: Some(1),
+        ..Default::default()
+    };
+    let page = read(&f.runtime, "archive", &mold_view, Some(&allowed))
+        .await
+        .unwrap();
+    let item = &page["entries"][0];
+    assert_eq!(item["kind"], "paddon_mold");
+    assert_eq!(item["code"], "Q-ONE");
+    assert_eq!(item["snapshot"]["qolip_code"], "Q-ONE");
+    assert_eq!(item["parent_paddon_code"], code);
+    assert_eq!(item["id"], first["paddon"]["archive_entry_id"]);
+    assert_eq!(page["has_more"], true);
+    let next = read(
+        &f.runtime,
+        "archive",
+        &Query {
+            offset: 1,
+            ..mold_view.clone()
+        },
+        Some(&allowed),
+    )
+    .await
+    .unwrap();
+    assert_eq!(next["entries"][0]["code"], "Q-TWO");
+    assert_eq!(next["has_more"], false);
+    let searched = read(
+        &f.runtime,
+        "archive",
+        &Query {
+            q: "Q-TWO".into(),
+            ..mold_view.clone()
+        },
+        Some(&allowed),
+    )
+    .await
+    .unwrap();
+    assert_eq!(searched["entries"].as_array().unwrap().len(), 1);
+    assert_eq!(searched["entries"][0]["code"], "Q-TWO");
     let inspection = change(
         &f,
         "inspect",
