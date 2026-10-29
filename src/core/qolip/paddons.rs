@@ -137,6 +137,7 @@ impl QolipStorageAction {
         } else {
             &[
                 "create", "add", "remove", "lock", "unlock", "archive", "restore", "inspect",
+                "delete",
             ][..]
         };
         if !actions.contains(&self.action.as_str()) {
@@ -257,8 +258,15 @@ mod tests {
     }
     #[test]
     fn unknown_actions_and_empty_selection_fail() {
-        assert!(input("delete").normalize(false).is_err());
+        assert!(input("unknown").normalize(false).is_err());
         assert!(input("add").normalize(false).is_err());
+    }
+    #[test]
+    fn delete_requires_a_current_revision() {
+        assert!(input("delete").normalize(false).is_ok());
+        let mut i = input("delete");
+        i.expected_revision = None;
+        assert!(i.normalize(false).is_err());
     }
     #[test]
     fn validates_archive_calendar_dates_and_order() {

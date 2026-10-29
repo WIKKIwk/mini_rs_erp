@@ -452,6 +452,136 @@ async fn postgres_concurrent_paddon_membership_and_idempotent_creation() {
 
 #[tokio::test]
 #[ignore = "requires isolated disposable PostgreSQL admin URL"]
+async fn postgres_delete_only_empty_paddons_and_preserve_history() {
+    let f = Fixture::new().await;
+    let allowed = vec!["Qolip ombor".to_owned()];
+    let created = action(
+        &f.runtime,
+        &request("create", "create-for-delete", "", None, &[]),
+        false,
+        &actor(),
+        Some(&allowed),
+    )
+    .await
+    .unwrap();
+    let code = created["paddon"]["code"].as_str().unwrap().to_owned();
+    let denied = action(
+        &f.runtime,
+        &request("delete", "wrong-warehouse", &code, Some(1), &[]),
+        false,
+        &actor(),
+        Some(&["Other warehouse".into()]),
+    )
+    .await;
+    assert!(matches!(denied, Err(Error::Forbidden)));
+
+    change(&f, "add", "add-before-delete", &code, 1, &["Q-ONE"]).await;
+    let nonempty = action(
+        &f.runtime,
+        &request("delete", "nonempty", &code, Some(2), &[]),
+        false,
+        &actor(),
+        Some(&allowed),
+    )
+    .await;
+    assert!(matches!(
+        nonempty,
+        Err(Error::Conflict("qolip_paddon_not_empty"))
+    ));
+    let stale = action(
+        &f.runtime,
+        &request("delete", "stale-delete", &code, Some(1), &[]),
+        false,
+        &actor(),
+        Some(&allowed),
+    )
+    .await;
+    assert!(matches!(stale, Err(Error::Conflict("qolip_paddon_changed"))));
+
+    change(&f, "remove", "remove-before-delete", &code, 2, &["Q-ONE"]).await;
+    let delete = request("delete", "delete-empty", &code, Some(3), &[]);
+    let deleted = action(&f.runtime, &delete, false, &actor(), Some(&allowed))
+        .await
+        .unwrap();
+    assert_eq!(deleted, json!({"ok":true,"deleted":true,"code":code}));
+    assert_eq!(
+        action(&f.runtime, &delete, false, &actor(), Some(&allowed))
+            .await
+            .unwrap(),
+        deleted
+    );
+    let listing = read(&f.runtime, "paddons", &Query::default(), Some(&allowed))
+        .await
+        .unwrap();
+    assert!(listing["paddons"].as_array().unwrap().is_empty());
+    assert!(matches!(
+        read(
+            &f.runtime,
+            "detail",
+            &Query { code: code.clone(), ..Default::default() },
+            Some(&allowed)
+        )
+        .await,
+        Err(Error::NotFound)
+    ));
+    assert!(matches!(
+        action(
+            &f.runtime,
+            &request("add", "add-after-delete", &code, Some(4), &["Q-ONE"]),
+            false,
+            &actor(),
+            Some(&allowed)
+        )
+        .await,
+        Err(Error::NotFound)
+    ));
+    let history: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM mini_qolip_paddon_events WHERE paddon_code=$1",
+    )
+    .bind(&code)
+    .fetch_one(&f.admin)
+    .await
+    .unwrap();
+    let previous_members: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM mini_qolip_paddon_members WHERE paddon_code=$1 AND removed_at IS NOT NULL",
+    )
+    .bind(&code)
+    .fetch_one(&f.admin)
+    .await
+    .unwrap();
+    assert_eq!(history, 4);
+    assert_eq!(previous_members, 1);
+
+    let second = action(
+        &f.runtime,
+        &request("create", "create-race", "", None, &[]),
+        false,
+        &actor(),
+        Some(&allowed),
+    )
+    .await
+    .unwrap();
+    let race_code = second["paddon"]["code"].as_str().unwrap();
+    let add = request("add", "race-add", race_code, Some(1), &["Q-ONE"]);
+    let delete = request("delete", "race-delete", race_code, Some(1), &[]);
+    let principal = actor();
+    let (add_result, delete_result) = tokio::join!(
+        action(&f.runtime, &add, false, &principal, Some(&allowed)),
+        action(&f.runtime, &delete, false, &principal, Some(&allowed)),
+    );
+    assert_ne!(add_result.is_ok(), delete_result.is_ok());
+    let invalid: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM mini_qolip_paddons p JOIN mini_qolip_paddon_members m ON m.paddon_code=p.code WHERE p.deleted_at IS NOT NULL AND m.removed_at IS NULL",
+    )
+    .fetch_one(&f.admin)
+    .await
+    .unwrap();
+    assert_eq!(invalid, 0);
+    f.cleanup().await;
+}
+
+#[tokio::test]
+#[ignore = "requires isolated disposable PostgreSQL admin URL"]
 async fn postgres_archive_filters_use_tashkent_day_before_pagination() {
     let f = Fixture::new().await;
     let allowed = vec!["Qolip ombor".to_owned()];

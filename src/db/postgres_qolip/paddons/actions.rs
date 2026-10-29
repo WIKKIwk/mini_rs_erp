@@ -124,6 +124,21 @@ async fn paddon_action(
     let mut payload = json!({"qolip_codes":input.qolip_codes,"note":input.note});
     let mut inspection = None;
     match input.action.as_str() {
+        "delete" => {
+            if !current.is_empty() {
+                return Err(Error::Conflict("qolip_paddon_not_empty"));
+            }
+            let updated = sqlx::query("UPDATE mini_qolip_paddons SET deleted_at=now(),revision=revision+1 WHERE code=$1 AND deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM mini_qolip_paddon_members WHERE paddon_code=$1 AND removed_at IS NULL)")
+                .bind(code)
+                .execute(&mut **tx)
+                .await
+                .map_err(db)?;
+            if updated.rows_affected() != 1 {
+                return Err(Error::Conflict("qolip_paddon_not_empty"));
+            }
+            event(tx, code, "delete", principal, json!({})).await?;
+            return Ok((json!({"ok":true,"deleted":true,"code":code}), vec![warehouse]));
+        }
         "add" => {
             if locked {
                 return Err(Error::Conflict("qolip_paddon_locked"));

@@ -112,7 +112,7 @@ async fn molds(
         .map_err(db)
 }
 async fn paddon(tx: &mut Tx<'_>, code: &str, allowed: Option<&[String]>) -> Result<Value, Error> {
-    let p: Value = sqlx::query_scalar(&format!("{PADDON_SELECT} WHERE p.code=$1"))
+    let p: Value = sqlx::query_scalar(&format!("{PADDON_SELECT} WHERE p.code=$1 AND p.deleted_at IS NULL"))
         .bind(code)
         .fetch_optional(&mut **tx)
         .await
@@ -179,7 +179,7 @@ pub async fn read(
             json!({"ok":true,"molds":rows,"has_more":more,"next_offset":if more{Some(offset+limit)}else{None}})
         }
         "paddons" => {
-            let mut rows:Vec<Value>=sqlx::query_scalar(&format!("{PADDON_SELECT} WHERE (p.archived_at IS NOT NULL)=$1 AND ($2::text[] IS NULL OR lower(btrim(p.warehouse))=ANY($2)) AND ($3='' OR lower(p.code) LIKE $3 OR lower(p.location) LIKE $3 OR lower(p.note) LIKE $3) ORDER BY p.created_at DESC,p.code DESC LIMIT $4 OFFSET $5")).bind(query.archived).bind(allowed_names(allowed)).bind(if query.q.is_empty(){String::new()}else{format!("%{}%",query.q.trim().to_lowercase())}).bind((limit+1)as i64).bind(offset as i64).fetch_all(&mut *tx).await.map_err(db)?;
+            let mut rows:Vec<Value>=sqlx::query_scalar(&format!("{PADDON_SELECT} WHERE p.deleted_at IS NULL AND (p.archived_at IS NOT NULL)=$1 AND ($2::text[] IS NULL OR lower(btrim(p.warehouse))=ANY($2)) AND ($3='' OR lower(p.code) LIKE $3 OR lower(p.location) LIKE $3 OR lower(p.note) LIKE $3) ORDER BY p.created_at DESC,p.code DESC LIMIT $4 OFFSET $5")).bind(query.archived).bind(allowed_names(allowed)).bind(if query.q.is_empty(){String::new()}else{format!("%{}%",query.q.trim().to_lowercase())}).bind((limit+1)as i64).bind(offset as i64).fetch_all(&mut *tx).await.map_err(db)?;
             let more = rows.len() > limit;
             rows.truncate(limit);
             json!({"ok":true,"paddons":rows,"has_more":more,"next_offset":if more{Some(offset+limit)}else{None}})
