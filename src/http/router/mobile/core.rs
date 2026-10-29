@@ -35,6 +35,7 @@ pub(super) fn routes() -> Router<AppState> {
             .patch(crate::http::handlers::preparation::rename_formula_set))
         .route("/v1/mobile/preparation/formula-variants", get(crate::http::handlers::preparation::formula_variants)
             .post(crate::http::handlers::preparation::formula_variant_create))
+        .route("/v1/mobile/preparation/formula-variants/reuse", axum::routing::post(crate::http::handlers::preparation::formula_variant_reuse))
         .route("/v1/mobile/preparation/formulas/saved", get(crate::http::handlers::preparation::saved_formula_show)
             .patch(crate::http::handlers::preparation::saved_formula_update)
             .delete(crate::http::handlers::preparation::saved_formula_delete))

@@ -272,6 +272,29 @@ pub struct FormulaVariantCreate {
     pub request_id: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FormulaVariantReuse {
+    pub product_code: String,
+    pub material_id: String,
+    pub source_variant_id: String,
+}
+
+impl FormulaVariantReuse {
+    pub fn validate(&self) -> Result<(), PreparationError> {
+        for (value, limit) in [
+            (&self.product_code, 160),
+            (&self.material_id, 128),
+            (&self.source_variant_id, 160),
+        ] {
+            if value.trim().is_empty() || value.trim().chars().count() > limit {
+                return Err(PreparationError::Invalid("Variant ma’lumotlari noto‘g‘ri"));
+            }
+        }
+        Ok(())
+    }
+}
+
 impl FormulaVariantCreate {
     pub fn normalized_name(&self) -> Result<String, PreparationError> {
         let name = self.name.split_whitespace().collect::<Vec<_>>().join(" ");

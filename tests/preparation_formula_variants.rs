@@ -53,6 +53,21 @@ fn variant_names_are_required_and_normalized() {
     assert!(invalid.normalized_name().is_err());
 }
 
+#[test]
+fn formula_reuse_requires_source_and_target_scope() {
+    for (product, material, source) in [
+        ("", "mat-a", "fv-source"),
+        ("P", "", "fv-source"),
+        ("P", "mat-a", " "),
+        ("P", "mat-a", &"x".repeat(161)),
+    ] {
+        assert!(FormulaVariantReuse {
+            product_code: product.into(), material_id: material.into(),
+            source_variant_id: source.into(),
+        }.validate().is_err());
+    }
+}
+
 #[tokio::test]
 #[ignore = "requires MINI_ERP_TEST_ADMIN_DATABASE_URL; creates an isolated database"]
 async fn named_variants_persist_empty_and_isolate_screws_and_shares() {
@@ -341,6 +356,7 @@ async fn run_checks(pool: &PgPool, options: PgConnectOptions) {
         store.create_formula_variant("prep-1", create("Concurrent", "parallel"))
     );
     assert_eq!(first.unwrap()["id"], second.unwrap()["id"]);
+    check_recipe_reuse(&store, &actor, &item, &foreign_id, &old_id).await;
     sqlx::query("DELETE FROM mini_preparation_material_responsibilities WHERE principal_ref='prep-1'")
         .execute(pool).await.unwrap();
     let catalog = store.formula_catalog("prep-1").await.unwrap();
@@ -350,4 +366,74 @@ async fn run_checks(pool: &PgPool, options: PgConnectOptions) {
     assert_eq!(recipe["order_codes"], serde_json::json!([]));
     assert_eq!(recipe["can_create"], false);
     runtime.close().await;
+}
+
+async fn check_recipe_reuse(
+    store: &PostgresPreparationStore,
+    actor: &Principal,
+    item: &str,
+    foreign: &str,
+    invalid_recipe: &str,
+) {
+    let source = store.create_formula_variant("prep-1", FormulaVariantCreate {
+        product_code: "SOURCE".into(), material_id: "mat-a".into(),
+        name: "LG".into(), request_id: "reuse-source".into(),
+    }).await.unwrap();
+    let source_id = source["id"].as_str().unwrap();
+    for name in ["A", "B", "C"] {
+        store.upsert_formula_variant(actor, FormulaUpsert {
+            product_code: "SOURCE".into(), material_id: "mat-a".into(), name: name.into(),
+            lines: vec![FormulaLine { item_code: item.into(), percent: "100".into() }],
+        }, source_id).await.unwrap();
+    }
+    store.update_formula_variant_shares("prep-1", FormulaSharesUpdate {
+        product_code: "SOURCE".into(), material_id: "mat-a".into(),
+        shares: [ ("A", "30"), ("B", "40"), ("C", "30") ].into_iter()
+            .map(|(name, percent)| FormulaShare { name: name.into(), percent: percent.into() }).collect(),
+    }, false, source_id).await.unwrap();
+    let request = |source: &str, product: &str, material: &str| FormulaVariantReuse {
+        source_variant_id: source.into(), product_code: product.into(), material_id: material.into(),
+    };
+    let copied = store.reuse_formula_variant("prep-1", request(source_id, "TARGET", "mat-a")).await.unwrap();
+    assert_ne!(copied["id"], source["id"]);
+    assert_ne!(copied["formula_code"], source["formula_code"]);
+    assert_eq!(copied["name"], "LG");
+    assert_eq!(copied["formula_count"], 3);
+    assert_eq!(copied["shares_complete"], true);
+    let copied_id = copied["id"].as_str().unwrap();
+    let original = store.list_formulas_variant("prep-1", "SOURCE", "mat-a", source_id).await.unwrap();
+    let target = store.list_formulas_variant("prep-1", "TARGET", "mat-a", copied_id).await.unwrap();
+    for (source, target) in original["formulas"].as_array().unwrap().iter()
+        .zip(target["formulas"].as_array().unwrap()) {
+        assert_eq!(target["name"], source["name"]);
+        assert_eq!(target["lines"], source["lines"]);
+        assert_eq!(target["share_percent"], source["share_percent"]);
+        assert_ne!(target["formula_code"], source["formula_code"]);
+    }
+    let (retry, concurrent) = tokio::join!(
+        store.reuse_formula_variant("prep-1", request(source_id, "TARGET", "mat-a")),
+        store.reuse_formula_variant("prep-1", request(source_id, "TARGET", "mat-a")),
+    );
+    assert_eq!(retry.unwrap()["id"], copied["id"]);
+    assert_eq!(concurrent.unwrap()["id"], copied["id"]);
+    assert_eq!(store.reuse_formula_variant("prep-1", request(source_id, "SOURCE", "mat-a"))
+        .await.unwrap()["id"], source["id"]);
+    assert!(store.reuse_formula_variant("prep-1", request(foreign, "TARGET", "mat-a")).await.is_err());
+    assert!(store.reuse_formula_variant("prep-2", request(source_id, "TARGET", "mat-a")).await.is_err());
+    assert!(store.reuse_formula_variant("prep-1", request(source_id, "TARGET", "not-assigned")).await.is_err());
+    assert!(store.reuse_formula_variant("prep-1", request(invalid_recipe, "ROLLBACK", "mat-a")).await.is_err());
+    assert!(store.formula_variants("prep-1", "ROLLBACK", "mat-a", false)
+        .await.unwrap()["variants"].as_array().unwrap().is_empty());
+
+    let collision = store.create_formula_variant("prep-1", FormulaVariantCreate {
+        product_code: "COLLISION".into(), material_id: "mat-a".into(),
+        name: "LG".into(), request_id: "collision".into(),
+    }).await.unwrap();
+    let renamed = store.reuse_formula_variant("prep-1", request(source_id, "COLLISION", "mat-a")).await.unwrap();
+    assert_eq!(renamed["name"], "LG (2)");
+    assert_ne!(renamed["id"], collision["id"]);
+    store.delete_formula_variant("prep-1", "TARGET", "A", "mat-a", copied_id).await.unwrap();
+    assert_eq!(store.list_formulas_variant("prep-1", "SOURCE", "mat-a", source_id).await.unwrap(), original);
+    assert_eq!(store.reuse_formula_variant("prep-1", request(source_id, "TARGET", "mat-a"))
+        .await.unwrap()["formula_count"], 2);
 }

@@ -418,6 +418,13 @@ pub async fn formula_variant_create(
     store(&state)?.create_formula_variant(&actor.ref_, input).await.map(Json).map_err(error)
 }
 
+pub async fn formula_variant_reuse(
+    State(state): State<AppState>, headers: HeaderMap, Json(input): Json<FormulaVariantReuse>,
+) -> Result<Json<Value>, ApiError> {
+    let actor = authorize(&state, &headers).await?;
+    store(&state)?.reuse_formula_variant(&actor.ref_, input).await.map(Json).map_err(error)
+}
+
 #[derive(Debug, Deserialize)]
 pub struct OrderMaterialsQuery {
     pub order_id: String,
