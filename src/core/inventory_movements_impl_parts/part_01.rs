@@ -93,6 +93,7 @@ impl MemoryInventoryMovementStore {
                 !query.current_user_states_only
                     || asset.physical_location.kind == InventoryLocationKind::State
             })
+            .filter(|asset| !query.warehouse_only || asset.physical_location.kind == InventoryLocationKind::Warehouse)
             .filter(|asset| {
                 requested_warehouse
                     .as_ref()

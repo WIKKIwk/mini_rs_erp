@@ -225,6 +225,8 @@ pub struct InventoryAssetQuery {
     /// regardless of who last placed the asset there.
     #[serde(default)]
     pub current_user_states_only: bool,
+    #[serde(skip)]
+    pub warehouse_only: bool,
     #[serde(default)]
     pub include_order_assignment: bool,
     #[serde(default = "default_asset_limit")]

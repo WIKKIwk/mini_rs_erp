@@ -9,6 +9,7 @@ pub(super) async fn list_order_assignments(
     barcodes: &[String],
     assigned_apparatus: &[String],
 ) -> Result<Vec<InventoryOrderAssignment>, InventoryMovementError> {
+    let preparation = actor.principal.role == crate::core::auth::models::PrincipalRole::TayyorlovMasteri;
     let warehouses = actor
         .assigned_warehouses
         .iter()
@@ -20,7 +21,7 @@ pub(super) async fn list_order_assignments(
             SELECT barcode, order_id, canonical_apparatus_id
             FROM mini_raw_material_assignments
             WHERE lower(barcode) = ANY($1::text[])
-              AND canonical_apparatus_id = ANY($2::text[])
+              AND ($4 OR canonical_apparatus_id = ANY($2::text[]))
               AND EXISTS (
                   SELECT 1 FROM mini_apparatus apparatus
                   WHERE apparatus.id = canonical_apparatus_id
@@ -31,7 +32,14 @@ pub(super) async fn list_order_assignments(
         FROM visible_assignments assignment
         JOIN mini_raw_material_stock stock ON lower(stock.barcode) = lower(assignment.barcode)
         LEFT JOIN mini_order_control_states control ON control.order_id = assignment.order_id
-        WHERE lower(btrim(stock.warehouse)) = ANY($3::text[])
+        WHERE (lower(btrim(stock.warehouse)) = ANY($3::text[])
+            OR ($4 AND EXISTS (
+                SELECT 1 FROM mini_gscale_receipts receipt
+                WHERE receipt.name = stock.source_receipt_id
+                  AND receipt.status = 'submitted'
+                  AND receipt.payload_json->>'actor_role' = 'tayyorlov_masteri'
+                  AND receipt.payload_json->>'actor_ref' = $5
+            )))
           AND stock.status <> 'deleted'
         ORDER BY assignment.barcode
         "#,
@@ -39,6 +47,8 @@ pub(super) async fn list_order_assignments(
     .bind(barcodes)
     .bind(assigned_apparatus)
     .bind(warehouses)
+    .bind(preparation)
+    .bind(actor.principal.ref_.trim())
     .fetch_all(&store.pool)
     .await
     .map_err(store_error)?;
@@ -47,23 +57,28 @@ pub(super) async fn list_order_assignments(
     }
     let order_ids = rows
         .iter()
-        .filter(|(_, _, state)| state == "active")
+        .filter(|(_, _, state)| preparation || state == "active")
         .map(|(_, id, _)| id.clone())
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
         .collect::<Vec<_>>();
     let mut labels = BTreeMap::new();
     if !order_ids.is_empty() {
-        let maps = sqlx::query_scalar::<_, Value>(
-            "SELECT map_json FROM mini_production_maps
+        let maps = sqlx::query_as::<_, (String, String, String, String, Value)>(
+            "SELECT id, code, order_number, title, map_json FROM mini_production_maps
              WHERE id = ANY($1::text[])
-               AND lifecycle_status IN ('released', 'in_progress')",
+               AND ($2 OR lifecycle_status IN ('released', 'in_progress'))",
         )
         .bind(order_ids)
+        .bind(preparation)
         .fetch_all(&store.pool)
         .await
         .map_err(store_error)?;
-        for payload in maps {
+        for (id, code, order_number, title, payload) in maps {
+            if preparation {
+                labels.insert(id.trim().to_string(), order_label_fields(&id, &code, &order_number, &title));
+                continue;
+            }
             // Match the prior assignment-orders contract, including its
             // fallback for a stored map which cannot be compiled.
             if let Ok(map) = serde_json::from_value::<ProductionMapDefinition>(payload) {
@@ -91,11 +106,15 @@ pub(super) async fn list_order_assignments(
 }
 
 fn order_label(map: &ProductionMapDefinition) -> String {
-    let code = [map.code.trim(), map.order_number.trim(), map.id.trim()]
+    order_label_fields(&map.id, &map.code, &map.order_number, &map.title)
+}
+
+fn order_label_fields(id: &str, code: &str, order_number: &str, title: &str) -> String {
+    let code = [code.trim(), order_number.trim(), id.trim()]
         .into_iter()
         .find(|value| !value.is_empty())
         .unwrap_or_default();
-    let title = map.title.trim();
+    let title = title.trim();
     if title.is_empty() {
         code.to_string()
     } else {

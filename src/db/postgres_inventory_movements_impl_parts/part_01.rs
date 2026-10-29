@@ -131,7 +131,8 @@ impl PostgresInventoryMovementStore {
     ) -> Result<Vec<InventoryAsset>, InventoryMovementError> {
         if !query.warehouse_id.is_empty() {
             let warehouse = warehouse_by_id(&self.pool, &query.warehouse_id).await?;
-            if !actor.can_manage_warehouse(&warehouse.name) {
+            if actor.principal.role != crate::core::auth::models::PrincipalRole::TayyorlovMasteri
+                && !actor.can_manage_warehouse(&warehouse.name) {
                 return Err(InventoryMovementError::WarehouseForbidden);
             }
         }
@@ -155,6 +156,12 @@ impl PostgresInventoryMovementStore {
             .bind(query.limit as i64)
             .bind(query.offset as i64)
             .bind(query.current_user_states_only)
+            .bind(query.warehouse_only)
+            .bind(if actor.principal.role == crate::core::auth::models::PrincipalRole::TayyorlovMasteri {
+                actor.principal.ref_.trim()
+            } else {
+                ""
+            })
             .fetch_all(&self.pool)
             .await
             .map_err(store_error)?;

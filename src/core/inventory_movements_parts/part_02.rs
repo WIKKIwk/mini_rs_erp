@@ -68,6 +68,11 @@ impl InventoryMovementService {
         query.query = trim_owned(query.query);
         query.limit = query.limit.clamp(1, 500);
         query.offset = query.offset.min(100_000);
+        if actor.principal.role == PrincipalRole::TayyorlovMasteri {
+            query.asset_kind = Some(InventoryAssetKind::RawMaterial);
+            query.current_user_states_only = false;
+            query.warehouse_only = true;
+        }
         self.store.assets(actor, &query).await
     }
 
@@ -77,7 +82,7 @@ impl InventoryMovementService {
         barcodes: &[String],
         assigned_apparatus: &[String],
     ) -> Result<Vec<InventoryOrderAssignment>, InventoryMovementError> {
-        if actor.principal.role != PrincipalRole::MaterialTaminotchi {
+        if !matches!(actor.principal.role, PrincipalRole::MaterialTaminotchi | PrincipalRole::TayyorlovMasteri) {
             return Err(InventoryMovementError::WarehouseForbidden);
         }
         let barcodes = barcodes
@@ -94,7 +99,9 @@ impl InventoryMovementService {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();
-        if barcodes.is_empty() || apparatus.is_empty() || actor.assigned_warehouses.is_empty() {
+        if barcodes.is_empty()
+            || (actor.principal.role == PrincipalRole::MaterialTaminotchi
+                && (actor.assigned_warehouses.is_empty() || apparatus.is_empty())) {
             return Ok(Vec::new());
         }
         self.store
@@ -165,6 +172,10 @@ impl InventoryMovementService {
         input.idempotency_key = normalize_idempotency(input.idempotency_key)?;
         input.note = trim_owned(input.note);
         input.assets = normalize_asset_selectors(input.assets)?;
+        if actor.principal.role == PrincipalRole::TayyorlovMasteri
+            && input.assets.iter().any(|asset| asset.asset_kind != InventoryAssetKind::RawMaterial) {
+            return Err(InventoryMovementError::WarehouseForbidden);
+        }
         let transfer_id = movement_id("inventory_transfer");
         self.store
             .create_transfer(actor, &transfer_id, &input)

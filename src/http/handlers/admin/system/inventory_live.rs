@@ -248,14 +248,18 @@ async fn read_rows(
                 .map_err(|_| server_error("inventory live read failed"))?,
         )
         .map_err(|_| server_error("inventory live serialization failed"))?,
-        ViewKind::Locations => serde_json::to_value(
-            state
+        ViewKind::Locations => {
+            let mut locations = state
                 .inventory_movements
                 .locations()
                 .await
-                .map_err(|_| server_error("inventory live read failed"))?,
-        )
-        .map_err(|_| server_error("inventory live serialization failed"))?,
+                .map_err(|_| server_error("inventory live read failed"))?;
+            if actor.principal.role == PrincipalRole::TayyorlovMasteri {
+                locations.retain(|location| location.kind == crate::core::inventory_movements::InventoryLocationKind::Warehouse);
+            }
+            serde_json::to_value(locations)
+                .map_err(|_| server_error("inventory live serialization failed"))?
+        },
     };
     value
         .as_array()

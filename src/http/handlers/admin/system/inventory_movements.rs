@@ -10,16 +10,19 @@ pub async fn inventory_locations(
     method: Method,
     headers: HeaderMap,
 ) -> Result<Response, AdminError> {
-    let _ = inventory_actor(&state, &headers).await?;
+    let actor = inventory_actor(&state, &headers).await?;
     if method != Method::GET {
         return Err(method_not_allowed());
     }
-    state
+    let mut locations = state
         .inventory_movements
         .locations()
         .await
-        .map(json_response)
-        .map_err(inventory_error)
+        .map_err(inventory_error)?;
+    if actor.principal.role == PrincipalRole::TayyorlovMasteri {
+        locations.retain(|location| location.kind == crate::core::inventory_movements::InventoryLocationKind::Warehouse);
+    }
+    Ok(json_response(locations))
 }
 
 pub async fn inventory_assets(
@@ -40,9 +43,9 @@ pub(super) async fn inventory_asset_rows(
     actor: &InventoryActor,
     query: InventoryAssetQuery,
 ) -> Result<InventoryAssetRows, AdminError> {
-    let include_order_assignment =
-        query.include_order_assignment && actor.principal.role == PrincipalRole::MaterialTaminotchi;
-    if include_order_assignment {
+    let include_order_assignment = query.include_order_assignment
+        && matches!(actor.principal.role, PrincipalRole::MaterialTaminotchi | PrincipalRole::TayyorlovMasteri);
+    if include_order_assignment && actor.principal.role == PrincipalRole::MaterialTaminotchi {
         require_capability(&state, &actor.principal, Capability::RawMaterialAssign).await?;
     }
     let assets = state
@@ -105,6 +108,7 @@ pub async fn inventory_relocations(
     body: Bytes,
 ) -> Result<Response, AdminError> {
     let actor = inventory_actor(&state, &headers).await?;
+    if actor.principal.role == PrincipalRole::TayyorlovMasteri { return Err(forbidden()); }
     if method != Method::POST {
         return Err(method_not_allowed());
     }
@@ -128,6 +132,7 @@ pub async fn inventory_relocations_batch(
     body: Bytes,
 ) -> Result<Response, AdminError> {
     let actor = inventory_actor(&state, &headers).await?;
+    if actor.principal.role == PrincipalRole::TayyorlovMasteri { return Err(forbidden()); }
     if method != Method::POST {
         return Err(method_not_allowed());
     }
@@ -157,6 +162,7 @@ pub async fn inventory_returns_batch(
     body: Bytes,
 ) -> Result<Response, AdminError> {
     let actor = inventory_actor(&state, &headers).await?;
+    if actor.principal.role == PrincipalRole::TayyorlovMasteri { return Err(forbidden()); }
     if method != Method::POST {
         return Err(method_not_allowed());
     }
@@ -246,9 +252,15 @@ pub(super) async fn inventory_actor(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<InventoryActor, AdminError> {
-    let principal =
-        authorize_capability(state, headers, Capability::InventoryMovementManage).await?;
-    let is_admin = state
+    let principal = authorize_any_capability(state, headers, &[
+        Capability::InventoryMovementManage, Capability::PreparationAccess,
+    ]).await?;
+    if principal.role == PrincipalRole::TayyorlovMasteri {
+        require_capability(state, &principal, Capability::PreparationAccess).await?;
+    } else {
+        require_capability(state, &principal, Capability::InventoryMovementManage).await?;
+    }
+    let is_admin = principal.role != PrincipalRole::TayyorlovMasteri && state
         .admin
         .principal_has_admin_workspace_access(&principal)
         .await;

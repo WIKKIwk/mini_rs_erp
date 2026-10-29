@@ -107,7 +107,17 @@ LEFT JOIN mini_inventory_placements placement
  AND lower(placement.asset_ref) = lower(assets.asset_ref)
 JOIN mini_inventory_locations location
   ON location.id = COALESCE(placement.physical_location_id, warehouse_location.id)
-WHERE ($1 = true OR lower(assets.warehouse) = ANY($2))
+WHERE (
+        $1 = true OR lower(assets.warehouse) = ANY($2)
+        OR ($11 <> '' AND assets.asset_kind = 'raw_material' AND EXISTS (
+            SELECT 1 FROM mini_raw_material_stock own_stock
+            JOIN mini_gscale_receipts receipt ON receipt.name = own_stock.source_receipt_id
+            WHERE own_stock.id = assets.asset_ref
+              AND receipt.status = 'submitted'
+              AND receipt.payload_json->>'actor_role' = 'tayyorlov_masteri'
+              AND receipt.payload_json->>'actor_ref' = $11
+        ))
+  )
   AND (
         $3 = ''
         OR (
@@ -124,6 +134,7 @@ WHERE ($1 = true OR lower(assets.warehouse) = ANY($2))
         OR lower(assets.asset_ref) LIKE $6
   )
   AND ($9 = false OR location.kind = 'state')
+  AND ($10 = false OR location.kind = 'warehouse')
 ORDER BY lower(assets.item_name), lower(assets.identifier), assets.asset_ref
 LIMIT $7 OFFSET $8
 "#;
@@ -295,6 +306,8 @@ async fn fetch_asset(
         .bind(50_i64)
         .bind(0_i64)
         .bind(false)
+        .bind(false)
+        .bind("")
         .fetch_all(pool)
         .await
         .map_err(store_error)?;

@@ -129,6 +129,8 @@ impl MemoryInventoryMovementStore {
                 }
             })
             .filter(|transfer| query.status.is_empty() || transfer.status.as_str() == query.status)
+            .filter(|transfer| actor.principal.role != PrincipalRole::TayyorlovMasteri
+                || (!transfer.lines.is_empty() && transfer.lines.iter().all(|line| line.asset_kind == InventoryAssetKind::RawMaterial)))
             .cloned()
             .collect::<Vec<_>>();
         transfers.sort_by(|left, right| {
@@ -157,6 +159,10 @@ impl MemoryInventoryMovementStore {
             .get(transfer_id)
             .cloned()
             .ok_or(InventoryMovementError::TransferNotFound)?;
+        if actor.principal.role == PrincipalRole::TayyorlovMasteri
+            && (transfer.lines.is_empty() || transfer.lines.iter().any(|line| line.asset_kind != InventoryAssetKind::RawMaterial)) {
+            return Err(InventoryMovementError::WarehouseForbidden);
+        }
         let source_access = actor.can_manage_warehouse(&transfer.source_warehouse);
         let destination_access = actor.can_manage_warehouse(&transfer.destination_warehouse);
         let authorized = match action {

@@ -18,6 +18,10 @@ impl PostgresInventoryMovementStore {
             &transfer.destination_warehouse,
         );
         let lines = transfer_lines_tx(&mut tx, transfer_id).await?;
+        if actor.principal.role == crate::core::auth::models::PrincipalRole::TayyorlovMasteri
+            && (lines.is_empty() || lines.iter().any(|line| line.asset_kind != "raw_material")) {
+            return Err(InventoryMovementError::WarehouseForbidden);
+        }
 
         let authorized = match action {
             InventoryTransferActionKind::Approve

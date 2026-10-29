@@ -3,8 +3,10 @@ use crate::core::apparatus_standard::test_support::TestApparatusSpec;
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::inventory_movements::{
     InventoryActor, InventoryAsset, InventoryAssetKind, InventoryAssetSelector,
+    InventoryAssetQuery, InventoryMovementService,
     InventoryMovementError, InventoryMovementStorePort, InventoryRelocationBatchCreate,
-    InventoryRelocationCreate, InventoryReturnBatchCreate, InventoryTransferCreate,
+    InventoryRelocationCreate, InventoryReturnBatchCreate, InventoryTransferAction,
+    InventoryTransferActionKind, InventoryTransferCreate, InventoryTransferQuery,
     InventoryTransferStatus,
 };
 use crate::db::postgres::{
@@ -15,6 +17,98 @@ use crate::db::postgres_canonical_apparatus::PostgresCanonicalApparatusRepositor
 use crate::db::postgres_inventory_movements::PostgresInventoryMovementStore;
 
 use super::seed_canonical_apparatus;
+
+#[tokio::test]
+async fn postgres_preparation_inventory_resolves_order_label_without_apparatus_assignment() {
+    let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://wikki@127.0.0.1:5432/postgres".to_string());
+    let db_name = format!("mini_rs_erp_test_prep_inventory_{:016x}", rand::random::<u64>());
+    let admin_pool = sqlx::PgPool::connect(&admin_url).await.unwrap();
+    sqlx::query(&format!(r#"CREATE DATABASE "{db_name}""#)).execute(&admin_pool).await.unwrap();
+    let pool = sqlx::PgPool::connect_with(postgres_test_database_options(&admin_url, &db_name)).await.unwrap();
+    apply_postgres_migrations_through_version(&pool, "0121").await.unwrap();
+    CanonicalApparatusService::new(std::sync::Arc::new(
+        PostgresCanonicalApparatusRepository::new(pool.clone()),
+    )).bootstrap_factory_defaults().await.unwrap();
+    apply_foundation_migration(&pool).await.unwrap();
+    let apparatus: String = sqlx::query_scalar("SELECT id FROM mini_apparatus ORDER BY id LIMIT 1")
+        .fetch_one(&pool).await.unwrap();
+    sqlx::raw_sql(r#"
+        INSERT INTO mini_warehouses(id,name) VALUES ('warehouse-prep','Tayyorlov ombori'),('warehouse-other','Other');
+        INSERT INTO mini_items(code,name,item_group) VALUES ('PREP_INVENTORY_PE','PE PR','Rulon');
+        INSERT INTO mini_production_maps(id,product_code,title,code,map_json,lifecycle_status,production_completed_at)
+        VALUES ('zakaz-86','P','Avella 72 sht','0086',
+            '{}',
+            'production_completed',now());
+        INSERT INTO mini_raw_material_stock(id,warehouse,item_code,item_name,barcode,qty,uom,status)
+        VALUES ('raw:prep','Tayyorlov ombori','PREP_INVENTORY_PE','PE PR','QR-PREP',10,'kg','available'),
+               ('raw:other','Other','PREP_INVENTORY_PE','PE PR','QR-OTHER',10,'kg','available');
+        INSERT INTO mini_gscale_receipts(name,status,item_code,warehouse,qty,barcode,payload_json)
+        VALUES ('receipt-own','submitted','PREP_INVENTORY_PE','Other',10,'QR-FOREIGN',
+                   '{"actor_role":"tayyorlov_masteri","actor_ref":"prep-1"}'),
+               ('receipt-other','submitted','PREP_INVENTORY_PE','Other',10,'QR-FOREIGN-OTHER',
+                   '{"actor_role":"tayyorlov_masteri","actor_ref":"prep-2"}');
+        INSERT INTO mini_raw_material_stock(id,warehouse,item_code,item_name,barcode,qty,uom,status,source_receipt_id)
+        VALUES ('raw:foreign','Other','PREP_INVENTORY_PE','PE PR','QR-FOREIGN',10,'kg','available','receipt-own'),
+               ('raw:foreign-other','Other','PREP_INVENTORY_PE','PE PR','QR-FOREIGN-OTHER',10,'kg','available','receipt-other');
+    "#).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO mini_raw_material_assignments(barcode,order_id,apparatus,canonical_apparatus_id,item_code,item_group,payload_json) VALUES('QR-PREP','zakaz-86',$1,$1,'PREP_INVENTORY_PE','Rulon','{}')")
+        .bind(&apparatus).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO mini_raw_material_assignments(barcode,order_id,apparatus,canonical_apparatus_id,item_code,item_group,payload_json) VALUES('QR-FOREIGN','zakaz-86',$1,$1,'PREP_INVENTORY_PE','Rulon','{}'),('QR-FOREIGN-OTHER','zakaz-86',$1,$1,'PREP_INVENTORY_PE','Rulon','{}')")
+        .bind(&apparatus).execute(&pool).await.unwrap();
+    sqlx::raw_sql(r#"
+        INSERT INTO mini_inventory_transfers(id,idempotency_key,source_warehouse_id,source_warehouse,
+            destination_warehouse_id,destination_warehouse,requested_by_role,requested_by_ref)
+        VALUES ('prep-raw-transfer','raw-transfer','warehouse-prep','Tayyorlov ombori','warehouse-other','Other','admin','admin'),
+               ('prep-fg-transfer','fg-transfer','warehouse-prep','Tayyorlov ombori','warehouse-other','Other','admin','admin');
+        INSERT INTO mini_inventory_transfer_lines(transfer_id,asset_kind,asset_ref,qty,uom,source_physical_location_id)
+        VALUES ('prep-raw-transfer','raw_material','raw:prep',10,'kg','warehouse-prep'),
+               ('prep-fg-transfer','finished_goods','fg:one',10,'kg','warehouse-prep');
+    "#).execute(&pool).await.unwrap();
+    let actor = InventoryActor::new(Principal {
+        role: PrincipalRole::TayyorlovMasteri, display_name: "Master".into(),
+        legal_name: String::new(), ref_: "prep-1".into(), phone: String::new(), avatar_url: String::new(),
+    }, false, ["Tayyorlov ombori".to_string()]);
+    let runtime_pool = sqlx::postgres::PgPoolOptions::new()
+        .after_connect(|connection, _| Box::pin(async move {
+            sqlx::query("SET ROLE mini_rs_erp").execute(connection).await?;
+            Ok(())
+        }))
+        .connect_with(postgres_test_database_options(&admin_url, &db_name)).await.unwrap();
+    let service = InventoryMovementService::new(std::sync::Arc::new(PostgresInventoryMovementStore::new(runtime_pool.clone())));
+    let assets = service.assets(&actor, InventoryAssetQuery { limit: 100, ..Default::default() }).await.unwrap();
+    assert_eq!(assets.len(), 2);
+    assert!(assets.iter().any(|asset| asset.identifier == "QR-PREP"));
+    assert!(assets.iter().any(|asset| asset.identifier == "QR-FOREIGN"));
+    let assignments = service.list_order_assignments(&actor, &["QR-PREP".into(), "QR-OTHER".into(), "QR-FOREIGN".into(), "QR-FOREIGN-OTHER".into()], &[]).await.unwrap();
+    assert_eq!(assignments.len(), 2);
+    assert!(assignments.iter().all(|assignment| assignment.order_label == "0086 · Avella 72 sht"));
+    let unassigned_actor = InventoryActor::new(actor.principal.clone(), false, Vec::new());
+    let foreign_assets = service.assets(&unassigned_actor, InventoryAssetQuery {
+        warehouse_id: "warehouse-other".into(), limit: 100, ..Default::default()
+    }).await.unwrap();
+    assert_eq!(foreign_assets.len(), 1);
+    assert_eq!(foreign_assets[0].identifier, "QR-FOREIGN");
+    let foreign_assignment = service.list_order_assignments(&unassigned_actor, &["QR-FOREIGN".into(), "QR-FOREIGN-OTHER".into()], &[]).await.unwrap();
+    assert_eq!(foreign_assignment.len(), 1);
+    assert_eq!(foreign_assignment[0].order_label, "0086 · Avella 72 sht");
+    let denied = service.create_transfer(&actor, InventoryTransferCreate {
+        source_warehouse_id: "warehouse-other".into(), destination_warehouse_id: "warehouse-prep".into(),
+        assets: vec![InventoryAssetSelector { asset_kind: InventoryAssetKind::RawMaterial, asset_ref: "raw:foreign".into() }],
+        note: String::new(), idempotency_key: "prep-foreign-transfer".into(),
+    }).await;
+    assert!(matches!(denied, Err(InventoryMovementError::WarehouseForbidden)));
+    let transfers = service.transfers(&actor, InventoryTransferQuery { limit: 100, ..Default::default() }).await.unwrap();
+    assert_eq!(transfers.len(), 1);
+    assert_eq!(transfers[0].id, "prep-raw-transfer");
+    let result = service.transfer_action(&actor, "prep-fg-transfer", InventoryTransferActionKind::Cancel,
+        InventoryTransferAction { idempotency_key: "prep-no-fg".into(), note: String::new() }).await;
+    assert!(matches!(result, Err(InventoryMovementError::WarehouseForbidden)));
+    runtime_pool.close().await;
+    pool.close().await;
+    sqlx::query(&format!(r#"DROP DATABASE "{db_name}" WITH (FORCE)"#)).execute(&admin_pool).await.unwrap();
+    admin_pool.close().await;
+}
 
 #[tokio::test]
 async fn postgres_material_relocations_return_committed_assets_and_replay_safely() {

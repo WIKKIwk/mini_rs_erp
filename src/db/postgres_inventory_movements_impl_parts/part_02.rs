@@ -342,6 +342,11 @@ impl PostgresInventoryMovementStore {
                     OR ($3 = 'incoming' AND lower(destination_warehouse) = ANY($2))
                   )
               AND ($4 = '' OR status = $4)
+              AND ($7 = false OR (
+                    EXISTS (SELECT 1 FROM mini_inventory_transfer_lines line WHERE line.transfer_id = id)
+                    AND NOT EXISTS (SELECT 1 FROM mini_inventory_transfer_lines line
+                                    WHERE line.transfer_id = id AND line.asset_kind <> 'raw_material')
+                  ))
             ORDER BY created_at DESC, id DESC
             LIMIT $5 OFFSET $6
             "#,
@@ -352,6 +357,7 @@ impl PostgresInventoryMovementStore {
         .bind(query.status.as_str())
         .bind(query.limit as i64)
         .bind(query.offset as i64)
+        .bind(actor.principal.role == crate::core::auth::models::PrincipalRole::TayyorlovMasteri)
         .fetch_all(&self.pool)
         .await
         .map_err(store_error)?;
