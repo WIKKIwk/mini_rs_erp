@@ -148,7 +148,8 @@ pub(crate) fn checked_template_read_identity(
 ) -> Result<Option<TemplateIdentity>, CalculateOrderError> {
     if let Some(identity)=&existing {
         let readable=identity.owner == owner.trim()
-            || (owner.starts_with("admin:") && identity.owner.starts_with("telegram:"));
+            || (owner.starts_with("admin:") && identity.owner.starts_with("telegram:"))
+            || (owner.starts_with("sales_manager:") && identity.owner.starts_with("admin:"));
         if !readable || (!identity.item_code.trim().is_empty() && identity.item_code.trim()!=incoming.item_code.trim()) {
             return Err(CalculateOrderError::IdentityConflict);
         }

@@ -75,6 +75,7 @@ impl CalculateOrderStorePort for PostgresCalculateOrderStore {
              FROM mini_quick_order_templates
              WHERE owner_key = $1
                 OR ($1 LIKE 'admin:%' AND owner_key LIKE 'telegram:%')
+                OR ($1 LIKE 'sales_manager:%' AND owner_key LIKE 'admin:%')
              ORDER BY saved_at DESC",
         )
         .bind(owner_key.trim())
@@ -167,10 +168,14 @@ impl CalculateOrderStorePort for PostgresCalculateOrderStore {
     ) -> Result<Option<CalculateOrderImage>, CalculateOrderError> {
         let row = sqlx::query_as::<_, (String, String, String, i64, Vec<u8>)>(
             "SELECT image_id, image_name, image_mime, image_size_bytes, body
-             FROM mini_quick_order_images
+             FROM mini_quick_order_images AS image
              WHERE image_id = $2
                AND (owner_key = $1
-                    OR ($1 LIKE 'admin:%' AND owner_key LIKE 'telegram:%'))
+                    OR ($1 LIKE 'admin:%' AND owner_key LIKE 'telegram:%')
+                    OR ($1 LIKE 'sales_manager:%' AND owner_key LIKE 'admin:%'
+                        AND EXISTS (SELECT 1 FROM mini_quick_order_templates AS t
+                                    WHERE t.owner_key = image.owner_key
+                                      AND t.payload_json->>'image_id' = image.image_id)))
              ORDER BY created_at DESC
              LIMIT 1",
         )

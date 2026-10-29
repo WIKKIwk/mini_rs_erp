@@ -519,3 +519,43 @@ fn test_template(code: &str) -> CalculateOrderTemplate {
         source_map_id: String::new(),
     }
 }
+
+#[tokio::test]
+async fn sales_can_read_admin_templates_and_their_images_without_mutating_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = CalculateOrderStore::new(dir.path().join("orders.sqlite"));
+    let image = store.save_image("admin:one", CalculateOrderImage {
+        image_id: "admin-linked".into(), image_name: "image.jpg".into(),
+        image_mime: "image/jpeg".into(), body: vec![1, 2, 3], ..Default::default()
+    }).await.unwrap();
+    store.save_image("admin:one", CalculateOrderImage {
+        image_id: "admin-unlinked".into(), body: vec![4], ..Default::default()
+    }).await.unwrap();
+    let admin = store.upsert("admin:one", CalculateOrderTemplate {
+        image_id: image.image_id.clone(), item_code: "ADMIN".into(), ..test_template("ADMIN")
+    }).await.unwrap();
+    let own = store.upsert("sales_manager:one", CalculateOrderTemplate {
+        item_code: "OWN".into(), ..test_template("OWN")
+    }).await.unwrap();
+    let other = store.upsert("sales_manager:two", CalculateOrderTemplate {
+        item_code: "OTHER".into(), ..test_template("OTHER")
+    }).await.unwrap();
+    let telegram = store.upsert("telegram:one", CalculateOrderTemplate {
+        item_code: "TG".into(), ..test_template("TG")
+    }).await.unwrap();
+
+    let rows = store.list("sales_manager:one").await.unwrap();
+    assert_eq!(rows.len(), 2);
+    assert!(rows.contains(&admin));
+    assert!(rows.contains(&own));
+    assert!(!rows.contains(&other));
+    assert!(!rows.contains(&telegram));
+    assert_eq!(store.get_image("sales_manager:one", "admin-linked").await.unwrap(), Some(image));
+    assert!(store.get_image("sales_manager:one", "admin-unlinked").await.unwrap().is_none());
+    assert!(store.validate_read_identity("sales_manager:one", &admin).await.is_ok());
+    assert!(matches!(store.validate_identity("sales_manager:one", &admin).await, Err(CalculateOrderError::IdentityConflict)));
+    assert!(matches!(store.upsert("sales_manager:one", admin.clone()).await, Err(CalculateOrderError::IdentityConflict)));
+    store.delete("sales_manager:one", &admin.id).await.unwrap();
+    assert!(store.list("admin:one").await.unwrap().contains(&admin));
+    assert!(matches!(store.validate_read_identity("sales_manager:one", &other).await, Err(CalculateOrderError::IdentityConflict)));
+}
