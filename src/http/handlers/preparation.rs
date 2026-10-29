@@ -401,13 +401,21 @@ pub struct FormulaVariantsQuery {
     pub material_id: String,
     #[serde(default)]
     pub saved_only: bool,
+    #[serde(default)]
+    pub order_id: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct FormulaVariantOrderContext {
+    #[serde(default)]
+    pub order_id: String,
 }
 
 pub async fn formula_variants(
     State(state): State<AppState>, headers: HeaderMap, Query(query): Query<FormulaVariantsQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let actor = authorize(&state, &headers).await?;
-    store(&state)?.formula_variants(&actor.ref_, &query.product_code, &query.material_id, query.saved_only)
+    store(&state)?.formula_variants_in_order(&actor.ref_, &query.product_code, &query.material_id, query.saved_only, &query.order_id)
         .await.map(Json).map_err(error)
 }
 
@@ -419,10 +427,19 @@ pub async fn formula_variant_create(
 }
 
 pub async fn formula_variant_reuse(
-    State(state): State<AppState>, headers: HeaderMap, Json(input): Json<FormulaVariantReuse>,
+    State(state): State<AppState>, headers: HeaderMap,
+    Query(query): Query<FormulaVariantOrderContext>, Json(input): Json<FormulaVariantReuse>,
 ) -> Result<Json<Value>, ApiError> {
     let actor = authorize(&state, &headers).await?;
-    store(&state)?.reuse_formula_variant(&actor.ref_, input).await.map(Json).map_err(error)
+    store(&state)?.reuse_formula_variant_in_order(&actor.ref_, input, &query.order_id).await.map(Json).map_err(error)
+}
+
+pub async fn formula_variant_remove_from_order(
+    State(state): State<AppState>, headers: HeaderMap,
+    Query(query): Query<FormulaVariantOrderRemove>,
+) -> Result<Json<Value>, ApiError> {
+    let actor = authorize(&state, &headers).await?;
+    store(&state)?.remove_formula_variant_from_order(&actor.ref_, query).await.map(Json).map_err(error)
 }
 
 #[derive(Debug, Deserialize)]

@@ -13,6 +13,7 @@ mod saved_formulas;
 mod formula_shares;
 mod formula_variants;
 mod formula_variant_reuse;
+mod formula_variant_orders;
 mod formula_print_snapshot;
 mod production_journal;
 pub(crate) mod orders;

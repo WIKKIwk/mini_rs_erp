@@ -280,6 +280,15 @@ pub struct FormulaVariantReuse {
     pub source_variant_id: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FormulaVariantOrderRemove {
+    pub order_id: String,
+    pub product_code: String,
+    pub material_id: String,
+    pub variant_id: String,
+}
+
 impl FormulaVariantReuse {
     pub fn validate(&self) -> Result<(), PreparationError> {
         for (value, limit) in [

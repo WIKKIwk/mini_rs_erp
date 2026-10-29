@@ -144,6 +144,17 @@ async fn run_checks(pool: &PgPool, options: PgConnectOptions) {
         .execute(pool).await.unwrap();
     sqlx::raw_sql(include_str!("../migrations/postgres/0176_preparation_recipe_codes.sql"))
         .execute(pool).await.unwrap();
+    sqlx::raw_sql(include_str!("../migrations/postgres/0181_preparation_order_formula_exclusions.sql"))
+        .execute(pool).await.unwrap();
+    sqlx::raw_sql(r#"
+        INSERT INTO mini_orders(id,code,order_number,product_name)
+          VALUES ('order-2','O2','O2','Product'),('order-target','OT','OT','Target');
+        INSERT INTO mini_production_maps(id,product_code,title,code,map_json)
+          VALUES ('order-2','P','Product','O2','{}'),('order-target','TARGET','Target','OT','{}');
+        INSERT INTO mini_order_products(id,order_id,product_name,layers_json)
+          VALUES ('item-2','order-2','Product','[{"material_id":"mat-a"}]'),
+                 ('item-target','order-target','Target','[{"material_id":"mat-a"}]');
+    "#).execute(pool).await.unwrap();
     let runtime = PgPoolOptions::new()
         .after_connect(|c, _| {
             Box::pin(async move {
@@ -170,7 +181,7 @@ async fn run_checks(pool: &PgPool, options: PgConnectOptions) {
     assert_eq!(initial_catalog["formulas"].as_array().unwrap().len(), 1);
     assert_eq!(initial_catalog["formulas"][0]["formula_code"], old_code);
     assert_eq!(initial_catalog["formulas"][0]["formula_count"], 3);
-    assert_eq!(initial_catalog["formulas"][0]["order_codes"], serde_json::json!(["O1"]));
+    assert_eq!(initial_catalog["formulas"][0]["order_codes"], serde_json::json!(["O1", "O2"]));
     assert_eq!(initial_catalog["formulas"][0]["can_create"], true);
     assert!(store.formula_catalog("prep-2").await.unwrap()["formulas"].as_array().unwrap().is_empty());
     let old_formulas = store.list_formulas("prep-1", "P", "mat-a").await.unwrap();
@@ -357,6 +368,7 @@ async fn run_checks(pool: &PgPool, options: PgConnectOptions) {
     );
     assert_eq!(first.unwrap()["id"], second.unwrap()["id"]);
     check_recipe_reuse(&store, &actor, &item, &foreign_id, &old_id).await;
+    check_order_removal(&store, &id, &foreign_id).await;
     sqlx::query("DELETE FROM mini_preparation_material_responsibilities WHERE principal_ref='prep-1'")
         .execute(pool).await.unwrap();
     let catalog = store.formula_catalog("prep-1").await.unwrap();
@@ -401,6 +413,14 @@ async fn check_recipe_reuse(
     assert_eq!(copied["formula_count"], 3);
     assert_eq!(copied["shares_complete"], true);
     let copied_id = copied["id"].as_str().unwrap();
+    store.remove_formula_variant_from_order("prep-1", FormulaVariantOrderRemove {
+        order_id: "order-target".into(), product_code: "TARGET".into(),
+        material_id: "mat-a".into(), variant_id: copied_id.into(),
+    }).await.unwrap();
+    assert_eq!(store.reuse_formula_variant_in_order("prep-1",
+        request(source_id, "TARGET", "mat-a"), "order-target").await.unwrap()["id"], copied["id"]);
+    assert!(store.formula_variants_in_order("prep-1", "TARGET", "mat-a", false, "order-target")
+        .await.unwrap()["variants"].as_array().unwrap().iter().any(|entry| entry["id"] == copied["id"]));
     let original = store.list_formulas_variant("prep-1", "SOURCE", "mat-a", source_id).await.unwrap();
     let target = store.list_formulas_variant("prep-1", "TARGET", "mat-a", copied_id).await.unwrap();
     for (source, target) in original["formulas"].as_array().unwrap().iter()
@@ -436,4 +456,34 @@ async fn check_recipe_reuse(
     assert_eq!(store.list_formulas_variant("prep-1", "SOURCE", "mat-a", source_id).await.unwrap(), original);
     assert_eq!(store.reuse_formula_variant("prep-1", request(source_id, "TARGET", "mat-a"))
         .await.unwrap()["formula_count"], 2);
+}
+
+async fn check_order_removal(store: &PostgresPreparationStore, id: &str, foreign: &str) {
+    let remove = |order: &str, variant: &str| FormulaVariantOrderRemove {
+        order_id: order.into(), product_code: "P".into(), material_id: "mat-a".into(),
+        variant_id: variant.into(),
+    };
+    let before = store.list_saved_formulas_variant("prep-1", "P", "mat-a", id).await.unwrap();
+    for _ in 0..2 {
+        assert_eq!(store.remove_formula_variant_from_order("prep-1", remove("order-1", id))
+            .await.unwrap()["removed"], true);
+    }
+    let hidden = store.formula_variants_in_order("prep-1", "P", "mat-a", false, "order-1").await.unwrap();
+    assert!(!hidden["variants"].as_array().unwrap().iter().any(|v| v["id"] == id));
+    let other_order = store.formula_variants_in_order("prep-1", "P", "mat-a", false, "order-2").await.unwrap();
+    assert!(other_order["variants"].as_array().unwrap().iter().any(|v| v["id"] == id));
+    assert_eq!(store.list_saved_formulas_variant("prep-1", "P", "mat-a", id).await.unwrap(), before);
+    let catalog = store.formula_catalog("prep-1").await.unwrap();
+    let recipe = catalog["formulas"].as_array().unwrap().iter().find(|v| v["id"] == id).unwrap();
+    assert_eq!(recipe["order_codes"], serde_json::json!(["O2"]));
+    assert!(store.remove_formula_variant_from_order("prep-2", remove("order-1", id)).await.is_err());
+    assert!(store.remove_formula_variant_from_order("prep-1", remove("order-1", foreign)).await.is_err());
+    assert!(store.remove_formula_variant_from_order("prep-1", remove("order-target", id)).await.is_err());
+    assert!(store.remove_formula_variant_from_order("prep-1", remove("", id)).await.is_err());
+    let restored = store.reuse_formula_variant_in_order("prep-1", FormulaVariantReuse {
+        product_code: "P".into(), material_id: "mat-a".into(), source_variant_id: id.into(),
+    }, "order-1").await.unwrap();
+    assert_eq!(restored["id"], id);
+    assert!(store.formula_variants_in_order("prep-1", "P", "mat-a", false, "order-1")
+        .await.unwrap()["variants"].as_array().unwrap().iter().any(|v| v["id"] == id));
 }

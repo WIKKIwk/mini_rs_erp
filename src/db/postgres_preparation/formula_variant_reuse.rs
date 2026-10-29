@@ -14,12 +14,24 @@ impl PostgresPreparationStore {
         owner: &str,
         input: FormulaVariantReuse,
     ) -> Result<Value, PreparationError> {
+        self.reuse_formula_variant_in_order(owner, input, "").await
+    }
+
+    pub async fn reuse_formula_variant_in_order(
+        &self,
+        owner: &str,
+        input: FormulaVariantReuse,
+        order_id: &str,
+    ) -> Result<Value, PreparationError> {
         input.validate()?;
         let product = input.product_code.trim();
         let material = input.material_id.trim();
         let source = input.source_variant_id.trim();
         let mut tx = self.formula_write_transaction(owner).await?;
         let target_material = responsibility_material_name(&mut tx, owner, material).await?;
+        if !order_id.trim().is_empty() {
+            formula_variant_orders::order_scope(&mut tx, owner, order_id, product, material).await?;
+        }
         let (source_product, source_material, source_name): (String, String, String) =
             sqlx::query_as(
                 "SELECT product_code, material_id, name FROM mini_preparation_formula_variants
@@ -31,7 +43,10 @@ impl PostgresPreparationStore {
             .await?
             .ok_or(PreparationError::Forbidden)?;
         if source_product == product && source_material == material {
-            return variant_summary(&mut tx, owner, source).await;
+            formula_variant_orders::restore(&mut tx, owner, order_id, source).await?;
+            let result = variant_summary(&mut tx, owner, source).await?;
+            tx.commit().await?;
+            return Ok(result);
         }
 
         // Re-selecting a recipe, concurrent taps and a lost response all refer
@@ -51,7 +66,10 @@ impl PostgresPreparationStore {
         .fetch_optional(&mut *tx)
         .await?;
         if let Some(id) = previous {
-            return variant_summary(&mut tx, owner, &id).await;
+            formula_variant_orders::restore(&mut tx, owner, order_id, &id).await?;
+            let result = variant_summary(&mut tx, owner, &id).await?;
+            tx.commit().await?;
+            return Ok(result);
         }
 
         let source_formulas: Vec<(String, Value, Option<String>)> = sqlx::query_as(

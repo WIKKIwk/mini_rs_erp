@@ -168,6 +168,15 @@ async fn run_formula_checks(pool: sqlx::PgPool) {
     assert_eq!(snapshot["variant_name"], "LG");
     assert_eq!(snapshot["formulas"][0]["share_percent"], "30.000000");
     assert_eq!(snapshot["formulas"][0]["lines"][0]["percent"], "88.000000");
+    store.remove_formula_variant_from_order(&actor.ref_, FormulaVariantOrderRemove {
+        order_id: "zakaz-trace".into(), product_code: "P-TRACE".into(),
+        material_id: "pe-pr".into(), variant_id: variant_id.into(),
+    }).await.unwrap();
+    assert!(store.formula_print_snapshot(&actor.ref_, "zakaz-trace", "PE PR", &reference).await.is_err());
+    store.reuse_formula_variant_in_order(&actor.ref_, FormulaVariantReuse {
+        product_code: "P-TRACE".into(), material_id: "pe-pr".into(), source_variant_id: variant_id.into(),
+    }, "zakaz-trace").await.unwrap();
+    assert!(store.formula_print_snapshot(&actor.ref_, "zakaz-trace", "PE PR", &reference).await.is_ok());
     for (owner, order, item) in [
         ("another-master", "zakaz-trace", "PE PR"),
         ("prep-trace", "zakaz-other", "PE PR"),

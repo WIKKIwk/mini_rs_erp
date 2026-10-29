@@ -5,7 +5,7 @@ impl PostgresPreparationStore {
     pub async fn formula_catalog(&self, owner: &str) -> Result<Value, PreparationError> {
         let recipes: Vec<Value> = sqlx::query_scalar(
             "WITH matched_orders AS (
-                SELECT DISTINCT m.product_code, v.material_id,
+                SELECT DISTINCT m.id AS order_id, m.product_code, v.material_id,
                     COALESCE(NULLIF(btrim(m.code), ''), m.order_number) AS code
                 FROM mini_preparation_formula_variants v
                 JOIN mini_production_maps m ON m.product_code=v.product_code
@@ -57,6 +57,9 @@ impl PostgresPreparationStore {
                     SELECT DISTINCT m.code FROM matched_orders m
                     WHERE m.product_code=v.product_code AND lower(m.material_id)=lower(v.material_id)
                       AND btrim(m.code)<>''
+                      AND NOT EXISTS(SELECT 1 FROM mini_preparation_order_formula_exclusions removed
+                          WHERE removed.owner_ref=v.owner_ref AND removed.order_id=m.order_id
+                            AND removed.variant_id=v.id)
                 ) codes),'[]'::jsonb),
                 'formula_count',f.formula_count,
                 'shares_complete',f.formula_count>0 AND f.formula_count=f.share_count AND f.share_total=100

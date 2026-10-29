@@ -57,6 +57,13 @@ impl PostgresPreparationStore {
             false,
         )
         .await?;
+        let removed: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM mini_preparation_order_formula_exclusions
+             WHERE owner_ref=$1 AND order_id=$2 AND variant_id=$3)",
+        ).bind(owner).bind(order_id.trim()).bind(&variant).fetch_one(&mut *tx).await?;
+        if removed {
+            return Err(PreparationError::Invalid("Bu shnek formulasi buyurtmadan olib tashlangan"));
+        }
         let snapshot: Value = sqlx::query_scalar(
             "SELECT jsonb_build_object('schema_version',1,'owner_ref',v.owner_ref,
                 'product_code',v.product_code,'material_id',v.material_id,'material_name',$2::text,
