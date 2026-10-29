@@ -1,8 +1,8 @@
-# Automatic mold confirmation for printing starts
+# Automatic mold confirmation for printing starts and released runs
 
 The administrator may enable automatic mold confirmation in Additional Settings.
 The default is off. Enabling it removes individual mold QR scans for a fresh
-production Start on equipment whose canonical tooling policy already requires
+production Start, or replacement tooling on Resume after freeze, on equipment whose tooling policy requires
 Qolip scans. Material/WIP scans, assignments, print preflight and other queue
 gates continue to apply.
 
@@ -35,7 +35,8 @@ transaction.
   and readiness, and individual `required_qolips` with readiness and blockers.
 - An automatic Start sends `qolip_confirmation` containing
   `method:"automatic"`, `set_id`, `fingerprint`, and `policy_revision`.
-  Combining it with manual mold codes, another action, training, or unsupported
+  Resume after freeze accepts the same confirmation. Combining it with manual
+  mold codes, other actions, training, or unsupported
   equipment is rejected. The server derives the selected codes.
 
 Policy changes invalidate production views. An outdated automatic confirmation
@@ -43,9 +44,16 @@ is rejected at Start; the policy row is held through the commit so concurrent
 disabling cannot admit a start after the policy change. The selected composition
 fingerprint and every product's common-set binding are rechecked in that same
 transaction. Start history records the automatic method and the actual selected
-set/codes. Ordinary Resume, frozen-session reacquisition, and completed-work
-reactivation continue to use their historical mold identity. Training is
-unchanged.
+set/codes. Ordinary Resume retains its mounted tooling. A released printing run
+advertises `qolip_mode:"scan_required"` on Resume. If its saved complete set still
+matches the catalog, the manual requirements response includes
+`reused_qolip_codes`; the mobile client restores those confirmations without
+requiring another scan. Otherwise the operator scans the current complete set,
+or confirms/selects it using the automatic policy. Resume revalidates catalog
+composition, availability, checkouts and policy in the commit transaction.
+The session and subsequent output use the new set. Earlier output remains
+unchanged, and the queue event records `qolip_replaced_on_resume` with previous
+and current tooling. Completed-work reactivation and training are unchanged.
 
 ## Rollout
 

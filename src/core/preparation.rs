@@ -388,7 +388,7 @@ impl FormulaUpsert {
     /// Safety rule: percentages must total exactly 100%.
     pub fn normalized_lines(&self) -> Result<Vec<(String, i64)>, PreparationError> {
         if self.lines.is_empty() || self.lines.len() > 100 {
-            return Err(PreparationError::Invalid("1–100 ta seriya tanlang"));
+            return Err(PreparationError::Invalid("1–100 ta seriyo tanlang"));
         }
         let mut seen = BTreeSet::new();
         let mut result = Vec::new();
@@ -397,7 +397,7 @@ impl FormulaUpsert {
             let code = line.item_code.trim();
             if code.is_empty() || !seen.insert(code.to_string()) {
                 return Err(PreparationError::Invalid(
-                    "Seriya bo‘sh yoki takrorlangan",
+                    "Seriyo bo‘sh yoki takrorlangan",
                 ));
             }
             let percent = decimal(&line.percent)?;

@@ -1,6 +1,35 @@
 use super::*;
 
 #[tokio::test]
+async fn preparation_production_journal_requires_master_capability_and_valid_paging() {
+    let state = test_state();
+    let admin = session(&state, PrincipalRole::Admin).await;
+    let master = session(&state, PrincipalRole::TayyorlovMasteri).await;
+    let router = build_router(state);
+    for path in [
+        "/v1/mobile/preparation/production/orders",
+        "/v1/mobile/preparation/production/order?order_id=order-1",
+        "/v1/mobile/preparation/production/batch?batch_id=batch-1",
+    ] {
+        let response = router.clone().oneshot(request_with_body("GET",path,"","")).await.unwrap();
+        assert_eq!(response.status(),StatusCode::UNAUTHORIZED);
+        let response = router.clone().oneshot(request_with_body("GET",path,&admin,"")).await.unwrap();
+        assert_eq!(response.status(),StatusCode::FORBIDDEN);
+    }
+    for path in [
+        "/v1/mobile/preparation/production/orders?limit=0",
+        "/v1/mobile/preparation/production/orders?limit=101",
+        "/v1/mobile/preparation/production/orders?offset=1000001",
+        "/v1/mobile/preparation/production/orders?status=invalid",
+        "/v1/mobile/preparation/production/order",
+        "/v1/mobile/preparation/production/batch",
+    ] {
+        let response = router.clone().oneshot(request_with_body("GET",path,&master,"")).await.unwrap();
+        assert_eq!(response.status(),StatusCode::BAD_REQUEST,"{path}");
+    }
+}
+
+#[tokio::test]
 async fn raw_material_receipt_keeps_preparation_order_scope_and_other_warehouse_access() {
     use crate::core::preparation::MaterialResponsibilityAssign;
     use crate::db::postgres_preparation::PostgresPreparationStore;

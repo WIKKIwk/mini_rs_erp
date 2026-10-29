@@ -51,7 +51,8 @@ impl QueueActionCommand {
             principal,
         );
         if let Some(confirmation) = &request.qolip_confirmation
-            && (!confirmation.is_valid() || action != queue_state::ApparatusQueueAction::Start
+            && (!confirmation.is_valid() || !matches!(action,
+                queue_state::ApparatusQueueAction::Start | queue_state::ApparatusQueueAction::Resume)
                 || !apparatus.requires_qolip_scan() || request.order_id.trim().starts_with("training-")
                 || !request.qolip_code.trim().is_empty() || !request.qolip_codes.is_empty()) {
             return Err(bad_request("qolip_confirmation_invalid"));

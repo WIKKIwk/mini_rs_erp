@@ -30,6 +30,16 @@ Later formula edits or deletion do not change earlier roll recipes. Batch
 history exposes the saved copy to the mobile Print history details. These fields
 use the existing JSONB storage and require no additional database migration.
 
+The preparation master's production journal groups confirmed roll output by
+order. Its paged reads are `/v1/mobile/preparation/production/orders`,
+`/v1/mobile/preparation/production/order?order_id=...`, and
+`/v1/mobile/preparation/production/batch?batch_id=...`. Each read is restricted
+to the authenticated master's production history, including completed orders.
+Original receipt events and frozen recipe snapshots remain authoritative after
+stock corrections or formula changes. Apply migration
+`0177_preparation_production_journal_index` before deploying this journal's
+backend; it indexes the owner's submitted receipts for periodic refreshes.
+
 ## Architecture
 
 The service is implemented in Rust using Axum, Tokio, and SQLx.

@@ -56,7 +56,7 @@ impl PostgresPreparationStore {
                 .ok_or(PreparationError::Forbidden)?;
         }
         let variants: Vec<Value> = sqlx::query_scalar(
-            "SELECT jsonb_build_object('id',v.id,'name',v.name,'product_code',v.product_code,
+            "SELECT jsonb_build_object('id',v.id,'name',v.name,'formula_code',v.formula_code,'product_code',v.product_code,
                 'material_id',v.material_id,'formula_count',count(f.name),
                 'shares_complete',count(f.name)>0 AND count(f.name)=count(f.share_percent)
                     AND COALESCE(sum(f.share_percent),0)=100)
@@ -102,7 +102,10 @@ impl PostgresPreparationStore {
                     WHERE owner_ref=$1 AND product_code=$2 AND material_id=$3 AND is_default)) RETURNING id")
                 .bind(owner).bind(code).bind(material).bind(&name).bind(request).fetch_one(&mut *tx).await?
         };
+        let formula_code: String = sqlx::query_scalar(
+            "SELECT formula_code FROM mini_preparation_formula_variants WHERE id=$1 AND owner_ref=$2",
+        ).bind(&id).bind(owner).fetch_one(&mut *tx).await?;
         tx.commit().await?;
-        Ok(json!({"id":id,"name":name,"product_code":code,"material_id":material}))
+        Ok(json!({"id":id,"name":name,"formula_code":formula_code,"product_code":code,"material_id":material}))
     }
 }

@@ -124,30 +124,23 @@ async fn prepare_qolips_for_bosma_start(
     else {
         return Err(production_map_error(ProductionMapError::MapNotFound));
     };
-    // Resume reuses the set validated at Start. It must not make the operator
-    // scan again or let a client silently replace the session's tooling.
+    let required_qolips = state.qolip.required_qolips_for_production_map(&map)
+        .await.map_err(qolip_queue_error)?;
+    // Unchanged tooling remains scan-free. A changed released set requires
+    // a new complete scan or the server-resolved automatic confirmation.
     let qolip_codes = if input.action == queue_state::ApparatusQueueAction::Resume {
-        state.production_maps
-            .qolip_codes_for_resume(&input.apparatus, &input.order_id)
-            .await
-            .map_err(production_map_error)?
+        match state.production_maps.reusable_qolips_for_resume(
+            &input.apparatus, &input.order_id, &required_qolips,
+        ).await.map_err(production_map_error)? {
+            Some(specs) => specs.into_iter().map(|spec| spec.qolip_code).collect(),
+            None => input.materials.qolip_codes.clone(),
+        }
     } else {
         input.materials.qolip_codes.clone()
     };
-    let combo_requirements = if map.combo.is_some() {
-        Some(state.qolip.required_qolips_for_production_map(&map).await.map_err(qolip_queue_error)?)
-    } else { None };
     if qolip_codes.is_empty() {
-        return Err(if input.action == queue_state::ApparatusQueueAction::Resume {
-            production_map_error(ProductionMapError::QolipCodeMismatch)
-        } else {
-            bad_request("qolip_scan_required")
-        });
+        return Err(bad_request("qolip_scan_required"));
     }
-    let required_qolips = match combo_requirements {
-        Some(specs) => specs,
-        None => state.qolip.required_qolips_for_production_map(&map).await.map_err(qolip_queue_error)?,
-    };
     let mut preparations = Vec::with_capacity(qolip_codes.len());
     for qolip_code in &qolip_codes {
         reject_qolip_in_use(state, apparatus, &input.order_id, qolip_code).await?;

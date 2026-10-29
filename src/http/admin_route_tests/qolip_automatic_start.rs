@@ -788,7 +788,7 @@ async fn qolip_automatic_start_rechecks_physical_checkout_owned_by_another_worke
 }
 
 #[tokio::test]
-async fn qolip_automatic_start_confirmation_cannot_be_used_on_non_start_or_malformed_requests() {
+async fn qolip_automatic_start_confirmation_rejects_unsupported_actions_or_malformed_requests() {
     let fixture = Fixture::new(&[("AUTO-A1", SET_A)]).await;
     fixture.enabled(true).await;
     let requirements = fixture.requirements(ORDER, PRINT).await;

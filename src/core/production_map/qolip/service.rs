@@ -1,5 +1,7 @@
 use super::*;
 
+include!("resume.rs");
+
 impl ProductionMapService {
     pub async fn qolip_codes_for_resume(
         &self,

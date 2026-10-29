@@ -7,11 +7,13 @@ use sqlx::{PgPool, Postgres, Row, Transaction};
 mod warehouses;
 mod materials;
 mod formula_orders;
+mod formula_catalog;
 mod formula_sets;
 mod saved_formulas;
 mod formula_shares;
 mod formula_variants;
 mod formula_print_snapshot;
+mod production_journal;
 pub(crate) mod orders;
 mod order_customers;
 

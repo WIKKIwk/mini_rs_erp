@@ -20,6 +20,8 @@ type ApiError = (StatusCode, Json<Value>);
 
 mod order_estimates;
 mod orders;
+mod production_journal;
+pub use production_journal::{production_orders, production_order, production_batch};
 pub use orders::{order_detail, order_list, order_list_live};
 
 async fn authorize(state: &AppState, headers: &HeaderMap) -> Result<Principal, ApiError> {
@@ -480,6 +482,14 @@ pub async fn formula_sets(
 ) -> Result<Json<Value>, ApiError> {
     let actor = authorize(&state, &headers).await?;
     store(&state)?.formula_sets(&actor.ref_).await.map(Json).map_err(error)
+}
+
+pub async fn formula_catalog(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    let actor = authorize(&state, &headers).await?;
+    store(&state)?.formula_catalog(&actor.ref_).await.map(Json).map_err(error)
 }
 
 pub async fn rename_formula_set(

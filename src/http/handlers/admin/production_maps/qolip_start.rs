@@ -89,8 +89,8 @@ pub(super) async fn automatic_readiness(
     if order_id.starts_with("training-") || !apparatus.requires_qolip_scan() {
         return Err(bad_request("qolip_confirmation_invalid"));
     }
-    // Opt-in readiness is scoped to an actionable fresh start; it cannot grant
-    // tooling to paused, completed or another worker's queue row.
+    // A released printing run may confirm its replacement set on Resume.
+    // Ordinary paused runs retain their mounted tooling and cannot swap it.
     let controls = state
         .production_maps
         .queue_action_controls_for_apparatus(apparatus.id.as_str())
@@ -102,7 +102,11 @@ pub(super) async fn automatic_readiness(
         .ok_or_else(|| bad_request("order_not_available"))?;
     let start_allowed = control
         .allowed_actions
-        .contains(&queue_state::ApparatusQueueAction::Start);
+        .contains(&queue_state::ApparatusQueueAction::Start)
+        || (control.allowed_actions.contains(&queue_state::ApparatusQueueAction::Resume)
+            && state.production_maps.qolip_validation_required_for_action(
+                apparatus.id.as_str(), order_id, queue_state::ApparatusQueueAction::Resume,
+            ).await.map_err(production_map_error)?);
     if control.interaction.qolip_mode
         != crate::core::production_map::ApparatusQueueQolipMode::ScanRequired
     {
@@ -115,7 +119,7 @@ pub(super) async fn automatic_readiness(
         .map_err(production_map_error)?
         .ok_or_else(|| production_map_error(ProductionMapError::MapNotFound))?;
     let mut blocker = String::new();
-    let specs = match state.qolip.required_qolips_for_production_map(&map).await {
+    let mut specs = match state.qolip.required_qolips_for_production_map(&map).await {
         Ok(specs) => specs,
         Err(error) => {
             blocker = qolip_error_code(&error).to_string();
@@ -123,6 +127,11 @@ pub(super) async fn automatic_readiness(
             Vec::new()
         }
     };
+    if let Some(reused) = state.production_maps.reusable_qolips_for_resume(
+        apparatus.id.as_str(), order_id, &specs,
+    ).await.map_err(production_map_error)? {
+        specs = reused;
+    }
     if specs.is_empty() && blocker.is_empty() {
         blocker = "qolip_scan_required".into();
     }

@@ -1286,6 +1286,17 @@ impl ProductionMapService {
                     }
                 }
 
+                if control == OrderControlState::Active
+                    && apparatus::requires_qolip_scan(canonical)
+                    && active_session.is_some_and(|session| session.qolip_reacquisition_required())
+                    && matches!(state, queue_state::ApparatusQueueOrderState::Pending
+                        | queue_state::ApparatusQueueOrderState::Paused)
+                {
+                    interaction.qolip_mode = ApparatusQueueQolipMode::ScanRequired;
+                    interaction.qolip_automatic_confirmation = qolip_start_settings.automatic_confirmation_enabled;
+                    interaction.qolip_policy_revision = qolip_start_settings.revision;
+                }
+
                 let mut allowed_actions = allowed_actions_for_control(QueueActionPolicyInput {
                     state,
                     profile: QueueActionPolicyProfile::Live {

@@ -181,7 +181,7 @@ async fn unfrozen_order_resumes_saved_resources_without_scans_in_both_queue_mode
                 );
                 assert_eq!(
                     control.interaction.qolip_mode,
-                    crate::core::production_map::ApparatusQueueQolipMode::NotRequired
+                    crate::core::production_map::ApparatusQueueQolipMode::ScanRequired
                 );
                 let ready = discipline == QueueDiscipline::FreePick && !other_active;
                 assert_eq!(

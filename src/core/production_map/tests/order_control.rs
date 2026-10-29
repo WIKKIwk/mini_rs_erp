@@ -2169,7 +2169,7 @@ async fn fully_frozen_molds_release_on_every_stop_path_and_resume_requires_reacq
         let control = &snapshot.queue_action_controls[PECHAT_ID][id];
         assert_eq!(
             control.interaction.qolip_mode,
-            ApparatusQueueQolipMode::NotRequired
+            ApparatusQueueQolipMode::ScanRequired
         );
         assert!(!control.interaction.material_scan_required);
         assert!(control.allowed_actions.contains(&Action::Resume));

@@ -140,6 +140,12 @@ pub async fn production_map_queue_action(
         if !is_admin && !queue_state::apparatus_matches_assigned(&input.apparatus, &assigned_apparatus) {
             return Err(bad_request("apparatus_not_assigned"));
         }
+        if input.action == queue_state::ApparatusQueueAction::Resume
+            && !state.production_maps.qolip_validation_required_for_action(
+                &input.apparatus, &input.order_id, input.action,
+            ).await.map_err(production_map_error)? {
+            return Err(bad_request("qolip_confirmation_invalid"));
+        }
         input.materials.qolip_codes = super::qolip_start::resolve_automatic_codes(
             &state, &principal, &apparatus, &input.order_id, confirmation,
         ).await?;

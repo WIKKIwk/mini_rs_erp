@@ -142,11 +142,17 @@ pub async fn production_map_qolip_validate(
         return Err(production_map_error(ProductionMapError::MapNotFound));
     };
     state.qolip.require_qolips_available_for_production_map(&map).await.map_err(qolip_queue_error)?;
-    let required_qolips = state
+    let mut required_qolips = state
         .qolip
         .required_qolips_for_production_map(&map)
         .await
         .map_err(qolip_queue_error)?;
+    let reused = state.production_maps.reusable_qolips_for_resume(
+        &apparatus_id, order_id, &required_qolips,
+    ).await.map_err(production_map_error)?;
+    let reused_qolip_codes = reused.as_ref().map(|specs| specs.iter()
+        .map(|spec| spec.qolip_code.clone()).collect::<Vec<_>>()).unwrap_or_default();
+    if let Some(specs) = reused { required_qolips = specs; }
     let required_qolip_codes = required_qolips
         .iter()
         .map(|spec| spec.qolip_code.trim().to_string())
@@ -164,6 +170,7 @@ pub async fn production_map_qolip_validate(
                 "required_qolip_codes": required_qolip_codes,
                 "required_qolip_count": required_qolip_count,
                 "required_qolips": required_qolips_payload,
+                "reused_qolip_codes": reused_qolip_codes,
             }
         })));
     }

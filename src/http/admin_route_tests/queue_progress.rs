@@ -8,6 +8,7 @@ mod laminatsiya_notices;
 mod qolip_chain;
 mod report;
 mod resume_after_freeze;
+mod qolip_resume_replacement;
 mod rezka;
 mod rezka_prepared_label;
 mod rezka_recorded_outputs;

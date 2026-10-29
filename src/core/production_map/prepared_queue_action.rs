@@ -176,6 +176,17 @@ impl PreparedApparatusQueueAction {
         if let Some(session) = &mut self.session {
             if session.qolip_reacquisition_required() {
                 self.event.payload_json["qolip_reacquired_after_freeze"] = serde_json::json!(true);
+                if let Some(previous) = QolipLineage::from_payload(&session.payload_json)
+                    && previous != lineage
+                {
+                    self.event.payload_json["qolip_replaced_on_resume"] = serde_json::json!({
+                        "previous": previous, "current": lineage,
+                        "previous_confirmation": session.payload_json.get("qolip_confirmation"),
+                    });
+                    if let Some(payload) = session.payload_json.as_object_mut() {
+                        payload.remove("qolip_confirmation");
+                    }
+                }
             }
             lineage.write_to_payload(&mut session.payload_json);
             session.payload_json["qolip_lock_owner"] = serde_json::Value::Bool(true);

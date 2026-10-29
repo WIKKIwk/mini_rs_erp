@@ -1317,7 +1317,11 @@ pub(super) async fn apply_queue_progress_tx(
         if let Some(raw) = write.event.payload_json.get("qolip_confirmation") {
             let confirmation: crate::core::production_map::AutomaticQolipConfirmation = serde_json::from_value(raw.clone())
                 .map_err(|_| ProductionMapError::QueueActionNotAllowed)?;
-            if write.event.action != crate::core::production_map::queue_state::ApparatusQueueAction::Start || !confirmation.is_valid() {
+            let released_resume = write.event.action == crate::core::production_map::queue_state::ApparatusQueueAction::Resume
+                && write.event.payload_json.get("qolip_reacquired_after_freeze")
+                    .and_then(serde_json::Value::as_bool) == Some(true);
+            if (write.event.action != crate::core::production_map::queue_state::ApparatusQueueAction::Start
+                && !released_resume) || !confirmation.is_valid() {
                 return Err(ProductionMapError::QueueActionNotAllowed);
             }
             qolip_start_settings::require_automatic_tx(tx, &confirmation).await?;
@@ -1435,12 +1439,11 @@ pub(super) async fn apply_queue_progress_tx(
             if matches!(event.action, crate::core::production_map::queue_state::ApparatusQueueAction::Start)
                 || event.payload_json.get("qolip_reacquired_after_freeze")
                     .and_then(serde_json::Value::as_bool) == Some(true) {
-                if event.action == crate::core::production_map::queue_state::ApparatusQueueAction::Start
-                    && event.payload_json.get("qolip_confirmation").is_some() {
+                if event.payload_json.get("qolip_confirmation").is_some() {
                     qolip_session_helpers::validate_automatic_qolip_set_tx(tx, session).await?;
                 } else {
-                    // Historical automatic provenance is not a new request:
-                    // Resume keeps the pre-existing reacquisition policy.
+                    // Only this command's confirmation activates automatic
+                    // policy validation; session history alone never does.
                     qolip_session_helpers::validate_qolip_set_tx(tx, session).await?;
                 }
             }
