@@ -1385,6 +1385,12 @@ impl ProductionMapService {
                             && control == OrderControlState::Active {
                             active_session.and_then(super::super::re_pause::control)
                         } else { None },
+                        cancel_start: if self.store.supports_cancel_start()
+                            && (is_laminatsiya || is_rezka)
+                            && state == queue_state::ApparatusQueueOrderState::InProgress
+                            && control == OrderControlState::Active {
+                            active_session.and_then(super::super::cancel_start::control)
+                        } else { None },
                         temporary_pause: if self.store.supports_temporary_pause()
                             && state == queue_state::ApparatusQueueOrderState::InProgress
                             && control == OrderControlState::Active {

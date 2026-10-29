@@ -168,6 +168,7 @@ fn training_queue_action_controls(
                     stage_control_state: String::new(),
                     re_pause: None,
                     temporary_pause: None,
+                    cancel_start: None,
                     temporarily_paused: false,
                     reclose: None,
                     stage_work: None,

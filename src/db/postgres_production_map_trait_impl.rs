@@ -34,6 +34,11 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
     }
     fn supports_resume_pause(&self) -> bool { true }
     fn supports_temporary_pause(&self) -> bool { true }
+    fn supports_cancel_start(&self) -> bool { true }
+    async fn cancel_started_work(&self, apparatus: &str, order_id: &str, session_id: &str, token: &str,
+        actor: &QueueActionActor, assigned: &[String]) -> Result<(), ProductionMapError> {
+        cancel_start::execute(self, apparatus, order_id, session_id, token, actor, assigned).await
+    }
     async fn temporarily_pause_work(&self, apparatus: &str, order_id: &str, session_id: &str, token: &str,
         actor: &QueueActionActor, assigned: &[String], policy: crate::core::production_map::ApparatusQueuePolicy)
         -> Result<(), ProductionMapError> {

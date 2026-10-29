@@ -70,6 +70,8 @@ mod qolip_validation;
 mod queue_actions;
 mod re_pause;
 mod temporary_pause;
+mod cancel_start;
+pub use cancel_start::production_map_cancel_start;
 pub use temporary_pause::production_map_temporary_pause;
 mod reactivation;
 pub use reactivation::{production_map_reactivation, production_map_reactivation_preview, production_map_reactivation_reclose};

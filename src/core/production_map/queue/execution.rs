@@ -638,6 +638,11 @@ impl ProductionMapService {
             print_preflight_cancel_hold_id: print_preflight_hold
                 .map(|hold| hold.hold_id.trim().to_string()),
         };
+        if queue_action == queue_state::ApparatusQueueAction::Start
+            && apparatus::requires_previous_stage(&canonical)
+        {
+            prepared.event.payload_json["cancel_start_supported"] = serde_json::json!(true);
+        }
         if resume_pause_allowed && let Some(previous) = active_session.as_ref() {
             // Mark the continuation as started before re-pause fingerprints it.
             // The persistence layer also enforces this latch for other writers.

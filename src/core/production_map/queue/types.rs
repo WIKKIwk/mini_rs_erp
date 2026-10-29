@@ -138,6 +138,8 @@ pub struct ApparatusQueueOrderActionControl {
     pub re_pause: Option<crate::core::production_map::ResumePauseControl>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temporary_pause: Option<crate::core::production_map::TemporaryPauseControl>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cancel_start: Option<crate::core::production_map::CancelStartControl>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub temporarily_paused: bool,
     #[serde(skip_serializing_if = "Option::is_none")]

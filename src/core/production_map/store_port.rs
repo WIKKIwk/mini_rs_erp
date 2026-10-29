@@ -557,6 +557,13 @@ pub trait ProductionMapStorePort: Send + Sync {
     /// Only stores with atomic checkpoint validation expose output-free re-pause.
     fn supports_resume_pause(&self) -> bool { false }
     fn supports_temporary_pause(&self) -> bool { false }
+    fn supports_cancel_start(&self) -> bool { false }
+    async fn cancel_started_work(
+        &self, _apparatus: &str, _order_id: &str, _session_id: &str, _token: &str,
+        _actor: &QueueActionActor, _assigned: &[String],
+    ) -> StoreResult<()> {
+        Err(ProductionMapError::QueueActionNotAllowed)
+    }
     async fn temporarily_pause_work(
         &self, _apparatus: &str, _order_id: &str, _session_id: &str, _token: &str,
         _actor: &QueueActionActor, _assigned: &[String], _policy: ApparatusQueuePolicy,

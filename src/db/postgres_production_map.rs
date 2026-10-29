@@ -41,6 +41,7 @@ mod qolip_start_settings;
 mod sequence_move;
 mod re_pause;
 mod temporary_pause;
+mod cancel_start;
 mod reactivation;
 #[cfg(test)]
 mod sequence_move_tests;
@@ -1384,12 +1385,14 @@ pub(super) async fn apply_queue_progress_tx(
             }
         }
         validate_merge_session_transition_tx(tx, &write.event, write.session.as_ref()).await?;
+        let start_checkpoint = cancel_start::before_start_tx(tx, write).await?;
         let raw_material_stock_committed = !write.raw_material_stock_transitions.is_empty();
-        let raw_material_outcome = apply_raw_material_stock_transitions_tx(
+        let raw_material_outcome = raw_material_stock_helpers::apply_raw_material_stock_transitions_for_event_tx(
             tx,
             &write.raw_material_stock_transitions,
             &write.event.actor,
             &write.event.apparatus,
+            start_checkpoint.as_ref().map(|_| write.event.event_id.as_str()),
         )
         .await?;
         let mut augmented_event = None;
@@ -1556,6 +1559,7 @@ pub(super) async fn apply_queue_progress_tx(
                 .await
                 .map_err(|_| ProductionMapError::StoreFailed)?;
         }
+        cancel_start::after_start_tx(tx, write, start_checkpoint).await?;
         order_control_helpers::finalize_global_stop_tx(tx, &event.order_id).await?;
         if !lifecycle::refresh_recorded_rezka_output_tx(tx, write).await? {
             refresh_production_order_lifecycle_tx(

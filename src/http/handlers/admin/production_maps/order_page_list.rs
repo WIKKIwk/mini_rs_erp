@@ -558,6 +558,7 @@ mod tests {
             last_worked_at_unix: 0,
             re_pause: None,
             temporary_pause: None,
+            cancel_start: None,
             temporarily_paused: false,
             reclose: None,
             state,

@@ -32,6 +32,16 @@ pub(super) async fn apply_raw_material_stock_transitions_tx(
     actor: &QueueActionActor,
     apparatus: &str,
 ) -> Result<RawMaterialStockTransitionOutcome, ProductionMapError> {
+    apply_raw_material_stock_transitions_for_event_tx(tx, transitions, actor, apparatus, None).await
+}
+
+pub(super) async fn apply_raw_material_stock_transitions_for_event_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    transitions: &[RawMaterialStockTransition],
+    actor: &QueueActionActor,
+    apparatus: &str,
+    queue_event: Option<&str>,
+) -> Result<RawMaterialStockTransitionOutcome, ProductionMapError> {
     let apparatus_id = ApparatusId::new(apparatus.trim().to_string())
         .map_err(|_| ProductionMapError::RawMaterialInvalidInput)?;
     let mut warehouses = BTreeSet::new();
@@ -98,20 +108,26 @@ pub(super) async fn apply_raw_material_stock_transitions_tx(
             }
             let previous = before.get(&stock_key(&row.barcode));
             let owner = owners.get(&stock_key(&row.barcode));
-            insert_raw_material_event_tx(
-                tx,
-                stock_transition_event_draft(
-                    transition.kind,
-                    row,
-                    previous.map(|row| row.status.clone()),
-                    &transition.order_id,
-                    actor,
-                    apparatus_id.as_str(),
-                    owner,
-                ),
-            )
-            .await
-            .map_err(|_| ProductionMapError::StoreFailed)?;
+            let mut draft = stock_transition_event_draft(
+                transition.kind,
+                row,
+                previous.map(|row| row.status.clone()),
+                &transition.order_id,
+                actor,
+                apparatus_id.as_str(),
+                owner,
+            );
+            if transition.kind == RawMaterialStockTransitionKind::InUse
+                && let Some(event) = queue_event
+            {
+                // A cancelled Start can later claim the same material again.
+                // Its fresh usage needs its own durable audit receipt.
+                draft.idempotency_key = format!("{}:{event}", draft.idempotency_key);
+                draft.correlation_id = Some(event.into());
+            }
+            insert_raw_material_event_tx(tx, draft)
+                .await
+                .map_err(|_| ProductionMapError::StoreFailed)?;
         }
         warehouses.extend(
             rows.into_iter()

@@ -30,6 +30,8 @@ pub(crate) mod re_pause;
 pub use re_pause::ResumePauseControl;
 pub(crate) mod temporary_pause;
 pub use temporary_pause::TemporaryPauseControl;
+pub(crate) mod cancel_start;
+pub use cancel_start::CancelStartControl;
 pub(crate) mod reactivation;
 pub use reactivation::{ReactivationSelector, ReactivationTarget, ReactivationPreview, ReactivationRecloseControl, ReactivationRecloseTarget};
 mod print_preflight;

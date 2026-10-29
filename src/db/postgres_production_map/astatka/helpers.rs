@@ -112,6 +112,7 @@ pub(super) async fn put_laminatsiya_astatka_report(
 pub(super) async fn put_laminatsiya_astatka_report_tx(
     tx: &mut Transaction<'_, Postgres>, report: &LaminatsiyaAstatkaReport,
 ) -> Result<(), ProductionMapError> {
+    super::transaction_locks::lock_order_and_apparatuses_tx(tx, &report.order_id, &[&report.apparatus]).await?;
     let apparatus_id = ApparatusId::new(report.apparatus.trim().to_string())
         .map_err(|_| ProductionMapError::ProgressInputInvalid)?;
     sqlx::query(
@@ -244,6 +245,7 @@ pub(super) async fn put_rezka_astatka_report(
 pub(super) async fn put_rezka_astatka_report_tx(
     tx: &mut Transaction<'_, Postgres>, report: &RezkaAstatkaReport,
 ) -> Result<(), ProductionMapError> {
+    super::transaction_locks::lock_order_and_apparatuses_tx(tx, &report.order_id, &[&report.apparatus]).await?;
     let apparatus_id = ApparatusId::new(report.apparatus.trim().to_string())
         .map_err(|_| ProductionMapError::ProgressInputInvalid)?;
     sqlx::query(
