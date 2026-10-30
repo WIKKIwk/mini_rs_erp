@@ -279,7 +279,7 @@ mod notification_tests {
     }
 }
 
-async fn load_maps_tx(
+pub(super) async fn load_maps_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
 ) -> Result<Vec<ProductionMapDefinition>, ProductionMapError> {
     let payloads: Vec<serde_json::Value> = sqlx::query_scalar(

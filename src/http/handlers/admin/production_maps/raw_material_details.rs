@@ -258,7 +258,7 @@ pub(super) fn rulon_width_bounds(order_width: f64, maximum_leftover_width_mm: f6
     )
 }
 
-fn rulon_width_restriction_applies(role: PrincipalRole) -> bool {
+pub(super) fn rulon_width_restriction_applies(role: PrincipalRole) -> bool {
     role != PrincipalRole::TayyorlovMasteri
 }
 

@@ -177,7 +177,7 @@ pub async fn production_map_order_edit(
         .map_err(opened_order_edit_error)?;
     let prepared = state
         .production_maps
-        .prepare_map_for_save(map)
+        .prepare_map_for_order_edit(map)
         .await
         .map_err(production_map_error)?;
     let saved = state

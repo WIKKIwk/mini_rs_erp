@@ -123,6 +123,7 @@ pub async fn checkout_return(
         .return_checkout(input)
         .await
         .map_err(qolip_error)?;
+    state.production_maps.notify_live();
     Ok(Json(serde_json::json!({
         "ok": true,
         "checkout": returned,

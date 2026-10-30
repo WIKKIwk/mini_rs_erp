@@ -110,7 +110,7 @@ async fn raw_material_claims_restore_atomically_and_repeat_usage_is_audited() {
     .fetch_one(&f.pool)
     .await
     .unwrap();
-    for _ in 0..2 {
+    for through_history in [false,true] {
         let c = start_with_material(&f).await;
         let runtime_pool = sqlx::PgPool::connect_with(
             f.pool
@@ -127,7 +127,16 @@ async fn raw_material_claims_restore_atomically_and_repeat_usage_is_audited() {
                 postgres::canonical_apparatus_service(runtime_pool.clone()),
             )),
         );
-        runtime_service
+        if through_history {
+            let history=runtime_service.scanned_wip_inputs(&f.machine,&f.order,"work",&[f.machine.clone()],actor())
+                .await.unwrap();
+            let item=history.iter().find(|r|r.session_id==c.session_id).unwrap();
+            runtime_service.return_scanned_wip(&ScannedWipReturn {
+                apparatus:f.machine.clone(),order_id:f.order.clone(),stage_node_id:"work".into(),
+                session_id:c.session_id.clone(),batch_id:item.batch_id.clone(),token:item.return_token.clone().unwrap(),
+            },&[f.machine.clone()],actor()).await.unwrap();
+        } else {
+            runtime_service
             .cancel_started_work(
                 &f.machine,
                 &f.order,
@@ -138,6 +147,7 @@ async fn raw_material_claims_restore_atomically_and_repeat_usage_is_audited() {
             )
             .await
             .unwrap();
+        }
         runtime_pool.close().await;
         let after: Value = sqlx::query_scalar(
             "SELECT to_jsonb(s)-'updated_at' FROM mini_raw_material_stock s WHERE barcode=$1",

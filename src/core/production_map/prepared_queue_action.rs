@@ -191,6 +191,7 @@ impl PreparedApparatusQueueAction {
             lineage.write_to_payload(&mut session.payload_json);
             session.payload_json["qolip_lock_owner"] = serde_json::Value::Bool(true);
             session.payload_json["qolip_released_on_freeze"] = serde_json::json!(false);
+            session.payload_json["qolip_released_on_return"] = serde_json::json!(false);
             let mut resources = ProductionQrSessionResources::for_session(session);
             resources.qolip_codes = lineage.qolip_codes.clone();
             resources.qolip_available = true;

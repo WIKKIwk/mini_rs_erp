@@ -3,7 +3,7 @@ use crate::core::production_map::{
     ProductionMapError, QueueActionActor, QueueProgressInput, queue_state,
 };
 
-async fn verify_recorded_rezka_outputs(intermediate: bool, all_individual: bool) {
+async fn verify_recorded_rezka_outputs(intermediate: bool, all_individual: bool, correct_first: bool) {
     let requests = Arc::new(Mutex::new(Vec::<ScaleDriverPrintRequest>::new()));
     let mut state = test_state();
     state.gscale = GscaleService::new().with_driver(Arc::new(FakeProgressDriver {
@@ -70,7 +70,7 @@ async fn verify_recorded_rezka_outputs(intermediate: bool, all_individual: bool)
     assert_eq!(status, StatusCode::OK, "{start:?}");
     let cycle = start["session"]["session_id"].as_str().unwrap();
     let count = if intermediate { 2 } else { 3 };
-    let frames: Vec<_> = (0..count)
+    let mut frames: Vec<_> = (0..count)
         .map(|i| {
             serde_json::json!({
                 "produced_qty":100.0 + i as f64, "finished_goods_meter":100.0 + i as f64,
@@ -101,15 +101,18 @@ async fn verify_recorded_rezka_outputs(intermediate: bool, all_individual: bool)
         .unwrap();
     let mut recorded_ids = Vec::new();
     // Start from the second physical roll: indices must not depend on print order.
-    let indices = if all_individual {
+    let indices = if correct_first {
+        vec![1, 2, 3]
+    } else if all_individual {
         if intermediate {
             vec![2, 1]
         } else {
-            vec![2, 1, 3]
+            vec![3, 1, 2]
         }
     } else {
         vec![2]
     };
+    let reference_index = indices[0];
     for index in indices {
         let input = serde_json::json!({
             "apparatus":apparatus,"order_id":order,"action":"roll_complete",
@@ -121,6 +124,7 @@ async fn verify_recorded_rezka_outputs(intermediate: bool, all_individual: bool)
         assert_eq!(status, StatusCode::OK, "{saved:?}");
         assert_eq!(saved["states"][order], "in_progress");
         assert_eq!(saved["session"]["status"], "active");
+        assert_eq!(saved["session"]["payload_json"]["rezka_reference_frame_index"], reference_index);
         assert_eq!(saved["progress_batches"].as_array().unwrap().len(), 1);
         assert_eq!(
             saved["prints"].as_array().unwrap().len(),
@@ -167,6 +171,55 @@ async fn verify_recorded_rezka_outputs(intermediate: bool, all_individual: bool)
         let print = json_body(response).await;
         assert_eq!(status, StatusCode::OK, "{print:?}");
         assert_eq!(print["batch"]["qr_payload"], batch["qr_payload"]);
+        if correct_first && index == 1 {
+            let stale_after_correction = service
+                .prepare_apparatus_queue_action_with_progress(
+                    apparatus, order, queue_state::ApparatusQueueAction::RollComplete,
+                    &[apparatus.to_string()], QueueActionActor {
+                        role: "aparatchi".to_string(), ref_: "recorded-rezka-worker".to_string(),
+                        display_name: "Rezka worker".to_string(),
+                    }, QueueProgressInput {
+                        rezka_record_frame_index: Some(2), rezka_output_cycle: cycle.to_string(),
+                        rezka_frames: vec![serde_json::from_value(frames[1].clone()).unwrap()],
+                        ..Default::default()
+                    },
+                ).await.unwrap();
+            let mut correction = batch.clone();
+            correction["expected_revision"] = batch["revision"].clone();
+            correction["reason"] = serde_json::json!("Corrected scale reading");
+            correction["finished_goods_kg"] = serde_json::json!(12.6);
+            correction["produced_qty"] = serde_json::json!(126.0);
+            correction["finished_goods_meter"] = serde_json::json!(126.0);
+            correction["diameter"] = serde_json::json!(47.0);
+            let response = router.clone().oneshot(request_with_body("POST",
+                "/v1/mobile/admin/production-maps/progress-qr/correct", &worker,
+                &correction.to_string(),
+            )).await.unwrap();
+            let status = response.status();
+            let corrected = json_body(response).await;
+            assert_eq!(status, StatusCode::OK, "{corrected:?}");
+            frames[0]["gross_qty"] = serde_json::json!(12.6);
+            frames[0]["finished_goods_kg"] = serde_json::json!(12.6);
+            frames[0]["produced_qty"] = serde_json::json!(126.0);
+            frames[0]["finished_goods_meter"] = serde_json::json!(126.0);
+            frames[0]["diameter"] = serde_json::json!(47.0);
+            let response = router.clone().oneshot(request("GET",
+                &format!("/v1/mobile/admin/production-maps/rezka-output-report?apparatus={apparatus}&order_id={order}"),
+                &worker,
+            )).await.unwrap();
+            let status = response.status();
+            let report = json_body(response).await;
+            assert_eq!(status, StatusCode::OK, "{report:?}");
+            let slot = &report["rezka_output_report"]["frames"][0];
+            assert_eq!(slot["batch_id"], batch["batch_id"]);
+            assert_eq!(slot["qr_payload"], batch["qr_payload"]);
+            assert_eq!(slot["input"]["gross_qty"], 12.6);
+            assert_eq!(slot["input"]["produced_qty"], 126.0);
+            assert_eq!(slot["input"]["diameter"], 47.0);
+            assert!(matches!(service.commit_prepared_queue_action(stale_after_correction).await,
+                Err(ProductionMapError::RezkaOutputCycleConflict)),
+                "an action prepared before the authorized correction must not overwrite it");
+        }
     }
     let response = router
         .clone()
@@ -187,6 +240,14 @@ async fn verify_recorded_rezka_outputs(intermediate: bool, all_individual: bool)
     let snapshot = json_body(response).await;
     let snapshot_text = snapshot.to_string();
     assert!(snapshot_text.contains("rezka_output_report") && snapshot_text.contains(cycle));
+    let response = router.clone().oneshot(request("GET",
+        &format!("/v1/mobile/admin/production-maps/rezka-output-report?apparatus={apparatus}&order_id={order}"),
+        &worker,
+    )).await.unwrap();
+    let status = response.status();
+    let narrow = json_body(response).await;
+    assert_eq!(status, StatusCode::OK, "{narrow:?}");
+    assert_eq!(narrow["rezka_output_report"]["reference_frame_index"], reference_index);
     let (status, _) = super::rezka::queue_action_json(
         &router,
         &worker,
@@ -242,6 +303,7 @@ async fn verify_recorded_rezka_outputs(intermediate: bool, all_individual: bool)
         finished["session"]["payload_json"]["rezka_output_report"],
         serde_json::json!([])
     );
+    assert!(finished["session"]["payload_json"].get("rezka_reference_frame_index").is_none());
     if intermediate {
         let (status, _) = super::rezka::queue_action_json(
             &router,
@@ -291,20 +353,30 @@ async fn verify_recorded_rezka_outputs(intermediate: bool, all_individual: bool)
 
 #[tokio::test]
 async fn final_rezka_individual_rolls_complete_without_duplicate_batches_or_prints() {
-    verify_recorded_rezka_outputs(false, true).await;
+    verify_recorded_rezka_outputs(false, true, false).await;
+}
+
+#[tokio::test]
+async fn corrected_rezka_first_record_updates_report_and_allows_completion() {
+    verify_recorded_rezka_outputs(false, true, true).await;
+}
+
+#[tokio::test]
+async fn rezka_first_recorded_reference_survives_out_of_order_card_prints() {
+    verify_recorded_rezka_outputs(false, true, false).await;
 }
 
 #[tokio::test]
 async fn intermediate_rezka_recorded_group_and_bulk_pause_keep_correct_rolls() {
-    verify_recorded_rezka_outputs(true, false).await;
+    verify_recorded_rezka_outputs(true, false, false).await;
 }
 
 #[tokio::test]
 async fn intermediate_rezka_all_individual_rolls_pause_and_resume_without_reusing_output() {
-    verify_recorded_rezka_outputs(true, true).await;
+    verify_recorded_rezka_outputs(true, true, false).await;
 }
 
-async fn verify_recorded_rezka_issues(intermediate: bool, all_issues: bool) {
+async fn verify_recorded_rezka_issues(intermediate: bool, all_issues: bool, issue_first: bool) {
     let requests = Arc::new(Mutex::new(Vec::<ScaleDriverPrintRequest>::new()));
     let mut state = test_state();
     state.gscale = GscaleService::new().with_driver(Arc::new(FakeProgressDriver {
@@ -379,7 +451,8 @@ async fn verify_recorded_rezka_issues(intermediate: bool, all_issues: bool) {
         if all_issues || index == 0 { issue.clone() } else { healthy.clone() }
     ).collect();
     // Save the issue last, after a healthy roll, including a grouped two-kadr roll.
-    let indices: Vec<_> = if all_issues { (1..=count).rev().collect() } else { vec![2, 1] };
+    let indices: Vec<_> = if all_issues { (1..=count).rev().collect() }
+        else if issue_first { vec![1, 2] } else { vec![2, 1] };
     for (saved_count, index) in indices.into_iter().enumerate() {
         let input = serde_json::json!({
             "apparatus":apparatus,"order_id":order,"action":"roll_complete",
@@ -390,6 +463,11 @@ async fn verify_recorded_rezka_issues(intermediate: bool, all_issues: bool) {
         assert_eq!(status, StatusCode::OK, "{saved:?}");
         assert_eq!(saved["states"][order], "in_progress");
         assert_eq!(saved["session"]["status"], "active");
+        if all_issues || (issue_first && saved_count == 0) {
+            assert!(saved["session"]["payload_json"].get("rezka_reference_frame_index").is_none());
+        } else {
+            assert_eq!(saved["session"]["payload_json"]["rezka_reference_frame_index"], 2);
+        }
         assert!(saved["prints"].as_array().unwrap().is_empty());
         let report = saved["session"]["payload_json"]["rezka_output_report"].as_array().unwrap();
         assert_eq!(report.len(), saved_count + 1);
@@ -462,17 +540,22 @@ async fn verify_recorded_rezka_issues(intermediate: bool, all_issues: bool) {
 
 #[tokio::test]
 async fn intermediate_rezka_last_card_issue_detaches_and_resumes() {
-    verify_recorded_rezka_issues(true,false).await;
+    verify_recorded_rezka_issues(true,false,false).await;
 }
 #[tokio::test]
 async fn intermediate_rezka_all_cards_issue_detaches_and_resumes_without_qr() {
-    verify_recorded_rezka_issues(true,true).await;
+    verify_recorded_rezka_issues(true,true,false).await;
 }
 #[tokio::test]
 async fn final_rezka_saved_issue_and_printed_and_pending_rolls_complete() {
-    verify_recorded_rezka_issues(false,false).await;
+    verify_recorded_rezka_issues(false,false,false).await;
 }
 #[tokio::test]
 async fn final_rezka_all_cards_issue_completes_without_qr_and_keeps_waste() {
-    verify_recorded_rezka_issues(false,true).await;
+    verify_recorded_rezka_issues(false,true,false).await;
+}
+
+#[tokio::test]
+async fn rezka_issue_before_healthy_card_does_not_become_reference() {
+    verify_recorded_rezka_issues(false, false, true).await;
 }

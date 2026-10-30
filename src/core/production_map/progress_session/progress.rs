@@ -304,10 +304,24 @@ impl OrderRunSession {
     }
 
     pub fn qolip_reacquisition_required(&self) -> bool {
-        self.payload_json
-            .get("qolip_released_on_freeze")
-            .and_then(serde_json::Value::as_bool)
-            == Some(true)
+        ["qolip_released_on_freeze", "qolip_released_on_return"]
+            .iter()
+            .any(|key| {
+                self.payload_json.get(*key).and_then(serde_json::Value::as_bool) == Some(true)
+            })
+    }
+
+    pub(crate) fn release_returned_qolips(&mut self, checkout_id: &str, now: i64) {
+        let mut resources = ProductionQrSessionResources::for_session(self);
+        resources.qolip_codes.clear();
+        resources.qolip_available = false;
+        resources.write_to_session(self);
+        // Keep the set and codes as immutable production lineage. A paused run
+        // must acquire its complete tooling again before it can resume.
+        self.payload_json["qolip_lock_owner"] = serde_json::json!(false);
+        self.payload_json["qolip_released_on_return"] = serde_json::json!(true);
+        self.payload_json["qolip_returned_checkout_id"] = serde_json::json!(checkout_id);
+        self.payload_json["qolip_released_at_unix"] = serde_json::json!(now);
     }
 
     pub(crate) fn release_frozen_qolips(&mut self) {

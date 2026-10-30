@@ -35,6 +35,14 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
     fn supports_resume_pause(&self) -> bool { true }
     fn supports_temporary_pause(&self) -> bool { true }
     fn supports_cancel_start(&self) -> bool { true }
+    async fn scanned_wip_inputs(&self, apparatus: &str, order: &str, stage: &str,
+        actor: &QueueActionActor) -> Result<Vec<crate::core::production_map::ScannedWipInput>, ProductionMapError> {
+        scanned_wip::load(self, apparatus, order, stage, actor).await
+    }
+    async fn return_scanned_wip(&self, target: &crate::core::production_map::ScannedWipReturn,
+        actor: &QueueActionActor, assigned: &[String]) -> Result<(), ProductionMapError> {
+        scanned_wip::execute(self, target, actor, assigned).await
+    }
     async fn cancel_started_work(&self, apparatus: &str, order_id: &str, session_id: &str, token: &str,
         actor: &QueueActionActor, assigned: &[String]) -> Result<(), ProductionMapError> {
         cancel_start::execute(self, apparatus, order_id, session_id, token, actor, assigned).await

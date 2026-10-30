@@ -32,6 +32,8 @@ pub(crate) mod temporary_pause;
 pub use temporary_pause::TemporaryPauseControl;
 pub(crate) mod cancel_start;
 pub use cancel_start::CancelStartControl;
+pub(crate) mod scanned_wip;
+pub use scanned_wip::{ScannedWipInput, ScannedWipReturn};
 pub(crate) mod reactivation;
 pub use reactivation::{ReactivationSelector, ReactivationTarget, ReactivationPreview, ReactivationRecloseControl, ReactivationRecloseTarget};
 mod print_preflight;
@@ -71,6 +73,7 @@ mod service_order_control;
 mod service_progress;
 #[path = "progress_session/service_progress_correction.rs"]
 mod service_progress_correction;
+pub(crate) use service_progress_correction::{correct_recorded_rezka_frame, rezka_reference_frame_index};
 #[path = "progress_session/service_progress_metrics.rs"]
 mod service_progress_metrics;
 #[path = "progress_session/service_progress_support.rs"]

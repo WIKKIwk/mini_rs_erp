@@ -17,6 +17,48 @@ fn actor() -> QueueActionActor {
 }
 
 #[tokio::test]
+async fn order_edit_preflight_allows_layout_changes_until_actual_start() {
+    for passed in [false, true] {
+        let store = Arc::new(MemoryProductionMapStore::new());
+        let service = service_with_default_apparatus(store).await;
+        let order_id = "zakaz-preflight-edit";
+        let saved = service.upsert_map(canonical_apparatus_stage_map(
+            order_id, PRINT_ID, "7 ta rangli bosma aparat",
+        )).await.unwrap();
+        let hold = service.begin_print_preflight(
+            PRINT_ID, order_id, "preflight-edit", "preflight-edit", actor(),
+        ).await.unwrap();
+        if passed {
+            service.advance_print_preflight(
+                PRINT_ID, order_id, &hold.hold_id, "passed", actor(),
+            ).await.unwrap();
+        }
+        let mut edited = saved.map;
+        edited.products = vec![crate::core::order_layout::OrderProduct {
+            id: "product".into(), item_code: "item".into(), product: "Product".into(),
+            frame_product_size_mm: 400.0, frame_count: 2,
+        }];
+        assert!(matches!(service.prepare_map_for_save(edited.clone()).await,
+            Err(ProductionMapError::StartedProductionMapStageLocked)),
+            "the generic map editor must keep the reserved route locked");
+        service.prepare_map_for_order_edit(edited.clone()).await.unwrap();
+        if !passed {
+            service.advance_print_preflight(
+                PRINT_ID, order_id, &hold.hold_id, "passed", actor(),
+            ).await.unwrap();
+        }
+        let mut start = service.prepare_apparatus_queue_action_with_progress(
+            PRINT_ID, order_id, queue_state::ApparatusQueueAction::Start,
+            &[PRINT_ID.into()], actor(), QueueProgressInput::default(),
+        ).await.unwrap();
+        start.attach_print_preflight_hold_id(&hold.hold_id);
+        service.commit_prepared_queue_action(start).await.unwrap();
+        assert!(matches!(service.prepare_map_for_order_edit(edited).await,
+            Err(ProductionMapError::StartedProductionMapStageLocked)));
+    }
+}
+
+#[tokio::test]
 async fn reopen_passed_colour_restores_outcomes_without_moving_the_order() {
     let store = Arc::new(MemoryProductionMapStore::new());
     let service = service_with_default_apparatus(store.clone()).await;

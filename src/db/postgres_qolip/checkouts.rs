@@ -511,16 +511,47 @@ pub(super) async fn return_checkout_to_location(
     row_letter: &str,
     column_number: Option<i32>,
 ) -> Result<QolipCheckout, QolipError> {
+    for _ in 0..3 {
+        if let Some(checkout) =
+            return_checkout_once(pool, checkout_id, row_letter, column_number).await?
+        {
+            return Ok(checkout);
+        }
+    }
+    Err(QolipError::StoreFailed)
+}
+
+async fn return_checkout_once(
+    pool: &PgPool,
+    checkout_id: &str,
+    row_letter: &str,
+    column_number: Option<i32>,
+) -> Result<Option<QolipCheckout>, QolipError> {
     let checkout_id = checkout_id.trim();
     let mut tx = pool.begin().await.map_err(super::reworks::storage_error)?;
-
-    let code = sqlx::query_scalar::<_, String>(
-        "SELECT qolip_code FROM mini_qolip_checkouts WHERE id = $1",
-    ).bind(checkout_id).fetch_optional(&mut *tx).await
-        .map_err(super::reworks::storage_error)?.ok_or(QolipError::CheckoutNotFound)?;
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
-        .bind(format!("qolip:{}", code.trim().to_ascii_lowercase()))
-        .execute(&mut *tx).await.map_err(super::reworks::storage_error)?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
+        .execute(&mut *tx)
+        .await
+        .map_err(super::reworks::storage_error)?;
+    let (code, status) = sqlx::query_as::<_, (String, String)>(
+        "SELECT qolip_code,status FROM mini_qolip_checkouts WHERE id = $1",
+    )
+    .bind(checkout_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(super::reworks::storage_error)?
+    .ok_or(QolipError::CheckoutNotFound)?;
+    if !status.eq_ignore_ascii_case("open") {
+        return Err(QolipError::CheckoutNotReturnable);
+    }
+    let Some(sessions) =
+        crate::db::postgres_production_map::prepare_qolip_return_tx(&mut tx, &code).await?
+    else {
+        tx.rollback()
+            .await
+            .map_err(super::reworks::storage_error)?;
+        return Ok(None);
+    };
 
     let row = sqlx::query_as::<_, QolipCheckoutRow>(
         "UPDATE mini_qolip_checkouts
@@ -553,38 +584,11 @@ pub(super) async fn return_checkout_to_location(
     };
 
     let checkout = row_to_checkout(row);
-    let attached_to_active_order = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS (
-             SELECT 1
-             FROM mini_order_run_sessions session
-             WHERE session.status IN ('active', 'paused', 'frozen', 'roll_detached')
-               AND session.payload_json->>'qolip_lock_owner' = 'true'
-               AND (
-                   lower(session.payload_json->>'qolip_code') = lower($1)
-                   OR EXISTS (
-                       SELECT 1
-                       FROM jsonb_array_elements_text(
-                           CASE
-                               WHEN jsonb_typeof(session.payload_json->'qolip_codes') = 'array'
-                               THEN session.payload_json->'qolip_codes'
-                               ELSE '[]'::jsonb
-                           END
-                       ) AS code(value)
-                       WHERE lower(code.value) = lower($1)
-                   )
-               )
-         )",
-    )
-    .bind(checkout.qolip_code.trim())
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(super::reworks::storage_error)?;
-    if attached_to_active_order {
-        return Err(QolipError::QolipInUse);
-    }
     let restore = location_from_checkout_target(&checkout, row_letter, column_number)?;
     restore_checkout_location_tx(&mut tx, &restore).await?;
+    crate::db::postgres_production_map::release_returned_qolips_tx(&mut tx, sessions, checkout_id)
+        .await?;
 
     tx.commit().await.map_err(super::reworks::storage_error)?;
-    Ok(checkout)
+    Ok(Some(checkout))
 }

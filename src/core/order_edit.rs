@@ -334,6 +334,28 @@ pub(crate) fn validate_route(
     Ok(())
 }
 
+/// Colour approval belongs to the printed product, artwork, substrate and
+/// dimensions. Changing the planned quantity alone does not invalidate it.
+pub(crate) fn print_preflight_requires_recheck(
+    before: &CalculateOrderTemplate,
+    after: &CalculateOrderTemplate,
+) -> bool {
+    before.combo != after.combo
+        || before.products != after.products
+        || before.item_code != after.item_code
+        || before.color != after.color
+        || before.roll_count != after.roll_count
+        || before.image_id != after.image_id
+        || before.image_url != after.image_url
+        || before.effective_layers() != after.effective_layers()
+        || before.frame_product_size_mm != after.frame_product_size_mm
+        || before.frame_count != after.frame_count
+        || before.edge_allowance_mm != after.edge_allowance_mm
+        || before.print_val_size_mm != after.print_val_size_mm
+        || before.status != after.status
+        || before.production_options != after.production_options
+}
+
 pub(crate) fn calculation_map_changed(
     before: &ProductionMapDefinition,
     after: &ProductionMapDefinition,

@@ -52,7 +52,7 @@ impl MiniOrderSink for EditSink {
         if source.revision != original.revision {
             return Err(OrderEditError::Conflict);
         }
-        assert!(matches!(actor.role.as_str(), "admin" | "sales_manager"));
+        assert!(matches!(actor.role.as_str(), "admin" | "brigader" | "sales_manager"));
         *source = OrderEditSource {
             map: map.clone(),
             template: template.clone(),
@@ -146,6 +146,11 @@ async fn order_edit_route_authorization_stale_form_and_existing_order_update() {
 #[tokio::test]
 async fn sales_order_edit_preserves_stale_form_and_material_guards() {
     check_order_edit_route(PrincipalRole::SalesManager).await;
+}
+
+#[tokio::test]
+async fn brigader_order_edit_preserves_stale_form_and_material_guards() {
+    check_order_edit_route(PrincipalRole::Brigader).await;
 }
 
 async fn check_order_edit_route(role: PrincipalRole) {

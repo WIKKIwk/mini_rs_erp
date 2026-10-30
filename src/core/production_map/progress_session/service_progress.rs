@@ -1381,6 +1381,8 @@ impl ProductionMapService {
             )?;
             if report.is_some() {
                 session.payload_json["rezka_output_report"] = serde_json::json!([]);
+                session.payload_json.as_object_mut().expect("session payload")
+                    .remove("rezka_reference_frame_index");
                 session.payload_json["rezka_output_cycle"] = serde_json::json!(event.event_id);
                 if action.creates_resumable_output()
                     && report.as_ref().is_some_and(|report| !report.saved.is_empty())

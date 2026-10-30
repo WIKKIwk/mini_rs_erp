@@ -5,6 +5,9 @@ use crate::db::postgres::{
 };
 use crate::db::postgres_production_map::PostgresProductionMapStore;
 
+#[path = "qolip_checkout/returns.rs"]
+mod returns;
+
 struct Fixture {
     pool: sqlx::PgPool,
     admin_url: String,

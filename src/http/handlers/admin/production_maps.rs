@@ -71,6 +71,8 @@ mod queue_actions;
 mod re_pause;
 mod temporary_pause;
 mod cancel_start;
+mod scanned_wip;
+pub use scanned_wip::{production_map_scanned_wips, production_map_return_scanned_wip};
 pub use cancel_start::production_map_cancel_start;
 pub use temporary_pause::production_map_temporary_pause;
 mod reactivation;

@@ -657,6 +657,7 @@ async fn order_edit_postgres_atomic_save_history_and_races() {
     sink.create_order_atomic(&material_order).await.unwrap();
     maps.put_apparatus_sequence("apparatus:test:cut", vec!["zakaz-1001".into(), "zakaz-3001".into()]).await.unwrap();
     verify_material_edit_restrictions(&pool, &runtime_pool, &sink).await;
+    verify_preflight_order_edits(&pool, &runtime_pool, &sink).await;
     runtime_pool.close().await;
     pool.close().await;
     sqlx::query(&format!("DROP DATABASE {db}"))
@@ -730,6 +731,147 @@ async fn verify_material_edit_restrictions(
     }
     let detached = sink.order_edit_source("zakaz-3001").await.unwrap();
     assert_eq!(detached.restrictions, OrderEditRestrictions::default());
+}
+
+async fn verify_preflight_order_edits(
+    pool: &PgPool,
+    runtime_pool: &PgPool,
+    sink: &PostgresMiniOrderSink,
+) {
+    use crate::core::production_map::{PrintPreflightHold, PrintPreflightStatus as Status};
+    const PRINT: &str = "apparatus:default:bosma_7";
+    let maps = PostgresProductionMapStore::new(runtime_pool.clone());
+    for (role_index, role) in ["admin", "brigader", "sales_manager"].iter().enumerate() {
+        for (status_index, status) in [Status::Running, Status::Passed].into_iter().enumerate() {
+            let number = (4100 + role_index * 2 + status_index).to_string();
+            let id = format!("zakaz-{number}");
+            let barcode = format!("PREFLIGHT-{number}");
+            let map: ProductionMapDefinition = serde_json::from_value(serde_json::json!({
+                "id":id, "code":number, "order_number":number,
+                "product_code":"item", "title":"Product", "order_kg":500,
+                "width_mm":615, "roll_count":6,
+                "nodes":[{"id":"start","kind":"start","title":"Start"},
+                    {"id":"print","kind":"apparatus","title":"Print","apparatus_id":PRINT},
+                    {"id":"end","kind":"end","title":"End"}],
+                "edges":[{"from":"start","to":"print"},{"from":"print","to":"end"}]
+            })).unwrap();
+            let template = CalculateOrderTemplate {
+                id: format!("calculation-{number}"), name: "Order".into(),
+                product: "Product".into(), item_code: "item".into(),
+                kg: 500.0, frame_product_size_mm: 300.0, frame_count: 2.0,
+                edge_allowance_mm: 15.0, width_mm: 615.0, roll_count: Some(6),
+                layers: vec![crate::core::formula::LayerInput::new("PET", "12")],
+                ..Default::default()
+            };
+            maps.put_map(map.clone()).await.unwrap();
+            sink.save_order(&map, &template).await.unwrap();
+            maps.put_apparatus_sequence(PRINT, vec![id.clone()]).await.unwrap();
+            assert!(matches!(sink.order_edit_source(&id).await, Err(Error::Locked(_))),
+                "ordinary pending queue heads retain their existing policy");
+            sqlx::query("INSERT INTO mini_raw_material_stock(id,warehouse,item_code,item_name,barcode,qty) VALUES($1,'raw','PET','PET',$1,100)")
+                .bind(&barcode).execute(pool).await.unwrap();
+            maps.put_raw_material_assignment(serde_json::from_value(serde_json::json!({
+                "order_id":id, "apparatus_id":PRINT, "apparatus":"Print",
+                "barcode":barcode, "item_code":"PET", "item_name":"PET", "item_group":"Rulon",
+                "assigned_by_role":"admin", "assigned_by_ref":"admin", "assigned_by_display_name":"Admin",
+                "assigned_at":"2026-10-30T00:00:00Z"
+            })).unwrap()).await.unwrap();
+            let actor = QueueActionActor {
+                role: (*role).into(), ref_: "editor".into(), display_name: "Editor".into(),
+            };
+            let mut hold = PrintPreflightHold {
+                hold_id: format!("preflight-{number}"), idempotency_key: format!("preflight-{number}"),
+                order_id: id.clone(), apparatus: PRINT.into(), stage_node_id: "print".into(),
+                status: Status::Running, revision: 0, actor: QueueActionActor::default(),
+                created_at_unix: 1, updated_at_unix: 1, expires_at_unix: 0, previous_queue_state: None,
+            };
+            hold.actor = actor.clone();
+            maps.put_print_preflight_hold(hold.clone()).await.unwrap();
+            if status == Status::Passed {
+                hold.status = status;
+                hold.revision += 1;
+                maps.update_print_preflight_hold(hold.clone()).await.unwrap();
+            }
+            let source = sink.order_edit_source(&id).await.unwrap();
+            assert_eq!(source.restrictions.locked_layer_indices, vec![0]);
+            let mut edited = source.template.clone();
+            edited.kg = 600.0;
+            let mut edited_map = source.map.clone();
+            edited_map.order_kg = Some(600.0);
+            let saved = sink.save_order_edit(&source, &edited_map, &edited, &actor).await.unwrap();
+            assert_eq!(saved.revision, 1, "{role} / {status:?}");
+            assert_eq!(maps.print_preflight_hold_by_id(&hold.hold_id).await.unwrap(), Some(hold.clone()),
+                "quantity edits must preserve the trial and its matched result");
+
+            // A colour trial never exempts actual work at this or another
+            // stage, historical sessions, invalid holds, or unavailable stock.
+            for sql in [
+                "UPDATE mini_queue_states SET state='in_progress' WHERE order_id=$1",
+                "INSERT INTO mini_queue_states(apparatus,canonical_apparatus_id,order_id,state) VALUES ('Cut','apparatus:test:cut',$1,'in_progress')",
+                "INSERT INTO mini_order_run_sessions(session_id,apparatus,canonical_apparatus_id,stage_node_id,order_id,status) VALUES ($1,'Print','apparatus:default:bosma_7','print',$1,'completed')",
+                "UPDATE mini_print_preflight_holds SET status='cancelled' WHERE order_id=$1",
+                "UPDATE mini_raw_material_stock SET status='in_use' WHERE id='PREFLIGHT-' || right($1,4)",
+                "UPDATE mini_raw_material_stock SET status='consumed',qty=0 WHERE id='PREFLIGHT-' || right($1,4)",
+            ] {
+                let mut tx = pool.begin().await.unwrap();
+                sqlx::query(sql).bind(&id).execute(&mut *tx).await.unwrap();
+                assert!(matches!(check_eligible(&mut tx, &id).await, Err(Error::Locked(_))), "{sql}");
+                tx.rollback().await.unwrap();
+            }
+            let mut invalid_material = saved.template.clone();
+            invalid_material.layers[0].micron = "15".into();
+            assert!(matches!(sink.save_order_edit(&saved, &saved.map, &invalid_material, &actor).await,
+                Err(Error::Invalid(_))), "attached material restrictions still apply");
+
+            // A changed print specification invalidates both old approval and
+            // a decision being submitted from an already open worker sheet.
+            let mut changed = saved.template.clone();
+            changed.roll_count = Some(7);
+            let mut changed_map = saved.map.clone();
+            changed_map.roll_count = Some(7);
+            let changed = sink.save_order_edit(&saved, &changed_map, &changed, &actor).await.unwrap();
+            let refreshed = maps.print_preflight_hold_by_id(&hold.hold_id).await.unwrap().unwrap();
+            assert_eq!(refreshed.status, Status::Running);
+            assert_eq!(refreshed.revision, hold.revision + 1);
+            let mut stale_pass = hold.clone();
+            stale_pass.status = Status::Passed;
+            stale_pass.revision += 1;
+            assert!(matches!(maps.update_print_preflight_hold(stale_pass).await,
+                Err(crate::core::production_map::ProductionMapError::PrintPreflightNotReady)));
+            assert!(matches!(maps.consume_print_preflight_hold(&hold.hold_id, &id, PRINT, &actor).await,
+                Err(crate::core::production_map::ProductionMapError::PrintPreflightNotReady)));
+            let (quantity, stock_status, reserved): (f64, String, String) = sqlx::query_as(
+                "SELECT qty::float8,status,reserved_order_id FROM mini_raw_material_stock WHERE id=$1")
+                .bind(&barcode).fetch_one(pool).await.unwrap();
+            assert_eq!((quantity, stock_status, reserved), (100.0, "available".into(), "".into()));
+            let (state, sequence): (String, serde_json::Value) = sqlx::query_as(
+                "SELECT q.state,s.order_ids FROM mini_queue_states q JOIN mini_queue_sequences s USING(canonical_apparatus_id) WHERE q.order_id=$1")
+                .bind(&id).fetch_one(pool).await.unwrap();
+            assert_eq!(state, "print_preflight");
+            assert_eq!(sequence, serde_json::json!([id]));
+
+            // Work or consumption committed after the form opened must also
+            // reject saving, with no calculation revision or hold changes.
+            if status == Status::Passed {
+                sqlx::query("INSERT INTO mini_order_run_sessions(session_id,apparatus,canonical_apparatus_id,stage_node_id,order_id,status) VALUES ($1,'Print','apparatus:default:bosma_7','print',$1,'active')")
+                    .bind(&id).execute(pool).await.unwrap();
+            } else {
+                sqlx::query("UPDATE mini_raw_material_stock SET status='consumed',qty=0 WHERE id=$1")
+                    .bind(&barcode).execute(pool).await.unwrap();
+            }
+            assert!(matches!(sink.order_edit_source(&id).await, Err(Error::Locked(_))));
+            assert!(matches!(sink.save_order_edit(&changed, &changed.map, &changed.template, &actor).await,
+                Err(Error::Locked(_))));
+            let revision: i64 = sqlx::query_scalar("SELECT calculation_revision FROM mini_orders WHERE id=$1")
+                .bind(&id).fetch_one(pool).await.unwrap();
+            assert_eq!(revision, 2);
+            assert_eq!(maps.print_preflight_hold_by_id(&hold.hold_id).await.unwrap(), Some(refreshed.clone()));
+            let mut cancelled = refreshed;
+            cancelled.status = Status::Cancelled;
+            cancelled.revision += 1;
+            maps.update_print_preflight_hold(cancelled).await.unwrap();
+        }
+    }
 }
 
 async fn verify_runtime_history_locks(pool: &PgPool) {

@@ -847,6 +847,7 @@ pub(super) fn preserve_qolip_lineage(
     }
     for field in [
         "qolip_confirmation",
+        "qolip_released_on_return",
         "_reactivation_of_session_id",
         "_reactivation_reserved_outputs",
         "reactivation_token",
@@ -854,6 +855,7 @@ pub(super) fn preserve_qolip_lineage(
         INPUT_LINEAGE_PAYLOAD_FIELD,
         REZKA_ACTIVE_PARTIAL_ROLLS_PAYLOAD_FIELD,
         "rezka_output_report",
+        "rezka_reference_frame_index",
         "rezka_output_cycle",
         "rezka_output_revision",
         "rezka_recorded_kadr_counts",

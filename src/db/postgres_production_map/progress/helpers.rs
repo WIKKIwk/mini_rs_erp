@@ -14,6 +14,10 @@ use crate::core::production_map::{
 
 use super::transaction_locks::lock_order_and_apparatuses_tx;
 
+#[cfg(test)]
+#[path = "correction_tests.rs"]
+mod correction_tests;
+
 pub(super) async fn reconcile_frozen_qolip_returns(
     pool: &PgPool,
 ) -> Result<usize, ProductionMapError> {
@@ -521,8 +525,10 @@ pub(super) async fn correct_progress_batch(
         .begin()
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
-    // Start and dispatch lock molds before WIP rows. Keep correction in that
-    // same order so its batch CAS cannot deadlock an input claim.
+    // Queue writes take these advisory locks before molds, sessions and WIP.
+    // Serialize card corrections with a concurrent record/close before taking
+    // any row lock, and invalidate prepared writes using the output revision.
+    lock_order_and_apparatuses_tx(&mut tx, &current.order_id, &[&current.apparatus]).await?;
     crate::db::postgres_qolip::mileage::lock_output_sources_tx(&mut tx, &current.batch_id).await?;
     let result = sqlx::query(
         "UPDATE mini_progress_batches SET
@@ -667,6 +673,23 @@ pub(super) async fn correct_progress_batch(
         );
         ProductionMapError::StoreFailed
     })?;
+    if let Some(mut payload) = sqlx::query_scalar::<_, serde_json::Value>(
+        "SELECT payload_json FROM mini_order_run_sessions
+         WHERE session_id = $1 AND order_id = $2 AND canonical_apparatus_id = $3
+           AND status IN ('active', 'paused', 'frozen', 'roll_detached') FOR UPDATE",
+    )
+    .bind(&corrected.session_id)
+    .bind(&corrected.order_id)
+    .bind(&corrected.apparatus)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?
+        && crate::core::production_map::correct_recorded_rezka_frame(&mut payload, &corrected)?
+    {
+        sqlx::query("UPDATE mini_order_run_sessions SET payload_json = $1, updated_at = now() WHERE session_id = $2")
+            .bind(payload).bind(&corrected.session_id).execute(&mut *tx).await
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+    }
     crate::db::postgres_qolip::mileage::correct_output_tx(&mut tx, &corrected).await?;
     tx.commit()
         .await

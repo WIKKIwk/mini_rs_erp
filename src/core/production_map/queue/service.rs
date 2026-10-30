@@ -1446,6 +1446,7 @@ impl ProductionMapService {
                                             .unwrap_or(&session.session_id),
                                         "frames": session.payload_json.get("rezka_output_report")
                                             .cloned().unwrap_or_else(|| serde_json::json!([])),
+                                        "reference_frame_index": super::super::rezka_reference_frame_index(&session.payload_json),
                                     })
                                 })
                                 .unwrap_or(serde_json::Value::Null)

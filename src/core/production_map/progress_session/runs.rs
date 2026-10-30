@@ -291,6 +291,7 @@ pub(super) async fn correct_progress_batch(
     input: ProgressBatchCorrectionInput,
     actor: QueueActionActor,
 ) -> Result<OrderProgressBatch, ProductionMapError> {
+    let _queue_write_guard = store.queue_progress_lock.lock().await;
     let mut batches = store.order_progress_batches.write().await;
     let stored = batches
         .get(current.batch_id.trim())
@@ -306,7 +307,16 @@ pub(super) async fn correct_progress_batch(
         return Err(ProductionMapError::ProgressBatchCorrectionConflict);
     }
     let corrected = stored.corrected(&input);
+    let mut sessions = store.order_run_sessions.write().await;
+    if let Some(session) = sessions.get_mut(&corrected.session_id)
+        && session.status.is_open()
+        && session.order_id == corrected.order_id
+        && session.apparatus == corrected.apparatus
+    {
+        correct_recorded_rezka_frame(&mut session.payload_json, &corrected)?;
+    }
     batches.insert(corrected.batch_id.clone(), corrected.clone());
+    drop(sessions);
     drop(batches);
     let created_at_unix = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

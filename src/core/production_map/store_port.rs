@@ -558,6 +558,12 @@ pub trait ProductionMapStorePort: Send + Sync {
     fn supports_resume_pause(&self) -> bool { false }
     fn supports_temporary_pause(&self) -> bool { false }
     fn supports_cancel_start(&self) -> bool { false }
+    async fn scanned_wip_inputs(
+        &self, _apparatus: &str, _order: &str, _stage: &str, _actor: &QueueActionActor,
+    ) -> StoreResult<Vec<super::ScannedWipInput>> { Ok(Vec::new()) }
+    async fn return_scanned_wip(
+        &self, _target: &super::ScannedWipReturn, _actor: &QueueActionActor, _assigned: &[String],
+    ) -> StoreResult<()> { Err(ProductionMapError::QueueActionNotAllowed) }
     async fn cancel_started_work(
         &self, _apparatus: &str, _order_id: &str, _session_id: &str, _token: &str,
         _actor: &QueueActionActor, _assigned: &[String],

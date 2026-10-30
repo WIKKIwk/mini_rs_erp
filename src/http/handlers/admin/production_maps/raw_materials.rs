@@ -3,7 +3,7 @@ use super::raw_material_details::{
     fill_raw_material_assignment_input, item_group_path, lookup_raw_material_detail,
     raw_material_rulon_match_metrics, require_material_item_group_scope,
     require_material_warehouse_scope, resolve_raw_material_stock_item, roll_width_allowance_mm,
-    rulon_width_bounds, validate_rulon_size_for_apparatus_map,
+    rulon_width_bounds, rulon_width_restriction_applies, validate_rulon_size_for_apparatus_map,
 };
 use super::*;
 use crate::core::apparatus_standard::{MaterialExecutionPolicy, ToolingExecutionPolicy};
@@ -1234,6 +1234,20 @@ pub async fn raw_material_assignment_candidate_orders(
     }
     let mut candidates = Vec::<RawMaterialAssignmentOrderCandidateResponse>::new();
     for order in active_orders {
+        if principal.role == PrincipalRole::TayyorlovMasteri {
+            let Some(preparation) = state.preparation.as_ref() else {
+                return Ok(json_response(Vec::<
+                    RawMaterialAssignmentOrderCandidateResponse,
+                >::new()));
+            };
+            if !preparation
+                .order_in_scope(&principal.ref_, &order.map.id)
+                .await
+                .map_err(|_| forbidden())?
+            {
+                continue;
+            }
+        }
         let apparatus_options = state
             .production_maps
             .raw_material_assignment_apparatus_options_for_map(&order.map, &group_path)
@@ -1246,16 +1260,17 @@ pub async fn raw_material_assignment_candidate_orders(
         );
         let mut apparatus_options = Vec::new();
         for apparatus in filtered_apparatus {
-            if validate_rulon_size_for_apparatus_map(
-                &state,
-                &order.map,
-                &apparatus,
-                &stock,
-                &item,
-                &group_path,
-            )
-            .await
-            .is_ok()
+            if !rulon_width_restriction_applies(principal.role)
+                || validate_rulon_size_for_apparatus_map(
+                    &state,
+                    &order.map,
+                    &apparatus,
+                    &stock,
+                    &item,
+                    &group_path,
+                )
+                .await
+                .is_ok()
             {
                 apparatus_options.push(apparatus);
             }

@@ -64,6 +64,7 @@ pub(crate) fn attach_checkpoint(
             "lamination_astatka_shift_closed",
             "lamination_astatka_raw_released",
             "qolip_released_on_freeze",
+            "qolip_released_on_return",
         ]
         .iter()
         .any(|key| {

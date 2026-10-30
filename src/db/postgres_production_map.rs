@@ -42,6 +42,7 @@ mod sequence_move;
 mod re_pause;
 mod temporary_pause;
 mod cancel_start;
+mod scanned_wip;
 mod reactivation;
 #[cfg(test)]
 mod sequence_move_tests;
@@ -82,6 +83,9 @@ mod progress_helpers;
 mod output_paddon_assignment;
 #[path = "postgres_production_map/qolip/session_helpers.rs"]
 mod qolip_session_helpers;
+#[path = "postgres_production_map/qolip/returns.rs"]
+mod qolip_returns;
+pub(crate) use qolip_returns::{prepare_qolip_return_tx, release_returned_qolips_tx};
 #[path = "postgres_production_map/qolip/rework_availability.rs"]
 mod qolip_rework_availability;
 #[path = "postgres_production_map/queue/helpers.rs"]
@@ -1327,6 +1331,7 @@ pub(super) async fn apply_queue_progress_tx(
             qolip_start_settings::require_automatic_tx(tx, &confirmation).await?;
         }
         order_control_helpers::validate_execution_controls_tx(tx, write).await?;
+        qolip_returns::validate_returned_qolip_resume_tx(tx, write).await?;
         if matches!(write.event.action,
             crate::core::production_map::queue_state::ApparatusQueueAction::Start
                 | crate::core::production_map::queue_state::ApparatusQueueAction::Resume)
@@ -1390,6 +1395,7 @@ pub(super) async fn apply_queue_progress_tx(
         }
         validate_merge_session_transition_tx(tx, &write.event, write.session.as_ref()).await?;
         let start_checkpoint = cancel_start::before_start_tx(tx, write).await?;
+        let scanned_input = scanned_wip::before_claim_tx(tx, write).await?;
         let raw_material_stock_committed = !write.raw_material_stock_transitions.is_empty();
         let raw_material_outcome = raw_material_stock_helpers::apply_raw_material_stock_transitions_for_event_tx(
             tx,
@@ -1563,6 +1569,7 @@ pub(super) async fn apply_queue_progress_tx(
                 .map_err(|_| ProductionMapError::StoreFailed)?;
         }
         cancel_start::after_start_tx(tx, write, start_checkpoint).await?;
+        scanned_wip::after_claim_tx(tx, write, scanned_input).await?;
         order_control_helpers::finalize_global_stop_tx(tx, &event.order_id).await?;
         if !lifecycle::refresh_recorded_rezka_output_tx(tx, write).await? {
             refresh_production_order_lifecycle_tx(

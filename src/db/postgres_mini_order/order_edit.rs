@@ -302,14 +302,21 @@ pub(super) async fn check_eligible(
             return Err(Error::Locked(activity_reason(table)));
         }
     }
-    let (work_started, material_unavailable) = sqlx::query_as::<_, (bool, bool)>(
-        "SELECT EXISTS(SELECT 1 FROM mini_queue_states WHERE order_id = $1 AND state <> 'pending'),
+    let (work_started, material_unavailable, has_preflight) =
+        sqlx::query_as::<_, (bool, bool, bool)>(
+        "SELECT EXISTS(
+             SELECT 1 FROM mini_queue_states q WHERE q.order_id = $1 AND q.state <> 'pending'
+             AND (q.state <> 'print_preflight' OR NOT EXISTS(
+                 SELECT 1 FROM mini_print_preflight_holds h WHERE h.order_id = q.order_id
+                 AND h.canonical_apparatus_id = q.canonical_apparatus_id
+                 AND h.status IN ('running', 'passed')))),
          EXISTS(SELECT 1 FROM mini_raw_material_stock WHERE reserved_order_id = $1)
          OR EXISTS(
              SELECT 1 FROM mini_raw_material_assignments a
              LEFT JOIN mini_raw_material_stock s ON lower(s.barcode) = lower(a.barcode)
              WHERE a.order_id = $1 AND (s.id IS NULL OR s.status <> 'available'
-                 OR s.reserved_order_id <> '' OR NOT (s.qty > 0 AND s.qty < 'Infinity'::float8)))",
+                 OR s.reserved_order_id <> '' OR NOT (s.qty > 0 AND s.qty < 'Infinity'::float8))),
+         EXISTS(SELECT 1 FROM mini_queue_states WHERE order_id = $1 AND state = 'print_preflight')",
     )
     .bind(id)
     .fetch_one(&mut **tx)
@@ -324,7 +331,14 @@ pub(super) async fn check_eligible(
             "Ulangan xomashyo ishlatishga olingan, tugagan yoki ombordagi yozuvi mavjud emas. Xomashyo holatini tekshiring. Faqat ishlatish boshlanmagan xomashyo bilan buyurtmani tahrirlash mumkin",
         ));
     }
-    check_queues(tx, id).await
+    // A colour trial reserves the apparatus and becomes first actionable, but
+    // has no production session or material use. The history/state guards
+    // above remain authoritative, including at save time under database locks.
+    if has_preflight {
+        Ok(())
+    } else {
+        check_queues(tx, id).await
+    }
 }
 
 async fn check_queues(tx: &mut Transaction<'_, Postgres>, id: &str) -> Result<(), Error> {
@@ -442,6 +456,25 @@ pub(super) async fn save(
     .fetch_one(&mut *tx)
     .await?;
     super::super::postgres_production_map::save_edited_map_tx(&mut tx, map).await?;
+    if crate::core::order_edit::print_preflight_requires_recheck(&current.template, template) {
+        // The shared order advisory lock also serializes preflight decisions
+        // and Start. Retain the reservation, but retire the old specification's
+        // decision version. Quantity-only edits preserve the colour result.
+        sqlx::query(
+            "UPDATE mini_print_preflight_holds h SET status = 'running', revision = revision + 1,
+             actor_role = $2, actor_ref = $3, actor_display_name = $4,
+             updated_at_unix = EXTRACT(EPOCH FROM now())::BIGINT
+             WHERE h.order_id = $1 AND h.status IN ('running', 'passed')
+             AND EXISTS(SELECT 1 FROM mini_queue_states q WHERE q.order_id = h.order_id
+                 AND q.canonical_apparatus_id = h.canonical_apparatus_id AND q.state = 'print_preflight')",
+        )
+        .bind(&map.id)
+        .bind(&actor.role)
+        .bind(&actor.ref_)
+        .bind(&actor.display_name)
+        .execute(&mut *tx)
+        .await?;
+    }
     let payload = serde_json::to_value(template).map_err(|_| Error::Store)?;
     let audit = serde_json::json!({ "actor": actor, "before": current.template, "after": template, "revision": current.revision + 1, "restrictions": current.restrictions });
     sqlx::query("UPDATE mini_orders SET calculation_json = $2, calculation_revision = calculation_revision + 1,

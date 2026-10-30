@@ -179,6 +179,111 @@ async fn raw_material_receipt_keeps_preparation_order_scope_and_other_warehouse_
 }
 
 #[tokio::test]
+async fn preparation_inventory_assignment_candidates_follow_scope_and_roll_policy() {
+    use crate::core::apparatus_standard::CanonicalApparatusService;
+    use crate::core::preparation::MaterialResponsibilityAssign;
+    use crate::db::postgres::{apply_foundation_migration, apply_postgres_migrations_through_version};
+    use crate::db::postgres_canonical_apparatus::PostgresCanonicalApparatusRepository;
+    use crate::db::postgres_preparation::PostgresPreparationStore;
+    use sqlx::{PgPool, postgres::PgConnectOptions};
+
+    let url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
+        .expect("isolated test database URL");
+    let admin_db = PgPool::connect(&url).await.unwrap();
+    let db = format!("mini_rs_erp_test_prep_assignment_{:016x}", rand::random::<u64>());
+    sqlx::query(&format!("CREATE DATABASE {db} TEMPLATE template0"))
+        .execute(&admin_db).await.unwrap();
+    let pool = PgPool::connect_with(url.parse::<PgConnectOptions>().unwrap().database(&db))
+        .await.unwrap();
+    apply_postgres_migrations_through_version(&pool, "0121").await.unwrap();
+    CanonicalApparatusService::new(Arc::new(
+        PostgresCanonicalApparatusRepository::new(pool.clone()),
+    )).bootstrap_factory_defaults().await.unwrap();
+    apply_foundation_migration(&pool).await.unwrap();
+    sqlx::raw_sql(r#"
+        INSERT INTO mini_system_users(id,role,name,phone)
+            VALUES('prep-assignment','tayyorlov_masteri','Master','901234599');
+        INSERT INTO mini_calculate_materials(id,lower_name,payload_json)
+            VALUES('prep-film','prepfilm','{"id":"prep-film","name":"PrepFilm","active":true}');
+        INSERT INTO mini_orders(id,code,order_number,product_name) VALUES
+            ('zakaz-prep-allowed','1001','1001','Allowed'),
+            ('zakaz-prep-denied','1002','1002','Denied');
+        INSERT INTO mini_order_products(id,order_id,product_name,layers_json) VALUES
+            ('prep-product-allowed','zakaz-prep-allowed','Allowed','[{"material_id":"prep-film"}]'),
+            ('prep-product-denied','zakaz-prep-denied','Denied','[{"material_id":"other-film"}]');
+    "#).execute(&pool).await.unwrap();
+    let preparation = PostgresPreparationStore::new(pool.clone());
+    preparation.assign_responsibility(MaterialResponsibilityAssign {
+        principal_ref: "prep-assignment".into(), material_id: "prep-film".into(),
+    }).await.unwrap();
+    let stock = Arc::new(RawMaterialStockLookup::default());
+    stock.insert_stock("QR-PREP-WIDE", "ROLL-1000", "CPP 1530/25", 12.0).await;
+    let mut state = test_state();
+    state.preparation = Some(preparation);
+    state.gscale = GscaleService::new().with_receipt_store(stock);
+    assign_warehouse_to_principal(&state, PrincipalRole::TayyorlovMasteri,
+        "prep-assignment", "Kalidor").await;
+    state.admin.upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+        principal_role: PrincipalRole::MaterialTaminotchi,
+        principal_ref: "material-assignment".into(),
+        role_id: "material_taminotchi".into(),
+        assigned_apparatus: vec!["apparatus:default:bosma_7".into()],
+        assigned_item_groups: vec!["Rulon".into()],
+    }).await.unwrap();
+    assign_warehouse_to_principal(&state, PrincipalRole::MaterialTaminotchi,
+        "material-assignment", "Kalidor").await;
+    let admin = session(&state, PrincipalRole::Admin).await;
+    let master = session_for(&state, PrincipalRole::TayyorlovMasteri, "prep-assignment").await;
+    let material = session_for(&state, PrincipalRole::MaterialTaminotchi, "material-assignment").await;
+    let router = build_router(state.clone());
+    let apparatus = "apparatus:default:bosma_7";
+    for (id, code) in [("zakaz-prep-allowed", "1001"), ("zakaz-prep-denied", "1002")] {
+        let response = router.clone().oneshot(request_with_body("PUT",
+            "/v1/mobile/admin/production-maps", &admin,
+            &pechat_order_map_json_with_dims(id, id, code, apparatus, 7, 765.0),
+        )).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    let response = router.clone().oneshot(request_with_body("PUT",
+        "/v1/mobile/admin/raw-material-rules", &admin,
+        &canonical_requirement_set_material_policy_body(apparatus, 1, &["Rulon"], true),
+    )).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let path = "/v1/mobile/admin/raw-material-assignments/candidate-orders?barcode=QR-PREP-WIDE";
+    let response = router.clone().oneshot(request("GET", path, &master)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let candidates = json_body(response).await;
+    assert_eq!(candidates.as_array().unwrap().len(), 1);
+    assert_eq!(candidates[0]["order"]["map"]["id"], "zakaz-prep-allowed");
+    let response = router.clone().oneshot(request("GET", path, &material)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(json_body(response).await.as_array().unwrap().is_empty());
+
+    for (order_id, expected) in [
+        ("zakaz-prep-denied", StatusCode::FORBIDDEN),
+        ("zakaz-prep-allowed", StatusCode::OK),
+    ] {
+        let body = serde_json::json!({"order_id": order_id, "barcode": "QR-PREP-WIDE", "apparatus": apparatus}).to_string();
+        let response = router.clone().oneshot(request_with_body("POST",
+            "/v1/mobile/admin/raw-material-assignments", &master, &body,
+        )).await.unwrap();
+        assert_eq!(response.status(), expected, "{order_id}");
+    }
+    let response = router.clone().oneshot(request_with_body("DELETE",
+        "/v1/mobile/admin/raw-material-assignments", &master,
+        r#"{"order_id":"zakaz-prep-allowed","barcode":"QR-PREP-WIDE"}"#,
+    )).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    drop(router);
+    drop(state);
+    pool.close().await;
+    sqlx::query(&format!("DROP DATABASE {db}")).execute(&admin_db).await.unwrap();
+    admin_db.close().await;
+}
+
+#[tokio::test]
 async fn preparation_warehouse_assignment_is_admin_only_and_visible_to_master() {
     let state = test_state();
     let admin = session(&state, PrincipalRole::Admin).await;

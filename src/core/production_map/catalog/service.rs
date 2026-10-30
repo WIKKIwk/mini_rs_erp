@@ -329,6 +329,7 @@ impl ProductionMapService {
     async fn reject_started_stage_changes(
         &self,
         next: &ProductionMapDefinition,
+        allow_preflight_edit: bool,
     ) -> Result<(), ProductionMapError> {
         let Some(previous) = self.raw_map(&next.id).await? else {
             return Ok(());
@@ -348,8 +349,10 @@ impl ProductionMapService {
             let Some(state) = states.get(order_id) else {
                 continue;
             };
-            if queue_state::ApparatusQueueOrderState::parse(state)
-                != Some(queue_state::ApparatusQueueOrderState::Pending)
+            let state = queue_state::ApparatusQueueOrderState::parse(state);
+            if state != Some(queue_state::ApparatusQueueOrderState::Pending)
+                && !(allow_preflight_edit
+                    && state == Some(queue_state::ApparatusQueueOrderState::PrintPreflight))
             {
                 insert_apparatus_id(&mut started_apparatus, &apparatus);
             }
@@ -462,13 +465,30 @@ impl ProductionMapService {
     /// Validation shared by ordinary saves and atomic Telegram order completion.
     pub(crate) async fn prepare_map_for_save(
         &self,
+        map: ProductionMapDefinition,
+    ) -> Result<ProductionMapSaved, ProductionMapError> {
+        self.prepare_map(map, false).await
+    }
+
+    /// The dedicated order editor rechecks work/material eligibility under
+    /// database locks and invalidates colour approval when print inputs change.
+    pub(crate) async fn prepare_map_for_order_edit(
+        &self,
+        map: ProductionMapDefinition,
+    ) -> Result<ProductionMapSaved, ProductionMapError> {
+        self.prepare_map(map, true).await
+    }
+
+    async fn prepare_map(
+        &self,
         mut map: ProductionMapDefinition,
+        allow_preflight_edit: bool,
     ) -> Result<ProductionMapSaved, ProductionMapError> {
         normalize_map(&mut map);
         compile_map(&map)?;
         self.validate_and_normalize_map_apparatus(&mut map).await?;
         let program = compile_map(&map)?;
-        self.reject_started_stage_changes(&map).await?;
+        self.reject_started_stage_changes(&map, allow_preflight_edit).await?;
         Ok(ProductionMapSaved { map, program })
     }
 
@@ -485,7 +505,7 @@ impl ProductionMapService {
             compile_map(&map)?;
             self.validate_and_normalize_map_apparatus(&mut map).await?;
             let program = compile_map(&map)?;
-            self.reject_started_stage_changes(&map).await?;
+            self.reject_started_stage_changes(&map, false).await?;
             saved.push(ProductionMapSaved {
                 map: map.clone(),
                 program,

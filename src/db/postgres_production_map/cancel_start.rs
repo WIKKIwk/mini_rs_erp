@@ -20,6 +20,66 @@ fn text<'a>(value: &'a Value, key: &str) -> &'a str {
     value[key].as_str().unwrap_or_default()
 }
 
+pub(super) async fn restore_scanned_input_tx(
+    tx: &mut Transaction<'_, Postgres>, kind: &str, batch: &str, before: &Value,
+) -> Result<(), ProductionMapError> {
+    let kind=match kind {
+        "progress_batch" => Kind::Progress,
+        "opening_wip" => Kind::Opening,
+        _ => return Err(ProductionMapError::QueueActionNotAllowed),
+    };
+    restore(tx,&Resource { kind,key:batch.into(),before:before.clone(),after:Value::Null,last_material_event:None }).await
+}
+
+/// The final input may release a whole unused Start, including its material
+/// claims. All resource witnesses are rechecked under the same transaction.
+pub(super) async fn can_finish_scanned_session_tx(
+    tx: &mut Transaction<'_, Postgres>, session: &OrderRunSession,
+) -> Result<bool, ProductionMapError> {
+    let Ok(checkpoint)=serde_json::from_value::<Checkpoint>(session.payload_json[domain::CHECKPOINT].clone())
+        else { return Ok(false); };
+    let Some(control)=checkpoint.control.as_ref() else { return Ok(false); };
+    if control.worker_ref!=session.worker_ref || control.session_id!=session.session_id { return Ok(false); }
+    let outputs: bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM mini_progress_batches WHERE session_id=$1)")
+        .bind(&session.session_id).fetch_one(&mut **tx).await.map_err(failed)?;
+    let map: Value=sqlx::query_scalar("SELECT map_json FROM mini_production_maps WHERE id=$1")
+        .bind(&session.order_id).fetch_one(&mut **tx).await.map_err(failed)?;
+    if outputs || map!=checkpoint.map
+        || assignments(tx,&session.apparatus,&session.order_id).await?!=checkpoint.assignments
+        || reports(tx,&session.apparatus,&session.order_id).await?!=checkpoint.reports
+    { return Ok(false); }
+    let schedules=checkpoint.resources.iter().filter(|r| matches!(r.kind,Kind::Schedule))
+        .map(|r| r.key.clone()).collect::<Vec<_>>();
+    if schedule_ids(tx,&session.apparatus,&session.order_id).await?!=schedules { return Ok(false); }
+    for resource in &checkpoint.resources {
+        if matches!(resource.kind,Kind::Progress|Kind::Opening|Kind::Intake) { continue; }
+        if row(tx,&resource.kind,&resource.key).await?!=resource.after
+            || matches!(resource.kind,Kind::Stock)
+                && last_material_event(tx,&resource.key).await?!=resource.last_material_event
+        { return Ok(false); }
+    }
+    Ok(true)
+}
+
+pub(super) async fn finish_scanned_session_tx(
+    tx: &mut Transaction<'_, Postgres>, session: &OrderRunSession, actor: &QueueActionActor, token: &str,
+) -> Result<State, ProductionMapError> {
+    if !can_finish_scanned_session_tx(tx,session).await? { return Err(ProductionMapError::QueueActionNotAllowed); }
+    let checkpoint: Checkpoint=serde_json::from_value(session.payload_json[domain::CHECKPOINT].clone())
+        .map_err(|_|ProductionMapError::QueueActionNotAllowed)?;
+    for resource in &checkpoint.resources {
+        if matches!(resource.kind,Kind::Progress|Kind::Opening|Kind::Intake) { continue; }
+        restore(tx,resource).await?;
+        if matches!(resource.kind,Kind::Stock) {
+            record_material_return(tx,resource,&format!("return-wip:{token}"),&checkpoint.start_event,
+                &session.order_id,&session.apparatus,actor).await?;
+        }
+    }
+    sqlx::query("DELETE FROM mini_order_run_sessions WHERE session_id=$1")
+        .bind(&session.session_id).execute(&mut **tx).await.map_err(failed)?;
+    Ok(checkpoint.control.ok_or(ProductionMapError::QueueActionNotAllowed)?.previous_state)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn execute(
     store: &PostgresProductionMapStore,

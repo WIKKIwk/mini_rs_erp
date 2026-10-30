@@ -11,6 +11,8 @@ fn production_routes() -> Router<AppState> {
         .route("/v1/mobile/admin/production-maps/re-pause", post(admin::production_map_re_pause))
         .route("/v1/mobile/admin/production-maps/temporary-pause", post(admin::production_map_temporary_pause))
         .route("/v1/mobile/admin/production-maps/cancel-start", post(admin::production_maps::production_map_cancel_start))
+        .route("/v1/mobile/admin/production-maps/scanned-wips", get(admin::production_maps::production_map_scanned_wips))
+        .route("/v1/mobile/admin/production-maps/scanned-wips/return", post(admin::production_maps::production_map_return_scanned_wip))
         .route(
             "/v1/mobile/admin/production-maps/order-alert",
             any(admin::production_map_order_alert),

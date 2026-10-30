@@ -11,6 +11,7 @@ mod order_control;
 mod pending_move;
 mod print_dispatch;
 mod print_preflight;
+mod qolip_returns;
 mod queue_controls;
 mod queue_reorder;
 mod service_flow;

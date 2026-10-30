@@ -113,4 +113,39 @@ async fn endpoint_requires_worker_authority_and_rejects_client_metrics() {
         f.batch().await.wip_status,
         OrderProgressBatchWipStatus::Waiting
     );
+
+    // The history is an independent, non-cached read. Its return command uses
+    // only server-issued authority and rejects client-supplied work metrics.
+    let fresh=f.start().await;
+    let uri=format!("/v1/mobile/admin/production-maps/scanned-wips?apparatus={}&order_id={}&stage_node_id=work",f.machine,f.order);
+    for (token,status) in [(None,401),(Some(&tokens[1]),403)] {
+        let mut request=Request::builder().uri(&uri);
+        if let Some(token)=token { request=request.header("Authorization",format!("Bearer {token}")); }
+        let response=app.clone().oneshot(request.body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(response.status().as_u16(),status);
+    }
+    let response=app.clone().oneshot(Request::builder().uri(&uri)
+        .header("Authorization",format!("Bearer {}",tokens[0])).body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(response.status().as_u16(),200);
+    assert_eq!(response.headers()["cache-control"],"no-store");
+    let bytes=axum::body::to_bytes(response.into_body(),1024*1024).await.unwrap();
+    let history:Value=serde_json::from_slice(&bytes).unwrap();
+    let item=history["items"].as_array().unwrap().iter()
+        .find(|row|row["session_id"]==fresh.session_id).unwrap();
+    let target=json!({"apparatus":f.machine,"order_id":f.order,"stage_node_id":"work",
+        "session_id":fresh.session_id,"batch_id":f.original.batch_id,"token":item["return_token"]});
+    for (token,body,status) in [
+        (None,target.clone(),401),
+        (Some(&tokens[1]),target.clone(),403),
+        (Some(&tokens[0]),{let mut b=target.clone();b["produced_qty"]=json!(0);b},400),
+        (Some(&tokens[0]),target.clone(),200),
+        (Some(&tokens[0]),target.clone(),200),
+    ] {
+        let mut request=Request::builder().method("POST")
+            .uri("/v1/mobile/admin/production-maps/scanned-wips/return").header("Content-Type","application/json");
+        if let Some(token)=token { request=request.header("Authorization",format!("Bearer {token}")); }
+        let response=app.clone().oneshot(request.body(Body::from(body.to_string())).unwrap()).await.unwrap();
+        assert_eq!(response.status().as_u16(),status);
+    }
+    assert_eq!(f.batch().await.wip_status,OrderProgressBatchWipStatus::Waiting);
 }

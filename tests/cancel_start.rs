@@ -9,6 +9,8 @@ use queue_state::{ApparatusQueueAction as Action, ApparatusQueueOrderState as St
 mod http;
 #[path = "cancel_start/resources.rs"]
 mod resources;
+#[path = "cancel_start/scanned_wip.rs"]
+mod scanned_wip;
 use serde_json::{Value, json};
 use std::sync::Arc;
 
@@ -28,10 +30,18 @@ fn actor() -> QueueActionActor {
 }
 
 async fn pool() -> sqlx::PgPool {
+    pool_for_history(false).await
+}
+
+async fn pool_for_history(history: bool) -> sqlx::PgPool {
     static DATABASE: tokio::sync::OnceCell<String> = tokio::sync::OnceCell::const_new();
+    // Legacy cancellation fixtures deliberately retain incomplete/stale runs.
+    // Keep the new history flows in a separate disposable database.
+    static HISTORY_DATABASE: tokio::sync::OnceCell<String> = tokio::sync::OnceCell::const_new();
     let url = std::env::var("CANCEL_START_TEST_DATABASE_URL")
         .expect("explicit disposable PostgreSQL URL");
-    let database = DATABASE
+    let databases = if history { &HISTORY_DATABASE } else { &DATABASE };
+    let database = databases
         .get_or_init(|| async {
             let admin = sqlx::PgPool::connect(&url).await.unwrap();
             let name = format!("cancel_start_{:032x}", rand::random::<u128>());
@@ -103,6 +113,12 @@ struct Fixture {
 impl Fixture {
     async fn new(machine: &str) -> Self {
         let pool = pool().await;
+        Self::with_pool(machine,pool).await
+    }
+    async fn new_scanned(machine: &str) -> Self {
+        Self::with_pool(machine,pool_for_history(true).await).await
+    }
+    async fn with_pool(machine: &str, pool: sqlx::PgPool) -> Self {
         let store = Arc::new(PostgresProductionMapStore::new(pool.clone()));
         let service = ProductionMapService::new(
             store.clone(),
