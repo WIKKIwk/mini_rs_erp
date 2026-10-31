@@ -223,7 +223,7 @@ async fn execute_queue_action(
             .warehouse_events
             .notify_updated(&warehouse, "raw_material_stock");
     }
-    let prints = dispatch_progress_label_prints(
+    let mut prints = dispatch_progress_label_prints(
         state.gscale.clone(),
         print_requests,
         &print.print_transport,
@@ -231,6 +231,17 @@ async fn execute_queue_action(
         &order_id,
         action,
     );
+    if !prints.is_empty() && print.print_transport.trim().eq_ignore_ascii_case("offline") {
+        if let Ok(Some(map)) = state.production_maps.raw_map(&order_id).await {
+            if let Some(code) = production_map_print_order_code(&map) {
+                for print in &mut prints {
+                    if print.get("ok").and_then(serde_json::Value::as_bool) == Some(true) {
+                        print["order_code"] = serde_json::json!(code);
+                    }
+                }
+            }
+        }
+    }
     let print = prints.first().cloned().unwrap_or(serde_json::Value::Null);
     let order_control = result.order_control;
     let work_activity = result.session.as_ref().and_then(|session| {

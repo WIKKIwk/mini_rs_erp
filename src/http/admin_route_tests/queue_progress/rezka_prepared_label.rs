@@ -37,13 +37,17 @@ impl PreparedLabelFixture {
         let admin = session(&state, PrincipalRole::Admin).await;
         let worker = session_for(&state, PrincipalRole::Aparatchi, "prepared-label-worker").await;
         let router = build_router(state);
+        let mut map: serde_json::Value = serde_json::from_str(&pechat_order_map_json(
+            ORDER, "Prepared label rolls", "9531", APPARATUS,
+        )).unwrap();
+        map["code"] = serde_json::json!("ISH-42");
         let saved = router
             .clone()
             .oneshot(request_with_body(
                 "PUT",
                 "/v1/mobile/admin/production-maps",
                 &admin,
-                &pechat_order_map_json(ORDER, "Prepared label rolls", "9531", APPARATUS),
+                &map.to_string(),
             ))
             .await
             .unwrap();
@@ -136,6 +140,7 @@ fn assert_prepared_label_matches_batch(saved: &serde_json::Value) {
     assert!(!print["qr_payload"].as_str().unwrap().is_empty());
     assert_eq!(print["apparatus"], APPARATUS);
     assert_eq!(print["label_kind"], "progress");
+    assert_eq!(print["order_code"], "ISH-42");
     assert_eq!(print["printer"], "xp-p323b");
     assert_eq!(print["print_mode"], "label");
     assert_eq!(print["print_count"], 1, "one label for one saved roll");

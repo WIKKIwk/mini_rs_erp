@@ -6,6 +6,16 @@ use crate::core::production_map::{ProductionMapDefinition, ProductionMapSaved};
 
 use super::*;
 
+pub(super) fn production_map_print_order_code(map: &ProductionMapDefinition) -> Option<String> {
+    [map.code.trim(), map.order_number.trim()]
+        .into_iter()
+        .find(|value| !value.is_empty())
+        .or_else(|| {
+            map.id.trim().strip_prefix("zakaz-").map(str::trim).filter(|value| !value.is_empty())
+        })
+        .map(str::to_owned)
+}
+
 pub(super) fn effective_progress_qr_payload<'a>(
     qr_payload: &'a str,
     legacy_progress_qr: &'a str,
@@ -174,6 +184,19 @@ mod customer_resolution_tests {
             "order_number": "8768"
         }))
         .expect("test production map")
+    }
+
+    #[test]
+    fn label_order_code_matches_the_order_screen_fallbacks() {
+        let mut map = test_map();
+        map.code = " WORK-42 ".into();
+        assert_eq!(production_map_print_order_code(&map).as_deref(), Some("WORK-42"));
+        map.code.clear();
+        assert_eq!(production_map_print_order_code(&map).as_deref(), Some("8768"));
+        map.order_number.clear();
+        assert_eq!(production_map_print_order_code(&map).as_deref(), Some("8768"));
+        map.id = "internal-id".into();
+        assert_eq!(production_map_print_order_code(&map), None);
     }
 
     #[test]

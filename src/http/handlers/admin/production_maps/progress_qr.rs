@@ -431,15 +431,16 @@ pub async fn production_map_progress_qr_reprint(
         .display
         .display_name
         .clone();
-    let item_name = match state.production_maps.raw_map(&batch.order_id).await {
-        Ok(Some(order_map)) if !order_map.products.is_empty() => batch.label_item_name.clone(),
-        Ok(Some(order_map)) => crate::core::production_map::progress_label_item_name(
-            &order_map,
+    let order_map = state.production_maps.raw_map(&batch.order_id).await
+        .map_err(production_map_error)?;
+    let item_name = match order_map.as_ref() {
+        Some(order_map) if !order_map.products.is_empty() => batch.label_item_name.clone(),
+        Some(order_map) => crate::core::production_map::progress_label_item_name(
+            order_map,
             &batch.apparatus,
             batch.action,
         ),
-        Ok(None) => batch.label_item_name.clone(),
-        Err(error) => return Err(production_map_error(error)),
+        None => batch.label_item_name.clone(),
     };
     let request = progress_reprint_request(&input, &batch, &item_name, &apparatus_display_name);
     let print_result = if input.print_transport.trim().eq_ignore_ascii_case("offline") {
@@ -447,7 +448,7 @@ pub async fn production_map_progress_qr_reprint(
     } else {
         state.gscale.print_progress_label(request).await
     };
-    let print = match print_result {
+    let mut print = match print_result {
         Ok(response) => serde_json::to_value(response).unwrap_or(serde_json::Value::Null),
         Err(error) => {
             tracing::warn!(
@@ -460,6 +461,13 @@ pub async fn production_map_progress_qr_reprint(
             progress_print_failure_json(error)
         }
     };
+    if input.print_transport.trim().eq_ignore_ascii_case("offline")
+        && print.get("ok").and_then(serde_json::Value::as_bool) == Some(true)
+    {
+        if let Some(code) = order_map.as_ref().and_then(production_map_print_order_code) {
+            print["order_code"] = serde_json::json!(code);
+        }
+    }
     let ok = print
         .get("ok")
         .and_then(serde_json::Value::as_bool)
