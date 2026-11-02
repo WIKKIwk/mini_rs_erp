@@ -138,6 +138,7 @@ impl ProductionMapService {
                     .map_err(|_| ProductionMapError::OpeningWipInvalidInput)?;
                 let batch_id = format!("{intake_id}:roll-{sequence_no}");
                 Ok(OpeningWipBatch {
+                    parent_batch_id: String::new(),
                     qr_payload: progress_qr_payload(&batch_id),
                     batch_id,
                     intake_id: intake_id.clone(),

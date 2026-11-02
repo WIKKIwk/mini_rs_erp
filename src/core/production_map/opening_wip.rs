@@ -131,7 +131,7 @@ pub struct OpeningWipCreateInput {
 pub struct OpeningWipIntake {
     pub intake_id: String,
     pub idempotency_key: String,
-    #[serde(skip_serializing)]
+    #[serde(default, skip_serializing)]
     pub request_fingerprint: String,
     pub order_id: String,
     pub entry_apparatus: String,
@@ -153,6 +153,8 @@ pub struct OpeningWipIntake {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OpeningWipBatch {
     pub batch_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub parent_batch_id: String,
     pub intake_id: String,
     pub order_id: String,
     pub sequence_no: i32,

@@ -1445,6 +1445,9 @@ impl ProductionMapService {
             None
         };
         if let Some(record) = opening_record {
+            if temporary_session.as_ref().is_some_and(lamination_input_was_released) {
+                return self.build_resumed_opening_lamination_input(context, record).await;
+            }
                 let current = self
                     .store
                     .active_order_run_session(apparatus, order_id)
@@ -1792,6 +1795,128 @@ impl ProductionMapService {
 }
 
 impl ProductionMapService {
+    /// A returned opening roll retains its passport while becoming the next
+    /// physical input of the released lamination session.
+    async fn build_resumed_opening_lamination_input(
+        &self,
+        context: ProgressBuildContext<'_>,
+        record: OpeningWipBatchRecord,
+    ) -> Result<QueueProgressRecords, ProductionMapError> {
+        let ProgressBuildContext {
+            apparatus,
+            order_id,
+            order_map,
+            action,
+            actor,
+            canonical,
+            now,
+        } = context;
+        let current = self
+            .store
+            .active_order_run_session(apparatus, order_id)
+            .await?
+            .ok_or(ProductionMapError::ProgressBatchNotResumable)?;
+        let shift_closed = current
+            .payload_json
+            .get("lamination_astatka_shift_closed")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true);
+        if !apparatus::uses_lamination_workflow(canonical)
+            || !lamination_input_was_released(&current)
+            || record.intake.status != OpeningWipIntakeStatus::Confirmed
+            || record.intake.order_id != order_id
+            || record.batch.order_id != order_id
+            || record.batch.wip_status != OpeningWipBatchStatus::Waiting
+            || (!shift_closed
+                && (record.batch.parent_batch_id.is_empty()
+                    || current.payload_json["layer_remainder_detached_input_batch_id"].as_str()
+                        != Some(record.batch.parent_batch_id.as_str())))
+        {
+            return Err(ProductionMapError::ProgressBatchNotResumable);
+        }
+        let stage = Self::opening_wip_target_stage(
+            order_map,
+            &record.intake,
+            apparatus,
+            &current.stage_node_id,
+        )
+        .ok_or(ProductionMapError::ProgressBatchNotResumable)?;
+        let mut links = progress_links_from_opening_wip(&record, &stage.node_id);
+        links.stage_node_id = current.stage_node_id.clone();
+        let mut payload = resumed_handoff_session_payload(&current, &links);
+        let mut inputs = order_run_input_links_from_payload(&payload)
+            .map_err(|_| ProductionMapError::ProgressBatchNotResumable)?;
+        if inputs.iter().any(|link| {
+            link.status == OrderRunInputStatus::InUse
+                || (link.source_kind == OrderRunInputSourceKind::OpeningWip
+                    && link.input_batch_id == record.batch.batch_id)
+        }) {
+            return Err(ProductionMapError::ProgressBatchNotResumable);
+        }
+        let sequence_no = inputs
+            .iter()
+            .map(|link| link.sequence_no)
+            .max()
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or(ProductionMapError::ProgressInputInvalid)?;
+        inputs.push(OrderRunInputLink {
+            input_batch_id: record.batch.batch_id.clone(),
+            input_qr_payload: record.batch.qr_payload.clone(),
+            source_apparatus: links.apparatus.clone(),
+            source_kind: OrderRunInputSourceKind::OpeningWip,
+            stage_node_id: current.stage_node_id.clone(),
+            sequence_no,
+            status: OrderRunInputStatus::InUse,
+            linked_at_unix: now,
+            processed_at_unix: None,
+        });
+        write_order_run_input_links(&mut payload, &inputs);
+        if let Some(object) = payload.as_object_mut() {
+            for field in [
+                "layer_remainder_detached_input_batch_id",
+                "lamination_astatka_shift_closed",
+                "lamination_astatka_raw_released",
+            ] {
+                object.remove(field);
+            }
+        }
+        let session = OrderRunSession {
+            status: OrderRunStatus::Active,
+            worker_role: actor.role.trim().into(),
+            worker_ref: actor.ref_.trim().into(),
+            worker_display_name: actor.display_name.trim().into(),
+            updated_at_unix: now,
+            payload_json: payload,
+            ..current
+        };
+        let mut event = zero_quantity_event(
+            ProgressRecordContext {
+                session: &session,
+                apparatus,
+                order_id,
+                action,
+                actor,
+            },
+            record.batch.batch_id.clone(),
+            record.batch.qr_payload.clone(),
+            resume_event_payload(),
+        );
+        event.payload_json["opening_wip_input_expected_record"] =
+            serde_json::to_value(&record).map_err(|_| ProductionMapError::StoreFailed)?;
+        event.payload_json["wip_input_map_fingerprint"] =
+            serde_json::json!(super::wip_route::production_map_fingerprint(order_map));
+        let input = opening_wip_batch_in_use(record.batch, apparatus, &session.session_id, now);
+        Ok(QueueProgressRecords {
+            session: Some(session),
+            progress_event: Some(event),
+            progress_batch: None,
+            progress_batches: Vec::new(),
+            progress_batch_updates: Vec::new(),
+            opening_wip_batch_updates: vec![input],
+        })
+    }
+
     /// Claim the next physical input after a lamination shift returned or
     /// exhausted its mounted roll. This preserves the upstream producer.
     async fn build_resumed_lamination_input(

@@ -193,3 +193,79 @@ async fn disabling_remainder_labels_keeps_the_ordinary_output_label() {
     assert_eq!(value["prints"][0]["qr_payload"], output_qr);
     assert_eq!(value["remainders"].as_array().unwrap().len(), 2);
 }
+
+#[tokio::test]
+async fn opening_remainder_label_keeps_the_original_passport_and_wip_switch() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = AppState::new(config(directory.path()));
+    state.apparatus.bootstrap_factory_defaults().await.unwrap();
+    state.production_maps.upsert_map(serde_json::from_value(json!({
+        "id":"zakaz-label","title":"Printed PET","product_code":"PET","order_number":"0042",
+        "customer_name":"Original Customer",
+        "nodes":[{"id":"s","kind":"start","title":"Start"},
+            {"id":"p","kind":"apparatus","title":"Print","apparatus_id":"apparatus:default:bosma_8"},
+            {"id":"l","kind":"apparatus","title":"Lam","apparatus_id":"apparatus:default:asset-007"},
+            {"id":"e","kind":"end","title":"End"}],
+        "edges":[{"from":"s","to":"p"},{"from":"p","to":"l"},{"from":"l","to":"e"}]
+    })).unwrap()).await.unwrap();
+    let mut saved = result();
+    saved.remainders.truncate(1);
+    let remainder = &mut saved.remainders[0];
+    remainder.source_kind = "opening_wip".into();
+    remainder.source_id = "original-opening".into();
+    remainder.progress_batch = None;
+    remainder.opening_wip = Some(serde_json::from_value(json!({
+        "intake":{"intake_id":"original-intake","idempotency_key":"original-key","request_fingerprint":"original",
+            "order_id":"zakaz-label","entry_apparatus":"apparatus:default:bosma_8","source_operation":"print",
+            "source_apparatus":"apparatus:default:bosma_8","current_location":"","resume_apparatus":"",
+            "resume_stage_node_id":"p","history_status":"unavailable_before_cutover","status":"confirmed",
+            "actor":{"role":"admin","ref_":"original-owner","display_name":"Original Owner"},
+            "created_at_unix":1,"updated_at_unix":1},
+        "batch":{"batch_id":"child-opening","parent_batch_id":"original-opening","intake_id":"original-intake",
+            "order_id":"zakaz-label","sequence_no":2,"qr_payload":remainder.qr_payload,
+            "quantity_basis":"estimated","quantity":600,"uom":"m","finished_goods_meter":600,
+            "finished_goods_kg":22,"bobina_kg":2,"wip_status":"waiting","label_item_code":"PET",
+            "label_item_name":"Printed PET","created_at_unix":3,"updated_at_unix":3}
+    })).unwrap());
+    for enabled in [false, true] {
+        state
+            .production_maps
+            .update_lamination_label_settings(
+                LaminationLabelSettingsPatch {
+                    print_wip_remainder_labels: Some(enabled),
+                    print_film_remainder_labels: Some(!enabled),
+                },
+                &QueueActionActor {
+                    role: "admin".into(),
+                    ref_: "admin".into(),
+                    display_name: "Admin".into(),
+                },
+            )
+            .await
+            .unwrap();
+        let value = response(&state, saved.clone()).await;
+        assert_eq!(value["ok"], true);
+        assert_eq!(
+            value["remainders"][0]["opening_wip"]["batch"]["parent_batch_id"],
+            "original-opening"
+        );
+        assert_eq!(
+            value["prints"].as_array().unwrap().len(),
+            usize::from(enabled)
+        );
+        if enabled {
+            let label = &value["prints"][0];
+            assert_eq!(label["ok"], true, "{label}");
+            assert_eq!(label["label_kind"], "opening_wip");
+            assert_eq!(label["executor_name"], "Original Owner");
+            assert_eq!(label["customer_name"], "Original Customer");
+            assert_eq!(label["order_code"], "0042");
+            assert_eq!(label["apparatus"], "apparatus:default:bosma_8");
+            assert_eq!(label["gross_qty"], 22.0);
+            assert_eq!(label["tare_kg"], 2.0);
+            assert_eq!(label["net_qty"], 20.0);
+            assert_eq!(label["progress_qty"], 600.0);
+            assert_eq!(label["completed_at_unix"], 3);
+        }
+    }
+}

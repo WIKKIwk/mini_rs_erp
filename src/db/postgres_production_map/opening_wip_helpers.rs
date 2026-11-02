@@ -1,4 +1,4 @@
-use sqlx::{PgPool, Postgres, Transaction};
+use sqlx::{PgConnection, PgPool, Postgres, Transaction};
 
 use crate::core::production_map::{
     OpeningWipBatch, OpeningWipBatchRecord, OpeningWipBatchStatus, OpeningWipCreateWrite,
@@ -31,6 +31,8 @@ struct OpeningWipIntakeRow {
 #[derive(sqlx::FromRow)]
 struct OpeningWipBatchRow {
     batch_id: String,
+    parent_batch_id: Option<String>,
+    revision: i64,
     intake_id: String,
     order_id: String,
     sequence_no: i32,
@@ -137,8 +139,36 @@ pub(super) async fn load_opening_wip_batch(
     batch_id: &str,
     qr_payload: &str,
 ) -> Result<Option<OpeningWipBatchRecord>, ProductionMapError> {
+    let mut connection = pool
+        .acquire()
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    Ok(
+        load_opening_wip_batch_connection(&mut connection, batch_id, qr_payload)
+            .await?
+            .map(|(record, _)| record),
+    )
+}
+
+pub(super) async fn load_opening_wip_batch_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    batch_id: &str,
+) -> Result<Option<(OpeningWipBatchRecord, u64)>, ProductionMapError> {
+    sqlx::query("SELECT batch_id FROM mini_opening_wip_batches WHERE batch_id=$1 FOR UPDATE")
+        .bind(batch_id)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    load_opening_wip_batch_connection(&mut **tx, batch_id, "").await
+}
+
+async fn load_opening_wip_batch_connection(
+    connection: &mut PgConnection,
+    batch_id: &str,
+    qr_payload: &str,
+) -> Result<Option<(OpeningWipBatchRecord, u64)>, ProductionMapError> {
     let batch = sqlx::query_as::<_, OpeningWipBatchRow>(
-        "SELECT batch_id, intake_id, order_id, sequence_no, qr_payload,
+        "SELECT batch_id, parent_batch_id, (EXTRACT(EPOCH FROM updated_at)*1000000)::BIGINT AS revision, intake_id, order_id, sequence_no, qr_payload,
                 quantity::DOUBLE PRECISION AS quantity, uom,
                 finished_goods_meter::DOUBLE PRECISION AS finished_goods_meter,
                 finished_goods_kg::DOUBLE PRECISION AS finished_goods_kg,
@@ -155,7 +185,7 @@ pub(super) async fn load_opening_wip_batch(
     )
     .bind(batch_id.trim())
     .bind(qr_payload.trim())
-    .fetch_optional(pool)
+    .fetch_optional(&mut *connection)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
     let Some(batch) = batch else {
@@ -171,13 +201,17 @@ pub(super) async fn load_opening_wip_batch(
          FROM mini_opening_wip_intakes WHERE intake_id = $1",
     )
     .bind(batch.intake_id.trim())
-    .fetch_one(pool)
+    .fetch_one(&mut *connection)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
-    Ok(Some(OpeningWipBatchRecord {
-        intake: opening_wip_intake_from_row(intake)?,
-        batch: opening_wip_batch_from_row(batch)?,
-    }))
+    let revision = u64::try_from(batch.revision).map_err(|_| ProductionMapError::StoreFailed)?;
+    Ok(Some((
+        OpeningWipBatchRecord {
+            intake: opening_wip_intake_from_row(intake)?,
+            batch: opening_wip_batch_from_row(batch)?,
+        },
+        revision,
+    )))
 }
 
 pub(super) async fn create_opening_wip(
@@ -258,7 +292,7 @@ pub(super) async fn delete_opening_wip_batch(
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
     let batch = sqlx::query_as::<_, OpeningWipBatchRow>(
-        "SELECT batch_id, intake_id, order_id, sequence_no, qr_payload,
+        "SELECT batch_id, parent_batch_id, (EXTRACT(EPOCH FROM updated_at)*1000000)::BIGINT AS revision, intake_id, order_id, sequence_no, qr_payload,
                 quantity::DOUBLE PRECISION AS quantity, uom,
                 finished_goods_meter::DOUBLE PRECISION AS finished_goods_meter,
                 finished_goods_kg::DOUBLE PRECISION AS finished_goods_kg,
@@ -391,7 +425,7 @@ pub(super) async fn delete_opening_wip_batch(
         .ok_or(ProductionMapError::ProgressBatchNotFound)
 }
 
-async fn insert_opening_wip_batch_tx(
+pub(super) async fn insert_opening_wip_batch_tx(
     tx: &mut Transaction<'_, Postgres>,
     batch: &OpeningWipBatch,
 ) -> Result<(), ProductionMapError> {
@@ -401,10 +435,10 @@ async fn insert_opening_wip_batch_tx(
              finished_goods_meter, finished_goods_kg, bobina_kg, diameter,
              quantity_basis, wip_status, used_by_session_id, used_by_apparatus,
              processed_by_session_id, processed_by_apparatus, label_item_code,
-             label_item_name, created_at, updated_at
+             label_item_name, created_at, updated_at, parent_batch_id
          ) VALUES (
              $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-             $15, $16, $17, $18, $19, to_timestamp($20), to_timestamp($21)
+             $15, $16, $17, $18, $19, to_timestamp($20), to_timestamp($21), $22
          )",
     )
     .bind(batch.batch_id.trim())
@@ -428,6 +462,7 @@ async fn insert_opening_wip_batch_tx(
     .bind(batch.label_item_name.trim())
     .bind(batch.created_at_unix)
     .bind(batch.updated_at_unix)
+    .bind((!batch.parent_batch_id.is_empty()).then_some(batch.parent_batch_id.as_str()))
     .execute(&mut **tx)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
@@ -476,6 +511,80 @@ pub(super) async fn update_opening_wip_batch_tx(
     .map_err(|_| ProductionMapError::StoreFailed)?;
     if updated.rows_affected() != 1 {
         return Err(ProductionMapError::ProgressBatchNotAccepted);
+    }
+    Ok(())
+}
+
+pub(super) async fn validate_opening_remainder_resume_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    write: &crate::core::production_map::QueueActionProgressWrite,
+    proposed: &OpeningWipBatch,
+) -> Result<(), ProductionMapError> {
+    let Some(expected) = write
+        .event
+        .payload_json
+        .get("opening_wip_input_expected_record")
+    else {
+        return Ok(());
+    };
+    let session = write
+        .session
+        .as_ref()
+        .ok_or(ProductionMapError::ProgressBatchNotResumable)?;
+    if write.event.action != crate::core::production_map::queue_state::ApparatusQueueAction::Resume
+        || proposed.wip_status != OpeningWipBatchStatus::InUse
+        || proposed.used_by_session_id != session.session_id
+        || proposed.used_by_apparatus != write.apparatus
+        || proposed.order_id != write.event.order_id
+    {
+        return Err(ProductionMapError::ProgressBatchNotResumable);
+    }
+    let released: Option<bool> = sqlx::query_scalar(
+        "SELECT status IN ('paused','roll_detached')
+            AND COALESCE(payload_json->>'input_progress_batch_id','')=''
+            AND (COALESCE(payload_json->>'lamination_astatka_shift_closed','')='true'
+                OR ($4<>'' AND COALESCE(payload_json->>'layer_remainder_detached_input_batch_id','')=$4))
+         FROM mini_order_run_sessions WHERE session_id=$1 AND order_id=$2
+            AND canonical_apparatus_id=$3 AND stage_node_id=$5 FOR UPDATE",
+    )
+    .bind(&session.session_id)
+    .bind(&write.event.order_id)
+    .bind(&write.apparatus)
+    .bind(&proposed.parent_batch_id)
+    .bind(&session.stage_node_id)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    let (record, _) = load_opening_wip_batch_tx(tx, &proposed.batch_id)
+        .await?
+        .ok_or(ProductionMapError::ProgressBatchNotResumable)?;
+    if released != Some(true)
+        || serde_json::json!(record) != *expected
+        || record.intake.status != OpeningWipIntakeStatus::Confirmed
+    {
+        return Err(ProductionMapError::ProgressBatchNotResumable);
+    }
+    let map: serde_json::Value =
+        sqlx::query_scalar("SELECT map_json FROM mini_production_maps WHERE id=$1")
+            .bind(&write.event.order_id)
+            .fetch_one(&mut **tx)
+            .await
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+    let map: crate::core::production_map::ProductionMapDefinition =
+        serde_json::from_value(map).map_err(|_| ProductionMapError::StoreFailed)?;
+    if write.event.payload_json["wip_input_map_fingerprint"]
+        != serde_json::json!(
+            crate::core::production_map::wip_route::production_map_fingerprint(&map)
+        )
+        || crate::core::production_map::ProductionMapService::opening_wip_target_stage(
+            &map,
+            &record.intake,
+            &write.apparatus,
+            &session.stage_node_id,
+        )
+        .is_none()
+    {
+        return Err(ProductionMapError::WipRouteChanged);
     }
     Ok(())
 }
@@ -533,6 +642,7 @@ fn opening_wip_batch_from_row(
 ) -> Result<OpeningWipBatch, ProductionMapError> {
     Ok(OpeningWipBatch {
         batch_id: row.batch_id,
+        parent_batch_id: row.parent_batch_id.unwrap_or_default(),
         intake_id: row.intake_id,
         order_id: row.order_id,
         sequence_no: row.sequence_no,
@@ -569,7 +679,7 @@ const OPENING_WIP_INTAKE_SELECT: &str =
      WHERE idempotency_key = $1";
 
 const OPENING_WIP_BATCH_SELECT_PREFIX: &str =
-    "SELECT batch_id, intake_id, order_id, sequence_no, qr_payload,
+    "SELECT batch_id, parent_batch_id, (EXTRACT(EPOCH FROM updated_at)*1000000)::BIGINT AS revision, intake_id, order_id, sequence_no, qr_payload,
             quantity::DOUBLE PRECISION AS quantity, uom,
             finished_goods_meter::DOUBLE PRECISION AS finished_goods_meter,
             finished_goods_kg::DOUBLE PRECISION AS finished_goods_kg,

@@ -27,7 +27,7 @@ impl Default for LaminationSettings {
 impl LaminationSettings {
     pub fn prints_remainder(&self, source_kind: &str) -> bool {
         match source_kind {
-            "progress_batch" => self.print_wip_remainder_labels,
+            "progress_batch" | "opening_wip" => self.print_wip_remainder_labels,
             "raw_material" => self.print_film_remainder_labels,
             _ => false,
         }
@@ -113,7 +113,8 @@ impl LaminationRemainderWeights {
                 .iter()
                 .enumerate()
                 .filter(|(_, source)| {
-                    source.source_kind == kind
+                    (source.source_kind == kind
+                        || (kind == "progress_batch" && source.source_kind == "opening_wip"))
                         && source.source_net_kg > 0.0
                         && source.source_meter > 0.0
                 })
@@ -197,6 +198,8 @@ pub struct LayerRemainderRecord {
     pub created_at_unix: i64,
     pub progress_batch: Option<OrderProgressBatch>,
     pub raw_material_stock: Option<LayerRemainderRawStock>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opening_wip: Option<OpeningWipBatchRecord>,
 }
 
 /// Round once at the inventory boundary, using integer micro-units and an
@@ -257,6 +260,27 @@ pub(crate) fn layer_remainder_wip_basis(
 
 pub(crate) fn json_number(value: &serde_json::Value) -> Option<f64> {
     value.as_f64().or_else(|| value.as_str()?.parse().ok())
+}
+
+pub(crate) fn layer_remainder_opening_basis(
+    batch: &OpeningWipBatch,
+) -> Result<(f64, f64, f64), ProductionMapError> {
+    let tare = batch.bobina_kg.unwrap_or(0.0);
+    if !tare.is_finite() || tare < 0.0 {
+        return Err(ProductionMapError::ProgressInputInvalid);
+    }
+    let gross = batch
+        .finished_goods_kg
+        .or_else(|| (batch.uom == "kg").then_some(batch.quantity).flatten())
+        .ok_or(ProductionMapError::ProgressInputInvalid)?;
+    let net =
+        positive_erp_quantity(gross - tare).ok_or(ProductionMapError::ProgressInputInvalid)?;
+    let meter = batch
+        .finished_goods_meter
+        .or_else(|| (batch.uom == "m").then_some(batch.quantity).flatten())
+        .and_then(positive_erp_quantity)
+        .ok_or(ProductionMapError::ProgressInputInvalid)?;
+    Ok((net, meter, tare))
 }
 
 impl ProductionMapService {
@@ -352,7 +376,7 @@ impl ProductionMapService {
             .await?;
         if !matches!(
             input.source_kind.as_str(),
-            "progress_batch" | "raw_material"
+            "progress_batch" | "opening_wip" | "raw_material"
         ) || input.source_id.trim().is_empty()
             || input.session_id.trim().is_empty()
             || !(8..=128).contains(&input.request_id.len())
@@ -465,6 +489,45 @@ mod tests {
             ProductionMapError::LaminationRemainderSourceMissing
         );
         assert!(weights(&[], 0.0, 0.0).dispositions(&[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn opening_wip_uses_the_existing_wip_kg_field_and_label_switch() {
+        let sources = [
+            source("opening_wip", "opening"),
+            source("raw_material", "film"),
+        ];
+        let layers = weights(&sources, 20.0, 0.0).dispositions(&sources).unwrap();
+        assert_eq!(layers[0].source_kind, "opening_wip");
+        assert_eq!(layers[0].remaining_net_kg, 20.0);
+        assert_eq!(layers[1].remaining_net_kg, 0.0);
+        for enabled in [false, true] {
+            let settings = LaminationSettings {
+                print_wip_remainder_labels: enabled,
+                print_film_remainder_labels: !enabled,
+                ..Default::default()
+            };
+            assert_eq!(settings.prints_remainder("opening_wip"), enabled);
+        }
+        let batch: OpeningWipBatch = serde_json::from_value(serde_json::json!({
+            "batch_id":"opening","intake_id":"intake","order_id":"order","sequence_no":1,
+            "qr_payload":"opening-qr","quantity_basis":"measured","quantity":1500,"uom":"m",
+            "finished_goods_meter":1500,"finished_goods_kg":52,"bobina_kg":2,
+            "wip_status":"waiting","label_item_code":"PET","label_item_name":"Printed PET",
+            "created_at_unix":1,"updated_at_unix":1,
+        }))
+        .unwrap();
+        assert_eq!(
+            layer_remainder_opening_basis(&batch).unwrap(),
+            (50.0, 1500.0, 2.0)
+        );
+        assert_eq!(
+            layer_remainder_meter(50.0, 1500.0, 20.0).unwrap(),
+            (20.0, 600.0)
+        );
+        let mut missing = batch;
+        missing.finished_goods_kg = None;
+        assert!(layer_remainder_opening_basis(&missing).is_err());
     }
 
     #[test]

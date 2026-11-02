@@ -1394,6 +1394,9 @@ pub(super) async fn apply_queue_progress_tx(
             }
         }
         validate_merge_session_transition_tx(tx, &write.event, write.session.as_ref()).await?;
+        for batch in &write.opening_wip_batch_updates {
+            opening_wip_helpers::validate_opening_remainder_resume_tx(tx, write, batch).await?;
+        }
         let start_checkpoint = cancel_start::before_start_tx(tx, write).await?;
         let scanned_input = scanned_wip::before_claim_tx(tx, write).await?;
         let raw_material_stock_committed = !write.raw_material_stock_transitions.is_empty();

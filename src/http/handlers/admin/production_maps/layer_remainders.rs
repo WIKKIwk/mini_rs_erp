@@ -205,6 +205,7 @@ pub(super) async fn layer_remainder_print(
     remainder: &LayerRemainderRecord,
     options: &LayerRemainderPrintOptions,
 ) -> Result<serde_json::Value, AdminError> {
+    let mut opening_order_code = None;
     let mut request = ProgressLabelPrintRequest {
         driver_url: options.driver_url.clone(),
         printer: options.printer.clone(),
@@ -239,6 +240,38 @@ pub(super) async fn layer_remainder_print(
         request.tare_enabled = request.tare_kg > 0.0;
         request.gross_qty = remainder.remaining_net_kg + request.tare_kg;
         request.label_kind = "progress".into();
+    } else if let Some(opening) = &remainder.opening_wip {
+        let source = if opening.intake.source_apparatus.trim().is_empty() {
+            &opening.intake.entry_apparatus
+        } else {
+            &opening.intake.source_apparatus
+        };
+        request.item_code = opening.batch.label_item_code.clone();
+        request.item_name = opening.batch.label_item_name.clone();
+        request.apparatus = source.clone();
+        request.apparatus_display_name = state
+            .production_maps
+            .resolve_canonical_apparatus_text(source)
+            .await
+            .map_err(production_map_error)?
+            .runtime
+            .display
+            .display_name
+            .clone();
+        if let Some(map) = state
+            .production_maps
+            .raw_map(&opening.intake.order_id)
+            .await
+            .map_err(production_map_error)?
+        {
+            request.customer_name = map.customer_name.clone();
+            opening_order_code = super::helpers::production_map_print_order_code(&map);
+        }
+        request.executor_name = opening.intake.actor.display_name.clone();
+        request.tare_kg = opening.batch.bobina_kg.unwrap_or(0.0);
+        request.tare_enabled = request.tare_kg > 0.0;
+        request.gross_qty = remainder.remaining_net_kg + request.tare_kg;
+        request.label_kind = "opening_wip".into();
     } else if let Some(stock) = &remainder.raw_material_stock {
         request.item_code = stock.item_code.clone();
         request.item_name = stock.item_name.clone();
@@ -309,6 +342,12 @@ pub(super) async fn layer_remainder_print(
             print["width_mm"] = serde_json::json!(stock.width_mm);
             print["micron"] = serde_json::json!(stock.micron);
             print["length_m"] = serde_json::json!(stock.length_m);
+        }
+        if let Some(opening) = &remainder.opening_wip {
+            print["completed_at_unix"] = serde_json::json!(opening.batch.created_at_unix);
+            if let Some(code) = opening_order_code {
+                print["order_code"] = serde_json::json!(code);
+            }
         }
     }
     Ok(print)

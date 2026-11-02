@@ -20,6 +20,9 @@ fn database_error(error: sqlx::Error) -> ProductionMapError {
 }
 use sqlx::{Postgres, Transaction};
 
+#[path = "layer_remainder_opening_wip.rs"]
+mod opening;
+
 #[derive(sqlx::FromRow)]
 struct RawRow {
     id: String,
@@ -535,7 +538,13 @@ pub(super) async fn record_layer_remainder_tx(
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64;
-    let (source, progress_batch, raw_material_stock) = if input.source_kind == "progress_batch" {
+    let (source, progress_batch, raw_material_stock, opening_wip) = if input.source_kind
+        == "opening_wip"
+    {
+        let (source, remainder) =
+            opening::record_tx(tx, &input, session, shift_report, now).await?;
+        (source, None, None, remainder)
+    } else if input.source_kind == "progress_batch" {
         sqlx::query("SELECT batch_id FROM mini_progress_batches WHERE batch_id=$1 FOR UPDATE")
             .bind(&input.source_id)
             .fetch_optional(&mut **tx)
@@ -643,7 +652,7 @@ pub(super) async fn record_layer_remainder_tx(
         }
         session.updated_at_unix = now;
         progress_helpers::put_order_run_session_tx(tx, &session).await?;
-        (source, (net > 0.0).then_some(child), None)
+        (source, (net > 0.0).then_some(child), None, None)
     } else {
         let r = raw_row(tx, &input.source_id)
             .await?
@@ -752,13 +761,14 @@ pub(super) async fn record_layer_remainder_tx(
             }
         }
 
-        (source, None, (net > 0.0).then_some(child))
+        (source, None, (net > 0.0).then_some(child), None)
     };
     let (net, meter) = remainder_quantities(&source, input.remaining_net_kg, shift_report)?;
     let qr = progress_batch
         .as_ref()
         .map(|b| b.qr_payload.clone())
         .or_else(|| raw_material_stock.as_ref().map(|s| s.barcode.clone()))
+        .or_else(|| opening_wip.as_ref().map(|w| w.batch.qr_payload.clone()))
         .unwrap_or_default();
     let record = LayerRemainderRecord {
         request_id: input.request_id.clone(),
@@ -780,6 +790,7 @@ pub(super) async fn record_layer_remainder_tx(
         created_at_unix: now,
         progress_batch,
         raw_material_stock,
+        opening_wip,
     };
     sqlx::query("INSERT INTO mini_layer_remainder_operations (operation_id,apparatus,order_id,session_id,source_kind,source_id,recorded_by_ref,request_id,request_json,response_json) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)")
             .bind(&record.operation_id).bind(&input.apparatus).bind(&input.order_id).bind(&input.session_id).bind(&input.source_kind).bind(&input.source_id).bind(&actor.ref_).bind(&input.request_id).bind(request).bind(json!(record))
@@ -846,6 +857,7 @@ pub(super) async fn session_sources_tx(
     ids.sort();
     ids.dedup();
     let mut sources = Vec::new();
+    sources.extend(opening::session_sources_tx(tx, session).await?);
     for id in ids {
         if source_already_returned(tx, "progress_batch", &id).await? {
             continue;

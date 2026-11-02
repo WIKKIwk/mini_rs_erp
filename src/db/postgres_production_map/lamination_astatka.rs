@@ -134,23 +134,6 @@ impl PostgresProductionMapStore {
         {
             return Err(ProductionMapError::QueueActionNotAllowed);
         }
-        if current
-            .payload_json
-            .get("input_wip_source_kind")
-            .and_then(Value::as_str)
-            == Some("opening_wip")
-            || crate::core::production_map::order_run_input_links_from_payload(
-                &current.payload_json,
-            )
-            .map_err(|_| ProductionMapError::StoreFailed)?
-            .iter()
-            .any(|link| {
-                link.source_kind == crate::core::production_map::OrderRunInputSourceKind::OpeningWip
-                    && link.status == crate::core::production_map::OrderRunInputStatus::InUse
-            })
-        {
-            return Err(ProductionMapError::ProgressInputInvalid);
-        }
         // Validate the complete current physical source set while holding the
         // same order/apparatus/source locks as every stock claim or return.
         let sources = layer_remainder::session_sources_tx(&mut tx, current).await?;
@@ -275,6 +258,20 @@ impl PostgresProductionMapStore {
                         .await?
                         .ok_or(ProductionMapError::ProgressBatchNotFound)?
                         .revision;
+            }
+            if input.source_kind == "opening_wip"
+                && queue_write.as_ref().is_some_and(|write| {
+                    write
+                        .opening_wip_batch_updates
+                        .iter()
+                        .any(|batch| batch.batch_id == input.source_id)
+                })
+            {
+                input.expected_revision =
+                    opening_wip_helpers::load_opening_wip_batch_tx(&mut tx, &input.source_id)
+                        .await?
+                        .ok_or(ProductionMapError::ProgressBatchNotFound)?
+                        .1;
             }
             input.request_id = format!("{operation_id}:{index}");
             saved.push(

@@ -65,6 +65,18 @@ producer/supplier, tare, order/customer information and physical stock lineage.
 Gross weight is the entered net kg plus the original tare. WIP uses the ordinary
 progress label; film uses the raw material label with its width and thickness.
 
+Opening WIP inputs use the same input-roll kg field and WIP label switch.
+Migration `0186_opening_wip_layer_remainders` enables their residuals. A positive
+residual creates a new opening batch with `parent_batch_id` and the original
+intake passport, product and route. Its new QR is resolved and claimed through
+the existing opening-WIP scanner. The original batch is retired as processed;
+its recorded quantities remain historical and its QR cannot be reactivated.
+The child retains the original tare, records the newly measured net kg and marks
+its proportional length as estimated. Zero exhausts the input without creating
+a child. Pause and Complete commit these changes with the ordinary report/output
+transaction, and retries return the same saved child. Bluetooth receives the
+opening-WIP label, original owner/product/order data and the new QR and quantities.
+
 The report, queue action, source consumption and remainder creation commit in one
 transaction. A stable request ID returns the same immutable receipt on retry.
 The app saves that ID before posting, asks the server only to prepare labels,

@@ -205,7 +205,7 @@ impl ProductionMapService {
             layer.source_id = layer.source_id.trim().to_string();
             if !matches!(
                 layer.source_kind.as_str(),
-                "progress_batch" | "raw_material"
+                "progress_batch" | "opening_wip" | "raw_material"
             ) || layer.source_id.is_empty()
                 || !layer.remaining_net_kg.is_finite()
                 || layer.remaining_net_kg < 0.0
@@ -248,15 +248,9 @@ impl ProductionMapService {
         ) {
             return Err(ProductionMapError::QueueActionNotAllowed);
         }
-        if session
-            .payload_json
-            .get("input_wip_source_kind")
-            .and_then(serde_json::Value::as_str)
-            == Some("opening_wip")
-        {
-            return Err(ProductionMapError::ProgressInputInvalid);
-        }
-        let control = self.effective_order_control_for_stage(&order_id, &input.apparatus, &session.stage_node_id).await?;
+        let control = self
+            .effective_order_control_for_stage(&order_id, &input.apparatus, &session.stage_node_id)
+            .await?;
         match control.state {
             OrderControlState::Active => {}
             OrderControlState::FreezeRequested => {
@@ -308,7 +302,11 @@ impl ProductionMapService {
                 input
                     .layer_remainders
                     .iter()
-                    .filter(|layer| layer.source_kind == kind && layer.remaining_net_kg > 0.0)
+                    .filter(|layer| {
+                        (layer.source_kind == kind
+                            || (kind == "progress_batch" && layer.source_kind == "opening_wip"))
+                            && layer.remaining_net_kg > 0.0
+                    })
                     .count() as f64
             };
             if session.status == OrderRunStatus::Completed
