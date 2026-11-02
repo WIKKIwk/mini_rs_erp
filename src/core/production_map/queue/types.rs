@@ -220,6 +220,9 @@ pub struct ProductionMapApparatusTransferRecord {
     /// reconstruct the complete lineage change, not only the paused batch.
     #[serde(default)]
     pub progress_batch_updates: Vec<OrderProgressBatch>,
+    /// Printing failovers move unfinished work and keep existing output intact.
+    #[serde(default)]
+    pub preserves_output_history: bool,
     pub created_at_unix: i64,
 }
 

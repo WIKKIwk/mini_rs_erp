@@ -46,10 +46,17 @@ fn write() -> ProductionMapApparatusTransferWrite {
         session: session.clone(),
         progress_batch: None,
         progress_batch_updates: vec![],
+        preserves_output_history: false,
         created_at_unix: 2,
     };
     ProductionMapApparatusTransferWrite {
         record,
+        expected_map: None,
+        expected_session: None,
+        expected_apparatus_revisions: vec![],
+        print_target_configuration: None,
+        expected_input_batches: vec![],
+        opening_wip_batch_updates: vec![],
         updated_map: map,
         from_sequence: vec![],
         to_sequence: vec![ORDER.into()],

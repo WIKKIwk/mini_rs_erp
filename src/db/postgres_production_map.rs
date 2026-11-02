@@ -1496,6 +1496,8 @@ pub(super) async fn apply_queue_progress_tx(
             let mut stored_session = session.clone();
             if (event.action == crate::core::production_map::queue_state::ApparatusQueueAction::Start
                 || event.payload_json.get("lamination_raw_reacquisition")
+                    .and_then(serde_json::Value::as_bool) == Some(true)
+                || event.payload_json.get("print_transfer_material_reacquisition")
                     .and_then(serde_json::Value::as_bool) == Some(true))
                 && let Some(mut resources) = ProductionQrSessionResources::recorded(session)
                 && resources.raw_materials_available

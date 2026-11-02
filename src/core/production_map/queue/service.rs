@@ -1271,6 +1271,15 @@ impl ProductionMapService {
                                 interaction.material_scan_required = true;
                             }
                         }
+                        if control == OrderControlState::Active
+                            && active_session.is_some_and(|session| session.is_print_transfer_continuation()
+                                && session.payload_json.get("print_transfer_materials_required")
+                                    .and_then(serde_json::Value::as_bool) == Some(true))
+                            && live_material_rule(canonical).is_some_and(|rule| rule.requires_material)
+                        {
+                            interaction.start_materials_mode = ApparatusQueueStartMaterialsMode::ScanRequired;
+                            interaction.material_scan_required = true;
+                        }
                         if !active_order_is_this {
                             interaction.blocking_reason_code = "apparatus_busy".to_string();
                         } else if !queue_actionable {

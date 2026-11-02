@@ -638,6 +638,9 @@ fn audit_paused_session_progress(
     violations: &mut Vec<ProductionWorkflowAuditViolation>,
 ) {
     for session in sessions {
+        if session.is_print_transfer_continuation() || super::temporary_pause::is_temporarily_paused(session) {
+            continue;
+        }
         if session
             .payload_json
             .get("requeued_at_tail")
@@ -773,8 +776,13 @@ fn audit_transfers(
             }
             None => {
                 transfer.progress_batch_id.is_empty()
-                    && transfer.queue_state == ApparatusQueueOrderState::Pending
-                    && transfer.session.is_requeued_at_tail()
+                    && ((transfer.preserves_output_history && transfer.session.is_print_transfer_continuation()
+                        && transfer.progress_batch_updates.iter().all(|batch|
+                            batch.used_by_session_id == transfer.session_id
+                                && batch.used_by_apparatus == transfer.to_apparatus
+                                && batch.wip_status == OrderProgressBatchWipStatus::InUse))
+                        || (transfer.queue_state == ApparatusQueueOrderState::Pending
+                            && transfer.session.is_requeued_at_tail()))
             }
         };
         if !progress_matches {
@@ -785,6 +793,9 @@ fn audit_transfers(
                 "transfer receipt progress batch must be the paused batch on the target apparatus",
             ));
         }
+        // A receipt describes the committed transfer, not the live queue after
+        // subsequent Resume/Complete or a second failover.
+        if transfer.preserves_output_history { continue; }
         let source_state =
             queue_state_for_apparatus_order(queue_states, &transfer.from_apparatus, order_id);
         let target_state =

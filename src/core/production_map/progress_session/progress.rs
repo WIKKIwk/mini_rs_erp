@@ -295,6 +295,15 @@ pub struct OrderRunSession {
 }
 
 impl OrderRunSession {
+    pub(crate) fn is_print_transfer_continuation(&self) -> bool {
+        self.payload_json.get("_print_transfer").is_some_and(|marker| {
+            marker.get("session_id").and_then(serde_json::Value::as_str) == Some(self.session_id.as_str())
+                && marker.get("apparatus").and_then(serde_json::Value::as_str) == Some(self.apparatus.as_str())
+                && marker.get("stage_node_id").and_then(serde_json::Value::as_str) == Some(self.stage_node_id.as_str())
+                && marker.get("transfer_id").and_then(serde_json::Value::as_str).is_some_and(|id| !id.is_empty())
+        })
+    }
+
     pub(crate) fn is_requeued_at_tail(&self) -> bool {
         self.status == OrderRunStatus::Paused
             && self.payload_json
@@ -304,7 +313,7 @@ impl OrderRunSession {
     }
 
     pub fn qolip_reacquisition_required(&self) -> bool {
-        ["qolip_released_on_freeze", "qolip_released_on_return"]
+        ["qolip_released_on_freeze", "qolip_released_on_return", "print_transfer_setup_required"]
             .iter()
             .any(|key| {
                 self.payload_json.get(*key).and_then(serde_json::Value::as_bool) == Some(true)

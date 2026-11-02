@@ -394,7 +394,7 @@ async fn paused_order_transfer_route_moves_state_and_is_idempotent() {
             .as_array()
             .expect("nodes")
             .iter()
-            .find(|node| node["kind"] == "apparatus")
+            .find(|node| node["apparatus_id"] == "apparatus:default:bosma_8")
             .expect("apparatus")["apparatus_id"],
         "apparatus:default:bosma_8"
     );

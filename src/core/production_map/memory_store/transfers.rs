@@ -93,7 +93,8 @@ pub(super) async fn commit_apparatus_transfer(
         .ok_or(ProductionMapError::ApparatusTransferSessionNotFound)?;
     if current_session.order_id.trim() != order_id
         || !queue_state::apparatus_ids_match(&current_session.apparatus, from)
-        || current_session.status != OrderRunStatus::Paused
+        || !(current_session.status == OrderRunStatus::Paused
+            || (write.record.preserves_output_history && current_session.status == OrderRunStatus::RollDetached))
     {
         return Err(ProductionMapError::ApparatusTransferSessionMismatch);
     }
@@ -103,7 +104,29 @@ pub(super) async fn commit_apparatus_transfer(
         return Err(ProductionMapError::ApparatusTransferOrderNotPaused);
     }
 
-    if let Some(batch) = &write.progress_batch {
+    if let Some(expected) = &write.expected_session
+        && expected != &current_session
+    {
+        return Err(ProductionMapError::ApparatusTransferSessionMismatch);
+    }
+    if let Some(expected) = &write.expected_map
+        && store.maps.read().await.get(order_id) != Some(expected)
+    {
+        return Err(ProductionMapError::WipRouteChanged);
+    }
+    if write.record.preserves_output_history {
+        if !write.session.is_print_transfer_continuation() || write.progress_batch.is_some()
+            || !write.record.progress_batch_id.is_empty()
+        {
+            return Err(ProductionMapError::ApparatusTransferProgressMismatch);
+        }
+        super::super::wip_route::validate_map_wip_routes(
+            write.expected_map.as_ref().ok_or(ProductionMapError::WipRouteChanged)?,
+            &write.updated_map,
+            &store.order_progress_batches.read().await.values()
+                .filter(|batch| batch.order_id.trim() == order_id).cloned().collect::<Vec<_>>(),
+        )?;
+    } else if let Some(batch) = &write.progress_batch {
         let current_batch = store
             .order_progress_batches
             .read()
@@ -143,6 +166,24 @@ pub(super) async fn commit_apparatus_transfer(
         if current.order_id.trim() != order_id {
             return Err(ProductionMapError::ApparatusTransferProgressMismatch);
         }
+        if write.record.preserves_output_history
+            && (!write.expected_input_batches.contains(&current)
+                || current.wip_status != OrderProgressBatchWipStatus::InUse
+                || current.used_by_session_id != write.session.session_id
+                || current.used_by_apparatus != from)
+        {
+            return Err(ProductionMapError::WipRouteChanged);
+        }
+    }
+    for update in &write.opening_wip_batch_updates {
+        let records = store.opening_wip_records.read().await;
+        let current = records.values().flat_map(|record| &record.batches)
+            .find(|batch| batch.batch_id == update.batch_id)
+            .ok_or(ProductionMapError::ProgressBatchNotResumable)?;
+        if current.wip_status != OpeningWipBatchStatus::InUse
+            || current.used_by_session_id != write.session.session_id
+            || current.used_by_apparatus != from
+        { return Err(ProductionMapError::ProgressBatchNotResumable); }
     }
 
     if !write.raw_material_assignments.is_empty() {
@@ -200,6 +241,12 @@ pub(super) async fn commit_apparatus_transfer(
     let mut maps = store.maps.write().await;
     maps.insert(order_id.to_string(), write.updated_map.clone());
     drop(maps);
+    for update in &write.opening_wip_batch_updates {
+        let mut records = store.opening_wip_records.write().await;
+        for batch in records.values_mut().flat_map(|record| &mut record.batches) {
+            if batch.batch_id == update.batch_id { *batch = update.clone(); }
+        }
+    }
 
     store
         .sequences

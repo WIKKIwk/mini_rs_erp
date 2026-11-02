@@ -23,6 +23,8 @@ const QR: &str = "400118DA2F17C3617F59DDC6";
 
 #[path = "wip_service_stress_tests.rs"]
 mod service_stress;
+#[path = "printing_transfer_tests.rs"]
+mod printing_transfer;
 
 async fn fixture() -> (PgPool, Arc<PostgresProductionMapStore>, PgPool, String) {
     let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")

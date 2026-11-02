@@ -22,6 +22,20 @@ pub(super) async fn load_raw_material_assignments_for_order(
     load_raw_material_assignments_scoped(pool, Some(&[order_id.trim().to_string()])).await
 }
 
+pub(super) async fn load_transferable_raw_material_assignments(
+    pool: &PgPool, order_id: &str, apparatus: &str,
+) -> Result<Vec<RawMaterialAssignment>, ProductionMapError> {
+    let rows = sqlx::query_as::<_, (String, serde_json::Value)>(
+        "SELECT a.canonical_apparatus_id, a.payload_json FROM mini_raw_material_assignments a
+         WHERE a.order_id=$1 AND a.canonical_apparatus_id=$2
+           AND NOT EXISTS(SELECT 1 FROM mini_raw_material_stock s
+               WHERE lower(s.barcode)=lower(a.barcode) AND s.status='consumed')
+         ORDER BY a.barcode",
+    ).bind(order_id).bind(apparatus).fetch_all(pool).await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    rows.into_iter().map(|(id, payload)| raw_material_assignment_from_payload(id, payload)).collect()
+}
+
 pub(super) async fn load_raw_material_assignment_by_barcode(
     pool: &PgPool,
     barcode: &str,

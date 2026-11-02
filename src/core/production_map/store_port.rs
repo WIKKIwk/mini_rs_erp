@@ -124,6 +124,12 @@ pub struct QueueActionProgressWrite {
 
 pub struct ProductionMapApparatusTransferWrite {
     pub record: ProductionMapApparatusTransferRecord,
+    pub expected_map: Option<ProductionMapDefinition>,
+    pub expected_session: Option<OrderRunSession>,
+    pub expected_apparatus_revisions: Vec<(String, u64)>,
+    pub print_target_configuration: Option<crate::core::apparatus_standard::RuntimeApparatusConfiguration>,
+    pub expected_input_batches: Vec<OrderProgressBatch>,
+    pub opening_wip_batch_updates: Vec<OpeningWipBatch>,
     pub updated_map: ProductionMapDefinition,
     pub from_sequence: Vec<String>,
     pub to_sequence: Vec<String>,
@@ -1112,6 +1118,11 @@ pub trait ProductionMapStorePort: Send + Sync {
     // Raw material assignment persistence. Apparatus material rules are
     // canonical runtime projections and have no independent store API.
     async fn raw_material_assignments(&self) -> StoreResult<Vec<RawMaterialAssignment>>;
+    /// Only live material reservations follow unfinished printing work.
+    async fn raw_material_assignments_for_transfer(&self, order_id: &str, apparatus: &str) -> StoreResult<Vec<RawMaterialAssignment>> {
+        Ok(self.raw_material_assignments_for_order(order_id).await?.into_iter()
+            .filter(|assignment| assignment.apparatus_id.as_str() == apparatus).collect())
+    }
     async fn raw_material_assignment_by_barcode(&self, barcode: &str) -> StoreResult<Option<RawMaterialAssignment>> {
         Ok(self.raw_material_assignments().await?.into_iter()
             .find(|assignment| assignment.barcode.trim().eq_ignore_ascii_case(barcode.trim())))

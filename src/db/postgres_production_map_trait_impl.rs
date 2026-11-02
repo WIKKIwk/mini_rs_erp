@@ -944,6 +944,12 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         PostgresProductionMapStore::raw_material_assignment_by_barcode(self, barcode).await
     }
 
+    async fn raw_material_assignments_for_transfer(
+        &self, order_id: &str, apparatus: &str,
+    ) -> Result<Vec<RawMaterialAssignment>, ProductionMapError> {
+        material_helpers::load_transferable_raw_material_assignments(&self.pool, order_id, apparatus).await
+    }
+
     async fn put_raw_material_assignment(
         &self,
         assignment: RawMaterialAssignment,

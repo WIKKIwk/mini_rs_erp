@@ -144,7 +144,7 @@ async fn requeued_transfer_preserves_pending_session_output_materials_and_resume
         );
         assert!(result.transfer.session.is_requeued_at_tail());
         assert_eq!(result.transfer.session.apparatus, PECHAT_8_ID);
-        assert_eq!(result.transfer.session.stage_node_id, "apparatus");
+        assert_ne!(result.transfer.session.stage_node_id, "apparatus");
         let states = store.apparatus_queue_states().await.unwrap();
         assert!(!states[PECHAT_7_ID].contains_key(&id));
         assert_eq!(states[PECHAT_8_ID][&id], "pending");
@@ -158,8 +158,8 @@ async fn requeued_transfer_preserves_pending_session_output_materials_and_resume
                 assert_eq!(batches.len(), 1);
                 assert_eq!(batches[0].batch_id, batch.batch_id);
                 assert_eq!(batches[0].produced_qty, batch.produced_qty);
-                assert_eq!(batches[0].apparatus, PECHAT_8_ID);
-                assert_eq!(result.transfer.progress_batch_id, batch.batch_id);
+                assert_eq!(batches[0].apparatus, PECHAT_7_ID);
+                assert!(result.transfer.progress_batch_id.is_empty());
             }
             None => {
                 assert!(batches.is_empty(), "no synthetic WIP or production output");

@@ -179,12 +179,38 @@ pub(super) async fn commit_apparatus_transfer(
 
     lock_transfer_rows(&mut tx, &write).await?;
     verify_transfer_preconditions(&mut tx, &write).await?;
+    let mut revisions = write.expected_apparatus_revisions.clone();
+    revisions.sort_by(|left, right| left.0.cmp(&right.0));
+    for (apparatus, expected) in revisions {
+        // Hold the canonical runtime row through commit: a concurrent profile
+        // change must not invalidate the capacity/tooling validation we used.
+        let current = sqlx::query_scalar::<_, Option<i64>>(
+            "SELECT source_revision FROM mini_apparatus WHERE id=$1 FOR SHARE",
+        ).bind(apparatus).fetch_optional(&mut *tx).await
+            .map_err(|_| ProductionMapError::StoreFailed)?.flatten();
+        if current.and_then(|value| u64::try_from(value).ok()) != Some(expected) {
+            return Err(ProductionMapError::MoveNotAllowed);
+        }
+    }
     reject_qolip_in_use_tx(&mut tx, &write.session).await?;
 
     put_map_inner_tx(&mut tx, &write.updated_map).await?;
     let mut from_sequence = queue_sequence_for_update_tx(&mut tx, from_apparatus).await?;
     from_sequence.retain(|order_id| order_id.trim() != write.record.order_id.trim());
     let mut to_sequence = queue_sequence_for_update_tx(&mut tx, to_apparatus).await?;
+    if let Some(canonical) = &write.print_target_configuration {
+        let maps = super::sequence_move::load_maps_tx(&mut tx).await?;
+        let states: Vec<(String, String)> = sqlx::query_as(
+            "SELECT order_id,state FROM mini_queue_states WHERE canonical_apparatus_id=$1",
+        ).bind(to_apparatus).fetch_all(&mut *tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
+        let frozen: Vec<String> = sqlx::query_scalar(
+            "SELECT order_id FROM mini_order_control_states WHERE state='frozen'",
+        ).fetch_all(&mut *tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
+        to_sequence = crate::core::production_map::SequenceMoveState::from_data(
+            canonical, &maps, &to_sequence, &states.into_iter().collect(),
+            &frozen.into_iter().collect(), &std::collections::BTreeSet::new(),
+        ).order_ids;
+    }
     to_sequence.retain(|order_id| order_id.trim() != write.record.order_id.trim());
     to_sequence.push(write.record.order_id.trim().to_string());
     save_apparatus_sequence_tx(&mut tx, from_apparatus, &from_sequence).await?;
@@ -211,6 +237,16 @@ pub(super) async fn commit_apparatus_transfer(
     }
     for batch in &write.progress_batch_updates {
         put_order_progress_batch_tx(&mut tx, batch).await?;
+    }
+    for batch in &write.opening_wip_batch_updates {
+        let updated = sqlx::query(
+            "UPDATE mini_opening_wip_batches SET used_by_apparatus=$1, updated_at=to_timestamp($2)
+             WHERE batch_id=$3 AND order_id=$4 AND wip_status='in_use'
+               AND used_by_session_id=$5 AND used_by_apparatus=$6",
+        ).bind(to_apparatus).bind(batch.updated_at_unix as f64).bind(&batch.batch_id)
+            .bind(&write.record.order_id).bind(&write.session.session_id).bind(from_apparatus)
+            .execute(&mut *tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
+        if updated.rows_affected() != 1 { return Err(ProductionMapError::ProgressBatchNotResumable); }
     }
     sqlx::query(
         "UPDATE mini_apparatus_schedule_reservations AS reservation
@@ -453,6 +489,15 @@ async fn verify_transfer_preconditions(
         Some("completed") => return Err(ProductionMapError::OrderAlreadyCompleted),
         _ => return Err(ProductionMapError::ApparatusTransferOrderNotPaused),
     }
+    if let Some(expected) = &write.expected_map {
+        let current = sqlx::query_scalar::<_, serde_json::Value>(
+            "SELECT map_json FROM mini_production_maps WHERE id = $1 FOR UPDATE",
+        ).bind(write.record.order_id.trim()).fetch_one(&mut **tx).await
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        let current: crate::core::production_map::ProductionMapDefinition =
+            serde_json::from_value(current).map_err(|_| ProductionMapError::StoreFailed)?;
+        if &current != expected { return Err(ProductionMapError::WipRouteChanged); }
+    }
 
     let control_state = sqlx::query_scalar::<_, String>(
         "SELECT state
@@ -514,9 +559,29 @@ async fn verify_transfer_preconditions(
     .ok_or(ProductionMapError::ApparatusTransferSessionNotFound)?;
     if session.1.trim() != write.record.order_id.trim()
         || session.0.trim() != write.record.from_apparatus.trim()
-        || session.2 != "paused"
+        || !(session.2 == "paused" || (write.record.preserves_output_history && session.2 == "roll_detached"))
     {
         return Err(ProductionMapError::ApparatusTransferSessionMismatch);
+    }
+    if let Some(expected) = &write.expected_session {
+        let current = super::order_query_helpers::load_order_run_session(&mut **tx, &write.record.session_id)
+            .await?.ok_or(ProductionMapError::ApparatusTransferSessionNotFound)?;
+        if &current != expected { return Err(ProductionMapError::ApparatusTransferSessionMismatch); }
+        let controls = sqlx::query_scalar::<_, serde_json::Value>(
+            "SELECT record_json FROM mini_stage_order_controls WHERE order_id = $1 FOR UPDATE",
+        ).bind(write.record.order_id.trim()).fetch_all(&mut **tx).await
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        for control in controls {
+            let control: crate::core::production_map::OrderControlRecord =
+                serde_json::from_value(control).map_err(|_| ProductionMapError::StoreFailed)?;
+            if control.freeze_request.as_ref().is_some_and(|request| request.target_apparatus == write.record.from_apparatus) {
+                match control.state {
+                    crate::core::production_map::OrderControlState::Frozen => return Err(ProductionMapError::OrderFrozen),
+                    crate::core::production_map::OrderControlState::FreezeRequested => return Err(ProductionMapError::OrderFreezeRequested),
+                    _ => {}
+                }
+            }
+        }
     }
     let requeued = session.3.get("requeued_at_tail")
         .and_then(serde_json::Value::as_bool) == Some(true);
@@ -526,7 +591,26 @@ async fn verify_transfer_preconditions(
         return Err(ProductionMapError::ApparatusTransferOrderNotPaused);
     }
 
-    if let Some(expected_batch) = &write.progress_batch {
+    if write.record.preserves_output_history {
+        if !write.session.is_print_transfer_continuation() || write.progress_batch.is_some()
+            || !write.record.progress_batch_id.is_empty() || write.expected_map.is_none() || write.expected_session.is_none()
+        {
+            return Err(ProductionMapError::ApparatusTransferProgressMismatch);
+        }
+        let current = sqlx::query_scalar::<_, String>(
+            "SELECT a.barcode FROM mini_raw_material_assignments a
+             WHERE a.order_id=$1 AND a.canonical_apparatus_id=$2
+               AND NOT EXISTS(SELECT 1 FROM mini_raw_material_stock s
+                   WHERE lower(s.barcode)=lower(a.barcode) AND s.status='consumed')
+             ORDER BY a.barcode FOR UPDATE OF a",
+        ).bind(&write.record.order_id).bind(&write.record.from_apparatus)
+            .fetch_all(&mut **tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
+        let normalize = |barcodes: Vec<String>| barcodes.into_iter()
+            .map(|barcode| barcode.trim().to_ascii_uppercase()).collect::<std::collections::BTreeSet<_>>();
+        if normalize(current) != normalize(write.raw_material_assignments.iter().map(|a| a.barcode.clone()).collect()) {
+            return Err(ProductionMapError::RawMaterialAssignmentLocked);
+        }
+    } else if let Some(expected_batch) = &write.progress_batch {
         let batch = sqlx::query_as::<_, (String, String, String, String, String)>(
             "SELECT canonical_apparatus_id, order_id, session_id, action, status
              FROM mini_progress_batches
@@ -567,6 +651,15 @@ async fn verify_transfer_preconditions(
         }
     }
     for update in &write.progress_batch_updates {
+        if write.record.preserves_output_history {
+            let current = super::order_query_helpers::load_progress_batch(&mut **tx, &update.batch_id)
+                .await?.ok_or(ProductionMapError::WipRouteChanged)?;
+            if !write.expected_input_batches.contains(&current)
+                || current.wip_status != crate::core::production_map::OrderProgressBatchWipStatus::InUse
+                || current.used_by_session_id != write.session.session_id
+                || current.used_by_apparatus != write.record.from_apparatus
+            { return Err(ProductionMapError::WipRouteChanged); }
+        }
         let update_order_id = sqlx::query_scalar::<_, String>(
             "SELECT order_id
              FROM mini_progress_batches

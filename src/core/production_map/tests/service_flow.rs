@@ -46,6 +46,8 @@ mod progress_qr_lineage;
 mod temporary_pause_latency;
 #[path = "requeued_transfer.rs"]
 mod requeued_transfer;
+#[path = "printing_transfer.rs"]
+mod printing_transfer;
 #[path = "service_flow_rezka_astatka.rs"]
 mod rezka_astatka;
 
@@ -944,9 +946,10 @@ async fn paused_order_can_transfer_between_compatible_pechat_apparatuses_atomica
     assert_eq!(result.saved.map.id, order_id);
     assert_eq!(result.transfer.from_apparatus, from);
     assert_eq!(result.transfer.to_apparatus, to);
-    assert_eq!(result.transfer.progress_batch_id, batch.batch_id);
+    assert!(result.transfer.progress_batch_id.is_empty());
+    assert!(result.transfer.preserves_output_history);
     assert_eq!(result.transfer.session.apparatus, to);
-    assert_eq!(result.transfer.progress_batch.as_ref().unwrap().apparatus, to);
+    assert!(result.transfer.progress_batch.is_none());
     let reservation = service
         .apparatus_capacity_snapshot()
         .await
@@ -978,11 +981,11 @@ async fn paused_order_can_transfer_between_compatible_pechat_apparatuses_atomica
         .expect("session");
     assert_eq!(session.apparatus, to);
     let moved_batch = store
-        .progress_batch(&result.transfer.progress_batch_id)
+        .progress_batch(&batch.batch_id)
         .await
         .expect("batch lookup")
         .expect("batch");
-    assert_eq!(moved_batch.apparatus, to);
+    assert_eq!(moved_batch, batch);
     assert_eq!(moved_batch.produced_qty, 42.5);
     let moved_assignment = service
         .raw_material_assignments()
@@ -1004,10 +1007,7 @@ async fn paused_order_can_transfer_between_compatible_pechat_apparatuses_atomica
             queue_state::ApparatusQueueAction::Resume,
             &[to.to_string()],
             actor.clone(),
-            QueueProgressInput {
-                qr_payload: result.transfer.progress_batch.as_ref().unwrap().qr_payload.clone(),
-                ..QueueProgressInput::default()
-            },
+            QueueProgressInput::default(),
         )
         .await
         .expect("resume on replacement apparatus");
@@ -1015,10 +1015,7 @@ async fn paused_order_can_transfer_between_compatible_pechat_apparatuses_atomica
         resumed.states.get(order_id),
         Some(&"in_progress".to_string())
     );
-    assert_eq!(
-        resumed.progress_batch.expect("resumed batch").status,
-        OrderProgressBatchStatus::Resumed
-    );
+    assert!(resumed.progress_batch.is_none());
 
     let replay = service
         .transfer_apparatus_order(
@@ -1162,7 +1159,7 @@ async fn apparatus_transfer_cannot_bypass_frozen_or_completed_stage_state() {
 }
 
 #[tokio::test]
-async fn apparatus_transfer_updates_parent_wip_next_apparatus_lineage() {
+async fn apparatus_transfer_preserves_parent_wip_lineage() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
     let service = default_service_with_store(store.clone()).await;
     let actor = QueueActionActor {
@@ -1216,13 +1213,13 @@ async fn apparatus_transfer_updates_parent_wip_next_apparatus_lineage() {
         )
         .await
         .expect("transfer");
-    assert_eq!(result.transfer.progress_batch_updates.len(), 1);
+    assert!(result.transfer.progress_batch_updates.is_empty());
     let updated_parent = store
         .progress_batch("parent-lineage-batch")
         .await
         .expect("parent lookup")
         .expect("parent");
-    assert_eq!(updated_parent.next_apparatus, to);
+    assert_eq!(updated_parent.next_apparatus, from);
 }
 
 #[tokio::test]

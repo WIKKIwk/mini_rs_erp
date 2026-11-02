@@ -1969,7 +1969,7 @@ impl ProductionMapService {
             && session.payload_json.get("_reactivation_of_session_id").and_then(serde_json::Value::as_str).is_some_and(|id| !id.is_empty())
             && (crate::core::production_map::reactivation::reclose_control(&session).is_some()
                 || session.payload_json.get("_reactivation_started").and_then(serde_json::Value::as_bool) == Some(true));
-        if !has_output && !reopened_work {
+        if !has_output && !reopened_work && !session.is_print_transfer_continuation() {
             return Err(ProductionMapError::ProgressBatchNotResumable);
         }
         session.payload_json = resumed_handoff_session_payload(&session, &links);

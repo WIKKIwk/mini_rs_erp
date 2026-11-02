@@ -637,7 +637,11 @@ impl ProductionMapService {
             .await?;
         prepared.material_scan_skipped = skip_material_scan;
         if reacquire_materials {
-            prepared.event.payload_json["lamination_raw_reacquisition"] = serde_json::json!(true);
+            let transferred = prepared.session.as_ref().is_some_and(|session| session.is_print_transfer_continuation());
+            prepared.event.payload_json[if transferred { "print_transfer_material_reacquisition" } else { "lamination_raw_reacquisition" }] = serde_json::json!(true);
+            if let Some(session) = &mut prepared.session {
+                session.payload_json["print_transfer_materials_required"] = serde_json::json!(false);
+            }
         }
         if (action == queue_state::ApparatusQueueAction::Start || reacquire_materials) && !skip_material_scan {
             // Capture only the validated scans for this occurrence. Assignment
@@ -690,14 +694,16 @@ impl ProductionMapService {
             return Ok(false);
         }
         let canonical = self.resolve_canonical_apparatus_text(apparatus).await?;
-        if !super::apparatus::uses_lamination_workflow(&canonical) {
-            return Ok(false);
-        }
         Ok(self.store.active_order_run_session(canonical.runtime.apparatus_id.as_str(), order_id)
             .await?.is_some_and(|session| {
                 matches!(session.status, OrderRunStatus::Paused | OrderRunStatus::RollDetached)
-                    && session.payload_json.get("lamination_astatka_raw_released")
-                        .and_then(serde_json::Value::as_bool) == Some(true)
+                    && ((super::apparatus::uses_lamination_workflow(&canonical)
+                        && session.payload_json.get("lamination_astatka_raw_released")
+                            .and_then(serde_json::Value::as_bool) == Some(true))
+                        || (session.is_print_transfer_continuation()
+                            && live_material_rule(&canonical).is_some_and(|rule| rule.requires_material)
+                            && session.payload_json.get("print_transfer_materials_required")
+                                .and_then(serde_json::Value::as_bool) == Some(true)))
             }))
     }
 

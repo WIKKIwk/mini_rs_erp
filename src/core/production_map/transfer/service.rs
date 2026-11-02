@@ -5,7 +5,10 @@ use super::queue_state;
 use super::service::ProductionMapService;
 use super::store_port::ProductionMapApparatusTransferWrite;
 use super::types::*;
+use super::OpeningWipBatchStatus;
 
+#[path = "printing.rs"]
+mod printing;
 
 impl ProductionMapService {
     pub async fn transfer_apparatus_order(
@@ -86,7 +89,8 @@ impl ProductionMapService {
             return Err(ProductionMapError::MoveNotAllowed);
         }
         let target_display = target.runtime.display.display_name.clone();
-        if !transfer_move_allowed_by_id(&map, &from_id, &to_id) {
+        let preserve_output_history = super::pechat::is_pechat_apparatus(&source);
+        if !preserve_output_history && !transfer_move_allowed_by_id(&map, &from_id, &to_id) {
             return Err(ProductionMapError::MoveNotAllowed);
         }
 
@@ -127,7 +131,8 @@ impl ProductionMapService {
             .active_order_run_session(&from_id, &order_id)
             .await?
             .ok_or(ProductionMapError::ApparatusTransferSessionNotFound)?;
-        if source_session.status != OrderRunStatus::Paused
+        if !(source_session.status == OrderRunStatus::Paused
+            || (preserve_output_history && source_session.status == OrderRunStatus::RollDetached))
             || source_session.order_id.trim() != order_id
             || source_session.apparatus.trim() != from_id
         {
@@ -153,12 +158,19 @@ impl ProductionMapService {
                     && batch.apparatus.trim() == from_id
             })
             .collect::<Vec<_>>();
-        if paused_batches.len() > 1 || (paused_batches.is_empty() && !requeued) {
+        if !preserve_output_history && (paused_batches.len() > 1 || (paused_batches.is_empty() && !requeued)) {
             return Err(ProductionMapError::ApparatusTransferProgressMismatch);
         }
         // An issue freeze can stop work before any output exists. Move its
         // retained session without inventing a WIP batch or production quantity.
-        let mut progress_batch = paused_batches.into_iter().next().cloned();
+        let mut progress_batch = if preserve_output_history { None }
+            else { paused_batches.into_iter().next().cloned() };
+        let expected_map = preserve_output_history.then(|| map.clone());
+        let expected_session = preserve_output_history.then(|| source_session.clone());
+        let mut updated_map = map;
+        let target_node_id = if preserve_output_history {
+            Some(printing::select_target(&mut updated_map, &source_session, &from_id, &to_id, &target_display)?)
+        } else { None };
 
         let transfer_id = format!("apparatus-transfer:{idempotency_key}");
         let now = unix_seconds();
@@ -179,6 +191,20 @@ impl ProductionMapService {
             session.payload_json = serde_json::json!({});
         }
         session.payload_json["last_apparatus_transfer"] = transfer_payload.clone();
+        if let Some(node_id) = target_node_id {
+            session.status = OrderRunStatus::Paused;
+            session.stage_node_id = node_id.clone();
+            session.payload_json["_print_transfer"] = serde_json::json!({
+                "session_id": session.session_id, "apparatus": to_id,
+                "stage_node_id": session.stage_node_id, "transfer_id": transfer_id,
+            });
+            session.payload_json["print_transfer_setup_required"] = serde_json::json!(super::pechat::requires_qolip_scan(&target));
+            session.payload_json["print_transfer_materials_required"] = serde_json::json!(
+                super::materials::live_material_rule(&target).is_some_and(|rule| rule.requires_material));
+            if let Some(payload) = session.payload_json.as_object_mut() {
+                payload.remove("_resume_pause");
+            }
+        }
 
         if let Some(batch) = &mut progress_batch {
             batch.apparatus = to_id.clone();
@@ -202,6 +228,45 @@ impl ProductionMapService {
         }
 
         let mut progress_batch_updates = Vec::new();
+        let mut expected_input_batches = Vec::new();
+        let mut opening_wip_batch_updates = Vec::new();
+        if preserve_output_history {
+            for input in progress_batches.iter().filter(|batch|
+                batch.wip_status == OrderProgressBatchWipStatus::InUse
+                    && batch.used_by_session_id == session.session_id)
+            {
+                if input.used_by_apparatus != from_id {
+                    return Err(ProductionMapError::ProgressBatchNotResumable);
+                }
+                let mut update = input.clone();
+                let mut route = super::wip_route::resolve_wip_input_route(&updated_map, input)?;
+                if !super::chain::stage_node_ids_match_for_map(&updated_map, &route.stage_node_id, &session.stage_node_id) {
+                    return Err(ProductionMapError::WipRouteChanged);
+                }
+                route.stage_node_id = session.stage_node_id.clone();
+                update.payload_json["wip_route_binding"] = serde_json::to_value(route)
+                    .map_err(|_| ProductionMapError::StoreFailed)?;
+                update.used_by_apparatus = to_id.clone();
+                update.current_apparatus = to_id.clone();
+                update.current_location = format!("{target_display} kirim");
+                update.refresh_status_detail();
+                super::wip_route::resolve_wip_input_route(&updated_map, &update)?;
+                expected_input_batches.push(input.clone());
+                progress_batch_updates.push(update);
+            }
+            for record in self.store.opening_wip_records_for_orders(&[order_id.clone()]).await? {
+                for mut batch in record.batches.into_iter().filter(|batch|
+                    batch.wip_status == OpeningWipBatchStatus::InUse && batch.used_by_session_id == session.session_id)
+                {
+                    if batch.used_by_apparatus != from_id {
+                        return Err(ProductionMapError::ProgressBatchNotResumable);
+                    }
+                    batch.used_by_apparatus = to_id.clone();
+                    batch.updated_at_unix = now;
+                    opening_wip_batch_updates.push(batch);
+                }
+            }
+        }
         if let Some(batch) = progress_batch
             .as_ref()
             .filter(|batch| !batch.parent_batch_id.trim().is_empty())
@@ -223,8 +288,7 @@ impl ProductionMapService {
             progress_batch_updates.push(parent_batch);
         }
 
-        let mut updated_map = map;
-        if !reassign_alternative_apparatus_assignment_by_id(
+        if !preserve_output_history && !reassign_alternative_apparatus_assignment_by_id(
             &mut updated_map,
             &from_id,
             &to_id,
@@ -241,14 +305,18 @@ impl ProductionMapService {
         );
         let mut from_sequence = sequences.get(&from_id).cloned().unwrap_or_default();
         from_sequence.retain(|id| id.trim() != order_id);
-        let mut to_sequence = sequences.get(&to_id).cloned().unwrap_or_default();
+        let mut to_sequence = if preserve_output_history {
+            super::SequenceMoveState::from_data(&target, &maps,
+                sequences.get(&to_id).map(Vec::as_slice).unwrap_or_default(), &to_states,
+                &std::collections::BTreeSet::new(), &std::collections::BTreeSet::new()).order_ids
+        } else { sequences.get(&to_id).cloned().unwrap_or_default() };
         to_sequence.retain(|id| id.trim() != order_id);
         to_sequence.push(order_id.clone());
 
-        let raw_material_assignments = self
-            .store
-            .raw_material_assignments()
-            .await?
+        let assignments = if preserve_output_history {
+            self.store.raw_material_assignments_for_transfer(&order_id, &from_id).await?
+        } else { self.store.raw_material_assignments().await? };
+        let raw_material_assignments = assignments
             .into_iter()
             .filter(|assignment| {
                 assignment.order_id.trim() == order_id
@@ -285,12 +353,21 @@ impl ProductionMapService {
             session: session.clone(),
             progress_batch: progress_batch.clone(),
             progress_batch_updates: progress_batch_updates.clone(),
+            preserves_output_history: preserve_output_history,
             created_at_unix: now,
         };
         let record = self
             .store
             .commit_apparatus_transfer(ProductionMapApparatusTransferWrite {
                 record,
+                expected_map,
+                expected_session,
+                expected_apparatus_revisions: if preserve_output_history {
+                    vec![(from_id.clone(), source.runtime.source_revision), (to_id.clone(), target.runtime.source_revision)]
+                } else { Vec::new() },
+                print_target_configuration: preserve_output_history.then(|| target.as_ref().clone()),
+                expected_input_batches,
+                opening_wip_batch_updates,
                 updated_map,
                 from_sequence,
                 to_sequence,

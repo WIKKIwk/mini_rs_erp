@@ -387,8 +387,8 @@ pub(super) async fn load_active_order_run_sessions_for_worker(
     rows.into_iter().map(progress_session_from_row).collect()
 }
 
-pub(super) async fn load_order_run_session(
-    pool: &PgPool,
+pub(super) async fn load_order_run_session<'e, E: sqlx::Executor<'e, Database = sqlx::Postgres>>(
+    executor: E,
     session_id: &str,
 ) -> Result<Option<OrderRunSession>, ProductionMapError> {
     let row = sqlx::query_as::<_, ProgressSessionRow>(
@@ -401,7 +401,7 @@ pub(super) async fn load_order_run_session(
          WHERE session_id = $1",
     )
     .bind(session_id.trim())
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
     row.map(progress_session_from_row).transpose()
