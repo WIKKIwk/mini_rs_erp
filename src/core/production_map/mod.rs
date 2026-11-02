@@ -22,7 +22,7 @@ mod participants;
 pub use participants::StageParticipant;
 pub mod output_stats;
 pub(crate) mod layer_remainder;
-pub use layer_remainder::{LaminationSettings, LayerRemainderInput, LayerRemainderSource, LayerRemainderRecord, LayerRemainderRawStock};
+pub use layer_remainder::{LaminationSettings, LaminationLabelSettingsPatch, LaminationRemainderWeights, LaminationRemainderSourceRevision, LayerRemainderInput, LayerRemainderSource, LayerRemainderRecord, LayerRemainderRawStock};
 #[path = "pechat/implementation.rs"]
 pub mod pechat;
 mod prepared_queue_action;

@@ -304,6 +304,7 @@ async fn reclose_preserves_a_physical_wip_remainder() {
         .service
         .record_laminatsiya_astatka_shift(
             LaminatsiyaAstatkaShiftInput {
+                layer_remainder_weights: None,
                 action: Action::Pause,
                 full_completion_report_required: false,
                 apparatus: LAM.into(),

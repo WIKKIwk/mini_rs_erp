@@ -45,6 +45,8 @@ pub struct LaminatsiyaAstatkaShiftInput {
     pub bobina_kg: Option<f64>,
     pub description: String,
     pub layer_remainders: Vec<LaminatsiyaAstatkaLayerInput>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layer_remainder_weights: Option<LaminationRemainderWeights>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -63,7 +65,9 @@ pub struct LaminatsiyaAstatkaCommitResult {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct LaminatsiyaAstatkaSnapshot {
+    pub remainder_weights_supported: bool,
     pub layer_remainders_required: bool,
+    pub label_settings: LaminationSettings,
     pub session: Option<OrderRunSession>,
     pub sources: Vec<LayerRemainderSource>,
     pub allow_empty_sources: bool,
@@ -81,7 +85,7 @@ impl ProductionMapService {
     ) -> Result<LaminatsiyaAstatkaSnapshot, ProductionMapError> {
         let apparatus = apparatus.trim();
         let order_id = order_id.trim();
-        let layer_remainders_required = self.lamination_settings().await?.layer_remainders_required;
+        let label_settings = self.lamination_settings().await?;
         // A saved request is an immutable receipt. Do not make reconciliation
         // depend on stocks that were consumed by this request or a later shift.
         if !request_id.trim().is_empty()
@@ -94,24 +98,14 @@ impl ProductionMapService {
                 return Err(ProductionMapError::ProgressInputInvalid);
             }
             return Ok(LaminatsiyaAstatkaSnapshot {
-                layer_remainders_required,
+                remainder_weights_supported: true,
+                layer_remainders_required: true,
+                label_settings,
                 session: Some(result.session.clone()),
                 sources: Vec::new(),
                 allow_empty_sources: false,
                 remainders: result.remainders.clone(),
                 request_result: Some(result),
-            });
-        }
-        // The legacy count/waste report does not need physical input rolls.
-        // In particular, missing historical roll metrics must not block it.
-        if !layer_remainders_required {
-            return Ok(LaminatsiyaAstatkaSnapshot {
-                layer_remainders_required,
-                session: None,
-                sources: Vec::new(),
-                allow_empty_sources: false,
-                remainders: Vec::new(),
-                request_result: None,
             });
         }
         let mut sources = self.layer_remainder_sources(apparatus, order_id).await?;
@@ -138,7 +132,9 @@ impl ProductionMapService {
                         != Some("opening_wip")
             });
         Ok(LaminatsiyaAstatkaSnapshot {
-            layer_remainders_required,
+            remainder_weights_supported: true,
+            layer_remainders_required: true,
+            label_settings,
             session,
             sources,
             allow_empty_sources,
@@ -159,6 +155,13 @@ impl ProductionMapService {
         input.session_id = input.session_id.trim().to_string();
         input.request_id = input.request_id.trim().to_string();
         input.description = input.description.trim().to_string();
+        if let Some(weights) = &input.layer_remainder_weights {
+            if !input.layer_remainders.is_empty() {
+                return Err(ProductionMapError::ProgressInputInvalid);
+            }
+            input.lamination_print_leftover_rolls = weights.wip_net_kg;
+            input.lamination_film_leftover_rolls = weights.film_net_kg;
+        }
         if input.apparatus.is_empty()
             || input.order_id.is_empty()
             || input.session_id.is_empty()
@@ -230,9 +233,6 @@ impl ProductionMapService {
                 Err(ProductionMapError::ProgressInputInvalid)
             };
         }
-        if !self.lamination_settings().await?.layer_remainders_required {
-            return Err(ProductionMapError::QueueActionNotAllowed);
-        }
         let order_id = self.astatka_order_id(&input.order_id).await?;
         let session = self
             .astatka_execution_anchor(&order_id, &input.apparatus)
@@ -273,6 +273,11 @@ impl ProductionMapService {
             .into_iter()
             .filter(|s| s.session_id == session.session_id)
             .collect::<Vec<_>>();
+        if let Some(weights) = &input.layer_remainder_weights {
+            // Resolve the two kg fields against this execution's physical rolls.
+            // Never infer a source from quantity alone or from a historical order.
+            input.layer_remainders = weights.dispositions(&sources)?;
+        }
         if (sources.is_empty()
             && super::materials::live_material_rule(&canonical)
                 .is_some_and(|rule| rule.requires_material))
@@ -307,7 +312,8 @@ impl ProductionMapService {
                     .count() as f64
             };
             if session.status == OrderRunStatus::Completed
-                || (!sources.is_empty()
+                || (input.layer_remainder_weights.is_none()
+                    && !sources.is_empty()
                     && (input.lamination_print_leftover_rolls != count("progress_batch")
                         || input.lamination_film_leftover_rolls != count("raw_material")))
             {

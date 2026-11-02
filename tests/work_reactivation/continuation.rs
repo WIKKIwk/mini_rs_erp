@@ -31,6 +31,7 @@ async fn exhaust_lamination_inputs(f: &Fixture) -> LaminatsiyaAstatkaCommitResul
     f.service
         .record_laminatsiya_astatka_shift(
             LaminatsiyaAstatkaShiftInput {
+                layer_remainder_weights: None,
                 action: Action::Complete,
                 full_completion_report_required: true,
                 apparatus: LAM.into(),

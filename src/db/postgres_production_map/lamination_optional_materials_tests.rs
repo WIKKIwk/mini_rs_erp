@@ -187,6 +187,11 @@ async fn checks(pool: PgPool) {
             28230.0
         );
         let input = LaminatsiyaAstatkaShiftInput {
+            layer_remainder_weights: (index == 0).then_some(LaminationRemainderWeights {
+                wip_net_kg: 0.0,
+                film_net_kg: 0.0,
+                expected_sources: vec![],
+            }),
             action: queue_state::ApparatusQueueAction::Complete,
             full_completion_report_required: true,
             apparatus: LAM.into(),

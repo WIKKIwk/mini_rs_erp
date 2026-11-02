@@ -211,6 +211,10 @@ pub enum ProductionMapError {
     LaminatsiyaCompletionMetricsRequired,
     #[error("laminatsiya astatka metrics are required")]
     LaminatsiyaAstatkaMetricsRequired,
+    #[error("lamination remainder source or its weight/length basis is missing")]
+    LaminationRemainderSourceMissing,
+    #[error("more than one mounted roll matches a lamination remainder")]
+    LaminationRemainderSourceAmbiguous,
     #[error("rezka astatka metrics are required")]
     RezkaAstatkaMetricsRequired,
     #[error("rezka progress metrics are required")]

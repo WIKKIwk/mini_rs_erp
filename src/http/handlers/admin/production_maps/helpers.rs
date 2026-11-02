@@ -447,6 +447,12 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         ProductionMapError::LaminatsiyaAstatkaMetricsRequired => {
             bad_request("laminatsiya_astatka_metrics_required")
         }
+        ProductionMapError::LaminationRemainderSourceMissing => {
+            conflict("lamination_remainder_source_missing")
+        }
+        ProductionMapError::LaminationRemainderSourceAmbiguous => {
+            conflict("lamination_remainder_source_ambiguous")
+        }
         ProductionMapError::RezkaAstatkaMetricsRequired => {
             bad_request("rezka_astatka_metrics_required")
         }

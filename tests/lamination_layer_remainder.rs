@@ -97,6 +97,13 @@ async fn checks(pool: PgPool) {
         .unwrap();
     // Existing delivery receipts must survive the extended ledger allowlist.
     sqlx::raw_sql("INSERT INTO mini_raw_material_events(event_id,idempotency_key,event_type,warehouse,barcode,item_code,item_name,qty_delta,uom,actor_role,actor_ref,source_type,source_id) VALUES('historical-delivery','historical-delivery','delivery_received','Raw W','HISTORICAL','FILM','Film',0,'kg','aparatchi','lam-worker','material_delivery','delivery')").execute(&pool).await.unwrap();
+    apply_postgres_migrations_through_version(&pool, "0184")
+        .await
+        .unwrap();
+    sqlx::query("UPDATE mini_lamination_settings SET layer_remainders_required=false")
+        .execute(&pool)
+        .await
+        .unwrap();
     apply_foundation_migration(&pool).await.unwrap();
     // Real installations configure material tracking; bare factory defaults
     // intentionally omit it. Enable the actual policy via the canonical API.
@@ -140,6 +147,24 @@ async fn checks(pool: PgPool) {
         store.clone(),
         Arc::new(CanonicalServiceApparatusResolver::new(canonical)),
     );
+    let migrated = service.lamination_settings().await.unwrap();
+    assert!(!migrated.print_wip_remainder_labels && !migrated.print_film_remainder_labels);
+    let changed = service
+        .update_lamination_label_settings(
+            LaminationLabelSettingsPatch {
+                print_wip_remainder_labels: Some(true),
+                print_film_remainder_labels: None,
+            },
+            &QueueActionActor {
+                role: "admin".into(),
+                ref_: "admin".into(),
+                display_name: "Admin".into(),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(changed.print_wip_remainder_labels && !changed.print_film_remainder_labels);
+
     let map:ProductionMapDefinition=serde_json::from_value(json!({"id":ORDER,"product_code":"PRODUCT","title":"Layer remainder","nodes":[{"id":"start","kind":"start","title":"Start"},{"id":"print","kind":"apparatus","title":"Bosma","apparatus_id":PRINT},{"id":"lam","kind":"apparatus","title":"Lamination","apparatus_id":LAM},{"id":"end","kind":"end","title":"End"}],"edges":[{"from":"start","to":"print"},{"from":"print","to":"lam"},{"from":"lam","to":"end"}]})).unwrap();
     store.put_map(map).await.unwrap();
     store
@@ -597,12 +622,52 @@ async fn additional_intake_and_legacy_mounted_source(
         .await
         .unwrap()
         .remove(0);
-    let mut request = input(&source, 10.0, "additional-raw-remainder");
-    request.order_id = EXTRA_ORDER.into();
-    let record = service
-        .record_layer_remainder(request.clone(), actor())
+    let request = LaminatsiyaAstatkaShiftInput {
+        action: queue_state::ApparatusQueueAction::Pause,
+        full_completion_report_required: false,
+        apparatus: LAM.into(),
+        order_id: EXTRA_ORDER.into(),
+        session_id: source.session_id.clone(),
+        request_id: "additional-raw-remainder-kg".into(),
+        lamination_print_leftover_rolls: 0.0,
+        lamination_film_leftover_rolls: 10.0,
+        total_waste: 0.0,
+        finished_goods_meter: None,
+        finished_goods_kg: None,
+        bobina_kg: None,
+        description: String::new(),
+        layer_remainders: vec![],
+        layer_remainder_weights: Some(LaminationRemainderWeights {
+            wip_net_kg: 0.0,
+            film_net_kg: 10.0,
+            expected_sources: vec![LaminationRemainderSourceRevision {
+                source_kind: source.source_kind.clone(),
+                source_id: source.source_id.clone(),
+                expected_revision: source.revision,
+            }],
+        }),
+    };
+    let result = service
+        .record_laminatsiya_astatka_shift(request.clone(), actor(), &[LAM.into()])
         .await
         .unwrap();
+    assert_eq!(
+        service
+            .record_laminatsiya_astatka_shift(request, actor(), &[LAM.into()])
+            .await
+            .unwrap(),
+        result
+    );
+    assert_eq!(
+        result
+            .report
+            .as_ref()
+            .unwrap()
+            .lamination_film_leftover_rolls,
+        10.0
+    );
+    assert_eq!(result.remainders.len(), 1);
+    let record = &result.remainders[0];
     assert_eq!(record.remaining_meter, 300.0);
     assert_eq!(record.producer_name, "Original Supplier");
     assert_eq!(record.recorded_by.ref_, "lam-worker");
@@ -610,13 +675,6 @@ async fn additional_intake_and_legacy_mounted_source(
     assert_eq!(stock.qty, 10.0);
     assert_eq!(stock.status, "available");
     assert_eq!(stock.source_receipt_id, "additional-receipt");
-    assert_eq!(
-        service
-            .record_layer_remainder(request, actor())
-            .await
-            .unwrap(),
-        record
-    );
     let status: String =
         sqlx::query_scalar("SELECT status FROM mini_raw_material_stock WHERE id='extra25'")
             .fetch_one(pool)

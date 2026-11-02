@@ -31,9 +31,13 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
     async fn lamination_settings(&self) -> Result<LaminationSettings, ProductionMapError> {
         Ok(self.lamination_settings.read().await.clone())
     }
-    async fn update_lamination_settings(&self, required: bool, _actor: &QueueActionActor) -> Result<LaminationSettings, ProductionMapError> {
+    async fn update_lamination_settings(
+        &self,
+        patch: super::LaminationLabelSettingsPatch,
+        _actor: &QueueActionActor,
+    ) -> Result<LaminationSettings, ProductionMapError> {
         let mut settings = self.lamination_settings.write().await;
-        settings.layer_remainders_required = required;
+        settings.apply(patch);
         Ok(settings.clone())
     }
     async fn paddon_management_settings(&self) -> Result<PaddonManagementSettings, ProductionMapError> {

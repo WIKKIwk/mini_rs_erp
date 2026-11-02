@@ -3,7 +3,9 @@ use super::*;
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct LaminationSettingsRequest {
-    layer_remainders_required: bool,
+    layer_remainders_required: Option<bool>,
+    print_wip_remainder_labels: Option<bool>,
+    print_film_remainder_labels: Option<bool>,
 }
 
 pub async fn production_map_lamination_settings(
@@ -34,10 +36,23 @@ pub async fn production_map_lamination_settings(
                 return Err(forbidden());
             }
             let input: LaminationSettingsRequest = parse_json(&body)?;
+            let legacy = input.layer_remainders_required;
+            if legacy.is_some()
+                && (input.print_wip_remainder_labels.is_some()
+                    || input.print_film_remainder_labels.is_some())
+                || legacy.is_none()
+                    && input.print_wip_remainder_labels.is_none()
+                    && input.print_film_remainder_labels.is_none()
+            {
+                return Err(bad_request("lamination_label_settings_required"));
+            }
             state
                 .production_maps
-                .update_lamination_settings(
-                    input.layer_remainders_required,
+                .update_lamination_label_settings(
+                    crate::core::production_map::LaminationLabelSettingsPatch {
+                        print_wip_remainder_labels: input.print_wip_remainder_labels.or(legacy),
+                        print_film_remainder_labels: input.print_film_remainder_labels.or(legacy),
+                    },
                     &queue_action_actor(&principal),
                 )
                 .await

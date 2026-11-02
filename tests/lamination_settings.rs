@@ -93,7 +93,7 @@ fn config(path: &Path) -> AppConfig {
 }
 
 #[tokio::test]
-async fn only_admin_can_disable_qr_returns_while_legacy_completion_and_astatka_keep_working() {
+async fn only_managers_change_independent_labels_while_reporting_stays_available() {
     let directory = tempfile::tempdir().unwrap();
     let mut state = AppState::verification(config(directory.path()));
     state.sessions = SessionManager::memory(Some(3600));
@@ -181,39 +181,43 @@ async fn only_admin_can_disable_qr_returns_while_legacy_completion_and_astatka_k
     let (status, body) = request(&router, "GET", &worker, SETTINGS, Value::Null).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["settings"]["layer_remainders_required"], false);
-    // Disabled mode works without loading or requiring any historical physical sources.
-    let uri = format!(
-        "/v1/mobile/admin/production-maps/laminatsiya-astatka?apparatus={lam}&order_id={ORDER}"
-    );
-    let (status, snapshot) = request(&router, "GET", &worker, &uri, Value::Null).await;
-    assert_eq!(status, StatusCode::OK, "{snapshot}");
-    assert_eq!(snapshot["layer_remainders_required"], false);
-    assert_eq!(snapshot["sources"], json!([]));
-
+    // New partial updates change one side without clobbering the other.
+    let (status, body) = request(
+        &router,
+        "PUT",
+        &admin,
+        SETTINGS,
+        json!({"print_wip_remainder_labels":true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["settings"]["print_wip_remainder_labels"], true);
+    assert_eq!(body["settings"]["print_film_remainder_labels"], false);
+    let (status, body) = request(
+        &router,
+        "PUT",
+        &admin,
+        SETTINGS,
+        json!({"print_film_remainder_labels":true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["settings"]["print_wip_remainder_labels"], true);
+    assert_eq!(body["settings"]["print_film_remainder_labels"], true);
+    for invalid in [
+        json!({}),
+        json!({"layer_remainders_required":false,"print_wip_remainder_labels":true}),
+    ] {
+        assert_eq!(
+            request(&router, "PUT", &admin, SETTINGS, invalid).await.0,
+            StatusCode::BAD_REQUEST
+        );
+    }
     let actor = QueueActionActor {
         role: "aparatchi".into(),
         ref_: "lam-worker".into(),
         display_name: "Laminator".into(),
     };
-    let error = state
-        .production_maps
-        .record_layer_remainder(
-            LayerRemainderInput {
-                apparatus: lam.into(),
-                order_id: ORDER.into(),
-                session_id: "lam-session".into(),
-                source_kind: "progress_batch".into(),
-                source_id: "original".into(),
-                expected_revision: 1,
-                remaining_net_kg: 2.0,
-                request_id: "disabled-request".into(),
-            },
-            actor.clone(),
-        )
-        .await
-        .unwrap_err();
-    assert!(matches!(error, ProductionMapError::QueueActionNotAllowed));
-
     let map = serde_json::from_value(json!({
         "id":ORDER, "title":"Lamination", "product_code":"PET", "code":"PET",
         "nodes":[{"id":"start","kind":"start","title":"Start"},

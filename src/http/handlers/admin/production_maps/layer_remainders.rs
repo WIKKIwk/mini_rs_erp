@@ -87,6 +87,17 @@ pub async fn production_map_layer_remainders(
             .warehouse_events
             .notify_updated(&stock.warehouse, "layer_remainder_recorded");
     }
+    let settings = state
+        .production_maps
+        .lamination_settings()
+        .await
+        .map_err(production_map_error)?;
+    if !settings.prints_remainder(&remainder.source_kind) {
+        return Ok(json_response(serde_json::json!({
+            "ok": true, "remainder": remainder, "print": {"ok":false,"status":"disabled"},
+            "label_settings": settings,
+        })));
+    }
     layer_remainder_response(&state, remainder, &input.print).await
 }
 
@@ -275,6 +286,22 @@ pub(super) async fn layer_remainder_print(
         print["qr_payload"] = serde_json::json!(remainder.qr_payload);
         print["net_qty"] = serde_json::json!(remainder.remaining_net_kg);
         print["progress_qty"] = serde_json::json!(remainder.remaining_meter);
+        if let Some(batch) = &remainder.progress_batch {
+            print["completed_at_unix"] = serde_json::json!(batch.completed_at_unix);
+            // Historical WIP owns the product/producer data. Only its order code
+            // is recovered from the same order map when not in the snapshot.
+            let order_code = batch
+                .payload_json
+                .get("order_code")
+                .and_then(serde_json::Value::as_str)
+                .filter(|code| !code.trim().is_empty())
+                .map(str::to_string);
+            if let Some(order_code) = order_code {
+                print["order_code"] = serde_json::json!(order_code);
+            } else if let Ok(Some(map)) = state.production_maps.raw_map(&batch.order_id).await {
+                print["order_code"] = serde_json::json!(map.order_number);
+            }
+        }
         if let Some(stock) = &remainder.raw_material_stock {
             print["qty"] = serde_json::json!(remainder.remaining_net_kg);
             print["epc"] = serde_json::json!(stock.barcode);

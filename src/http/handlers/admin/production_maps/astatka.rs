@@ -2,6 +2,10 @@ use super::*;
 
 use crate::core::production_map::queue_state;
 
+#[cfg(test)]
+#[path = "astatka_label_tests.rs"]
+mod label_tests;
+
 #[derive(serde::Deserialize)]
 struct BosmaAstatkaRequest {
     apparatus: String,
@@ -128,6 +132,8 @@ struct LaminatsiyaAstatkaRequest {
     request_id: String,
     #[serde(default)]
     layer_remainders: Option<Vec<crate::core::production_map::LaminatsiyaAstatkaLayerInput>>,
+    #[serde(default)]
+    layer_remainder_weights: Option<crate::core::production_map::LaminationRemainderWeights>,
     #[serde(flatten)]
     print: super::layer_remainders::LayerRemainderPrintOptions,
 }
@@ -237,10 +243,11 @@ pub async fn production_map_laminatsiya_astatka(
         response["ok"] = serde_json::json!(true);
         if response["request_result"].is_object() {
             response["request_result"]["ok"] = serde_json::json!(true);
+            response["request_result"]["label_settings"] = response["label_settings"].clone();
         }
         return Ok(json_response(response));
     }
-    if let Some(layer_remainders) = input.layer_remainders {
+    if input.layer_remainders.is_some() || input.layer_remainder_weights.is_some() {
         super::layer_remainders::validate_layer_print(&input.print)?;
         let required = |value: Option<f64>| {
             value.ok_or_else(|| {
@@ -258,15 +265,26 @@ pub async fn production_map_laminatsiya_astatka(
                     session_id: input.session_id,
                     request_id: input.request_id,
                     lamination_print_leftover_rolls: required(
-                        input.lamination_print_leftover_rolls,
+                        input
+                            .layer_remainder_weights
+                            .as_ref()
+                            .map(|w| w.wip_net_kg)
+                            .or(input.lamination_print_leftover_rolls),
                     )?,
-                    lamination_film_leftover_rolls: required(input.lamination_film_leftover_rolls)?,
+                    lamination_film_leftover_rolls: required(
+                        input
+                            .layer_remainder_weights
+                            .as_ref()
+                            .map(|w| w.film_net_kg)
+                            .or(input.lamination_film_leftover_rolls),
+                    )?,
                     total_waste: required(input.total_waste)?,
                     finished_goods_meter: input.finished_goods_meter,
                     finished_goods_kg: input.finished_goods_kg,
                     bobina_kg: input.bobina_kg,
                     description: input.description,
-                    layer_remainders,
+                    layer_remainders: input.layer_remainders.unwrap_or_default(),
+                    layer_remainder_weights: input.layer_remainder_weights,
                 },
                 queue_action_actor(&principal),
                 &assigned_apparatus,
@@ -275,8 +293,13 @@ pub async fn production_map_laminatsiya_astatka(
             .map_err(production_map_error)?;
         return laminatsiya_astatka_shift_response(&state, result, &input.print).await;
     }
-    if input.action.is_some_and(|action| action != queue_state::ApparatusQueueAction::Pause) {
-        return Err(production_map_error(ProductionMapError::ProgressInputInvalid));
+    if input
+        .action
+        .is_some_and(|action| action != queue_state::ApparatusQueueAction::Pause)
+    {
+        return Err(production_map_error(
+            ProductionMapError::ProgressInputInvalid,
+        ));
     }
     let report = state
         .production_maps
@@ -381,6 +404,11 @@ async fn laminatsiya_astatka_shift_response(
     // Hardware is contacted after the atomic business commit. A failed label
     // retains its saved QR and does not turn a successful stock write into an
     // ambiguous failed submission.
+    let label_settings = state
+        .production_maps
+        .lamination_settings()
+        .await
+        .map_err(production_map_error)?;
     let mut prints = Vec::new();
     for batch in &result.progress_batches {
         let request = ProgressLabelPrintRequest {
@@ -438,7 +466,10 @@ async fn laminatsiya_astatka_shift_response(
                 .warehouse_events
                 .notify_updated(&stock.warehouse, "layer_remainder_recorded");
         }
-        if remainder.qr_payload.trim().is_empty() || remainder.remaining_net_kg <= 0.0 {
+        if remainder.qr_payload.trim().is_empty()
+            || remainder.remaining_net_kg <= 0.0
+            || !label_settings.prints_remainder(&remainder.source_kind)
+        {
             continue;
         }
         let print =
@@ -455,6 +486,8 @@ async fn laminatsiya_astatka_shift_response(
         .map_err(|_| production_map_error(ProductionMapError::StoreFailed))?;
     response["ok"] = serde_json::json!(true);
     response["prints"] = serde_json::json!(prints);
+    response["label_settings"] = serde_json::json!(label_settings);
+    response["remainder_weights_supported"] = serde_json::json!(true);
     response["rev"] = serde_json::json!(state.production_maps.snapshot_revision());
     response["epoch"] = serde_json::json!(state.production_maps.snapshot_epoch());
     Ok(json_response(response))

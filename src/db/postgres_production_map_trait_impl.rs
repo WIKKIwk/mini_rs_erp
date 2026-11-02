@@ -17,8 +17,12 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
     async fn lamination_settings(&self) -> Result<crate::core::production_map::LaminationSettings, ProductionMapError> {
         lamination_settings::load(&self.pool).await
     }
-    async fn update_lamination_settings(&self, required: bool, actor: &QueueActionActor) -> Result<crate::core::production_map::LaminationSettings, ProductionMapError> {
-        lamination_settings::update(&self.pool, required, actor).await
+    async fn update_lamination_settings(
+        &self,
+        patch: crate::core::production_map::LaminationLabelSettingsPatch,
+        actor: &QueueActionActor,
+    ) -> Result<crate::core::production_map::LaminationSettings, ProductionMapError> {
+        lamination_settings::update(&self.pool, patch, actor).await
     }
     async fn reclose_reactivated_work(&self, target: &crate::core::production_map::ReactivationRecloseTarget, actor: &QueueActionActor, assigned: &[String]) -> Result<(), ProductionMapError> {
         reactivation::reclose::execute(self, target, actor, assigned).await

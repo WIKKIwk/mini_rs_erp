@@ -14,6 +14,8 @@ const CUT: &str = "apparatus:default:asset-010";
 mod reclose;
 #[path = "work_reactivation/continuation.rs"]
 mod continuation;
+#[path = "work_reactivation/lamination_labels.rs"]
+mod lamination_labels;
 
 fn actor() -> QueueActionActor {
     QueueActionActor {

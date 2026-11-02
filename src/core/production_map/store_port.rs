@@ -240,7 +240,9 @@ pub trait ProductionMapStorePort: Send + Sync {
         Ok(LaminationSettings::default())
     }
     async fn update_lamination_settings(
-        &self, _required: bool, _actor: &QueueActionActor,
+        &self,
+        _patch: super::LaminationLabelSettingsPatch,
+        _actor: &QueueActionActor,
     ) -> StoreResult<LaminationSettings> {
         Err(ProductionMapError::StoreFailed)
     }
