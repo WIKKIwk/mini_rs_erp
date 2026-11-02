@@ -35,6 +35,8 @@ async fn two_kg_fields_commit_pause_and_complete_with_original_wip_and_stable_re
             layer_remainder_weights: Some(LaminationRemainderWeights {
                 wip_net_kg: 3.25,
                 film_net_kg: 0.0,
+                wip_source_id: None,
+                film_source_id: None,
                 expected_sources: vec![LaminationRemainderSourceRevision {
                     source_kind: source.source_kind.clone(),
                     source_id: source.source_id.clone(),

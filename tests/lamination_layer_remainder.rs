@@ -607,6 +607,75 @@ async fn additional_intake_and_legacy_mounted_source(
         .fetch_one(&mut *connection).await.unwrap();
     assert_eq!(restored, 0.0);
     drop(connection);
+
+    // A replacement roll becomes the physical film input. The previous roll
+    // remains in the audit/resource list and must receive zero, not the 10 kg.
+    sqlx::query("INSERT INTO mini_raw_material_stock(id,warehouse,item_code,item_name,barcode,qty,width_mm,micron,length_m,uom,status,source_receipt_id,payload_json) VALUES('a-current40','Raw W','FILM','CPP','a-current40',40,1000,20,1200,'kg','available','replacement-receipt','{\"gross_qty\":43,\"tare_kg\":3}')")
+        .execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO mini_inventory_placements(asset_kind,asset_ref,physical_location_id) VALUES('raw_material','a-current40','inventory_location:state:lam-state')")
+        .execute(pool).await.unwrap();
+    let replacement = RawMaterialAssignment {
+        order_id: EXTRA_ORDER.into(),
+        apparatus_id: mini_rs_erp::core::apparatus_standard::ApparatusId::new(LAM).unwrap(),
+        apparatus: LAM.into(),
+        barcode: "a-current40".into(),
+        item_code: "FILM".into(),
+        item_name: "CPP".into(),
+        item_group: "All Item Groups".into(),
+        assigned_by_role: "material_taminotchi".into(),
+        assigned_by_ref: "replacement-supplier".into(),
+        assigned_by_display_name: "Replacement Supplier".into(),
+        assigned_at: "2026-11-02".into(),
+    };
+    store
+        .put_raw_material_assignment(replacement.clone())
+        .await
+        .unwrap();
+    store
+        .receive_raw_material_assignment(replacement, &actor())
+        .await
+        .unwrap();
+    let inputs = service
+        .layer_remainder_sources(LAM, EXTRA_ORDER)
+        .await
+        .unwrap();
+    assert_eq!(inputs.len(), 2);
+    assert_eq!(
+        inputs[0].source_id, "a-current40",
+        "the active roll is not the last list item"
+    );
+    assert!(inputs[0].is_current_roll);
+    assert!(!inputs[1].is_current_roll);
+    // Resume can audit every already-mounted material together. Those receipts
+    // are observations of existing rolls, not new physical activations.
+    sqlx::query("INSERT INTO mini_raw_material_events(event_id,idempotency_key,event_type,warehouse,barcode,item_code,item_name,qty_delta,uom,stock_status_before,stock_status_after,order_id,apparatus,canonical_apparatus_id,actor_role,actor_ref,actor_display_name,owner_role,owner_ref,owner_display_name,source_type,source_id) SELECT event_id||':resume',idempotency_key||':resume',event_type,warehouse,barcode,item_code,item_name,0,uom,'in_use','in_use',order_id,apparatus,canonical_apparatus_id,actor_role,actor_ref,actor_display_name,owner_role,owner_ref,owner_display_name,source_type,source_id FROM mini_raw_material_events WHERE event_type='usage_started' AND order_id=$1")
+        .bind(EXTRA_ORDER).execute(pool).await.unwrap();
+    // Old installations recover the same exact stock ID from the actual
+    // activation receipt, without using a worker's shift or session history.
+    sqlx::query("UPDATE mini_raw_material_assignments SET payload_json=payload_json-'lamination_input_stock_id' WHERE order_id=$1")
+        .bind(EXTRA_ORDER).execute(pool).await.unwrap();
+    sqlx::raw_sql(include_str!(
+        "../migrations/postgres/0187_lamination_input_roll_binding.sql"
+    ))
+    .execute(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        service
+            .layer_remainder_sources(LAM, EXTRA_ORDER)
+            .await
+            .unwrap(),
+        inputs
+    );
+    // Hand the physical roll to another worker/session without another scan.
+    next_run.status = OrderRunStatus::Completed;
+    next_run.updated_at_unix = now + 2;
+    store.put_order_run_session(next_run.clone()).await.unwrap();
+    next_run.session_id = "another-shift-same-roll".into();
+    next_run.worker_ref = "next-shift-worker".into();
+    next_run.worker_display_name = "Next shift".into();
+    next_run.started_at_unix = now + 3;
+    next_run.payload_json = json!({});
     next_run.status = OrderRunStatus::Completed;
     next_run.updated_at_unix = now + 2;
     store.put_order_run_session(next_run).await.unwrap();
@@ -617,12 +686,18 @@ async fn additional_intake_and_legacy_mounted_source(
         )
         .await
         .unwrap();
-    let source = service
+    let sources = service
         .layer_remainder_sources(LAM, EXTRA_ORDER)
         .await
-        .unwrap()
-        .remove(0);
-    let request = LaminatsiyaAstatkaShiftInput {
+        .unwrap();
+    assert_eq!(sources.len(), 2);
+    let source = sources
+        .iter()
+        .find(|source| source.is_current_roll)
+        .unwrap();
+    assert_eq!(source.source_id, "a-current40");
+    assert_eq!(source.session_id, "another-shift-same-roll");
+    let mut request = LaminatsiyaAstatkaShiftInput {
         action: queue_state::ApparatusQueueAction::Pause,
         full_completion_report_required: false,
         apparatus: LAM.into(),
@@ -640,13 +715,30 @@ async fn additional_intake_and_legacy_mounted_source(
         layer_remainder_weights: Some(LaminationRemainderWeights {
             wip_net_kg: 0.0,
             film_net_kg: 10.0,
-            expected_sources: vec![LaminationRemainderSourceRevision {
-                source_kind: source.source_kind.clone(),
-                source_id: source.source_id.clone(),
-                expected_revision: source.revision,
-            }],
+            wip_source_id: None,
+            film_source_id: Some("extra25".into()),
+            expected_sources: sources
+                .iter()
+                .map(|source| LaminationRemainderSourceRevision {
+                    source_kind: source.source_kind.clone(),
+                    source_id: source.source_id.clone(),
+                    expected_revision: source.revision,
+                })
+                .collect(),
         }),
     };
+    assert_eq!(
+        service
+            .record_laminatsiya_astatka_shift(request.clone(), actor(), &[LAM.into()])
+            .await
+            .unwrap_err(),
+        ProductionMapError::ProgressBatchCorrectionConflict
+    );
+    request
+        .layer_remainder_weights
+        .as_mut()
+        .unwrap()
+        .film_source_id = Some(source.source_id.clone());
     let result = service
         .record_laminatsiya_astatka_shift(request.clone(), actor(), &[LAM.into()])
         .await
@@ -666,15 +758,36 @@ async fn additional_intake_and_legacy_mounted_source(
             .lamination_film_leftover_rolls,
         10.0
     );
-    assert_eq!(result.remainders.len(), 1);
-    let record = &result.remainders[0];
+    assert_eq!(result.remainders.len(), 2);
+    let record = result
+        .remainders
+        .iter()
+        .find(|r| r.remaining_net_kg > 0.0)
+        .unwrap();
+    assert_eq!(record.source_id, "a-current40");
     assert_eq!(record.remaining_meter, 300.0);
-    assert_eq!(record.producer_name, "Original Supplier");
+    assert_eq!(record.producer_name, "Replacement Supplier");
+    assert_eq!(
+        result
+            .remainders
+            .iter()
+            .find(|r| r.source_id == "extra25")
+            .unwrap()
+            .remaining_net_kg,
+        0.0
+    );
     assert_eq!(record.recorded_by.ref_, "lam-worker");
     let stock = record.raw_material_stock.as_ref().unwrap();
     assert_eq!(stock.qty, 10.0);
     assert_eq!(stock.status, "available");
-    assert_eq!(stock.source_receipt_id, "additional-receipt");
+    assert_eq!(stock.source_receipt_id, "replacement-receipt");
+    assert_eq!(stock.payload_json["tare_kg"], json!(3.0));
+    let active_bindings: i64 = sqlx::query_scalar("SELECT count(*) FROM mini_raw_material_assignments WHERE order_id=$1 AND payload_json ? 'lamination_input_stock_id'")
+        .bind(EXTRA_ORDER).fetch_one(pool).await.unwrap();
+    assert_eq!(
+        active_bindings, 0,
+        "returned children do not inherit an active binding"
+    );
     let status: String =
         sqlx::query_scalar("SELECT status FROM mini_raw_material_stock WHERE id='extra25'")
             .fetch_one(pool)
@@ -683,7 +796,7 @@ async fn additional_intake_and_legacy_mounted_source(
     assert_eq!(status, "consumed");
     let net_consumption: f64 = sqlx::query_scalar("SELECT sum(qty_delta)::float8 FROM mini_raw_material_events WHERE order_id=$1 AND event_type IN ('consumption_posted','consumption_reversed','layer_remainder_returned')")
         .bind(EXTRA_ORDER).fetch_one(pool).await.unwrap();
-    assert_eq!(net_consumption, -15.0);
+    assert_eq!(net_consumption, -55.0);
     let debits: i64 = sqlx::query_scalar("SELECT count(*) FROM mini_raw_material_events WHERE barcode='EXTRA25' AND event_type='consumption_posted'")
         .fetch_one(pool).await.unwrap();
     assert_eq!(debits, 2, "the corrected debit cannot suppress the actual final settlement");

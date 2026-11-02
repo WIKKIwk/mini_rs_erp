@@ -56,6 +56,10 @@ pub struct LaminationLabelSettingsPatch {
 pub struct LaminationRemainderWeights {
     pub wip_net_kg: f64,
     pub film_net_kg: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wip_source_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub film_source_id: Option<String>,
     pub expected_sources: Vec<LaminationRemainderSourceRevision>,
 }
 
@@ -99,15 +103,20 @@ impl LaminationRemainderWeights {
                 remaining_net_kg: 0.0,
             })
             .collect::<Vec<_>>();
-        for (kind, kg) in [
-            ("progress_batch", self.wip_net_kg),
-            ("raw_material", self.film_net_kg),
+        for (kind, kg, source_id) in [
+            (
+                "progress_batch",
+                self.wip_net_kg,
+                self.wip_source_id.as_deref(),
+            ),
+            (
+                "raw_material",
+                self.film_net_kg,
+                self.film_source_id.as_deref(),
+            ),
         ] {
             if !kg.is_finite() || kg < 0.0 {
                 return Err(ProductionMapError::ProgressInputInvalid);
-            }
-            if kg == 0.0 {
-                continue;
             }
             let candidates = sources
                 .iter()
@@ -115,15 +124,45 @@ impl LaminationRemainderWeights {
                 .filter(|(_, source)| {
                     (source.source_kind == kind
                         || (kind == "progress_batch" && source.source_kind == "opening_wip"))
-                        && source.source_net_kg > 0.0
-                        && source.source_meter > 0.0
+                        && ((source.source_net_kg > 0.0 && source.source_meter > 0.0)
+                            || source.is_current_roll
+                            || source_id == Some(source.source_id.as_str()))
                 })
                 .collect::<Vec<_>>();
-            let (index, source) = match candidates.as_slice() {
-                [(index, source)] => (*index, *source),
-                [] => return Err(ProductionMapError::LaminationRemainderSourceMissing),
+            let current = candidates
+                .iter()
+                .copied()
+                .filter(|(_, source)| source.is_current_roll)
+                .collect::<Vec<_>>();
+            let selected = match (current.as_slice(), source_id) {
+                ([(index, source)], id) => {
+                    if id.is_some_and(|id| id != source.source_id) {
+                        return Err(ProductionMapError::ProgressBatchCorrectionConflict);
+                    }
+                    Some((*index, *source))
+                }
+                ([], Some(id)) => Some(
+                    candidates
+                        .iter()
+                        .copied()
+                        .find(|(_, source)| source.source_id == id)
+                        .ok_or(ProductionMapError::ProgressBatchCorrectionConflict)?,
+                ),
+                ([], None) => None,
                 _ => return Err(ProductionMapError::LaminationRemainderSourceAmbiguous),
             };
+            if kg == 0.0 {
+                continue;
+            }
+            let (index, source) = match (selected, candidates.as_slice()) {
+                (Some(source), _) => source,
+                (None, [(index, source)]) => (*index, *source),
+                (None, []) => return Err(ProductionMapError::LaminationRemainderSourceMissing),
+                _ => return Err(ProductionMapError::LaminationRemainderSourceAmbiguous),
+            };
+            if source.source_net_kg <= 0.0 || source.source_meter <= 0.0 {
+                return Err(ProductionMapError::LaminationRemainderSourceMissing);
+            }
             layer_remainder_meter(source.source_net_kg, source.source_meter, kg)?;
             layers[index].remaining_net_kg = kg;
         }
@@ -147,6 +186,8 @@ pub struct LayerRemainderInput {
 pub struct LayerRemainderSource {
     pub source_kind: String,
     pub source_id: String,
+    #[serde(default)]
+    pub is_current_roll: bool,
     pub session_id: String,
     pub revision: u64,
     pub qr_payload: String,
@@ -401,6 +442,7 @@ mod tests {
         LayerRemainderSource {
             source_kind: kind.into(),
             source_id: id.into(),
+            is_current_roll: false,
             session_id: "session".into(),
             revision: 7,
             qr_payload: format!("qr-{id}"),
@@ -421,6 +463,8 @@ mod tests {
         LaminationRemainderWeights {
             wip_net_kg: wip,
             film_net_kg: film,
+            wip_source_id: None,
+            film_source_id: None,
             expected_sources: sources
                 .iter()
                 .map(|s| LaminationRemainderSourceRevision {
@@ -489,6 +533,79 @@ mod tests {
             ProductionMapError::LaminationRemainderSourceMissing
         );
         assert!(weights(&[], 0.0, 0.0).dispositions(&[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn physical_roll_binding_survives_history_and_rejects_a_stale_roll_id() {
+        for wip_kind in ["progress_batch", "opening_wip"] {
+            let mut sources = vec![
+                source("raw_material", "a-current-film"),
+                source(wip_kind, "current-printed"),
+                source("raw_material", "z-old-film"),
+                source("progress_batch", "old-printed"),
+            ];
+            sources[0].is_current_roll = true;
+            sources[1].is_current_roll = true;
+            let mut input = weights(&sources, 20.0, 8.0);
+            input.wip_source_id = Some("current-printed".into());
+            input.film_source_id = Some("a-current-film".into());
+            let layers = input.dispositions(&sources).unwrap();
+            assert_eq!(layers[0].remaining_net_kg, 8.0);
+            assert_eq!(layers[1].remaining_net_kg, 20.0);
+            assert_eq!(layers[2].remaining_net_kg, 0.0);
+            assert_eq!(layers[3].remaining_net_kg, 0.0);
+            assert_eq!(
+                weights(&sources, 20.0, 8.0).dispositions(&sources).unwrap(),
+                layers
+            );
+            for id in ["z-old-film", "current-printed", "not-a-source"] {
+                input.film_source_id = Some(id.into());
+                assert_eq!(
+                    input.dispositions(&sources).unwrap_err(),
+                    ProductionMapError::ProgressBatchCorrectionConflict
+                );
+            }
+            input.film_source_id = Some("a-current-film".into());
+            sources[0].is_current_roll = false;
+            sources[2].is_current_roll = true;
+            assert_eq!(
+                input.dispositions(&sources).unwrap_err(),
+                ProductionMapError::ProgressBatchCorrectionConflict
+            );
+            input.film_net_kg = 0.0;
+            assert_eq!(
+                input.dispositions(&sources).unwrap_err(),
+                ProductionMapError::ProgressBatchCorrectionConflict
+            );
+            input.film_source_id = Some("z-old-film".into());
+            assert!(
+                input
+                    .dispositions(&sources)
+                    .unwrap()
+                    .iter()
+                    .filter(|layer| layer.source_kind == "raw_material")
+                    .all(|layer| layer.remaining_net_kg == 0.0)
+            );
+        }
+    }
+
+    #[test]
+    fn glue_is_not_a_roll_and_an_invalid_current_roll_never_uses_an_older_passport() {
+        let mut sources = vec![
+            source("raw_material", "film"),
+            source("raw_material", "glue"),
+        ];
+        sources[1].source_meter = 0.0;
+        let layers = weights(&sources, 0.0, 8.0).dispositions(&sources).unwrap();
+        assert_eq!(layers[0].remaining_net_kg, 8.0);
+        assert_eq!(layers[1].remaining_net_kg, 0.0);
+        sources[1].is_current_roll = true;
+        assert_eq!(
+            weights(&sources, 0.0, 8.0)
+                .dispositions(&sources)
+                .unwrap_err(),
+            ProductionMapError::LaminationRemainderSourceMissing
+        );
     }
 
     #[test]

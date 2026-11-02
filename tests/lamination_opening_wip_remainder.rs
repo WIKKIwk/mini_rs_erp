@@ -80,6 +80,8 @@ async fn report(
         layer_remainder_weights: Some(LaminationRemainderWeights {
             wip_net_kg: kg,
             film_net_kg: 0.0,
+            wip_source_id: None,
+            film_source_id: None,
             expected_sources: vec![LaminationRemainderSourceRevision {
                 source_kind: source.source_kind.clone(),
                 source_id: source.source_id.clone(),

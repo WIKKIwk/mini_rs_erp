@@ -187,6 +187,8 @@ fn wip_source(
     Ok(LayerRemainderSource {
         source_kind: "progress_batch".into(),
         source_id: b.batch_id.clone(),
+        is_current_roll: s.payload_json["input_wip_source_kind"] != "opening_wip"
+            && s.payload_json["input_progress_batch_id"].as_str() == Some(&b.batch_id),
         session_id: s.session_id.clone(),
         revision: b.revision,
         qr_payload: b.qr_payload.clone(),
@@ -268,6 +270,13 @@ async fn raw_source(
     if !assigned {
         return Err(ProductionMapError::RawMaterialStockUnavailable);
     }
+    let is_current_roll: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM mini_raw_material_assignments
+         WHERE lower(barcode)=lower($1) AND order_id=$2 AND canonical_apparatus_id=$3
+           AND payload_json->>'lamination_input_stock_id'=$4)",
+    )
+    .bind(&r.barcode).bind(&s.order_id).bind(&s.apparatus).bind(&r.id)
+    .fetch_one(&mut **tx).await.map_err(database_error)?;
     let placed:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM mini_inventory_placements p JOIN mini_inventory_locations l ON l.id=p.physical_location_id JOIN mini_factory_location_apparatus_links a ON a.location_id=l.factory_location_id WHERE p.asset_kind='raw_material' AND p.asset_ref=$1 AND l.kind='state' AND l.active AND a.apparatus_id=$2)")
         .bind(&r.id).bind(&s.apparatus).fetch_one(&mut **tx).await.map_err(|_|ProductionMapError::StoreFailed)?;
     if !placed {
@@ -287,6 +296,7 @@ async fn raw_source(
     Ok(LayerRemainderSource {
         source_kind: "raw_material".into(),
         source_id: r.id.clone(),
+        is_current_roll,
         session_id: s.session_id.clone(),
         revision: u64::try_from(r.revision).map_err(|_| ProductionMapError::StoreFailed)?,
         qr_payload: r.barcode.clone(),
@@ -726,6 +736,9 @@ pub(super) async fn record_layer_remainder_tx(
         }
         sqlx::query("UPDATE mini_raw_material_stock SET status='consumed',payload_json=payload_json || jsonb_build_object('consumed_order_id',$2::text,'layer_remainder_operation_id',$3::text),updated_at=now() WHERE id=$1")
                 .bind(&r.id).bind(&input.order_id).bind(&operation_id).execute(&mut **tx).await.map_err(database_error)?;
+        sqlx::query("UPDATE mini_raw_material_assignments SET payload_json=payload_json-'lamination_input_stock_id' WHERE lower(barcode)=lower($1) AND order_id=$2 AND canonical_apparatus_id=$3")
+            .bind(&r.barcode).bind(&input.order_id).bind(&input.apparatus)
+            .execute(&mut **tx).await.map_err(database_error)?;
         if net > 0.0 {
             sqlx::query("INSERT INTO mini_raw_material_stock (id,warehouse,item_code,item_name,barcode,qty,width_mm,micron,length_m,uom,status,reserved_order_id,source_receipt_id,payload_json) VALUES ($1,$2,$3,$4,$5,($6::float8)::numeric(18,6),($7::float8)::numeric(18,6),($8::float8)::numeric(18,6),($9::float8)::numeric(18,6),$10,'available','',$11,$12)")
                 .bind(&child.id).bind(&child.warehouse).bind(&child.item_code).bind(&child.item_name).bind(&child.barcode).bind(child.qty).bind(child.width_mm).bind(child.micron).bind(child.length_m).bind(&child.uom).bind(&child.source_receipt_id).bind(&child.payload_json)
@@ -749,7 +762,7 @@ pub(super) async fn record_layer_remainder_tx(
             // The physical roll stays at this machine with the same scoped
             // order assignment; the operator can scan it again without a
             // fabricated supplier issue or another warehouse handoff.
-            let assignment = sqlx::query("INSERT INTO mini_raw_material_assignments (barcode,order_id,apparatus,canonical_apparatus_id,item_code,item_group,payload_json,updated_at) SELECT $1,order_id,apparatus,canonical_apparatus_id,item_code,item_group,payload_json || jsonb_build_object('barcode',$1::text,'layer_remainder_operation_id',$4::text),now() FROM mini_raw_material_assignments WHERE lower(barcode)=lower($2) AND order_id=$3")
+            let assignment = sqlx::query("INSERT INTO mini_raw_material_assignments (barcode,order_id,apparatus,canonical_apparatus_id,item_code,item_group,payload_json,updated_at) SELECT $1,order_id,apparatus,canonical_apparatus_id,item_code,item_group,(payload_json-'lamination_input_stock_id') || jsonb_build_object('barcode',$1::text,'layer_remainder_operation_id',$4::text),now() FROM mini_raw_material_assignments WHERE lower(barcode)=lower($2) AND order_id=$3")
                 .bind(&child.barcode).bind(&r.barcode).bind(&input.order_id).bind(&operation_id).execute(&mut **tx).await.map_err(|_|ProductionMapError::StoreFailed)?;
             if assignment.rows_affected() != 1 {
                 return Err(ProductionMapError::RawMaterialStockUnavailable);

@@ -190,6 +190,8 @@ async fn checks(pool: PgPool) {
             layer_remainder_weights: (index == 0).then_some(LaminationRemainderWeights {
                 wip_net_kg: 0.0,
                 film_net_kg: 0.0,
+                wip_source_id: None,
+                film_source_id: None,
                 expected_sources: vec![],
             }),
             action: queue_state::ApparatusQueueAction::Complete,

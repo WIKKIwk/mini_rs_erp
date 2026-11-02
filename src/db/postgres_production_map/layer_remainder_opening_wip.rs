@@ -90,6 +90,7 @@ async fn source_tx(
     Ok(LayerRemainderSource {
         source_kind: "opening_wip".into(),
         source_id: batch.batch_id.clone(),
+        is_current_roll: primary,
         session_id: session.session_id.clone(),
         revision,
         qr_payload: batch.qr_payload.clone(),

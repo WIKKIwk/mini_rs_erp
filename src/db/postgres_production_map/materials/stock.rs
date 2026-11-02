@@ -102,6 +102,26 @@ pub(super) async fn apply_raw_material_stock_transitions_for_event_tx(
                 settlement.consumed_rows
             }
         };
+        if transition.kind == RawMaterialStockTransitionKind::InUse {
+            // Only a fresh physical intake changes the roll binding. Resume or
+            // a second shift observing older in-use stock must not replace it.
+            let activated_ids = rows
+                .iter()
+                .filter(|row| {
+                    before
+                        .get(&stock_key(&row.barcode))
+                        .is_some_and(|old| old.status != "in_use")
+                })
+                .map(|row| row.id.clone())
+                .collect::<Vec<_>>();
+            bind_lamination_input_roll_tx(
+                tx,
+                &activated_ids,
+                &transition.order_id,
+                apparatus_id.as_str(),
+            )
+            .await?;
+        }
         for row in &rows {
             if transition.kind == RawMaterialStockTransitionKind::InUse {
                 started_materials.push(row.start_material_snapshot());
@@ -140,6 +160,52 @@ pub(super) async fn apply_raw_material_stock_transitions_for_event_tx(
         unused_unlinks,
         started_materials,
     })
+}
+
+async fn bind_lamination_input_roll_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    activated_ids: &[String],
+    order_id: &str,
+    apparatus_id: &str,
+) -> Result<(), ProductionMapError> {
+    if activated_ids.is_empty() {
+        return Ok(());
+    }
+    let rolls: Vec<String> = sqlx::query_scalar(
+        "SELECT s.id FROM mini_raw_material_stock s
+         JOIN mini_apparatus a ON a.id=$2
+         WHERE s.id=ANY($1) AND s.uom='kg' AND s.length_m>0
+           AND a.execution_profile_json->>'operation'='laminate'",
+    )
+    .bind(activated_ids)
+    .bind(apparatus_id)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    // A bulk claim containing several rolls has no physical ordering. Never
+    // pick by barcode or SQL result order; sequential scans each bind one roll.
+    if rolls.len() > 1 {
+        sqlx::query("UPDATE mini_raw_material_assignments SET payload_json=payload_json-'lamination_input_stock_id' WHERE order_id=$1 AND canonical_apparatus_id=$2")
+            .bind(order_id).bind(apparatus_id).execute(&mut **tx)
+            .await.map_err(|_| ProductionMapError::StoreFailed)?;
+    } else if let [stock_id] = rolls.as_slice() {
+        sqlx::query(
+            "UPDATE mini_raw_material_assignments r
+             SET payload_json=CASE WHEN lower(r.barcode)=lower(s.barcode)
+                 THEN (r.payload_json-'lamination_input_stock_id')
+                      || jsonb_build_object('lamination_input_stock_id',s.id)
+                 ELSE r.payload_json-'lamination_input_stock_id' END
+             FROM mini_raw_material_stock s
+             WHERE s.id=$1 AND r.order_id=$2 AND r.canonical_apparatus_id=$3",
+        )
+        .bind(stock_id)
+        .bind(order_id)
+        .bind(apparatus_id)
+        .execute(&mut **tx)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    }
+    Ok(())
 }
 
 fn stock_transition_store_error(
@@ -527,14 +593,14 @@ mod tests {
         RawMaterialStockTransitionRow, apply_raw_material_stock_transitions_tx,
         ensure_stock_transition_rows_affected, stock_transition_event_draft,
     };
-    use crate::core::production_map::{
-        ProductionMapError, QueueActionActor, RawMaterialStockTransition,
-        RawMaterialStockTransitionKind,
-    };
     use crate::core::apparatus_standard::{
         ApparatusId, ProcessTechnology,
         service::CanonicalApparatusService,
         test_support::{TestApparatusSpec, canonical_draft},
+    };
+    use crate::core::production_map::{
+        ProductionMapError, QueueActionActor, RawMaterialStockTransition,
+        RawMaterialStockTransitionKind,
     };
     use crate::db::postgres::{apply_foundation_migration, postgres_test_database_options};
     use crate::db::postgres_canonical_apparatus::PostgresCanonicalApparatusRepository;

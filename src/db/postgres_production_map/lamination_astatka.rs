@@ -137,6 +137,27 @@ impl PostgresProductionMapStore {
         // Validate the complete current physical source set while holding the
         // same order/apparatus/source locks as every stock claim or return.
         let sources = layer_remainder::session_sources_tx(&mut tx, current).await?;
+        if let Some(weights) = request_json
+            .get("layer_remainder_weights")
+            .filter(|v| !v.is_null())
+        {
+            let weights: crate::core::production_map::LaminationRemainderWeights =
+                serde_json::from_value(weights.clone())
+                    .map_err(|_| ProductionMapError::ProgressInputInvalid)?;
+            let resolved = weights.dispositions(&sources)?;
+            if resolved.len() != remainders.len()
+                || resolved.iter().any(|layer| {
+                    !remainders.iter().any(|input| {
+                        input.source_kind == layer.source_kind
+                            && input.source_id == layer.source_id
+                            && input.expected_revision == layer.expected_revision
+                            && input.remaining_net_kg == layer.remaining_net_kg
+                    })
+                })
+            {
+                return Err(ProductionMapError::ProgressBatchCorrectionConflict);
+            }
+        }
         let available: BTreeSet<_> = sources
             .iter()
             .map(|s| (s.source_kind.as_str(), s.source_id.as_str()))
