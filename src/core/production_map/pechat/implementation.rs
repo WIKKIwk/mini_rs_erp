@@ -109,15 +109,23 @@ pub fn reroute_compatible(
 ///
 /// The broad apparatus compatibility check is not enough for pechat:
 /// the target station must also satisfy the order's roll and rubber-width
-/// limits. Every print technology follows the same station formula.
+/// limits, including the explicit profile used by Flexo machines.
 pub fn reroute_order_compatible(
     source: &RuntimeApparatusConfiguration,
     target: &RuntimeApparatusConfiguration,
     roll_count: Option<i64>,
     width_mm: Option<f64>,
 ) -> bool {
-    if !reroute_compatible(source, target) {
+    if !reroute_compatible(source, target)
+        || (is_pechat_apparatus(target)
+            && !apparatus_profile_can_handle_order(target, roll_count, width_mm))
+    {
         return false;
+    }
+    // Flexo capacity is defined by its own web-width/station profile, rather
+    // than the fixed rubber sizes of the 7/8/9-colour rotogravure machines.
+    if is_flexo_apparatus(target) {
+        return true;
     }
     let Some(target_color_stations) = pechat_color_stations(target) else {
         return true;
@@ -242,6 +250,9 @@ pub fn pechat_can_handle_order(
     let Some(width) = width_mm.filter(|value| *value > 0.0) else {
         return true;
     };
+    if !width.is_finite() || width > 1350.0 {
+        return false;
+    }
     let rubber = rubber_size_from_width(width);
     match apparatus_color_count {
         7 => rubber <= 850,
@@ -284,6 +295,22 @@ pub fn pechat_can_move_order(
 mod tests {
     use super::*;
     use crate::core::apparatus_standard::test_support::{TestApparatusSpec, runtime_configuration};
+
+    #[test]
+    fn reroute_respects_print_profiles_and_flexo_capacity() {
+        let source = canonical_apparatus("apparatus:test:source", "Source",
+            ExecutionOperation::Print, ProcessTechnology::Rotogravure, Some(8), false);
+        let mut target = canonical_apparatus("apparatus:test:target", "Target",
+            ExecutionOperation::Print, ProcessTechnology::Rotogravure, Some(8), false);
+        target.runtime.execution_profile.max_web_width_mm = Some(600);
+        assert!(!reroute_order_compatible(&source, &target, Some(7), Some(650.0)));
+        target.runtime.execution_profile.max_web_width_mm = Some(1500);
+        target.runtime.execution_profile.technology = ProcessTechnology::Flexographic;
+        assert!(reroute_order_compatible(&source, &target, Some(8), Some(1500.0)));
+        assert!(!reroute_order_compatible(&source, &target, Some(8), Some(1501.0)));
+        assert!(!reroute_order_compatible(&source, &target, Some(9), Some(650.0)));
+        assert!(!pechat_can_handle_order(9, Some(7), Some(1500.0)));
+    }
 
     fn canonical_apparatus(
         id: &str,
