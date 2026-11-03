@@ -143,7 +143,8 @@ fn validate_role(role: &PrincipalRole) -> Result<(), SystemUserError> {
         | PrincipalRole::TayyorlovMasteri
         | PrincipalRole::HomashyoRezkachi
         | PrincipalRole::SalesManager
-        | PrincipalRole::Brigader => Ok(()),
+        | PrincipalRole::Brigader
+        | PrincipalRole::RezkaMaster => Ok(()),
         _ => Err(SystemUserError::InvalidRole),
     }
 }
@@ -157,6 +158,7 @@ fn new_system_user_id(role: &PrincipalRole) -> String {
         PrincipalRole::HomashyoRezkachi => "homashyo_rezkachi",
         PrincipalRole::SalesManager => "sales_manager",
         PrincipalRole::Brigader => "brigader",
+        PrincipalRole::RezkaMaster => "rezka_master",
         _ => "system_user",
     };
     format!("{prefix}_{}", data_encoding::HEXLOWER.encode(&bytes))

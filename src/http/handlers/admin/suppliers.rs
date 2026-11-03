@@ -182,7 +182,7 @@ pub async fn user_list(
         .map(str::to_ascii_lowercase);
     let mut page = match role.as_deref() {
         Some(
-            "qolipchi" | "boyoqchi" | "tayyorlov_masteri" | "homashyo_rezkachi" | "sales_manager" | "brigader",
+            "qolipchi" | "boyoqchi" | "tayyorlov_masteri" | "homashyo_rezkachi" | "sales_manager" | "brigader" | "rezka_master",
         ) => system_users::system_user_list_page(&state, &query).await?,
         Some("worker" | "ishchi" | "aparatchi" | "apparatchi") => {
             workers::worker_user_list_page(&state, &query).await?
@@ -295,6 +295,7 @@ pub async fn admin_profile_avatar_view(
         | "qolipchi"
         | "boyoqchi"
         | "brigader"
+        | "rezka_master"
         | "material_taminotchi" => role,
         _ => return bad_request("invalid role").into_response(),
     };

@@ -41,6 +41,7 @@ fn chat_role_from_code(value: &str) -> Result<PrincipalRole, ChatError> {
         "homashyo_rezkachi" => Ok(PrincipalRole::HomashyoRezkachi),
         "sales_manager" => Ok(PrincipalRole::SalesManager),
         "brigader" => Ok(PrincipalRole::Brigader),
+        "rezka_master" => Ok(PrincipalRole::RezkaMaster),
         "material_taminotchi" => Ok(PrincipalRole::MaterialTaminotchi),
         "customer" => Ok(PrincipalRole::Customer),
         "admin" => Ok(PrincipalRole::Admin),

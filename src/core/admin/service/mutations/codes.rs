@@ -72,6 +72,7 @@ impl AdminService {
                     | PrincipalRole::HomashyoRezkachi
                     | PrincipalRole::SalesManager
                     | PrincipalRole::Brigader
+                    | PrincipalRole::RezkaMaster
             )
         {
             return Err(AdminPortError::NotFound);
@@ -85,6 +86,7 @@ impl AdminService {
             PrincipalRole::HomashyoRezkachi => "91",
             PrincipalRole::SalesManager => "92",
             PrincipalRole::Brigader => "93",
+            PrincipalRole::RezkaMaster => "94",
             _ => return Err(AdminPortError::NotFound),
         };
         state.custom_code = random_code(prefix, &mut existing);

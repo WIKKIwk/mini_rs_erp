@@ -111,7 +111,8 @@ pub(super) async fn resolve_target(
         | PrincipalRole::TayyorlovMasteri
         | PrincipalRole::HomashyoRezkachi
         | PrincipalRole::SalesManager
-        | PrincipalRole::Brigader => {
+        | PrincipalRole::Brigader
+        | PrincipalRole::RezkaMaster => {
             let user = state
                 .system_users
                 .users_by_ids(&[ref_.to_string()])

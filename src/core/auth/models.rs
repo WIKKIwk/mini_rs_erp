@@ -18,6 +18,7 @@ pub enum PrincipalRole {
     HomashyoRezkachi,
     SalesManager,
     Brigader,
+    RezkaMaster,
 }
 
 impl PrincipalRole {

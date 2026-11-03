@@ -475,6 +475,7 @@ fn role_key(role: &PrincipalRole) -> &'static str {
         PrincipalRole::HomashyoRezkachi => "homashyo_rezkachi",
         PrincipalRole::SalesManager => "sales_manager",
         PrincipalRole::Brigader => "brigader",
+        PrincipalRole::RezkaMaster => "rezka_master",
         PrincipalRole::MaterialTaminotchi => "material_taminotchi",
         PrincipalRole::Admin => "admin",
     }

@@ -114,6 +114,7 @@ fn role_key(role: &PrincipalRole) -> &'static str {
         PrincipalRole::HomashyoRezkachi => "homashyo_rezkachi",
         PrincipalRole::SalesManager => "sales_manager",
         PrincipalRole::Brigader => "brigader",
+        PrincipalRole::RezkaMaster => "rezka_master",
         PrincipalRole::MaterialTaminotchi => "material_taminotchi",
         PrincipalRole::Admin => "admin",
     }
@@ -132,6 +133,7 @@ fn system_role_ids() -> BTreeSet<&'static str> {
         "homashyo_rezkachi",
         "sales_manager",
         "brigader",
+        "rezka_master",
     ]
     .into_iter()
     .collect()

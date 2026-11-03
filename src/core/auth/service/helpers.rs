@@ -66,6 +66,7 @@ pub(super) fn requires_numeric_access_code(role: &PrincipalRole) -> bool {
             | PrincipalRole::HomashyoRezkachi
             | PrincipalRole::SalesManager
             | PrincipalRole::Brigader
+            | PrincipalRole::RezkaMaster
     )
 }
 

@@ -39,6 +39,12 @@ const INVENTORY_MOVEMENT_ROLES: &[PrincipalRole] = &[
 
 pub(super) const CAPABILITY_CATALOG: &[CapabilityDefinition] = &[
     CapabilityDefinition {
+        capability: Capability::RezkaMasterAccess,
+        code: "rezka.master.access",
+        label: "Rezka master ish joyi",
+        default_roles: &[PrincipalRole::RezkaMaster],
+    },
+    CapabilityDefinition {
         capability: Capability::BrigaderAccess,
         code: "brigader.access",
         label: "Brigader ish joyi",
