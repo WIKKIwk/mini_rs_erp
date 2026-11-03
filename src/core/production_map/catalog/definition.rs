@@ -41,6 +41,9 @@ pub struct ProductionMapDefinition {
     /// Planned production meters including waste and rounding; legacy wire name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_length: Option<f64>,
+    /// Whether each finished Rezka roll needs two copies of its label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duplicate_rezka_labels: Option<bool>,
     /// Sell final Rezka output including its bobina in the labelled net weight.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include_bobina_in_net: Option<bool>,

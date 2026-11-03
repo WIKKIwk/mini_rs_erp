@@ -287,6 +287,7 @@ mod tests {
                 width_mm: Some(680.0),
                 order_kg: Some(1000.0),
                 base_length: None,
+                duplicate_rezka_labels: None,
                 include_bobina_in_net: None,
                 nodes: Vec::new(),
                 edges: Vec::new(),

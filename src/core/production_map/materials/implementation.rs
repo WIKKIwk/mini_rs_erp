@@ -11,9 +11,9 @@ use super::materials_support::*;
 use super::queue_state;
 use super::service_maps::compile_saved_maps;
 use super::{
-    ApparatusQueueActionResult, OrderControlState, OrderRunStatus, PreparedApparatusQueueAction,
+    ApparatusQueueActionResult, OrderControlState, OrderRunSession, OrderRunStatus, PreparedApparatusQueueAction,
     ProductionMapError, ProductionMapSaved, ProductionMapService, ProductionQrRawMaterial,
-    QueueActionActor, QueueProgressInput, chain,
+    ProductionQrSessionResources, QueueActionActor, QueueProgressInput, chain,
 };
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -601,7 +601,7 @@ impl ProductionMapService {
             qolip_validation.as_ref(),
         )
         .await?;
-        let reacquire_materials = self.requires_material_reacquisition_for_action(
+        let (reacquire_materials, reuse_materials) = self.resume_material_requirements(
             apparatus_id.as_str(), order_id, action,
         ).await?;
         if reacquire_materials && material_barcodes.is_empty() {
@@ -635,7 +635,13 @@ impl ProductionMapService {
                 progress,
             )
             .await?;
-        prepared.material_scan_skipped = skip_material_scan;
+        prepared.material_scan_skipped = skip_material_scan || reuse_materials;
+        if reuse_materials {
+            prepared.event.payload_json["print_transfer_materials_reused"] = serde_json::json!(true);
+            if let Some(session) = &mut prepared.session {
+                session.payload_json["print_transfer_materials_required"] = serde_json::json!(false);
+            }
+        }
         if reacquire_materials {
             let transferred = prepared.session.as_ref().is_some_and(|session| session.is_print_transfer_continuation());
             prepared.event.payload_json[if transferred { "print_transfer_material_reacquisition" } else { "lamination_raw_reacquisition" }] = serde_json::json!(true);
@@ -690,21 +696,83 @@ impl ProductionMapService {
         order_id: &str,
         action: queue_state::ApparatusQueueAction,
     ) -> Result<bool, ProductionMapError> {
+        Ok(self.resume_material_requirements(apparatus, order_id, action).await?.0)
+    }
+
+    async fn resume_material_requirements(
+        &self,
+        apparatus: &str,
+        order_id: &str,
+        action: queue_state::ApparatusQueueAction,
+    ) -> Result<(bool, bool), ProductionMapError> {
         if action != queue_state::ApparatusQueueAction::Resume {
-            return Ok(false);
+            return Ok((false, false));
         }
         let canonical = self.resolve_canonical_apparatus_text(apparatus).await?;
-        Ok(self.store.active_order_run_session(canonical.runtime.apparatus_id.as_str(), order_id)
-            .await?.is_some_and(|session| {
-                matches!(session.status, OrderRunStatus::Paused | OrderRunStatus::RollDetached)
-                    && ((super::apparatus::uses_lamination_workflow(&canonical)
-                        && session.payload_json.get("lamination_astatka_raw_released")
-                            .and_then(serde_json::Value::as_bool) == Some(true))
-                        || (session.is_print_transfer_continuation()
-                            && live_material_rule(&canonical).is_some_and(|rule| rule.requires_material)
-                            && session.payload_json.get("print_transfer_materials_required")
-                                .and_then(serde_json::Value::as_bool) == Some(true)))
-            }))
+        let Some(session) = self.store.active_order_run_session(
+            canonical.runtime.apparatus_id.as_str(), order_id,
+        ).await? else {
+            return Ok((false, false));
+        };
+        if matches!(session.status, OrderRunStatus::Paused | OrderRunStatus::RollDetached)
+            && super::apparatus::uses_lamination_workflow(&canonical)
+            && session.payload_json["lamination_astatka_raw_released"].as_bool() == Some(true)
+        {
+            return Ok((true, false));
+        }
+        if session.needs_print_transfer_material_check()
+            && let Some(rule) = live_material_rule(&canonical).filter(|rule| rule.requires_material)
+        {
+            let assignments = self.store.raw_material_assignments_for_order(order_id).await?;
+            let reuse = self.print_transfer_can_reuse_materials(&session, &rule, &assignments).await?;
+            return Ok((!reuse, reuse));
+        }
+        Ok((false, false))
+    }
+
+    pub(super) async fn print_transfer_can_reuse_materials(
+        &self,
+        session: &OrderRunSession,
+        rule: &ApparatusMaterialRule,
+        assignments: &[RawMaterialAssignment],
+    ) -> Result<bool, ProductionMapError> {
+        let recorded = recorded_material_barcodes(session);
+        if recorded.is_empty() {
+            return Ok(false);
+        }
+        let scanned = normalized_barcodes_list(&recorded);
+        let assignments = assignments.iter().filter(|assignment| {
+            assignment.apparatus_id.as_str() == session.apparatus
+                && scanned.contains(&normalize_barcode(&assignment.barcode))
+        }).collect::<Vec<_>>();
+        let requirements = build_raw_material_start_requirements_refs(
+            Some(rule), &assignments, &recorded, &scanned,
+        );
+        if !requirements.scan_satisfied {
+            return Ok(false);
+        }
+        let confirmed = self.store.in_use_materials_at_apparatus(
+            &session.order_id, &session.apparatus,
+        ).await?;
+        Ok(normalized_barcodes_list(&confirmed) == scanned)
+    }
+
+    pub(crate) async fn in_use_print_transfer_materials(
+        &self,
+        order_id: &str,
+        apparatus: &str,
+    ) -> Result<Vec<String>, ProductionMapError> {
+        if let Some(session) = self.store.active_order_run_session(apparatus, order_id).await?
+            && session.needs_print_transfer_material_check()
+        {
+            let recorded = normalized_barcodes_list(&recorded_material_barcodes(&session));
+            if !recorded.is_empty() {
+                let mut confirmed = self.store.in_use_materials_at_apparatus(order_id, apparatus).await?;
+                confirmed.retain(|barcode| recorded.contains(&normalize_barcode(barcode)));
+                return Ok(confirmed);
+            }
+        }
+        Ok(Vec::new())
     }
 
     async fn resolve_material_apparatus_options(
@@ -744,6 +812,12 @@ impl ProductionMapService {
         }
         Ok(matches.into_iter().collect())
     }
+}
+
+fn recorded_material_barcodes(session: &OrderRunSession) -> Vec<String> {
+    ProductionQrSessionResources::recorded(session)
+        .map(|resources| resources.raw_materials.into_iter().map(|row| row.barcode).collect())
+        .unwrap_or_default()
 }
 
 impl ProductionMapService {

@@ -309,10 +309,18 @@ pub(super) async fn raw_material_usable_barcodes(
         })
         .collect::<Vec<_>>();
     let mut usable = Vec::new();
+    let mut transferred = None;
     for assignment in assignments {
         let stock = state.gscale.raw_material_stock_by_barcode(&assignment.barcode)
             .await.map_err(|_| server_error("raw material stock lookup failed"))?;
-        if raw_material_execution_status(state, &assignment, stock.as_ref()).await? == "compatible" {
+        let status = raw_material_execution_status(state, &assignment, stock.as_ref()).await?;
+        if status == "in_use" && transferred.is_none() {
+            transferred = Some(state.production_maps.in_use_print_transfer_materials(order_id, apparatus)
+                .await.map_err(production_map_error)?);
+        }
+        if status == "compatible" || (status == "in_use" && transferred.as_ref().is_some_and(
+            |barcodes| barcodes.iter().any(|barcode| barcode.eq_ignore_ascii_case(&assignment.barcode)),
+        )) {
             usable.push(assignment.barcode);
         }
     }

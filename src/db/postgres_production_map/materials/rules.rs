@@ -36,6 +36,84 @@ pub(super) async fn load_transferable_raw_material_assignments(
     rows.into_iter().map(|(id, payload)| raw_material_assignment_from_payload(id, payload)).collect()
 }
 
+pub(super) async fn in_use_materials_at_apparatus<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
+    order_id: &str,
+    apparatus: &str,
+    lock: bool,
+) -> Result<Vec<String>, ProductionMapError> {
+    let mut query = String::from(
+        "SELECT stock.barcode
+         FROM mini_raw_material_stock stock
+         JOIN mini_raw_material_assignments assignment
+           ON lower(assignment.barcode) = lower(stock.barcode)
+         JOIN mini_inventory_placements placement
+           ON placement.asset_kind = 'raw_material' AND lower(placement.asset_ref) = lower(stock.id)
+         JOIN mini_inventory_locations location
+           ON location.id = placement.physical_location_id AND location.kind = 'state' AND location.active
+         JOIN mini_factory_location_apparatus_links link
+           ON link.location_id = location.factory_location_id
+         WHERE stock.status = 'in_use' AND stock.qty > 0 AND stock.reserved_order_id = $1
+           AND assignment.order_id = $1 AND assignment.canonical_apparatus_id = $2
+           AND link.apparatus_id = $2
+         ORDER BY stock.barcode",
+    );
+    if lock {
+        query.push_str(" FOR SHARE OF stock, assignment, placement, location, link");
+    }
+    let mut barcodes: Vec<String> = sqlx::query_scalar(&query)
+        .bind(order_id)
+        .bind(apparatus)
+        .fetch_all(executor)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    barcodes.dedup();
+    Ok(barcodes)
+}
+
+pub(super) async fn validate_reused_print_materials_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    session: &crate::core::production_map::OrderRunSession,
+) -> Result<(), ProductionMapError> {
+    use crate::core::production_map::ProductionQrSessionResources;
+
+    let resources = ProductionQrSessionResources::recorded(session)
+        .ok_or(ProductionMapError::RawMaterialScanRequired)?;
+    let barcodes = resources.raw_materials.iter()
+        .map(|row| row.barcode.clone())
+        .collect::<Vec<_>>();
+    if barcodes.is_empty() {
+        return Err(ProductionMapError::RawMaterialScanRequired);
+    }
+    let current = sqlx::query_scalar::<_, String>(
+        "SELECT session_id FROM mini_order_run_sessions
+         WHERE session_id = $1 AND order_id = $2 AND canonical_apparatus_id = $3
+           AND status IN ('paused', 'roll_detached')
+           AND payload_json->'_print_transfer' = $4
+           AND payload_json->'start_resources'->'raw_materials' = $5
+           AND payload_json->>'print_transfer_materials_required' = 'true'
+         FOR UPDATE",
+    )
+    .bind(&session.session_id)
+    .bind(&session.order_id)
+    .bind(&session.apparatus)
+    .bind(&session.payload_json["_print_transfer"])
+    .bind(serde_json::json!(resources.raw_materials))
+    .fetch_optional(&mut **tx).await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    if current.is_none() {
+        return Err(ProductionMapError::RawMaterialScanRequired);
+    }
+    let confirmed = in_use_materials_at_apparatus(
+        &mut **tx, &session.order_id, &session.apparatus, true,
+    ).await?;
+    if confirmed.len() != barcodes.len() || !barcodes.iter().all(|barcode| confirmed.iter()
+        .any(|current| barcode.trim().eq_ignore_ascii_case(current.trim()))) {
+        return Err(ProductionMapError::RawMaterialScanRequired);
+    }
+    Ok(())
+}
+
 pub(super) async fn load_raw_material_assignment_by_barcode(
     pool: &PgPool,
     barcode: &str,

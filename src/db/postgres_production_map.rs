@@ -1361,6 +1361,10 @@ pub(super) async fn apply_queue_progress_tx(
             .await?;
         }
         validate_queue_action_event_transition_tx(tx, &write.event).await?;
+        if write.event.payload_json["print_transfer_materials_reused"].as_bool() == Some(true) {
+            let session = write.session.as_ref().ok_or(ProductionMapError::RawMaterialScanRequired)?;
+            material_helpers::validate_reused_print_materials_tx(tx, session).await?;
+        }
         re_pause::validate_resume_checkpoint_tx(tx, write).await?;
         temporary_pause::validate_write_tx(tx, write).await?;
         stage_execution::validate_input_claims_tx(tx, write).await?;

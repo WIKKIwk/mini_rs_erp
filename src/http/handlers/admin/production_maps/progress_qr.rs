@@ -377,6 +377,8 @@ struct ProgressQrReprintRequest {
     #[serde(default)]
     print_count: u32,
     #[serde(default)]
+    automatic_rezka_labels: bool,
+    #[serde(default)]
     print_transport: String,
 }
 
@@ -442,7 +444,10 @@ pub async fn production_map_progress_qr_reprint(
         ),
         None => batch.label_item_name.clone(),
     };
-    let request = progress_reprint_request(&input, &batch, &item_name, &apparatus_display_name);
+    let mut request = progress_reprint_request(&input, &batch, &item_name, &apparatus_display_name);
+    if input.automatic_rezka_labels {
+        request.print_count = automatic_rezka_label_count(order_map.as_ref(), &batch);
+    }
     let print_result = if input.print_transport.trim().eq_ignore_ascii_case("offline") {
         state.gscale.prepare_progress_label(request)
     } else {

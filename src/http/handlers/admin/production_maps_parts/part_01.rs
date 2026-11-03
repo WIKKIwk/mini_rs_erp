@@ -311,6 +311,8 @@ struct ProductionMapSaveWithOrderRequest {
 struct ProductionMapAutoOpenRequest {
     template: CalculateOrderTemplate,
     #[serde(default)]
+    duplicate_rezka_labels: bool,
+    #[serde(default)]
     include_bobina_in_net: bool,
 }
 
@@ -360,7 +362,11 @@ pub async fn production_map_auto_open(
     if method != Method::POST {
         return Err(method_not_allowed());
     }
-    let ProductionMapAutoOpenRequest { mut template, include_bobina_in_net } = parse_json(&body)?;
+    let ProductionMapAutoOpenRequest {
+        mut template,
+        duplicate_rezka_labels,
+        include_bobina_in_net,
+    } = parse_json(&body)?;
     super::combos::validate_combo_template(&state, &template).await?;
     if !template.products.is_empty() {
         template = crate::core::calculate_orders::hydrate_template_dimensions(template);
@@ -391,6 +397,7 @@ pub async fn production_map_auto_open(
         .map_err(|_| server_error("material catalog failed"))?;
     let mut map = automatic::generate(&template, &apparatus, &materials)
         .map_err(|error| bad_request(&error))?;
+    map.duplicate_rezka_labels = Some(duplicate_rezka_labels);
     map.include_bobina_in_net = Some(include_bobina_in_net);
     template.order_number = map.order_number.clone();
     template.code = map.code.clone();

@@ -1125,6 +1125,13 @@ pub trait ProductionMapStorePort: Send + Sync {
         Ok(self.raw_material_assignments_for_order(order_id).await?.into_iter()
             .filter(|assignment| assignment.apparatus_id.as_str() == apparatus).collect())
     }
+    async fn in_use_materials_at_apparatus(
+        &self,
+        _order_id: &str,
+        _apparatus: &str,
+    ) -> StoreResult<Vec<String>> {
+        Ok(Vec::new())
+    }
     async fn raw_material_assignment_by_barcode(&self, barcode: &str) -> StoreResult<Option<RawMaterialAssignment>> {
         Ok(self.raw_material_assignments().await?.into_iter()
             .find(|assignment| assignment.barcode.trim().eq_ignore_ascii_case(barcode.trim())))

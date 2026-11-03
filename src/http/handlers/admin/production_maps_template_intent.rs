@@ -176,6 +176,7 @@ async fn prepare_template_fork(
     copy.order_number.clear();
     copy.order_kg = None;
     copy.base_length = None;
+    copy.duplicate_rezka_labels = None;
     copy.include_bobina_in_net = None;
     for node in &mut copy.nodes {
         node.alternative_assigned_apparatus_id.clear();

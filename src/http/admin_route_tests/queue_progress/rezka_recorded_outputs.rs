@@ -3,7 +3,7 @@ use crate::core::production_map::{
     ProductionMapError, QueueActionActor, QueueProgressInput, queue_state,
 };
 
-async fn verify_recorded_rezka_outputs(intermediate: bool, all_individual: bool, correct_first: bool) {
+async fn verify_recorded_rezka_outputs(intermediate: bool, all_individual: bool, correct_first: bool, duplicate_labels: bool) {
     let requests = Arc::new(Mutex::new(Vec::<ScaleDriverPrintRequest>::new()));
     let mut state = test_state();
     state.gscale = GscaleService::new().with_driver(Arc::new(FakeProgressDriver {
@@ -29,6 +29,7 @@ async fn verify_recorded_rezka_outputs(intermediate: bool, all_individual: bool,
     let order = "zakaz-rezka-recorded";
     let mut map = serde_json::json!({
         "id": order, "product_code": "REZKA-RECORDED", "title": "Recorded rolls", "order_number": "9501",
+        "duplicate_rezka_labels": duplicate_labels,
         "nodes": [
             {"id":"start", "kind":"start", "title":"Start"},
             {"id":"rezka", "kind":"apparatus", "title":"Rezka", "apparatus_id":apparatus,
@@ -114,11 +115,16 @@ async fn verify_recorded_rezka_outputs(intermediate: bool, all_individual: bool,
     };
     let reference_index = indices[0];
     for index in indices {
-        let input = serde_json::json!({
+        let mut input = serde_json::json!({
             "apparatus":apparatus,"order_id":order,"action":"roll_complete",
             "rezka_output_cycle":cycle,"rezka_record_frame_index":index,
             "rezka_frames":[frames[index - 1]], "uom":"m"
         });
+        if duplicate_labels {
+            input["print_transport"] = "offline".into();
+            input["printer"] = "zebra".into();
+            input["print_mode"] = "label".into();
+        }
         let (status, saved) =
             super::rezka::queue_action_json(&router, &worker, input.clone()).await;
         assert_eq!(status, StatusCode::OK, "{saved:?}");
@@ -126,12 +132,14 @@ async fn verify_recorded_rezka_outputs(intermediate: bool, all_individual: bool,
         assert_eq!(saved["session"]["status"], "active");
         assert_eq!(saved["session"]["payload_json"]["rezka_reference_frame_index"], reference_index);
         assert_eq!(saved["progress_batches"].as_array().unwrap().len(), 1);
-        assert_eq!(
-            saved["prints"].as_array().unwrap().len(),
-            0,
-            "save must not dispatch print"
-        );
         let batch = &saved["progress_batch"];
+        if duplicate_labels {
+            assert_eq!(saved["prints"].as_array().unwrap().len(), 1);
+            assert_eq!(saved["print"]["print_count"], if intermediate { 1 } else { 2 });
+            assert_eq!(saved["print"]["qr_payload"], batch["qr_payload"]);
+        } else {
+            assert!(saved["prints"].as_array().unwrap().is_empty());
+        }
         assert_eq!(batch["payload_json"]["rezka_frame_index"], index);
         assert_eq!(
             batch["payload_json"]["contained_kadr_count"],
@@ -289,6 +297,14 @@ async fn verify_recorded_rezka_outputs(intermediate: bool, all_individual: bool,
         finished["prints"].as_array().unwrap().len(),
         count - recorded_ids.len()
     );
+    if duplicate_labels {
+        for (print, batch) in finished["prints"].as_array().unwrap().iter().zip(
+            finished["progress_batches"].as_array().unwrap(),
+        ) {
+            assert_eq!(print["print_count"], if intermediate { 1 } else { 2 });
+            assert_eq!(print["qr_payload"], batch["qr_payload"]);
+        }
+    }
     if all_individual {
         assert_eq!(finished["progress_event"]["produced_qty"], 0.0);
         assert_eq!(
@@ -353,27 +369,43 @@ async fn verify_recorded_rezka_outputs(intermediate: bool, all_individual: bool,
 
 #[tokio::test]
 async fn final_rezka_individual_rolls_complete_without_duplicate_batches_or_prints() {
-    verify_recorded_rezka_outputs(false, true, false).await;
+    verify_recorded_rezka_outputs(false, true, false, false).await;
 }
 
 #[tokio::test]
 async fn corrected_rezka_first_record_updates_report_and_allows_completion() {
-    verify_recorded_rezka_outputs(false, true, true).await;
+    verify_recorded_rezka_outputs(false, true, true, false).await;
 }
 
 #[tokio::test]
 async fn rezka_first_recorded_reference_survives_out_of_order_card_prints() {
-    verify_recorded_rezka_outputs(false, true, false).await;
+    verify_recorded_rezka_outputs(false, true, false, false).await;
 }
 
 #[tokio::test]
 async fn intermediate_rezka_recorded_group_and_bulk_pause_keep_correct_rolls() {
-    verify_recorded_rezka_outputs(true, false, false).await;
+    verify_recorded_rezka_outputs(true, false, false, false).await;
 }
 
 #[tokio::test]
 async fn intermediate_rezka_all_individual_rolls_pause_and_resume_without_reusing_output() {
-    verify_recorded_rezka_outputs(true, true, false).await;
+    verify_recorded_rezka_outputs(true, true, false, false).await;
+}
+
+#[tokio::test]
+async fn rezka_duplicate_labels_keep_one_batch_per_roll() {
+    verify_recorded_rezka_outputs(false, true, false, true).await;
+}
+
+#[tokio::test]
+async fn rezka_duplicate_labels_apply_to_bulk_outputs() {
+    verify_recorded_rezka_outputs(false, false, false, true).await;
+}
+
+#[tokio::test]
+async fn intermediate_rezka_keeps_single_labels_for_individual_and_bulk_outputs() {
+    verify_recorded_rezka_outputs(true, true, false, true).await;
+    verify_recorded_rezka_outputs(true, false, false, true).await;
 }
 
 async fn verify_recorded_rezka_issues(intermediate: bool, all_issues: bool, issue_first: bool) {

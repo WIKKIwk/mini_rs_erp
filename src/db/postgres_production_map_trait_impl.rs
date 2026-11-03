@@ -954,6 +954,14 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         material_helpers::load_transferable_raw_material_assignments(&self.pool, order_id, apparatus).await
     }
 
+    async fn in_use_materials_at_apparatus(
+        &self, order_id: &str, apparatus: &str,
+    ) -> Result<Vec<String>, ProductionMapError> {
+        material_helpers::in_use_materials_at_apparatus(
+            &self.pool, order_id, apparatus, false,
+        ).await
+    }
+
     async fn put_raw_material_assignment(
         &self,
         assignment: RawMaterialAssignment,

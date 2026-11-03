@@ -304,6 +304,12 @@ impl OrderRunSession {
         })
     }
 
+    pub(crate) fn needs_print_transfer_material_check(&self) -> bool {
+        matches!(self.status, OrderRunStatus::Paused | OrderRunStatus::RollDetached)
+            && self.is_print_transfer_continuation()
+            && self.payload_json["print_transfer_materials_required"].as_bool() == Some(true)
+    }
+
     pub(crate) fn is_requeued_at_tail(&self) -> bool {
         self.status == OrderRunStatus::Paused
             && self.payload_json

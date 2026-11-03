@@ -1376,6 +1376,7 @@ async fn grouped_rezka_wip_survives_lamination_and_reenters_same_final_rezka() {
         "product_code": "REZKA-GROUP-REENTRY",
         "title": "Rezka group reentry",
         "order_number": "9340",
+        "duplicate_rezka_labels": true,
         "nodes": [
             {"id": "start", "kind": "start", "title": "Start"},
             {"id": "lamination_before", "kind": "apparatus", "title": "Laminatsiya 1", "apparatus_id": "apparatus:default:asset-007"},
@@ -1538,6 +1539,9 @@ async fn grouped_rezka_wip_survives_lamination_and_reenters_same_final_rezka() {
             "action": "complete",
             "uom": "m",
             "total_waste": 0.0,
+            "print_transport": "offline",
+            "printer": "zebra",
+            "print_mode": "label",
             "rezka_frames": [
                 {"produced_qty": 120, "gross_qty": 12, "diameter": 45},
                 {"produced_qty": 120, "gross_qty": 12, "diameter": 45}
@@ -1550,6 +1554,22 @@ async fn grouped_rezka_wip_survives_lamination_and_reenters_same_final_rezka() {
         .as_array()
         .expect("grouped Rezka outputs");
     assert_eq!(grouped_outputs.len(), 2);
+    assert!(body["prints"].as_array().unwrap().iter()
+        .all(|print| print["print_count"] == 1));
+    let grouped_batch = &grouped_outputs[0];
+    for (automatic, expected) in [(true, 1), (false, 2)] {
+        let reprint = router.clone().oneshot(request_with_body(
+            "POST", "/v1/mobile/admin/production-maps/progress-qr/reprint", &worker_token,
+            &serde_json::json!({
+                "progress_batch_id": grouped_batch["batch_id"],
+                "qr_payload": grouped_batch["qr_payload"],
+                "print_transport": "offline", "printer": "zebra", "print_mode": "label",
+                "print_count": 2, "automatic_rezka_labels": automatic
+            }).to_string(),
+        )).await.unwrap();
+        assert_eq!(reprint.status(), StatusCode::OK);
+        assert_eq!(json_body(reprint).await["print"]["print_count"], expected);
+    }
     assert_eq!(grouped_outputs[0]["total_waste"], 0.0);
     assert_eq!(
         grouped_outputs
@@ -1795,6 +1815,9 @@ async fn grouped_rezka_wip_survives_lamination_and_reenters_same_final_rezka() {
             "order_id": order_id,
             "action": "complete",
             "uom": "m",
+            "print_transport": "offline",
+            "printer": "zebra",
+            "print_mode": "label",
             "rezka_frames": [
                 {"produced_qty": 110, "gross_qty": 11, "diameter": 44}
             ]
@@ -1803,6 +1826,19 @@ async fn grouped_rezka_wip_survives_lamination_and_reenters_same_final_rezka() {
     .await;
     assert_eq!(status, StatusCode::OK, "{body:?}");
     assert_eq!(body["progress_batches"].as_array().unwrap().len(), 1);
+    assert_eq!(body["print"]["print_count"], 2);
+    let final_batch = &body["progress_batches"][0];
+    let reprint = router.clone().oneshot(request_with_body(
+        "POST", "/v1/mobile/admin/production-maps/progress-qr/reprint", &worker_token,
+        &serde_json::json!({
+            "progress_batch_id": final_batch["batch_id"],
+            "qr_payload": final_batch["qr_payload"],
+            "print_transport": "offline", "printer": "zebra", "print_mode": "label",
+            "print_count": 1, "automatic_rezka_labels": true
+        }).to_string(),
+    )).await.unwrap();
+    assert_eq!(reprint.status(), StatusCode::OK);
+    assert_eq!(json_body(reprint).await["print"]["print_count"], 2);
     assert_eq!(body["states"][order_id], "pending");
 
     let snapshot = router
@@ -1864,6 +1900,9 @@ async fn grouped_rezka_wip_survives_lamination_and_reenters_same_final_rezka() {
             "rezka_bosma_waste": 0.1,
             "rezka_lamination_waste": 0.1,
             "rezka_edge_waste": 0.1,
+            "print_transport": "offline",
+            "printer": "zebra",
+            "print_mode": "label",
             "rezka_frames": [
                 {"produced_qty": 100, "gross_qty": 10, "diameter": 43},
                 {"produced_qty": 100, "gross_qty": 10, "diameter": 43}
@@ -1877,6 +1916,8 @@ async fn grouped_rezka_wip_survives_lamination_and_reenters_same_final_rezka() {
         .as_array()
         .expect("final individual frames");
     assert_eq!(final_outputs.len(), 2);
+    assert!(body["prints"].as_array().unwrap().iter()
+        .all(|print| print["print_count"] == 2));
     assert!(final_outputs.iter().all(|batch| {
         batch["payload_json"]["contained_kadr_count"] == 1
             && batch["payload_json"]["rezka_output_kind"] == "frame"

@@ -151,6 +151,10 @@ impl PreparedApparatusQueueAction {
         self.material_scan_skipped
     }
 
+    pub(crate) fn reacquires_print_transfer_materials(&self) -> bool {
+        self.event.payload_json["print_transfer_material_reacquisition"].as_bool() == Some(true)
+    }
+
     /// Raw materials belong to the station's work across input rolls. Only
     /// the server-resolved final report can settle the remaining stock.
     pub fn settles_completion_materials(&self) -> bool {

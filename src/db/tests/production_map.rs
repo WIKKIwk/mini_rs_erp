@@ -9,7 +9,8 @@ use crate::core::production_map::{
     queue_state,
 };
 use crate::db::postgres::{
-    apply_foundation_migration, apply_postgres_migrations_through, postgres_test_database_options,
+    apply_foundation_migration, apply_postgres_migrations_through,
+    apply_postgres_migrations_through_version, postgres_test_database_options,
 };
 use crate::db::postgres_production_map::PostgresProductionMapStore;
 
@@ -50,10 +51,13 @@ async fn postgres_production_map_store_persists_maps_sequences_and_queue_states(
     let pool = sqlx::PgPool::connect_with(postgres_test_database_options(&admin_url, db_name))
         .await
         .expect("test db");
+    apply_postgres_migrations_through_version(&pool, "0121")
+        .await
+        .expect("apply migrations before apparatus bootstrap");
+    seed_standard_canonical_apparatus(&pool).await;
     apply_foundation_migration(&pool)
         .await
         .expect("apply migration");
-    seed_standard_canonical_apparatus(&pool).await;
     let store = Arc::new(PostgresProductionMapStore::new(pool.clone()));
     let service = ProductionMapService::new_for_test(store.clone());
 
@@ -63,6 +67,21 @@ async fn postgres_production_map_store_persists_maps_sequences_and_queue_states(
         .expect("save map");
     assert_eq!(saved.map.id, "zakaz-1001");
     assert_eq!(saved.map.order_number, "1001");
+    let mut label_map = saved.map.clone();
+    label_map.duplicate_rezka_labels = Some(true);
+    store.put_map(label_map.clone()).await.expect("save duplicate labels");
+    label_map.duplicate_rezka_labels = None;
+    store.put_map(label_map.clone()).await.expect("save legacy map");
+    assert_eq!(
+        service.raw_map("zakaz-1001").await.unwrap().unwrap().duplicate_rezka_labels,
+        Some(true)
+    );
+    label_map.duplicate_rezka_labels = Some(false);
+    store.put_map(label_map).await.expect("explicitly disable duplicate labels");
+    assert_eq!(
+        service.raw_map("zakaz-1001").await.unwrap().unwrap().duplicate_rezka_labels,
+        Some(false)
+    );
     let released_lifecycle: String =
         sqlx::query_scalar("SELECT lifecycle_status FROM mini_production_maps WHERE id = $1")
             .bind("zakaz-1001")
@@ -749,6 +768,7 @@ fn test_map(id: &str, order_number: &str, product_code: &str) -> ProductionMapDe
         width_mm: Some(650.0),
         order_kg: None,
         base_length: None,
+        duplicate_rezka_labels: None,
         include_bobina_in_net: None,
         nodes: vec![
             test_node("start", ProductionMapNodeKind::Start, "Start", 0.0),

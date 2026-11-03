@@ -30,6 +30,16 @@ async fn execute_queue_action(
     );
     let frame_specific_metrics = !input.progress.rezka_frames.is_empty();
     let recording_rezka_frame = input.progress.rezka_record_frame_index.is_some();
+    let rezka_order_map = if apparatus.is_rezka() && frame_specific_metrics {
+        Some(state
+            .production_maps
+            .raw_map(&input.order_id)
+            .await
+            .map_err(production_map_error)?
+            .ok_or_else(|| production_map_error(ProductionMapError::MapNotFound))?)
+    } else {
+        None
+    };
     let fallback_gross_qty = input.progress.gross_qty.or(input.progress.finished_goods_kg);
     let fallback_bobina_kg = input.progress.bobina_kg;
     let QueueActionCommand {
@@ -60,6 +70,10 @@ async fn execute_queue_action(
         )
         .await
         .map_err(production_map_error)?;
+    // A roll can move after the request's initial material check.
+    if !material_start_required && prepared.reacquires_print_transfer_materials() {
+        return Err(production_map_error(ProductionMapError::RawMaterialScanRequired));
+    }
     prepared.attach_print_preflight_hold_id(&print_preflight_hold_id);
     if apparatus.is_rezka() {
         // Never trust an old device's output_paddon_code. Resolve the user's
@@ -161,7 +175,7 @@ async fn execute_queue_action(
                 },
                 label_kind: "progress".to_string(),
                 print_count: if frame_specific_metrics {
-                    1
+                    automatic_rezka_label_count(rezka_order_map.as_ref(), batch)
                 } else {
                     print.print_count
                 },

@@ -104,6 +104,9 @@ pub async fn production_map_order_edit(
         return Ok(json_response(current));
     }
     let mut input: OpenedOrderEditRequest = parse_json(&body)?;
+    if input.original.map.duplicate_rezka_labels.is_none() {
+        input.original.map.duplicate_rezka_labels = current.map.duplicate_rezka_labels;
+    }
     if input.original.map.include_bobina_in_net.is_none() {
         input.original.map.include_bobina_in_net = current.map.include_bobina_in_net;
     }

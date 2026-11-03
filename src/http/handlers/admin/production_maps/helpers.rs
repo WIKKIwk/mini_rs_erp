@@ -16,6 +16,22 @@ pub(super) fn production_map_print_order_code(map: &ProductionMapDefinition) -> 
         .map(str::to_owned)
 }
 
+pub(super) fn automatic_rezka_label_count(
+    map: Option<&ProductionMapDefinition>,
+    batch: &crate::core::production_map::OrderProgressBatch,
+) -> u32 {
+    // The production service assigns this kind from the resolved stage occurrence.
+    let is_final_rezka_frame = batch.payload_json.get("rezka_output_kind")
+        .and_then(|value| value.as_str()) == Some("frame");
+    if is_final_rezka_frame
+        && map.is_some_and(|map| map.duplicate_rezka_labels == Some(true))
+    {
+        2
+    } else {
+        1
+    }
+}
+
 pub(super) fn effective_progress_qr_payload<'a>(
     qr_payload: &'a str,
     legacy_progress_qr: &'a str,

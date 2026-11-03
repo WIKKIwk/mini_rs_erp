@@ -234,6 +234,7 @@ mod tests {
             width_mm: None,
             order_kg: None,
             base_length: None,
+            duplicate_rezka_labels: None,
             include_bobina_in_net: None,
             nodes: Vec::new(),
             edges: Vec::new(),

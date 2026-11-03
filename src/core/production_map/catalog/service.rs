@@ -450,7 +450,7 @@ impl ProductionMapService {
         map: ProductionMapDefinition,
     ) -> Result<ProductionMapSaved, ProductionMapError> {
         if !map.id.starts_with("template-")
-            && let Some(previous) = self.store.map_by_id(&map.id).await?
+            && let Some(previous) = self.store.map_by_id(map.id.trim()).await?
             && !previous.order_number.trim().is_empty()
             && crate::core::order_edit::calculation_map_changed(&previous, &map)
         {
@@ -484,6 +484,11 @@ impl ProductionMapService {
         mut map: ProductionMapDefinition,
         allow_preflight_edit: bool,
     ) -> Result<ProductionMapSaved, ProductionMapError> {
+        if map.duplicate_rezka_labels.is_none()
+            && let Some(previous) = self.store.map_by_id(&map.id).await?
+        {
+            map.duplicate_rezka_labels = previous.duplicate_rezka_labels;
+        }
         if map.include_bobina_in_net.is_none()
             && let Some(previous) = self.store.map_by_id(&map.id).await?
         {
@@ -506,6 +511,11 @@ impl ProductionMapService {
         let mut normalized = Vec::with_capacity(maps.len());
         let mut saved = Vec::with_capacity(maps.len());
         for mut map in maps {
+            if map.duplicate_rezka_labels.is_none()
+                && let Some(previous) = self.store.map_by_id(map.id.trim()).await?
+            {
+                map.duplicate_rezka_labels = previous.duplicate_rezka_labels;
+            }
             if map.include_bobina_in_net.is_none()
                 && let Some(previous) = self.store.map_by_id(&map.id).await?
             {

@@ -1271,15 +1271,6 @@ impl ProductionMapService {
                                 interaction.material_scan_required = true;
                             }
                         }
-                        if control == OrderControlState::Active
-                            && active_session.is_some_and(|session| session.is_print_transfer_continuation()
-                                && session.payload_json.get("print_transfer_materials_required")
-                                    .and_then(serde_json::Value::as_bool) == Some(true))
-                            && live_material_rule(canonical).is_some_and(|rule| rule.requires_material)
-                        {
-                            interaction.start_materials_mode = ApparatusQueueStartMaterialsMode::ScanRequired;
-                            interaction.material_scan_required = true;
-                        }
                         if !active_order_is_this {
                             interaction.blocking_reason_code = "apparatus_busy".to_string();
                         } else if !queue_actionable {
@@ -1293,6 +1284,19 @@ impl ProductionMapService {
                     queue_state::ApparatusQueueOrderState::Completed => {
                         interaction.mode = ApparatusQueueInteractionMode::Completed;
                     }
+                }
+
+                if control == OrderControlState::Active
+                    && (state == queue_state::ApparatusQueueOrderState::Paused
+                        || (state == queue_state::ApparatusQueueOrderState::Pending && requeued_session))
+                    && let Some(session) = active_session.filter(|session| session.needs_print_transfer_material_check())
+                    && let Some(rule) = live_material_rule(canonical).filter(|rule| rule.requires_material)
+                    && !self.print_transfer_can_reuse_materials(
+                        session, &rule, material_assignments_by_order.get(order_id).map(Vec::as_slice).unwrap_or_default(),
+                    ).await?
+                {
+                    interaction.start_materials_mode = ApparatusQueueStartMaterialsMode::ScanRequired;
+                    interaction.material_scan_required = true;
                 }
 
                 if control == OrderControlState::Active

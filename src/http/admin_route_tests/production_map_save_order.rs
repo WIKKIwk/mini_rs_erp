@@ -135,12 +135,13 @@ async fn production_map_save_with_order_saves_map_and_template() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
 
-    let map_json = pechat_order_map_json(
+    let mut map_json: serde_json::Value = serde_json::from_str(&pechat_order_map_json(
         "zakaz-7777",
         "Atomic zakaz",
         "7777",
         "apparatus:default:bosma_8",
-    );
+    )).unwrap();
+    map_json["duplicate_rezka_labels"] = true.into();
     let body = format!(
         r#"{{
             "map":{map_json},
@@ -172,6 +173,7 @@ async fn production_map_save_with_order_saves_map_and_template() {
     assert_eq!(value["ok"], true);
     assert_eq!(value["saved"]["map"]["id"], "zakaz-7777");
     assert_eq!(value["saved"]["map"]["customer_name"], "555 kukuruz");
+    assert_eq!(value["saved"]["map"]["duplicate_rezka_labels"], true);
     assert_eq!(value["template"]["name"], "atomic mahsulot");
     let template_map_id = value["template"]["source_map_id"].as_str().unwrap();
     assert!(template_map_id.starts_with("template-"));
@@ -228,12 +230,27 @@ async fn production_map_save_with_order_saves_map_and_template() {
     assert_eq!(fetched_template_map.status(), StatusCode::OK);
     let fetched_template_value = json_body(fetched_template_map).await;
     assert_eq!(fetched_template_value["map"]["id"], template_map_id);
+    assert!(fetched_template_value["map"].get("duplicate_rezka_labels").is_none());
     assert_eq!(
         fetched_template_value["map"]["order_number"]
             .as_str()
             .unwrap_or(""),
         ""
     );
+
+    let mut legacy_map = fetched_value["map"].clone();
+    legacy_map.as_object_mut().unwrap().remove("duplicate_rezka_labels");
+    let legacy_save = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &token,
+            &legacy_map.to_string(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(legacy_save.status(), StatusCode::OK);
+    assert_eq!(json_body(legacy_save).await["map"]["duplicate_rezka_labels"], true);
 
     let mut edited_template = fetched_template_value["map"].clone();
     edited_template["nodes"][0]["title"] = serde_json::json!("Template v2 start");
@@ -271,6 +288,7 @@ async fn production_map_auto_open_reuses_automatic_routing_and_saves_order() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
     let body = serde_json::json!({
+        "duplicate_rezka_labels": true,
         "template": {
             "id": "reusable-template",
             "variant_id": "reusable-template",
@@ -309,10 +327,30 @@ async fn production_map_auto_open_reuses_automatic_routing_and_saves_order() {
     assert_eq!(value["ok"], true);
     assert_eq!(value["saved"]["map"]["id"], "zakaz-0001");
     assert_eq!(value["saved"]["map"]["order_number"], "0001");
+    assert_eq!(value["saved"]["map"]["duplicate_rezka_labels"], true);
     assert_eq!(value["template"]["order_number"], "0001");
     let template_map_id = value["template"]["source_map_id"].as_str().unwrap();
     assert!(template_map_id.starts_with("template-"));
     assert_ne!(template_map_id, "template-zakaz-0001");
+    let template_map = state.production_maps.raw_map(template_map_id).await.unwrap().unwrap();
+    assert_eq!(template_map.duplicate_rezka_labels, None);
+
+    let mut next_body = body.clone();
+    next_body.as_object_mut().unwrap().remove("duplicate_rezka_labels");
+    let next_response = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/auto-open",
+            &token,
+            &next_body.to_string(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(next_response.status(), StatusCode::OK);
+    let next = json_body(next_response).await;
+    assert_eq!(next["saved"]["map"]["duplicate_rezka_labels"], false);
+    assert_ne!(next["saved"]["map"]["id"], value["saved"]["map"]["id"]);
+    assert_eq!(state.production_maps.raw_map("zakaz-0001").await.unwrap().unwrap().duplicate_rezka_labels, Some(true));
 
     let nodes = value["saved"]["map"]["nodes"]
         .as_array()

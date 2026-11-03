@@ -61,6 +61,7 @@ async fn complete_pending_order(
     source.order_number.clear();
     source.order_kg = None;
     source.base_length = None;
+    source.duplicate_rezka_labels = None;
     source.include_bobina_in_net = None;
     template.source_map_id = source.id.clone();
     template = crate::db::postgres_calculate_order::stamp_template(template, None);
