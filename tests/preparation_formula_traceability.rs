@@ -176,6 +176,37 @@ async fn run_formula_checks(pool: sqlx::PgPool) {
             (owner_ref,order_id,variant_id,product_code,material_id,revision_id,display_name)
         SELECT 'prep-trace','zakaz-other','fv-old-copy','OTHER','pe-pr',id,'Historical alias' FROM revision;
     "#).execute(&pool).await.unwrap();
+    apply_postgres_migrations_through_version(&pool, "0190").await.unwrap();
+    sqlx::raw_sql(r#"
+        INSERT INTO mini_orders(id,code,order_number,product_name)
+            VALUES ('zakaz-copy-chain','0320','0320','Copy chain order');
+        INSERT INTO mini_production_maps(id,product_code,title,code,map_json)
+            VALUES ('zakaz-copy-chain','CHAIN','Copy chain order','0320','{}');
+        INSERT INTO mini_order_products(id,order_id,product_name,layers_json)
+            VALUES ('trace-copy-chain','zakaz-copy-chain','CHAIN','[{"material_id":"pe-pr"}]');
+        INSERT INTO mini_preparation_formula_variants
+            (id,owner_ref,product_code,material_id,name,request_id)
+        VALUES ('fv-chain-copy','prep-trace','CHAIN','pe-pr','Reusable',
+            'reuse:' || encode(sha256(convert_to('["CHAIN","pe-pr","fv-old-copy"]','UTF8')), 'hex'));
+        INSERT INTO mini_preparation_formulas
+            (owner_ref,product_code,material_id,material_name,variant_id,name,lines,share_percent)
+        SELECT owner_ref,'CHAIN',material_id,material_name,'fv-chain-copy',name,lines,share_percent
+        FROM mini_preparation_formulas WHERE variant_id='fv-old-copy';
+
+        WITH recipe AS (
+            SELECT jsonb_agg(jsonb_build_object(
+                'name',name,'formula_code',formula_code,'lines',lines,'share_percent',share_percent::text
+            ) ORDER BY name) AS formulas
+            FROM mini_preparation_formulas WHERE variant_id='fv-chain-copy'
+        ), revision AS (
+            INSERT INTO mini_preparation_formula_revisions(variant_id,content_key,formulas)
+            SELECT 'fv-chain-copy', mini_preparation_recipe_key(formulas), formulas FROM recipe
+            RETURNING id
+        )
+        INSERT INTO mini_preparation_order_formula_selections
+            (owner_ref,order_id,variant_id,product_code,material_id,revision_id,display_name)
+        SELECT 'prep-trace','zakaz-copy-chain','fv-chain-copy','CHAIN','pe-pr',id,'Chained alias' FROM revision;
+    "#).execute(&pool).await.unwrap();
     apply_foundation_migration(&pool).await.unwrap();
     let actor = Principal {
         role: PrincipalRole::TayyorlovMasteri,
@@ -222,6 +253,18 @@ async fn run_formula_checks(pool: sqlx::PgPool) {
     assert_eq!(old_copy["id"], "fv-old-copy");
     assert_eq!(old_copy["name"], "Historical alias");
     assert_eq!(old_copy["formula_count"], 2);
+    assert!(!entries.iter().any(|entry| entry["id"] == "fv-chain-copy"));
+    assert!(reusable["order_codes"].as_array().unwrap().contains(&json!("0320")));
+    let available = store.available_formula_variants(&actor.ref_, "CHAIN", "pe-pr", "zakaz-copy-chain")
+        .await.unwrap();
+    assert!(!available["formulas"].as_array().unwrap().iter().any(|entry| entry["id"] == "fv-recover"));
+    let chain = store.reuse_formula_variant_in_order(&actor.ref_, FormulaVariantReuse {
+        source_variant_id: "fv-recover".into(), product_code: "CHAIN".into(), material_id: "pe-pr".into(),
+    }, "zakaz-copy-chain").await.unwrap();
+    assert_eq!(chain["id"], "fv-chain-copy");
+    assert_eq!(chain["name"], "Chained alias");
+    assert_eq!(chain["formula_count"], 2);
+
 
     let variant = store
         .create_formula_variant(

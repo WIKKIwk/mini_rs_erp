@@ -23,21 +23,27 @@ impl PostgresPreparationStore {
         let linked = self.formula_variants_in_order(owner, product, material, false, order_id).await?;
         let linked: BTreeSet<String> = linked["variants"].as_array().into_iter().flatten()
             .filter_map(|entry| entry["id"].as_str().map(str::to_owned)).collect();
-        let copies: Vec<(String, Option<String>)> = sqlx::query_as(
-            "SELECT id, request_id FROM mini_preparation_formula_variants
+        let copies: Vec<(String, Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT id, request_id, catalog_source_id FROM mini_preparation_formula_variants
              WHERE owner_ref=$1 AND product_code=$2 AND material_id=$3",
         ).bind(owner).bind(product.trim()).bind(material.trim()).fetch_all(&self.pool).await?;
-        let copies: BTreeMap<String, String> = copies.into_iter()
-            .filter_map(|(id, request)| request.map(|request| (request, id))).collect();
+        let linked_sources: BTreeSet<_> = copies.iter()
+            .filter(|(id, _, _)| linked.contains(id))
+            .filter_map(|(_, _, source)| source.as_deref())
+            .collect();
+        let linked_copy_requests: BTreeSet<_> = copies.iter()
+            .filter(|(id, _, _)| linked.contains(id))
+            .filter_map(|(_, request, _)| request.as_deref())
+            .collect();
         let mut catalog = self.formula_catalog(owner).await?;
         if let Some(entries) = catalog["formulas"].as_array_mut() {
             entries.retain(|entry| {
                 let id = entry["id"].as_str().unwrap_or_default();
-                if linked.contains(id) {
+                if linked.contains(id) || linked_sources.contains(id) {
                     return false;
                 }
                 let key = reuse_request_id(product.trim(), material.trim(), id);
-                !copies.get(&key).is_some_and(|target| linked.contains(target))
+                !linked_copy_requests.contains(key.as_str())
             });
         }
         Ok(catalog)
@@ -88,6 +94,35 @@ impl PostgresPreparationStore {
             let result = variant_summary_in_order(&mut tx, &scope, source).await?;
             tx.commit().await?;
             return Ok(result);
+        }
+
+        // A retired copy can descend through another retired copy. Look up
+        // its canonical identity instead of reconstructing its creation key.
+        if !scope.order.is_empty() {
+            let archived: Option<String> = sqlx::query_scalar(
+                "SELECT v.id FROM mini_preparation_order_formula_selections s
+                 JOIN mini_preparation_formula_variants v ON v.id=s.variant_id
+                 WHERE s.owner_ref=$1 AND s.order_id=$2 AND s.product_code=$3
+                   AND s.material_id=$4 AND v.catalog_source_id=$5
+                 ORDER BY EXISTS(
+                     SELECT 1 FROM mini_preparation_order_formula_exclusions x
+                     WHERE x.owner_ref=s.owner_ref AND x.order_id=s.order_id
+                       AND x.product_code=s.product_code AND x.material_id=s.material_id
+                       AND x.variant_id=s.variant_id
+                 ), v.created_at, v.id LIMIT 1",
+            )
+            .bind(owner)
+            .bind(scope.order)
+            .bind(product)
+            .bind(material)
+            .bind(source)
+            .fetch_optional(&mut *tx)
+            .await?;
+            if let Some(id) = archived {
+                let result = variant_summary_in_order(&mut tx, &scope, &id).await?;
+                tx.commit().await?;
+                return Ok(result);
+            }
         }
 
         // Preserve the product-scoped copy for the legacy catalog-only API.
