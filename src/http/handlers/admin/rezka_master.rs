@@ -1,11 +1,10 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
 use crate::core::{
     apparatus_standard::LifecycleState,
     authz::{RoleAssignment, RoleAssignmentUpsert},
     production_map::{ProductionMapDefinition, chain},
-    workers::Worker,
 };
 
 async fn authorize_master(state: &AppState, headers: &HeaderMap) -> Result<Principal, AdminError> {
@@ -121,68 +120,28 @@ pub struct WorkerApparatus {
     previous_apparatus_ids: Vec<String>,
 }
 
-struct WorkerScope {
-    known_cut: BTreeSet<String>,
-    active_cut: BTreeSet<String>,
-    cut_group: BTreeSet<String>,
-    other_group: BTreeSet<String>,
+async fn active_cut_ids(state: &AppState) -> Result<BTreeSet<String>, AdminError> {
+    let apparatus = state
+        .rezka_apparatus()
+        .await
+        .map_err(|_| server_error("rezka apparatus lookup failed"))?;
+    Ok(apparatus
+        .into_iter()
+        .filter(|row| row.lifecycle.state == LifecycleState::Active)
+        .map(|row| row.apparatus_id.to_string())
+        .collect())
 }
 
-impl WorkerScope {
-    async fn read(state: &AppState) -> Result<Self, AdminError> {
-        let apparatus = state
-            .rezka_apparatus()
-            .await
-            .map_err(|_| server_error("rezka apparatus lookup failed"))?;
-        let known_cut: BTreeSet<_> = apparatus
-            .iter()
-            .map(|row| row.apparatus_id.to_string())
-            .collect();
-        let active_cut = apparatus
-            .iter()
-            .filter(|row| row.lifecycle.state == LifecycleState::Active)
-            .map(|row| row.apparatus_id.to_string())
-            .collect();
-        let mut cut_group = BTreeSet::new();
-        let mut other_group = BTreeSet::new();
-        for group in state
-            .worker_groups
-            .worker_groups(None)
-            .await
-            .map_err(|_| server_error("worker group lookup failed"))?
-        {
-            let members = if known_cut.contains(group.apparatus_id.as_str()) {
-                &mut cut_group
-            } else {
-                &mut other_group
-            };
-            members.extend(group.worker_ids);
-        }
-        Ok(Self {
-            known_cut,
-            active_cut,
-            cut_group,
-            other_group,
-        })
-    }
-
-    fn allows(&self, worker: &Worker, assignment: Option<&RoleAssignment>) -> bool {
-        let assigned = assignment
-            .map(|row| row.assigned_apparatus.as_slice())
-            .unwrap_or_default();
-        self.cut_group.contains(&worker.id)
-            || assigned.iter().any(|id| self.known_cut.contains(id))
-            || (assigned.is_empty() && !self.other_group.contains(&worker.id))
-    }
-
-    fn visible_apparatus(&self, assignment: Option<&RoleAssignment>) -> BTreeSet<String> {
-        assignment
-            .into_iter()
-            .flat_map(|row| &row.assigned_apparatus)
-            .filter(|id| self.active_cut.contains(*id))
-            .cloned()
-            .collect()
-    }
+fn assigned_cut_ids(
+    assignment: &RoleAssignment,
+    active_cut: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    assignment
+        .assigned_apparatus
+        .iter()
+        .filter(|id| active_cut.contains(*id))
+        .cloned()
+        .collect()
 }
 
 pub async fn workers(
@@ -190,45 +149,47 @@ pub async fn workers(
     headers: HeaderMap,
 ) -> Result<Response, AdminError> {
     authorize_master(&state, &headers).await?;
-    let scope = WorkerScope::read(&state).await?;
+    let active_cut = active_cut_ids(&state).await?;
     let assignments = state
         .admin
         .role_assignments()
         .await
         .map_err(|_| server_error("worker assignment lookup failed"))?;
-    let by_worker = |worker: &Worker| {
-        assignments
-            .iter()
-            .find(|row| {
-                row.principal_role == PrincipalRole::Aparatchi && row.principal_ref == worker.id
-            })
-            .or_else(|| {
-                assignments.iter().find(|row| {
-                    row.principal_role == PrincipalRole::Customer && row.principal_ref == worker.id
-                })
-            })
-    };
-    let workers = state
-        .workers
-        .workers("", 500)
-        .await
-        .map_err(|_| server_error("worker lookup failed"))?;
-    let mut visible_workers = Vec::new();
-    let mut visible_assignments = Vec::new();
-    for worker in workers {
-        let assignment = by_worker(&worker);
-        if scope.allows(&worker, assignment) {
-            visible_assignments.push(serde_json::json!({
-                "principal_role": "aparatchi",
-                "principal_ref": worker.id,
-                "role_id": assignment.map(|row| row.role_id.as_str()).unwrap_or("aparatchi"),
-                "assigned_apparatus": scope.visible_apparatus(assignment),
-            }));
-            visible_workers.push(worker);
+    let mut by_worker = BTreeMap::new();
+    // Apply legacy assignments first so Aparatchi assignments take precedence.
+    for role in [PrincipalRole::Customer, PrincipalRole::Aparatchi] {
+        for assignment in assignments.iter().filter(|row| row.principal_role == role) {
+            by_worker.insert(assignment.principal_ref.trim().to_string(), assignment);
         }
     }
+    let by_worker: BTreeMap<_, _> = by_worker
+        .into_iter()
+        .filter_map(|(id, assignment)| {
+            let cut = assigned_cut_ids(assignment, &active_cut);
+            (!cut.is_empty()).then_some((id, (assignment, cut)))
+        })
+        .collect();
+    let ids: Vec<_> = by_worker.keys().cloned().collect();
+    let mut workers = state
+        .workers
+        .workers_by_ids(&ids)
+        .await
+        .map_err(|_| server_error("worker lookup failed"))?;
+    workers.sort_by_cached_key(|worker| (worker.name.to_lowercase(), worker.id.clone()));
+    let visible_assignments: Vec<_> = workers
+        .iter()
+        .map(|worker| {
+            let (assignment, cut) = &by_worker[&worker.id];
+            serde_json::json!({
+                "principal_role": "aparatchi",
+                "principal_ref": worker.id,
+                "role_id": assignment.role_id,
+                "assigned_apparatus": cut,
+            })
+        })
+        .collect();
     Ok(json_response(serde_json::json!({
-        "workers": visible_workers, "assignments": visible_assignments,
+        "workers": workers, "assignments": visible_assignments,
     })))
 }
 
@@ -256,28 +217,29 @@ pub async fn assign_worker(
         phone: String::new(),
         avatar_url: String::new(),
     };
-    let scope = WorkerScope::read(&state).await?;
+    let active_cut = active_cut_ids(&state).await?;
     let current = state
         .admin
         .principal_assignment(&principal)
         .await
-        .map_err(|_| server_error("worker assignment lookup failed"))?;
-    if !scope.allows(&worker, current.as_ref()) {
+        .map_err(|_| server_error("worker assignment lookup failed"))?
+        .ok_or_else(|| not_found("worker_not_found"))?;
+    let current_cut = assigned_cut_ids(&current, &active_cut);
+    if current_cut.is_empty() {
         return Err(not_found("worker_not_found"));
     }
     let selected: BTreeSet<_> = input.apparatus_ids.into_iter().collect();
-    if !selected.is_subset(&scope.active_cut) {
+    if selected.is_empty() || !selected.is_subset(&active_cut) {
         return Err(bad_request("rezka_apparatus_required"));
     }
     let previous: BTreeSet<_> = input.previous_apparatus_ids.into_iter().collect();
-    if scope.visible_apparatus(current.as_ref()) != previous {
+    if current_cut != previous {
         return Err(conflict("rezka_assignment_changed"));
     }
     let mut next: BTreeSet<_> = current
-        .iter()
-        .flat_map(|row| &row.assigned_apparatus)
-        .filter(|id| !scope.active_cut.contains(*id))
-        .cloned()
+        .assigned_apparatus
+        .into_iter()
+        .filter(|id| !active_cut.contains(id))
         .collect();
     next.extend(selected);
     if previous.iter().any(|id| !next.contains(id)) {
@@ -298,14 +260,9 @@ pub async fn assign_worker(
         .upsert_role_assignment(RoleAssignmentUpsert {
             principal_role: PrincipalRole::Aparatchi,
             principal_ref: worker.id.clone(),
-            role_id: current
-                .as_ref()
-                .map(|row| row.role_id.clone())
-                .unwrap_or_else(|| "aparatchi".into()),
+            role_id: current.role_id,
             assigned_apparatus: next.into_iter().collect(),
-            assigned_item_groups: current
-                .map(|row| row.assigned_item_groups)
-                .unwrap_or_default(),
+            assigned_item_groups: current.assigned_item_groups,
         })
         .await
         .map_err(|_| server_error("worker assignment save failed"))?;

@@ -145,6 +145,7 @@ pub async fn workers(
             }
         }
         Method::DELETE => {
+            let _guard = state.production_maps.queue_action_guard().await;
             let worker = required_worker(&state, query.id.as_deref()).await?;
             let check = worker_deletion_check(&state, &worker).await?;
             if check.blocked || check.requires_confirmation && !query.confirm_connections {

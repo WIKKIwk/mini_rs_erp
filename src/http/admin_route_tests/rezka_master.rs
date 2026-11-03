@@ -5,6 +5,7 @@ const CUT_TWO: &str = "apparatus:default:asset-011";
 const PRINT: &str = "apparatus:default:bosma_7";
 const MAPS: &str = "/v1/mobile/admin/production-maps";
 const WORKERS: &str = "/v1/mobile/rezka-master/workers";
+const ADMIN_ASSIGNMENTS: &str = "/v1/mobile/admin/role-assignments";
 const SETTINGS: &str = "/v1/mobile/rezka-master/order-settings";
 
 #[tokio::test]
@@ -95,54 +96,145 @@ async fn rezka_master_changes_only_cut_worker_access_and_detects_stale_choices()
     let master = session_for(&state, PrincipalRole::RezkaMaster, "rezka-master-test").await;
     let admin = session(&state, PrincipalRole::Admin).await;
     let router = build_router(state.clone());
-    let worker = router
+    let id = "worker-mixed";
+    for worker_id in [id, "worker-print", "worker-group", "worker-unassigned"] {
+        let worker = router
+            .clone()
+            .oneshot(request_with_body(
+                "POST",
+                "/v1/mobile/admin/workers",
+                &admin,
+                &serde_json::json!({"id": worker_id, "name": worker_id, "level": "Master"})
+                    .to_string(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            worker.status(),
+            StatusCode::OK,
+            "{}",
+            json_body(worker).await
+        );
+    }
+    for (worker_id, apparatus_ids) in [(id, vec![CUT, PRINT]), ("worker-print", vec![PRINT])] {
+        let assignment = router
+            .clone()
+            .oneshot(request_with_body(
+                "PUT",
+                ADMIN_ASSIGNMENTS,
+                &admin,
+                &serde_json::json!({
+                    "principal_role": "aparatchi",
+                    "principal_ref": worker_id,
+                    "role_id": "aparatchi",
+                    "assigned_apparatus": apparatus_ids,
+                    "assigned_item_groups": ["FILM"],
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            assignment.status(),
+            StatusCode::OK,
+            "{}",
+            json_body(assignment).await
+        );
+    }
+    let group = router
         .clone()
         .oneshot(request_with_body(
-            "POST",
-            "/v1/mobile/admin/workers",
+            "PUT",
+            "/v1/mobile/admin/worker-groups",
             &admin,
-            r#"{"name":"Mixed operator","level":"Master","phone":"+998907771146"}"#,
+            &serde_json::json!({
+                "apparatus_id": CUT, "group_code": "A", "shift": "kunduz",
+                "start_time": "08:00", "end_time": "17:00", "start_day": "monday",
+                "worker_ids": ["worker-group"],
+            })
+            .to_string(),
         ))
         .await
         .unwrap();
-    let status = worker.status();
-    let worker = json_body(worker).await;
-    assert_eq!(status, StatusCode::OK, "{worker}");
-    let id = worker["id"].as_str().unwrap();
-    state
-        .admin
-        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
-            principal_role: PrincipalRole::Aparatchi,
-            principal_ref: id.into(),
-            role_id: "aparatchi".into(),
-            assigned_apparatus: vec![CUT.into(), PRINT.into()],
-            assigned_item_groups: vec![],
-        })
-        .await
-        .unwrap();
+    assert_eq!(group.status(), StatusCode::OK, "{}", json_body(group).await);
     let list = router
         .clone()
         .oneshot(request("GET", WORKERS, &master))
         .await
         .unwrap();
     assert_eq!(list.status(), StatusCode::OK);
+    let list = json_body(list).await;
+    assert_eq!(list["workers"].as_array().unwrap().len(), 1);
+    assert_eq!(list["workers"][0]["id"], id);
+    assert_eq!(list["assignments"].as_array().unwrap().len(), 1);
     assert_eq!(
-        json_body(list).await["assignments"][0]["assigned_apparatus"],
+        list["assignments"][0]["assigned_apparatus"],
         serde_json::json!([CUT])
     );
-    for (next, previous, status) in [
-        (vec![PRINT], vec![CUT], StatusCode::BAD_REQUEST),
-        (vec![], vec![], StatusCode::CONFLICT),
-        (vec![CUT, CUT_TWO], vec![CUT], StatusCode::OK),
-        (vec![CUT_TWO], vec![CUT, CUT_TWO], StatusCode::OK),
-        (vec![], vec![CUT_TWO], StatusCode::OK),
-        (vec![CUT], vec![CUT], StatusCode::NOT_FOUND),
+    for (worker_id, next, previous, status, error) in [
+        (
+            "worker-print",
+            vec![CUT],
+            vec![],
+            StatusCode::NOT_FOUND,
+            "worker_not_found",
+        ),
+        (
+            "worker-group",
+            vec![CUT],
+            vec![],
+            StatusCode::NOT_FOUND,
+            "worker_not_found",
+        ),
+        (
+            "worker-unassigned",
+            vec![CUT],
+            vec![],
+            StatusCode::NOT_FOUND,
+            "worker_not_found",
+        ),
+        (
+            id,
+            vec![PRINT],
+            vec![CUT],
+            StatusCode::BAD_REQUEST,
+            "rezka_apparatus_required",
+        ),
+        (
+            id,
+            vec![],
+            vec![CUT],
+            StatusCode::BAD_REQUEST,
+            "rezka_apparatus_required",
+        ),
+        (
+            id,
+            vec![CUT_TWO],
+            vec![],
+            StatusCode::CONFLICT,
+            "rezka_assignment_changed",
+        ),
+        (id, vec![CUT_TWO], vec![CUT], StatusCode::OK, ""),
+        (id, vec![CUT, CUT_TWO], vec![CUT_TWO], StatusCode::OK, ""),
+        (id, vec![CUT_TWO], vec![CUT, CUT_TWO], StatusCode::OK, ""),
+        (
+            id,
+            vec![],
+            vec![CUT_TWO],
+            StatusCode::BAD_REQUEST,
+            "rezka_apparatus_required",
+        ),
     ] {
         let result = router.clone().oneshot(request_with_body(
             "PUT", WORKERS, &master,
-            &serde_json::json!({"worker_id":id,"apparatus_ids":next,"previous_apparatus_ids":previous}).to_string(),
+            &serde_json::json!({"worker_id":worker_id,"apparatus_ids":next,"previous_apparatus_ids":previous}).to_string(),
         )).await.unwrap();
-        assert_eq!(result.status(), status, "{}", json_body(result).await);
+        let actual_status = result.status();
+        let body = json_body(result).await;
+        assert_eq!(actual_status, status, "{body}");
+        if !error.is_empty() {
+            assert_eq!(body["error"], error);
+        }
     }
     let assignment = state
         .admin
@@ -152,7 +244,42 @@ async fn rezka_master_changes_only_cut_worker_access_and_detects_stale_choices()
         .into_iter()
         .find(|row| row.principal_ref == id)
         .unwrap();
-    assert_eq!(assignment.assigned_apparatus, vec![PRINT.to_string()]);
+    assert_eq!(assignment.assigned_apparatus, vec![CUT_TWO, PRINT]);
+    assert_eq!(assignment.assigned_item_groups, vec!["FILM"]);
+    let list = router
+        .clone()
+        .oneshot(request("GET", WORKERS, &master))
+        .await
+        .unwrap();
+    assert_eq!(list.status(), StatusCode::OK);
+    let list = json_body(list).await;
+    assert_eq!(list["workers"][0]["id"], id);
+    assert_eq!(
+        list["assignments"][0]["assigned_apparatus"],
+        serde_json::json!([CUT_TWO])
+    );
+
+    let cleared = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            ADMIN_ASSIGNMENTS,
+            &admin,
+            &serde_json::json!({
+                "principal_role": "aparatchi", "principal_ref": id,
+                "role_id": "aparatchi", "assigned_apparatus": [PRINT],
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(cleared.status(), StatusCode::OK);
+    let list = router
+        .oneshot(request("GET", WORKERS, &master))
+        .await
+        .unwrap();
+    assert_eq!(list.status(), StatusCode::OK);
+    assert_eq!(json_body(list).await["workers"], serde_json::json!([]));
 }
 
 #[tokio::test]
