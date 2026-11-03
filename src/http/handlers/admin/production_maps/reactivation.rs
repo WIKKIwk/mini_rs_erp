@@ -9,11 +9,11 @@ pub async fn production_map_reactivation_preview(
 ) -> Result<Response, AdminError> {
     let principal =
         authorize_capability(&state, &headers, Capability::ApparatusQueueManage).await?;
-    if principal.role != PrincipalRole::Aparatchi {
+    if !principal.role.is_apparatus_operator() {
         return Err(forbidden());
     }
     let selector: ReactivationSelector = parse_json(&body)?;
-    let assigned = state.admin.principal_assigned_apparatus(&principal).await;
+    let assigned = state.principal_assigned_apparatus(&principal).await;
     let result = state
         .production_maps
         .preview_reactivation(&selector, &assigned, &queue_action_actor(&principal))
@@ -31,11 +31,11 @@ pub async fn production_map_reactivation(
 ) -> Result<Response, AdminError> {
     let principal =
         authorize_capability(&state, &headers, Capability::ApparatusQueueManage).await?;
-    if principal.role != PrincipalRole::Aparatchi {
+    if !principal.role.is_apparatus_operator() {
         return Err(forbidden());
     }
     let target: ReactivationTarget = parse_json(&body)?;
-    let assigned = state.admin.principal_assigned_apparatus(&principal).await;
+    let assigned = state.principal_assigned_apparatus(&principal).await;
     let actor = queue_action_actor(&principal);
     if state.production_maps.reactivation_was_applied(&target, &assigned, &actor)
         .await.map_err(production_map_error)?
@@ -154,9 +154,9 @@ pub async fn production_map_reactivation_reclose(
     State(state): State<AppState>, headers: HeaderMap, body: Bytes,
 ) -> Result<Response, AdminError> {
     let principal = authorize_capability(&state, &headers, Capability::ApparatusQueueManage).await?;
-    if principal.role != PrincipalRole::Aparatchi { return Err(forbidden()); }
+    if !principal.role.is_apparatus_operator() { return Err(forbidden()); }
     let target: crate::core::production_map::ReactivationRecloseTarget = parse_json(&body)?;
-    let assigned = state.admin.principal_assigned_apparatus(&principal).await;
+    let assigned = state.principal_assigned_apparatus(&principal).await;
     state.production_maps.reclose_reactivated_work(&target, &assigned, &queue_action_actor(&principal))
         .await.map_err(production_map_error)?;
     if let Ok(barcodes) = raw_material_barcodes_for_order_apparatus(&state, &target.order_id, &target.apparatus).await {

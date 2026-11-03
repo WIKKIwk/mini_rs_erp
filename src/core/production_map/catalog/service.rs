@@ -445,7 +445,7 @@ impl ProductionMapService {
         self.upsert_map_under_queue_guard(map).await
     }
 
-    async fn upsert_map_under_queue_guard(
+    pub(crate) async fn upsert_map_under_queue_guard(
         &self,
         map: ProductionMapDefinition,
     ) -> Result<ProductionMapSaved, ProductionMapError> {

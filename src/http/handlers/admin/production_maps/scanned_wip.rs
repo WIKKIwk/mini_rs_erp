@@ -15,10 +15,10 @@ pub async fn production_map_scanned_wips(
     Query(query): Query<ScannedWipQuery>,
 ) -> Result<Response, AdminError> {
     let principal = authorize_capability(&state, &headers, Capability::ApparatusQueueRead).await?;
-    if principal.role != PrincipalRole::Aparatchi {
+    if !principal.role.is_apparatus_operator() {
         return Err(forbidden());
     }
-    let assigned = state.admin.principal_assigned_apparatus(&principal).await;
+    let assigned = state.principal_assigned_apparatus(&principal).await;
     let inputs = state
         .production_maps
         .scanned_wip_inputs(
@@ -45,11 +45,11 @@ pub async fn production_map_return_scanned_wip(
 ) -> Result<Response, AdminError> {
     let principal =
         authorize_capability(&state, &headers, Capability::ApparatusQueueManage).await?;
-    if principal.role != PrincipalRole::Aparatchi {
+    if !principal.role.is_apparatus_operator() {
         return Err(forbidden());
     }
     let target: ScannedWipReturn = parse_json(&body)?;
-    let assigned = state.admin.principal_assigned_apparatus(&principal).await;
+    let assigned = state.principal_assigned_apparatus(&principal).await;
     state
         .production_maps
         .return_scanned_wip(&target, &assigned, queue_action_actor(&principal))

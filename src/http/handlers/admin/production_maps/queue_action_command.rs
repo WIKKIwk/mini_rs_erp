@@ -72,7 +72,7 @@ impl QueueActionCommand {
             return Err(bad_request("queue_action_not_allowed"));
         }
         if request.freeze_with_issue || explicit_worker_freeze {
-            if principal.role != PrincipalRole::Aparatchi {
+            if !principal.role.is_apparatus_operator() {
                 return Err(forbidden());
             }
             if action != queue_state::ApparatusQueueAction::Freeze {

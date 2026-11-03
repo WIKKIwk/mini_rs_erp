@@ -22,6 +22,10 @@ pub enum PrincipalRole {
 }
 
 impl PrincipalRole {
+    pub fn is_apparatus_operator(self) -> bool {
+        matches!(self, Self::Aparatchi | Self::RezkaMaster)
+    }
+
     pub fn is_admin_workspace_manager(self) -> bool {
         matches!(self, Self::Admin | Self::Brigader)
     }

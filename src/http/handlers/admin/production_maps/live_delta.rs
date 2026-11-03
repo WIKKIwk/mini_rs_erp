@@ -72,7 +72,7 @@ async fn read_view_consistent(
     for _ in 0..3 {
         let started_revision = service.snapshot_revision();
         let actor = queue_action_actor(principal);
-        let worker_assignment = if principal.role == PrincipalRole::Aparatchi {
+        let worker_assignment = if principal.role.is_apparatus_operator() {
             Some(super::worker_snapshot::scope_token(state, principal).await?)
         } else { None };
         // Reuse history only for an exact colour-only revision. Retry when a

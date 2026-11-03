@@ -17,7 +17,7 @@ pub async fn production_map_paddon_items_transfer(
     )
     .await?;
     if !principal.role.is_admin_workspace_manager()
-        && (principal.role != PrincipalRole::Aparatchi
+        && (!principal.role.is_apparatus_operator()
             || super::paddon_print_lock::assigned_cut_apparatuses(&state, &principal)
                 .await?
                 .is_empty())
@@ -28,7 +28,7 @@ pub async fn production_map_paddon_items_transfer(
     super::paddons::require_paddon_visible(&state, &principal, &input.source_code).await?;
     super::paddons::require_paddon_visible(&state, &principal, &input.target_code).await?;
     let actor = queue_action_actor(&principal);
-    let result = if principal.role == PrincipalRole::Aparatchi {
+    let result = if principal.role.is_apparatus_operator() {
         let allowed = super::paddons::assigned_paddon_apparatuses(&state, &principal).await?;
         state.production_maps.transfer_paddon_items_for_apparatuses(input, &actor, &allowed).await
     } else {

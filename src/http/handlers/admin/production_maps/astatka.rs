@@ -357,7 +357,7 @@ pub async fn production_map_rezka_astatka(
         .principal_has_admin_workspace_access(&principal)
         .await;
     if !is_admin {
-        let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
+        let assigned_apparatus = state.principal_assigned_apparatus(&principal).await;
         if !queue_state::apparatus_matches_assigned(&input.apparatus, &assigned_apparatus) {
             return Err(production_map_error(
                 ProductionMapError::ApparatusNotAssigned,

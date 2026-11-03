@@ -156,7 +156,7 @@ async fn profile_payload(
     token: &str,
 ) -> Result<Value, (StatusCode, Json<ErrorResponse>)> {
     let capabilities = state.admin.principal_capability_codes(&principal).await;
-    let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
+    let assigned_apparatus = state.principal_assigned_apparatus(&principal).await;
     let assigned_apparatus_labels = assigned_apparatus_labels(state, &assigned_apparatus).await;
     let assigned_item_groups = state.admin.principal_assigned_item_groups(&principal).await;
     let assigned_warehouses = state

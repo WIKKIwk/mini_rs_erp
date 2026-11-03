@@ -117,7 +117,7 @@ fn project_participants(
         );
         // An admin may approve a completion on behalf of an operator. Count
         // other work actions only when their actor is an apparatus worker.
-        let worker_action = log.actor_role.trim() == "aparatchi"
+        let worker_action = matches!(log.actor_role.trim(), "aparatchi" | "rezka_master")
             && matches!(
                 log.action,
                 ApparatusQueueAction::Pause

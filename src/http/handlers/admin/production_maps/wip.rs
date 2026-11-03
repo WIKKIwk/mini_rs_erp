@@ -13,7 +13,7 @@ pub(super) async fn require_wip_order_read_scope(
     if order_id.is_empty() {
         return Err(forbidden());
     }
-    let assigned = state.admin.principal_assigned_apparatus(principal).await;
+    let assigned = state.principal_assigned_apparatus(principal).await;
     if assigned.is_empty() {
         return Err(forbidden());
     }
@@ -130,7 +130,7 @@ pub async fn production_map_wip_batches(
             .principal_has_capability(&principal, Capability::ProductionMapRead)
             .await;
     if !can_view_all {
-        let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
+        let assigned_apparatus = state.principal_assigned_apparatus(&principal).await;
         let scoped_to_current =
             queue_state::apparatus_matches_assigned(&query.apparatus, &assigned_apparatus);
         let scoped_to_next =

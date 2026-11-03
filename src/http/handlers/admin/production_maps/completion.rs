@@ -31,6 +31,12 @@ pub async fn production_map_live(
     }
     let principal = authenticated_principal_for_live(&state, &headers, &query.token).await?;
     require_any_live_capability(&state, &principal).await?;
+    if principal.role == PrincipalRole::RezkaMaster
+        && (query.paged || !matches!(query.protocol.as_deref(), Some("state_delta_v1" | "state_delta_v2")))
+    {
+        return Err(forbidden());
+    }
+    let worker_scope = query.worker_scope || principal.role == PrincipalRole::RezkaMaster;
     let include_completion_requests = principal.role.is_admin_workspace_manager();
     let delta_enabled = query.protocol.as_deref() == Some("delta");
     let compact_state_delta = query.protocol.as_deref() == Some("state_delta_v2");
@@ -53,10 +59,10 @@ pub async fn production_map_live(
     let window = super::worker_snapshot::WorkerQueueWindow::new(
         query.queue_limit,
         &query.queue_search,
-        query.worker_scope && state_delta_enabled,
+        worker_scope && state_delta_enabled,
     )?
     .with_positions(query.queue_positions)
-    .with_projection(&query.projection, query.worker_scope && compact_state_delta)?;
+    .with_projection(&query.projection, worker_scope && compact_state_delta)?;
     Ok(ws
         .on_upgrade(move |socket| {
             if let Some(windows) = page_windows {
@@ -79,7 +85,7 @@ pub async fn production_map_live(
                     include_completion_requests,
                     query.epoch,
                     query.rev,
-                    query.worker_scope,
+                    worker_scope,
                     query.scope,
                     window,
                     compact_state_delta,
@@ -369,8 +375,8 @@ async fn send_production_map_live_snapshot(
     };
     let (completed_orders, completion_requests, completion_request_decisions) = tokio::join!(
         async {
-            if principal.role == PrincipalRole::Aparatchi {
-                let assigned = state.admin.principal_assigned_apparatus(principal).await;
+            if principal.role.is_apparatus_operator() {
+                let assigned = state.principal_assigned_apparatus(principal).await;
                 service
                     .completed_queue_orders_for_apparatuses(&assigned, 200)
                     .await
@@ -410,7 +416,7 @@ async fn send_production_map_live_snapshot(
                 // resync instead of sitting on stale state.
                 "rev": revision,
                 "epoch": service.snapshot_epoch(),
-                "worker_show_all_apparatus_tabs": state.worker_show_all_apparatus_tabs,
+                "worker_show_all_apparatus_tabs": state.show_all_worker_apparatus(&principal).await,
                 "maps": &snapshot.maps,
                 "sequences": &snapshot.sequences,
                 "sequence_versions": &snapshot.sequence_versions,
@@ -508,8 +514,8 @@ pub async fn production_map_completed_orders(
         ],
     )
     .await?;
-    let completed_orders = if principal.role == PrincipalRole::Aparatchi {
-        let assigned = state.admin.principal_assigned_apparatus(&principal).await;
+    let completed_orders = if principal.role.is_apparatus_operator() {
+        let assigned = state.principal_assigned_apparatus(&principal).await;
         state
             .production_maps
             .completed_queue_orders_for_apparatuses(&assigned, 200)

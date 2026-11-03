@@ -15,11 +15,11 @@ pub async fn production_map_re_pause(
 ) -> Result<Response, AdminError> {
     let principal =
         authorize_capability(&state, &headers, Capability::ApparatusQueueManage).await?;
-    if principal.role != PrincipalRole::Aparatchi {
+    if !principal.role.is_apparatus_operator() {
         return Err(forbidden());
     }
     let request: RePauseRequest = parse_json(&body)?;
-    let assigned = state.admin.principal_assigned_apparatus(&principal).await;
+    let assigned = state.principal_assigned_apparatus(&principal).await;
     state
         .production_maps
         .re_pause_resumed_work(

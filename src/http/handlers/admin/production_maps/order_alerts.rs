@@ -78,7 +78,7 @@ pub async fn production_map_order_alert(
     if method != Method::POST {
         return Err(method_not_allowed());
     }
-    if principal.role != PrincipalRole::Aparatchi {
+    if !principal.role.is_apparatus_operator() {
         return Err(forbidden());
     }
     let command: OrderAlertCommand = parse_json(&body)?;
@@ -93,7 +93,7 @@ pub async fn production_map_order_alert(
         return Err(bad_request("order_alert_invalid_request"));
     }
     let apparatus = queue_actions::resolve_queue_apparatus(&state, &command.apparatus).await?;
-    let assigned = state.admin.principal_assigned_apparatus(&principal).await;
+    let assigned = state.principal_assigned_apparatus(&principal).await;
     if !raw_material_details::assigned_apparatus_contains(apparatus.id.as_str(), &assigned) {
         return Err(forbidden());
     }

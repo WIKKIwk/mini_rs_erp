@@ -48,7 +48,7 @@ pub async fn production_map_active_paddon(
         .admin
         .principal_has_admin_workspace_access(&principal)
         .await;
-    let assigned = state.admin.principal_assigned_apparatus(&principal).await;
+    let assigned = state.principal_assigned_apparatus(&principal).await;
     if !admin && !queue_state::apparatus_matches_assigned(&apparatus_id, &assigned) {
         return Err(bad_request("apparatus_not_assigned"));
     }
@@ -145,7 +145,7 @@ pub async fn production_map_paddons(
     if method != Method::GET {
         return Err(method_not_allowed());
     }
-    if principal.role == PrincipalRole::Aparatchi
+    if principal.role.is_apparatus_operator()
         && query
             .apparatus
             .as_deref()
@@ -354,7 +354,7 @@ async fn resolve_paddon_apparatus(
             .principal_has_capability(principal, Capability::ProductionMapRead)
             .await
     {
-        let assigned = state.admin.principal_assigned_apparatus(principal).await;
+        let assigned = state.principal_assigned_apparatus(principal).await;
         if !queue_state::apparatus_matches_assigned(&id, &assigned) {
             return Err(bad_request("apparatus_not_assigned"));
         }
@@ -372,7 +372,7 @@ async fn ensure_paddon_access(
         .ensure_paddon_visible(paddon, &queue_action_actor(principal))
         .await
         .map_err(production_map_error)?;
-    if principal.role == PrincipalRole::Aparatchi {
+    if principal.role.is_apparatus_operator() {
         if paddon.apparatus_id.is_empty() {
             return Err(bad_request("paddon_apparatus_unresolved"));
         }
@@ -386,7 +386,7 @@ pub(super) async fn require_paddon_visible(
     principal: &Principal,
     code: &str,
 ) -> Result<(), AdminError> {
-    if principal.role == PrincipalRole::Aparatchi {
+    if principal.role.is_apparatus_operator() {
         let snapshot = state
             .production_maps
             .paddon_scan_snapshot(code)
@@ -407,7 +407,7 @@ pub(super) async fn assigned_paddon_apparatuses(
 async fn snapshot_for_principal(
     state: &AppState, principal: &Principal, code: &str,
 ) -> Result<crate::core::production_map::PaddonSnapshot, AdminError> {
-    let result = if principal.role == PrincipalRole::Aparatchi {
+    let result = if principal.role.is_apparatus_operator() {
         require_paddon_visible(state, principal, code).await?;
         let allowed = assigned_paddon_apparatuses(state, principal).await?;
         state.production_maps.paddon_snapshot_for_apparatuses(code, &queue_action_actor(principal), &allowed).await
@@ -420,7 +420,7 @@ async fn snapshot_for_principal(
 pub(super) async fn refresh_mutation_candidates(
     state: &AppState, principal: &Principal, mut snapshot: crate::core::production_map::PaddonSnapshot,
 ) -> crate::core::production_map::PaddonSnapshot {
-    if principal.role == PrincipalRole::Aparatchi {
+    if principal.role.is_apparatus_operator() {
         match snapshot_for_principal(state, principal, &snapshot.paddon.code).await {
             Ok(current) => return current,
             Err(_) => {
@@ -438,7 +438,7 @@ async fn add_items_for_principal(
     state: &AppState, principal: &Principal, code: &str, ids: &[String],
 ) -> Result<crate::core::production_map::PaddonSnapshot, AdminError> {
     let actor = queue_action_actor(principal);
-    let result = if principal.role == PrincipalRole::Aparatchi {
+    let result = if principal.role.is_apparatus_operator() {
         let allowed = assigned_paddon_apparatuses(state, principal).await?;
         state.production_maps.add_paddon_items_for_apparatuses(code, ids, &actor, &allowed).await
     } else {
@@ -473,7 +473,7 @@ pub async fn production_map_paddon_create(
         return Err(method_not_allowed());
     }
     let input: PaddonCreateRequest = parse_json(&body)?;
-    if principal.role == PrincipalRole::Aparatchi
+    if principal.role.is_apparatus_operator()
         && input
             .apparatus
             .as_deref()

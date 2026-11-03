@@ -379,6 +379,7 @@ pub(super) fn parse_role(value: &str) -> Result<PrincipalRole, ChatError> {
         "homashyo_rezkachi" => Ok(PrincipalRole::HomashyoRezkachi),
         "sales_manager" => Ok(PrincipalRole::SalesManager),
         "brigader" => Ok(PrincipalRole::Brigader),
+        "rezka_master" => Ok(PrincipalRole::RezkaMaster),
         "material_taminotchi" => Ok(PrincipalRole::MaterialTaminotchi),
         "admin" => Ok(PrincipalRole::Admin),
         _ => Err(ChatError::StoreFailed),

@@ -245,7 +245,7 @@ impl AdminService {
             .ok_or(AdminPortError::LookupFailed)
     }
 
-    async fn principal_assignment(
+    pub(crate) async fn principal_assignment(
         &self,
         principal: &Principal,
     ) -> Result<Option<RoleAssignment>, AdminPortError> {

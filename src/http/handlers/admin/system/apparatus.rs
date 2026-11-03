@@ -71,11 +71,14 @@ pub async fn apparatus(
         Method::GET => {
             let limit = optional_search_limit(query.limit.as_deref(), 50, 500);
             let search = query.q.as_deref().unwrap_or("").trim().to_lowercase();
-            let mut rows = state
-                .apparatus
-                .list_runtime_projections()
-                .await
-                .map_err(canonical_apparatus_error)?;
+            let mut rows = if principal.role == PrincipalRole::RezkaMaster {
+                state.rezka_apparatus().await
+            } else {
+                state.apparatus.list_runtime_projections().await
+            }.map_err(canonical_apparatus_error)?;
+            if principal.role == PrincipalRole::RezkaMaster {
+                rows.retain(|item| item.lifecycle.state == crate::core::apparatus_standard::LifecycleState::Active);
+            }
             if !search.is_empty() {
                 rows.retain(|row| row.display.display_name.to_lowercase().contains(&search));
             }

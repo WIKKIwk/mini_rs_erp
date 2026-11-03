@@ -268,7 +268,7 @@ pub(super) fn calculate_order_error(error: CalculateOrderError) -> AdminError {
     }
 }
 
-pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
+pub(in crate::http::handlers::admin) fn production_map_error(error: ProductionMapError) -> AdminError {
     match error {
         ProductionMapError::ReactivationDenied(reason) => {
             conflict(format!("reactivation_{reason}"))

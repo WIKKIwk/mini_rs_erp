@@ -48,7 +48,7 @@ pub(crate) fn attach_checkpoint(
             previous.status,
             OrderRunStatus::Paused | OrderRunStatus::RollDetached
         )
-        || previous.worker_role != "aparatchi"
+        || !matches!(previous.worker_role.as_str(), "aparatchi" | "rezka_master")
         || previous.worker_ref.trim().is_empty()
         || previous.worker_role != prepared.event.actor.role
         || prepared.event.actor.ref_.trim().is_empty()
@@ -130,7 +130,7 @@ pub(crate) fn restore(
 ) -> Result<OrderRunSession, ProductionMapError> {
     let checkpoint = checkpoint(session).ok_or(ProductionMapError::QueueActionNotAllowed)?;
     if checkpoint.control.resume_id != resume_id
-        || actor.role != "aparatchi"
+        || !matches!(actor.role.as_str(), "aparatchi" | "rezka_master")
         || checkpoint.control.worker_role != actor.role
         || checkpoint.control.worker_ref != actor.ref_
         || !matches!(
@@ -226,7 +226,7 @@ impl ProductionMapService {
         assigned_apparatus: &[String],
         actor: QueueActionActor,
     ) -> Result<(), ProductionMapError> {
-        if actor.role != "aparatchi"
+        if !matches!(actor.role.as_str(), "aparatchi" | "rezka_master")
             || actor.ref_.trim().is_empty()
             || order_id.trim().is_empty()
             || order_id.starts_with("training-")

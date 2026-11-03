@@ -101,7 +101,7 @@ impl ProductionMapService {
         assigned: &[String],
         actor: &QueueActionActor,
     ) -> Result<(bool, bool), ProductionMapError> {
-        if actor.role != "aparatchi"
+        if !matches!(actor.role.as_str(), "aparatchi" | "rezka_master")
             || actor.ref_.trim().is_empty()
             || selector.order_id.trim().is_empty()
             || selector.order_id.starts_with("training-")

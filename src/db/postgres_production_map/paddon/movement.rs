@@ -6,7 +6,7 @@ use sqlx::{PgPool, Postgres, Transaction};
 pub(super) fn ensure_apparatus_access(
     actor: &QueueActionActor, apparatus: &str, target: &str, allowed: Option<&[String]>,
 ) -> Result<(), ProductionMapError> {
-    if actor.role != "aparatchi" { return Ok(()); }
+    if !matches!(actor.role.as_str(), "aparatchi" | "rezka_master") { return Ok(()); }
     if let Some(allowed) = allowed {
         if actor.ref_.trim().is_empty() || apparatus.is_empty() || !allowed.iter().any(|id| id == apparatus) {
             return Err(ProductionMapError::PaddonTransferForbidden);
@@ -121,7 +121,7 @@ pub(super) async fn move_items(
     batch_ids.dedup();
     for batch in batch_ids {
         lock_movable_roll(tx, &batch).await?;
-        if actor.role == "aparatchi" {
+        if matches!(actor.role.as_str(), "aparatchi" | "rezka_master") {
             let origin = sqlx::query_scalar::<_, Option<String>>("SELECT canonical_apparatus_id FROM mini_progress_batches WHERE batch_id=$1")
                 .bind(&batch).fetch_one(&mut **tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
             ensure_apparatus_access(actor, origin.as_deref().unwrap_or_default(), target_apparatus, allowed)?;

@@ -70,7 +70,7 @@ pub(super) async fn scope_token(
     state: &AppState,
     principal: &Principal,
 ) -> Result<(Vec<String>, String), AdminError> {
-    let mut assigned = state.admin.principal_assigned_apparatus(principal).await;
+    let mut assigned = state.principal_assigned_apparatus(principal).await;
     assigned.retain(|id| queue_state::is_canonical_apparatus_id(id));
     assigned.sort();
     assigned.dedup();
@@ -79,7 +79,7 @@ pub(super) async fn scope_token(
     }
     let mut digest = Sha256::new();
     digest.update(format!("{:?}\0{}\0", principal.role, principal.ref_));
-    digest.update([u8::from(state.worker_show_all_apparatus_tabs)]);
+    digest.update([u8::from(state.show_all_worker_apparatus(&principal).await)]);
     for apparatus in &assigned {
         digest.update(apparatus.as_bytes());
         digest.update([0]);
@@ -185,7 +185,7 @@ pub(super) async fn read_for_principal(
     let history = history_order_ids.into_iter().collect::<Vec<_>>();
     loop {
         let (assigned, scope) = scope_token(state, principal).await?;
-        let (snapshot, revision) = if state.worker_show_all_apparatus_tabs {
+        let (snapshot, revision) = if state.show_all_worker_apparatus(&principal).await {
             state
                 .production_maps
                 .live_snapshot_shared_with_revision()
@@ -220,7 +220,7 @@ pub(super) async fn read_for_principal(
             {
                 continue;
             }
-            let apparatus_scope = if state.worker_show_all_apparatus_tabs {
+            let apparatus_scope = if state.show_all_worker_apparatus(&principal).await {
                 snapshot.visible_order_ids.keys().cloned().collect()
             } else {
                 assigned
@@ -238,7 +238,7 @@ pub(super) async fn read_for_principal(
             state.production_state_live.project(&snapshot, key, || {
                 window.project(&snapshot, &apparatus_scope, &history, &customers)
             })
-        } else if state.worker_show_all_apparatus_tabs {
+        } else if state.show_all_worker_apparatus(&principal).await {
             snapshot
         } else {
             let mut history_key = history.clone();
@@ -266,7 +266,7 @@ pub(super) async fn read_detail(
     if !can_read { return Err(forbidden()); }
     for _ in 0..3 {
         let (assigned, assignment_scope) = scope_token(state,principal).await?;
-        if !state.worker_show_all_apparatus_tabs && !queue_state::apparatus_matches_assigned(apparatus,&assigned) {
+        if !state.show_all_worker_apparatus(&principal).await && !queue_state::apparatus_matches_assigned(apparatus,&assigned) {
             return Err(forbidden());
         }
         // One detail read must not rebuild every order assigned to this worker.
@@ -280,7 +280,7 @@ pub(super) async fn read_detail(
         ).await.map_err(super::super::training::training_workspace_error)?;
         // Preserve the existing assignment projection as the membership proof.
         // Reading a map by ID alone never authorizes a foreign worker order.
-        let mut snapshot = if state.worker_show_all_apparatus_tabs {
+        let mut snapshot = if state.show_all_worker_apparatus(&principal).await {
             detail.clone()
         } else {
             Arc::new(project(&detail, &assigned, std::iter::empty()))
@@ -313,7 +313,7 @@ pub(super) async fn read_detail(
         payload["scope"] = serde_json::json!(["worker_detail_v1",assignment_scope,apparatus,order_id]).to_string().into();
         payload["order_customers"] = serde_json::json!(customers);
         payload["calculation_templates"] = serde_json::json!(templates);
-        payload["worker_show_all_apparatus_tabs"] = state.worker_show_all_apparatus_tabs.into();
+        payload["worker_show_all_apparatus_tabs"] = state.show_all_worker_apparatus(&principal).await.into();
         return Ok(json_response(payload));
     }
     Err(conflict("production_state_changed_during_read"))

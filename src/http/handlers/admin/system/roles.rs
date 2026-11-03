@@ -119,9 +119,11 @@ pub async fn role_assignments(
             } else {
                 require_capability(&state, &principal, Capability::RoleCapabilityManage).await?;
             }
+            let _guard = state.production_maps.queue_action_guard().await;
             match state.admin.upsert_role_assignment(input).await {
                 Ok(assignment) => {
                     state.warehouse_events.invalidate_inventory();
+                    state.production_maps.notify_live();
                     Ok(json_response(assignment))
                 }
                 Err(AdminPortError::InvalidInput(message)) => Err(bad_request(message)),

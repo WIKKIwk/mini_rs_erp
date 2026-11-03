@@ -82,7 +82,7 @@ pub(super) async fn transfer(
     let mut memberships = Vec::with_capacity(batch_ids.len());
     for batch_id in &batch_ids {
         super::paddon_movement::lock_movable_roll(&mut tx, batch_id).await?;
-        if allowed.is_some() && actor.role == "aparatchi" {
+        if allowed.is_some() && matches!(actor.role.as_str(), "aparatchi" | "rezka_master") {
             let origin: Option<String> = sqlx::query_scalar("SELECT canonical_apparatus_id FROM mini_progress_batches WHERE batch_id=$1")
                 .bind(batch_id).fetch_one(&mut *tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
             super::paddon_movement::ensure_apparatus_access(actor, origin.as_deref().unwrap_or_default(), &target.apparatus_id, allowed)?;

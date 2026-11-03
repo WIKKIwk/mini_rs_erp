@@ -29,7 +29,7 @@ pub(crate) fn control(session: &OrderRunSession) -> Option<CancelStartControl> {
     let control: CancelStartControl =
         serde_json::from_value(checkpoint.get("control")?.clone()).ok()?;
     (session.status == OrderRunStatus::Active
-        && session.worker_role == "aparatchi"
+        && matches!(session.worker_role.as_str(), "aparatchi" | "rezka_master")
         && !session.worker_ref.is_empty()
         && control.worker_ref == session.worker_ref
         && control.session_id == session.session_id

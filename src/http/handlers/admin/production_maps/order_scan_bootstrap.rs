@@ -276,7 +276,7 @@ async fn bootstrap(
         });
         if query.include_context {
             payload["queue_context"] =
-                queue_context(state, &snapshot, revision, &scope, apparatus, order_id);
+                queue_context(state, &snapshot, revision, &scope, apparatus, order_id, state.show_all_worker_apparatus(&principal).await);
         }
         if include_prepared_sections {
             let scoped_section = |mut section: serde_json::Value| {
@@ -344,6 +344,7 @@ fn queue_context(
     scope: &str,
     apparatus: &str,
     order_id: &str,
+    show_all: bool,
 ) -> serde_json::Value {
     let mut selected = BTreeSet::from([order_id.to_string()]);
     if let Some(states) = snapshot.queue_states.get(apparatus) {
@@ -365,7 +366,7 @@ fn queue_context(
         "rev": revision,
         "epoch": state.production_maps.snapshot_epoch(),
         "scope": scope,
-        "worker_show_all_apparatus_tabs": state.worker_show_all_apparatus_tabs,
+        "worker_show_all_apparatus_tabs": show_all,
         "maps": snapshot.maps.iter().filter(|saved| selected.contains(&saved.map.id)).collect::<Vec<_>>(),
         "sequences": { apparatus: snapshot.sequences.get(apparatus).cloned().unwrap_or_default() },
         "sequence_versions": { apparatus: snapshot.sequence_versions.get(apparatus) },
@@ -400,7 +401,7 @@ pub(super) async fn authorization_scope(
     {
         return Err(forbidden());
     }
-    let mut assigned = state.admin.principal_assigned_apparatus(principal).await;
+    let mut assigned = state.principal_assigned_apparatus(principal).await;
     assigned.sort();
     assigned.dedup();
     if !has(Capability::AdminAccess)

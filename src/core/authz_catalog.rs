@@ -292,13 +292,13 @@ pub(super) const CAPABILITY_CATALOG: &[CapabilityDefinition] = &[
         capability: Capability::ApparatusQueueRead,
         code: "apparatus.queue.read",
         label: "Apparatus queue read",
-        default_roles: &[],
+        default_roles: &[PrincipalRole::RezkaMaster],
     },
     CapabilityDefinition {
         capability: Capability::ApparatusQueueManage,
         code: "apparatus.queue.manage",
         label: "Apparatus queue manage",
-        default_roles: &[],
+        default_roles: &[PrincipalRole::RezkaMaster],
     },
     CapabilityDefinition {
         capability: Capability::GscaleCatalogRead,

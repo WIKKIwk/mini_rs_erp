@@ -25,6 +25,7 @@ pub use push_config::{
 mod training;
 mod warehouse_live;
 mod workers;
+pub(crate) mod rezka_master;
 
 pub use calculate_materials::{calculate_material_sequence, calculate_materials};
 pub use customers::{

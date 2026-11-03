@@ -63,7 +63,9 @@ impl ProductionMapService {
         let mut progress = progress;
         progress.freeze_with_issue = freeze_with_issue;
         if freeze_with_issue {
-            if !actor.role.trim().eq_ignore_ascii_case("aparatchi") {
+            if !actor.role.trim().eq_ignore_ascii_case("aparatchi")
+                && actor.role != "rezka_master"
+            {
                 return Err(ProductionMapError::OrderControlActionNotAllowed);
             }
             if progress.description.trim().is_empty()

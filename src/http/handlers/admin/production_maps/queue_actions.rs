@@ -80,6 +80,12 @@ pub async fn production_map_queue_action(
         return Err(bad_request("apparatus and order_id are required"));
     }
     let apparatus = resolve_queue_apparatus(&state, &request.apparatus).await?;
+    if principal.role == PrincipalRole::RezkaMaster && (!apparatus.is_rezka()
+        || !state.principal_assigned_apparatus(&principal).await.contains(&apparatus.id.to_string())
+        || request.order_id.trim().starts_with("training-"))
+    {
+        return Err(forbidden());
+    }
     let include_control = request.include_control;
     let mut input = QueueActionCommand::from_request(request, &apparatus, &principal)?;
     if let Some(training_result) = super::super::training::training_queue_action(
@@ -134,7 +140,7 @@ pub async fn production_map_queue_action(
             .await
             .map_err(production_map_error)?;
     }
-    let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
+    let assigned_apparatus = state.principal_assigned_apparatus(&principal).await;
     if let Some(confirmation) = &input.qolip_confirmation {
         let is_admin = state.admin.principal_has_admin_workspace_access(&principal).await;
         if !is_admin && !queue_state::apparatus_matches_assigned(&input.apparatus, &assigned_apparatus) {
@@ -154,6 +160,7 @@ pub async fn production_map_queue_action(
         &input.apparatus, input.action, &input.progress,
         &input.materials.scan_barcodes, &input.materials.qolip_codes,
     ).await.map_err(production_map_error)?;
+    let assigned_apparatus = state.principal_assigned_apparatus(&principal).await;
     let material_start_required = input.action == queue_state::ApparatusQueueAction::Start
         || state.production_maps.requires_material_reacquisition_for_action(
             &input.apparatus, &input.order_id, input.action,

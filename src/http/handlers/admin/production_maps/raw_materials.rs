@@ -203,6 +203,12 @@ pub async fn raw_material_start_requirements(
     if query.order_id.trim().is_empty() || query.apparatus.trim().is_empty() {
         return Err(bad_request("apparatus and order_id are required"));
     }
+    if principal.role == PrincipalRole::RezkaMaster {
+        super::super::rezka_master::require_order_scope(&state, &principal, &query.order_id).await?;
+        if !state.principal_assigned_apparatus(&principal).await.contains(&query.apparatus) {
+            return Err(forbidden());
+        }
+    }
     if let Some(training_requirements) =
         super::super::training::training_raw_material_start_requirements(
             &state,
@@ -470,6 +476,14 @@ pub async fn raw_material_assignments(
     .await?;
     match method {
         Method::GET => {
+            if principal.role == PrincipalRole::RezkaMaster {
+                super::super::rezka_master::require_order_scope(&state, &principal, &query.order_id).await?;
+                if !query.apparatus.is_empty()
+                    && !state.principal_assigned_apparatus(&principal).await.contains(&query.apparatus)
+                {
+                    return Err(forbidden());
+                }
+            }
             if let Some(training_assignments) =
                 super::super::training::training_material_assignments_for_principal(
                     &state,
@@ -485,7 +499,7 @@ pub async fn raw_material_assignments(
             if principal.role == PrincipalRole::MaterialTaminotchi
                 && !query.apparatus.trim().is_empty()
             {
-                let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
+                let assigned_apparatus = state.principal_assigned_apparatus(&principal).await;
                 if !assigned_apparatus_contains(&query.apparatus, &assigned_apparatus) {
                     return Err(production_map_error(
                         ProductionMapError::ApparatusNotAssigned,
@@ -786,7 +800,7 @@ pub async fn raw_material_assignment_candidates(
         None
     };
     let assigned_apparatus = if principal.role == PrincipalRole::MaterialTaminotchi {
-        Some(state.admin.principal_assigned_apparatus(&principal).await)
+        Some(state.principal_assigned_apparatus(&principal).await)
     } else {
         None
     };
@@ -1022,7 +1036,7 @@ pub async fn raw_material_assignment_diagnostics(
     };
 
     let assigned_apparatus = if principal.role == PrincipalRole::MaterialTaminotchi {
-        Some(state.admin.principal_assigned_apparatus(&principal).await)
+        Some(state.principal_assigned_apparatus(&principal).await)
     } else {
         None
     };
@@ -1227,7 +1241,7 @@ pub async fn raw_material_assignment_candidate_orders(
         .await
         .map_err(production_map_error)?;
     let assigned_apparatus = if principal.role == PrincipalRole::MaterialTaminotchi {
-        Some(state.admin.principal_assigned_apparatus(&principal).await)
+        Some(state.principal_assigned_apparatus(&principal).await)
     } else {
         None
     };
@@ -1349,8 +1363,8 @@ pub async fn raw_material_intake_candidates(
         .ok_or_else(|| not_found("training_order_not_found"))?;
         return Ok(json_response(Vec::<serde_json::Value>::new()));
     }
-    if principal.role == PrincipalRole::Aparatchi {
-        let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
+    if principal.role.is_apparatus_operator() {
+        let assigned_apparatus = state.principal_assigned_apparatus(&principal).await;
         if !assigned_apparatus_contains(apparatus, &assigned_apparatus) {
             return Err(production_map_error(
                 ProductionMapError::ApparatusNotAssigned,
@@ -1481,7 +1495,7 @@ pub async fn raw_material_intake(
     }
     let warehouse = stock.warehouse.trim().to_string();
     let (input, _) = fill_raw_material_assignment_input(&state, &principal, input).await?;
-    let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
+    let assigned_apparatus = state.principal_assigned_apparatus(&principal).await;
     let actor = queue_action_actor(&principal);
     let (assignment, mut warehouses) = state
         .production_maps
@@ -1625,7 +1639,7 @@ async fn raw_material_unlink_stock_guard(
         let stock = stock.as_ref().ok_or_else(forbidden)?;
         require_material_warehouse_scope(state, principal, &stock.warehouse).await?;
         require_material_item_group_scope(state, principal, &assignment.item_group).await?;
-        let assigned_apparatus = state.admin.principal_assigned_apparatus(principal).await;
+        let assigned_apparatus = state.principal_assigned_apparatus(principal).await;
         if !assigned_apparatus_contains(assignment.apparatus_id.as_ref(), &assigned_apparatus) {
             return Err(production_map_error(
                 ProductionMapError::ApparatusNotAssigned,

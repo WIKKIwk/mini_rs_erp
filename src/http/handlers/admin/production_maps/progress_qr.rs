@@ -60,7 +60,7 @@ pub async fn production_map_progress_qr_lookup(
                 .principal_has_capability(&principal, Capability::ProductionMapRead)
                 .await;
         if !can_manage {
-            let assigned = state.admin.principal_assigned_apparatus(&principal).await;
+            let assigned = state.principal_assigned_apparatus(&principal).await;
             if !queue_state::apparatus_matches_assigned(&input.apparatus, &assigned) {
                 return Err(forbidden());
             }
@@ -98,6 +98,9 @@ pub async fn production_map_progress_qr_lookup(
         .progress_batch_for_qr(&input.progress_batch_id, qr_payload)
         .await
         .map_err(production_map_error)?;
+    if principal.role == PrincipalRole::RezkaMaster && !scoped {
+        super::super::rezka_master::require_order_scope(&state, &principal, &batch.order_id).await?;
+    }
     if input.require_active_order {
         match state
             .production_maps
@@ -263,6 +266,9 @@ pub async fn production_map_progress_qr_report(
         .progress_qr_report(&input.progress_batch_id, qr_payload)
         .await
         .map_err(production_map_error)?;
+    if principal.role == PrincipalRole::RezkaMaster {
+        super::super::rezka_master::require_order_scope(&state, &principal, &report.scanned_batch.order_id).await?;
+    }
     Ok(json_response(serde_json::json!({
         "ok": true,
         "scanned_batch": report.scanned_batch,
@@ -421,7 +427,12 @@ pub async fn production_map_progress_qr_reprint(
             .await
             .map_err(production_map_error)?,
     };
-    if !principal_can_reprint_progress_batch(&principal, &batch) {
+    if principal.role == PrincipalRole::RezkaMaster {
+        let allowed = state.principal_assigned_apparatus(&principal).await;
+        if !allowed.contains(&batch.apparatus) {
+            return Err(forbidden());
+        }
+    } else if !principal_can_reprint_progress_batch(&principal, &batch) {
         return Err(forbidden());
     }
     let apparatus_display_name = state

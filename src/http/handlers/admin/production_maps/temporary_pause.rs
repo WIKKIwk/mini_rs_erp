@@ -16,11 +16,11 @@ pub async fn production_map_temporary_pause(
 ) -> Result<Response, AdminError> {
     let principal =
         authorize_capability(&state, &headers, Capability::ApparatusQueueManage).await?;
-    if principal.role != PrincipalRole::Aparatchi {
+    if !principal.role.is_apparatus_operator() {
         return Err(forbidden());
     }
     let request: TemporaryPauseRequest = parse_json(&body)?;
-    let assigned = state.admin.principal_assigned_apparatus(&principal).await;
+    let assigned = state.principal_assigned_apparatus(&principal).await;
     state
         .production_maps
         .temporarily_pause_work(

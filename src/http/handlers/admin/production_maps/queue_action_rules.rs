@@ -17,7 +17,7 @@ fn canonical_queue_action(
         return queue_state::ApparatusQueueAction::Freeze;
     }
     let legacy_roll_removal = remove_roll_from_apparatus;
-    let legacy_worker_detach = principal.role == PrincipalRole::Aparatchi
+    let legacy_worker_detach = principal.role.is_apparatus_operator()
         && freeze_request_id.trim().is_empty()
         && !freeze_with_issue
         && !worker_handoff;

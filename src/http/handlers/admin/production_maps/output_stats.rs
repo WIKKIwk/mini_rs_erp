@@ -35,7 +35,7 @@ pub async fn production_map_output_stats(
     let scope = if can_view_all {
         None
     } else {
-        let mut assigned = state.admin.principal_assigned_apparatus(&principal).await;
+        let mut assigned = state.principal_assigned_apparatus(&principal).await;
         assigned.retain(|id| ApparatusId::new(id.clone()).is_ok());
         assigned.sort();
         assigned.dedup();

@@ -71,6 +71,7 @@ mod batch_move_advanced;
 mod batch_move_basic;
 mod boyoqchi_returned_paint;
 mod brigader_permissions;
+mod rezka_master;
 mod calculate_materials;
 mod combos;
 mod completion_rejections;

@@ -127,6 +127,51 @@ pub struct AppState {
 }
 
 impl AppState {
+    pub(crate) async fn rezka_apparatus(
+        &self,
+    ) -> Result<Vec<crate::core::apparatus_standard::RuntimeApparatusProjection>, crate::core::apparatus_standard::CanonicalApparatusError> {
+        use crate::core::apparatus_standard::ExecutionOperation;
+        Ok(self.apparatus.list_runtime_projections().await?
+            .into_iter()
+            .filter(|apparatus| apparatus.execution_profile.operation == ExecutionOperation::Cut)
+            .collect())
+    }
+
+    pub(crate) async fn principal_assigned_apparatus(
+        &self,
+        principal: &crate::core::auth::models::Principal,
+    ) -> Vec<String> {
+        use crate::core::{apparatus_standard::LifecycleState, auth::models::PrincipalRole};
+        if principal.role == PrincipalRole::RezkaMaster {
+            return self.rezka_apparatus().await.map(|items| {
+                items.into_iter()
+                    .filter(|item| item.lifecycle.state == LifecycleState::Active)
+                    .map(|item| item.apparatus_id.to_string())
+                    .collect()
+            }).unwrap_or_default();
+        }
+        self.admin.principal_assigned_apparatus(principal).await
+    }
+
+    pub(crate) async fn show_all_worker_apparatus(
+        &self,
+        principal: &crate::core::auth::models::Principal,
+    ) -> bool {
+        use crate::core::auth::models::PrincipalRole;
+        if !self.worker_show_all_apparatus_tabs || principal.role == PrincipalRole::RezkaMaster {
+            return false;
+        }
+        if principal.role != PrincipalRole::Aparatchi {
+            return true;
+        }
+        let assigned = self.admin.principal_assigned_apparatus(principal).await;
+        // A cutter's explicit machine list determines the tabs even on
+        // installations that expose all tabs to other operators.
+        self.rezka_apparatus().await.is_ok_and(|items| {
+            !items.iter().any(|item| assigned.iter().any(|id| id == item.apparatus_id.as_str()))
+        })
+    }
+
     /// Builds the production router over isolated in-memory domain stores.
     ///
     /// This is intentionally available only to the external contract verifier.

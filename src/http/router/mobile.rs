@@ -2,6 +2,7 @@ mod admin;
 mod brigader;
 mod core;
 mod sales;
+mod rezka_master;
 
 use axum::Router;
 use tower_http::trace::TraceLayer;
@@ -12,6 +13,7 @@ pub(super) fn routes(state: AppState) -> Router {
     Router::new()
         .merge(core::routes())
         .merge(admin::routes())
+        .merge(rezka_master::routes())
         .layer(TraceLayer::new_for_http())
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),

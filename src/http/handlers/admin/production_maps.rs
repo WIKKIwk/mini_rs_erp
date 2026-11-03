@@ -47,6 +47,7 @@ pub(crate) mod sequence_delta;
 pub(crate) use live_hub::StateLiveHub;
 mod worker_snapshot;
 mod helpers;
+pub(super) use helpers::production_map_error;
 mod move_run;
 mod opening_wip;
 mod output_stats;

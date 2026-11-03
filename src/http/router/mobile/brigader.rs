@@ -1,6 +1,10 @@
 //! Brigaders reuse administrative components within the requested workspace.
 //! Keep its closed endpoint boundary alongside the existing capability checks.
-use crate::{app::AppState, core::auth::models::PrincipalRole, http::handlers::auth::bearer_token};
+use crate::{
+    app::AppState,
+    core::{auth::models::PrincipalRole, authz::Capability},
+    http::handlers::auth::bearer_token,
+};
 use axum::{
     Json,
     extract::{Request, State},
@@ -24,9 +28,18 @@ pub(super) async fn enforce_scope(
         .flatten()
     {
         if let Ok(principal) = state.sessions.get(token.trim()).await {
-            if principal.role == PrincipalRole::Brigader
-                && !allows(request.method(), request.uri().path())
-            {
+            let allowed = match principal.role {
+                PrincipalRole::Brigader => allows(request.method(), request.uri().path()),
+                PrincipalRole::RezkaMaster => {
+                    super::rezka_master::allows(request.method(), request.uri().path())
+                        && state
+                            .admin
+                            .principal_has_capability(&principal, Capability::RezkaMasterAccess)
+                            .await
+                }
+                _ => true,
+            };
+            if !allowed {
                 return (
                     StatusCode::FORBIDDEN,
                     Json(serde_json::json!({"error":"forbidden"})),

@@ -17,7 +17,7 @@ pub struct TemporaryPauseControl {
 
 pub(crate) fn control(session: &OrderRunSession) -> Option<TemporaryPauseControl> {
     if session.status != OrderRunStatus::Active
-        || session.worker_role != "aparatchi"
+        || !matches!(session.worker_role.as_str(), "aparatchi" | "rezka_master")
         || session.worker_ref.trim().is_empty()
         || session.order_id.starts_with("training-")
         || !session.payload_json.is_object()
@@ -136,7 +136,7 @@ pub(crate) fn valid_actor(
     actor: &QueueActionActor,
     assigned: &[String],
 ) -> bool {
-    actor.role == "aparatchi"
+    matches!(actor.role.as_str(), "aparatchi" | "rezka_master")
         && !actor.ref_.trim().is_empty()
         && !order_id.trim().is_empty()
         && !order_id.starts_with("training-")

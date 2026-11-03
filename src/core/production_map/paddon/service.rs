@@ -51,7 +51,7 @@ impl ProductionMapService {
             || source_code.len() > 128
             || target_code.len() > 128
             || actor.ref_.trim().is_empty()
-            || !matches!(actor.role.as_str(), "admin" | "brigader" | "aparatchi")
+            || !matches!(actor.role.as_str(), "admin" | "brigader" | "aparatchi" | "rezka_master")
         {
             return Err(ProductionMapError::PaddonInvalidInput);
         }
@@ -78,7 +78,7 @@ impl ProductionMapService {
     }
 
     pub async fn update_paddon_settings(&self, free_movement_enabled: Option<bool>, worker_visibility_enabled: Option<bool>, actor: &QueueActionActor) -> Result<PaddonManagementSettings, ProductionMapError> {
-        if !matches!(actor.role.as_str(), "admin" | "brigader") || actor.ref_.trim().is_empty()
+        if !matches!(actor.role.as_str(), "admin" | "brigader" | "rezka_master") || actor.ref_.trim().is_empty()
             || (free_movement_enabled.is_none() && worker_visibility_enabled.is_none()) {
             return Err(ProductionMapError::PaddonInvalidInput);
         }

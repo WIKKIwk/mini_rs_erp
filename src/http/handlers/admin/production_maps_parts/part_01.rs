@@ -212,6 +212,9 @@ pub async fn production_maps(
     }
     match method {
         Method::GET => {
+            if principal.role == PrincipalRole::RezkaMaster {
+                super::rezka_master::require_order_scope(&state, &principal, &query.id).await?;
+            }
             if !query.id.trim().is_empty() {
                 if query.id.trim().starts_with("training-") {
                     let overlay = super::training::worker_training_overlay(&state, &principal)

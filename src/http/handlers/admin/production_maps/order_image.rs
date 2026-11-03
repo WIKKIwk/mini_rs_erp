@@ -16,7 +16,7 @@ pub async fn production_map_order_image_view(
     uri: Uri,
     headers: HeaderMap,
 ) -> Result<Response, AdminError> {
-    authorize_any_capability(
+    let principal = authorize_any_capability(
         &state,
         &headers,
         &[
@@ -36,6 +36,9 @@ pub async fn production_map_order_image_view(
     let order_id = query_value(&uri, "order_id")
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| bad_request("order_id kerak"))?;
+    if principal.role == PrincipalRole::RezkaMaster {
+        super::super::rezka_master::require_order_scope(&state, &principal, &order_id).await?;
+    }
     let map = state
         .production_maps
         .raw_map(&order_id)

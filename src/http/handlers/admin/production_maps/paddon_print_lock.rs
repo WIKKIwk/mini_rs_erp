@@ -86,10 +86,10 @@ pub(super) async fn assigned_cut_apparatuses(
     state: &AppState,
     principal: &Principal,
 ) -> Result<Vec<(String, String)>, AdminError> {
-    if principal.role != PrincipalRole::Aparatchi {
+    if !principal.role.is_apparatus_operator() {
         return Ok(Vec::new());
     }
-    let assigned = state.admin.principal_assigned_apparatus(principal).await;
+    let assigned = state.principal_assigned_apparatus(principal).await;
     let mut options = Vec::new();
     for id in assigned {
         let apparatus = super::queue_actions::resolve_queue_apparatus(state, &id).await?;

@@ -51,6 +51,9 @@ pub async fn production_map_sequence(
         ],
     )
     .await?;
+    if principal.role == PrincipalRole::RezkaMaster && !query.worker_scope {
+        return Err(forbidden());
+    }
     let window = worker_snapshot::WorkerQueueWindow::new(
         query.queue_limit,
         &query.queue_search,
@@ -158,7 +161,7 @@ pub async fn production_map_sequence(
                     if window.worker_list {
                         return Ok(json_response(live_delta::worker_list_payload(
                             &view,
-                            state.worker_show_all_apparatus_tabs,
+                            state.show_all_worker_apparatus(&principal).await,
                         )));
                     }
                     (
@@ -203,7 +206,7 @@ pub async fn production_map_sequence(
                     "rev": revision,
                     "epoch": state.production_maps.snapshot_epoch(),
                     "scope": scope,
-                    "worker_show_all_apparatus_tabs": state.worker_show_all_apparatus_tabs,
+                    "worker_show_all_apparatus_tabs": state.show_all_worker_apparatus(&principal).await,
                     "maps": [],
                     "sequences": { apparatus: snapshot.sequences.get(apparatus).cloned().unwrap_or_default() },
                     "sequence_versions": { apparatus: snapshot.sequence_versions.get(apparatus) },
@@ -228,7 +231,7 @@ pub async fn production_map_sequence(
                 "rev": revision,
                 "epoch": state.production_maps.snapshot_epoch(),
                 "scope": scope,
-                "worker_show_all_apparatus_tabs": state.worker_show_all_apparatus_tabs,
+                "worker_show_all_apparatus_tabs": state.show_all_worker_apparatus(&principal).await,
                 "maps": &snapshot.maps,
                 "sequences": &snapshot.sequences,
                 "sequence_versions": &snapshot.sequence_versions,
