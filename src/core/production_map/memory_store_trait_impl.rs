@@ -680,13 +680,13 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
     async fn active_order_run_sessions_for_worker(
         &self,
         worker_refs: &[String],
-        worker_display_name: &str,
+        running_on_apparatus: Option<&[String]>,
         limit: usize,
     ) -> Result<Vec<OrderRunSession>, ProductionMapError> {
         MemoryProductionMapStore::active_order_run_sessions_for_worker(
             self,
             worker_refs,
-            worker_display_name,
+            running_on_apparatus,
             limit,
         )
         .await

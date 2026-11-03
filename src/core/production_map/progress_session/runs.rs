@@ -113,7 +113,7 @@ pub(super) fn session_qolip_codes(session: &OrderRunSession) -> Vec<String> {
 pub(super) async fn active_order_run_sessions_for_worker(
     store: &MemoryProductionMapStore,
     worker_refs: &[String],
-    _worker_display_name: &str,
+    running_on_apparatus: Option<&[String]>,
     limit: usize,
 ) -> Result<Vec<OrderRunSession>, ProductionMapError> {
     let refs = normalized_worker_refs(worker_refs);
@@ -139,6 +139,9 @@ pub(super) async fn active_order_run_sessions_for_worker(
                     .and_then(serde_json::Value::as_bool)
                     == Some(true))
                 && refs.contains(session.worker_ref.trim())
+                && running_on_apparatus.is_none_or(|ids| {
+                    session.status == OrderRunStatus::Active && ids.contains(&session.apparatus)
+                })
         })
         .cloned()
         .collect::<Vec<_>>();

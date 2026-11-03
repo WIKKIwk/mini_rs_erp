@@ -208,7 +208,7 @@ async fn worker_deletion_check(
     let refs = worker_activity_refs(worker);
     let active_sessions = state
         .production_maps
-        .active_order_run_sessions_for_worker(&refs, &worker.name, 100)
+        .active_order_run_sessions_for_worker(&refs, None, 100)
         .await
         .map_err(|_| server_error("worker activity failed"))?;
     let mut active_work = active_sessions

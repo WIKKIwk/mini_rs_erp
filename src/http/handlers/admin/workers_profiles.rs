@@ -53,7 +53,7 @@ pub async fn worker_profile_detail(
     let refs = worker_activity_refs(&worker);
     let active_sessions = state
         .production_maps
-        .active_order_run_sessions_for_worker(&refs, &worker.name, 50)
+        .active_order_run_sessions_for_worker(&refs, None, 50)
         .await
         .map_err(|_| server_error("worker activity failed"))?;
     let recent_batches = state

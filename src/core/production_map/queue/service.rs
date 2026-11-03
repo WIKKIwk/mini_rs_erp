@@ -343,14 +343,15 @@ impl ProductionMapService {
         Ok(logs_by_order.remove(&order_id).unwrap_or_default())
     }
 
+    /// Limit the lookup to running sessions when an apparatus scope is supplied.
     pub async fn active_order_run_sessions_for_worker(
         &self,
         worker_refs: &[String],
-        worker_display_name: &str,
+        running_on_apparatus: Option<&[String]>,
         limit: usize,
     ) -> Result<Vec<OrderRunSession>, ProductionMapError> {
         self.store
-            .active_order_run_sessions_for_worker(worker_refs, worker_display_name, limit)
+            .active_order_run_sessions_for_worker(worker_refs, running_on_apparatus, limit)
             .await
     }
 

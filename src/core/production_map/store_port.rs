@@ -708,7 +708,7 @@ pub trait ProductionMapStorePort: Send + Sync {
     async fn active_order_run_sessions_for_worker(
         &self,
         _worker_refs: &[String],
-        _worker_display_name: &str,
+        _running_on_apparatus: Option<&[String]>,
         _limit: usize,
     ) -> StoreResult<Vec<OrderRunSession>> {
         Ok(Vec::new())

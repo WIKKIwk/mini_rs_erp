@@ -285,7 +285,7 @@ async fn rezka_master_changes_only_cut_worker_access_and_detects_stale_choices()
 }
 
 #[tokio::test]
-async fn keeping_rezka_four_blocks_only_removed_machines_with_work_for_that_worker() {
+async fn reassignment_blocks_only_running_work_for_that_worker_on_removed_machines() {
     let mut state = test_state();
     state.apparatus.bootstrap_factory_defaults().await.unwrap();
     let store = Arc::new(MemoryProductionMapStore::new());
@@ -309,7 +309,7 @@ async fn keeping_rezka_four_blocks_only_removed_machines_with_work_for_that_work
                 principal_role: PrincipalRole::Aparatchi,
                 principal_ref: worker.into(),
                 role_id: "aparatchi".into(),
-                assigned_apparatus: [CUT, CUT_FOUR, PRINT].map(String::from).to_vec(),
+                assigned_apparatus: [CUT, CUT_TWO, CUT_FOUR, PRINT].map(String::from).to_vec(),
                 assigned_item_groups: vec![],
             })
             .await
@@ -317,8 +317,12 @@ async fn keeping_rezka_four_blocks_only_removed_machines_with_work_for_that_work
     }
     for (order, worker, apparatus, status) in [
         ("zakaz-0055", "cut-worker", CUT, OrderRunStatus::Paused),
+        ("zakaz-frozen", "cut-worker", CUT, OrderRunStatus::Frozen),
+        ("zakaz-detached", "cut-worker", CUT, OrderRunStatus::RollDetached),
+        ("zakaz-other", "other-worker", CUT, OrderRunStatus::Active),
+        ("zakaz-0133", "cut-worker", CUT_TWO, OrderRunStatus::Active),
         ("zakaz-0243", "cut-worker", CUT_FOUR, OrderRunStatus::Active),
-        ("zakaz-0190", "print-worker", PRINT, OrderRunStatus::Paused),
+        ("zakaz-0190", "print-worker", PRINT, OrderRunStatus::Active),
     ] {
         store
             .put_order_run_session(OrderRunSession {
@@ -339,9 +343,25 @@ async fn keeping_rezka_four_blocks_only_removed_machines_with_work_for_that_work
     }
 
     let router = build_router(state.clone());
-    for (worker, expected) in [
-        ("cut-worker", StatusCode::CONFLICT),
-        ("print-worker", StatusCode::OK),
+    for (worker, selected, previous, expected) in [
+        (
+            "cut-worker",
+            vec![CUT_TWO, CUT_FOUR],
+            vec![CUT, CUT_TWO, CUT_FOUR],
+            StatusCode::OK,
+        ),
+        (
+            "cut-worker",
+            vec![CUT_FOUR],
+            vec![CUT_TWO, CUT_FOUR],
+            StatusCode::CONFLICT,
+        ),
+        (
+            "print-worker",
+            vec![CUT_FOUR],
+            vec![CUT, CUT_TWO, CUT_FOUR],
+            StatusCode::OK,
+        ),
     ] {
         let response = router
             .clone()
@@ -351,8 +371,8 @@ async fn keeping_rezka_four_blocks_only_removed_machines_with_work_for_that_work
                 &master,
                 &serde_json::json!({
                     "worker_id": worker,
-                    "apparatus_ids": [CUT_FOUR],
-                    "previous_apparatus_ids": [CUT, CUT_FOUR],
+                    "apparatus_ids": selected,
+                    "previous_apparatus_ids": previous,
                 })
                 .to_string(),
             ))
@@ -363,7 +383,7 @@ async fn keeping_rezka_four_blocks_only_removed_machines_with_work_for_that_work
         assert_eq!(status, expected, "{body}");
         if expected == StatusCode::CONFLICT {
             assert_eq!(body["error"], "rezka_worker_has_open_run");
-            assert_eq!(body["blocked_apparatus_ids"], serde_json::json!([CUT]));
+            assert_eq!(body["blocked_apparatus_ids"], serde_json::json!([CUT_TWO]));
         }
     }
     let assignments = state.admin.role_assignments().await.unwrap();

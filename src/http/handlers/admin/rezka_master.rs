@@ -242,16 +242,19 @@ pub async fn assign_worker(
         .filter(|id| !active_cut.contains(id))
         .collect();
     next.extend(selected);
-    let removed: BTreeSet<_> = previous.difference(&next).collect();
+    let removed: Vec<_> = previous.difference(&next).cloned().collect();
     if !removed.is_empty() {
         let sessions = state
             .production_maps
-            .active_order_run_sessions_for_worker(std::slice::from_ref(&worker.id), "", 500)
+            .active_order_run_sessions_for_worker(
+                std::slice::from_ref(&worker.id),
+                Some(&removed),
+                500,
+            )
             .await
             .map_err(production_maps::production_map_error)?;
         let blocked_apparatus_ids: BTreeSet<_> = sessions
             .into_iter()
-            .filter(|run| removed.contains(&run.apparatus))
             .map(|run| run.apparatus)
             .collect();
         if !blocked_apparatus_ids.is_empty() {

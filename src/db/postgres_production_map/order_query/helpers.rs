@@ -345,7 +345,7 @@ pub(super) async fn load_active_order_run_session_for_qolip(
 pub(super) async fn load_active_order_run_sessions_for_worker(
     pool: &PgPool,
     worker_refs: &[String],
-    _worker_display_name: &str,
+    running_on_apparatus: Option<&[String]>,
     limit: usize,
 ) -> Result<Vec<OrderRunSession>, ProductionMapError> {
     let worker_refs = normalized_refs(worker_refs);
@@ -363,6 +363,9 @@ pub(super) async fn load_active_order_run_sessions_for_worker(
          FROM mini_order_run_sessions AS session
          WHERE session.status IN ('active', 'paused', 'frozen', 'roll_detached')
            AND (session.payload_json->>'requeued_at_tail') IS DISTINCT FROM 'true'
+           AND ($3::text[] IS NULL OR (
+               session.status = 'active' AND session.canonical_apparatus_id = ANY($3)
+           ))
            AND (
                session.worker_ref = ANY($1)
                OR EXISTS (
@@ -381,6 +384,7 @@ pub(super) async fn load_active_order_run_sessions_for_worker(
     )
     .bind(&worker_refs)
     .bind(limit)
+    .bind(running_on_apparatus)
     .fetch_all(pool)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
