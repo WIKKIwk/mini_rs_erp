@@ -448,23 +448,69 @@ async fn rezka_master_updates_order_flags_and_paddon_sharing_within_cut_scope() 
             .unwrap();
         assert_eq!(response.status(), expected, "{}", json_body(response).await);
     }
-    let active = router
+    for (enabled, previous) in [(false, true), (true, false)] {
+        let response = router
+            .clone()
+            .oneshot(request_with_body(
+                "PUT",
+                SETTINGS,
+                &token,
+                &serde_json::json!({
+                    "order_id":"zakaz-cut",
+                    "duplicate_rezka_labels":enabled,
+                    "include_bobina_in_net":enabled,
+                    "previous_duplicate_rezka_labels":previous,
+                    "previous_include_bobina_in_net":previous,
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = json_body(response).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["map"]["duplicate_rezka_labels"], enabled);
+        assert_eq!(body["map"]["include_bobina_in_net"], enabled);
+    }
+    let completed = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            &format!("{MAPS}/queue-action"),
+            &token,
+            &serde_json::json!({
+                "order_id":"zakaz-cut", "apparatus": CUT, "action":"complete",
+                "produced_qty": 32, "gross_qty": 32, "uom": "kg",
+                "rezka_bosma_waste": 1.25, "diameter": 45.5,
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+    let status = completed.status();
+    let completed = json_body(completed).await;
+    assert_eq!(status, StatusCode::OK, "{completed}");
+    assert_eq!(
+        completed["order_status"]["lifecycle_status"],
+        "production_completed"
+    );
+    let after_completion = router
         .clone()
         .oneshot(request_with_body(
             "PUT",
             SETTINGS,
             &token,
             r#"{
-          "order_id":"zakaz-cut","duplicate_rezka_labels":true,"include_bobina_in_net":false,
+          "order_id":"zakaz-cut","duplicate_rezka_labels":false,"include_bobina_in_net":false,
           "previous_duplicate_rezka_labels":true,"previous_include_bobina_in_net":true
         }"#,
         ))
         .await
         .unwrap();
-    assert_eq!(active.status(), StatusCode::CONFLICT);
+    assert_eq!(after_completion.status(), StatusCode::CONFLICT);
     assert_eq!(
-        json_body(active).await["error"],
-        "rezka_weight_mode_run_active"
+        json_body(after_completion).await["error"],
+        "rezka_order_settings_order_finished"
     );
     let response = router
         .oneshot(request_with_body(

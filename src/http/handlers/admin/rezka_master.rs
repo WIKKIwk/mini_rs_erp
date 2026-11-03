@@ -4,7 +4,7 @@ use super::*;
 use crate::core::{
     apparatus_standard::LifecycleState,
     authz::{RoleAssignment, RoleAssignmentUpsert},
-    production_map::{ProductionMapDefinition, chain},
+    production_map::{ProductionMapDefinition, ProductionOrderLifecycleStatus, chain},
 };
 
 async fn authorize_master(state: &AppState, headers: &HeaderMap) -> Result<Principal, AdminError> {
@@ -60,19 +60,16 @@ pub async fn order_settings(
     let principal = authorize_master(&state, &headers).await?;
     let _guard = state.production_maps.queue_action_guard().await;
     let mut map = require_order_scope(&state, &principal, &input.order_id).await?;
-    let allowed = state.principal_assigned_apparatus(&principal).await;
-    let final_cut_stages: Vec<_> = chain::linear_work_stages(&map)
-        .into_iter()
-        .filter(|stage| {
-            stage
-                .apparatus_id
-                .as_ref()
-                .is_some_and(|id| allowed.contains(id))
-                && chain::is_final_work_stage_node(&map, &stage.node_id)
-        })
-        .collect();
-    if final_cut_stages.is_empty() {
-        return Err(bad_request("final_rezka_stage_required"));
+    let lifecycle = state
+        .production_maps
+        .production_order_lifecycle(&map.id)
+        .await
+        .map_err(production_maps::production_map_error)?;
+    if !matches!(
+        lifecycle.status,
+        ProductionOrderLifecycleStatus::Released | ProductionOrderLifecycleStatus::InProgress
+    ) {
+        return Err(conflict("rezka_order_settings_order_finished"));
     }
     let duplicate = map.duplicate_rezka_labels.unwrap_or(false);
     let include_bobina = map.include_bobina_in_net.unwrap_or(false);
@@ -84,22 +81,6 @@ pub async fn order_settings(
             )
     {
         return Err(conflict("rezka_order_settings_changed"));
-    }
-    if include_bobina != input.include_bobina_in_net {
-        let sessions = state
-            .production_maps
-            .order_run_sessions_for_order(&map.id)
-            .await
-            .map_err(production_maps::production_map_error)?;
-        if sessions.iter().any(|run| {
-            run.status == crate::core::production_map::OrderRunStatus::Active
-                && final_cut_stages.iter().any(|stage| {
-                    stage.apparatus_id.as_deref() == Some(&run.apparatus)
-                        && (run.stage_node_id.is_empty() || run.stage_node_id == stage.node_id)
-                })
-        }) {
-            return Err(conflict("rezka_weight_mode_run_active"));
-        }
     }
     map.duplicate_rezka_labels = Some(input.duplicate_rezka_labels);
     map.include_bobina_in_net = Some(input.include_bobina_in_net);
