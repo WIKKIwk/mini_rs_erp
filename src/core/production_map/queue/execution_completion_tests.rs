@@ -61,8 +61,8 @@ fn unfinished(
             )
         })
         .collect();
-    has_unprocessed_previous_wips_from_batches(
-        &map.id, map, apparatus, &canonical, &states, batches, "", stage,
+    has_unprocessed_previous_wips_from_sources(
+        &map.id, map, apparatus, &canonical, &states, batches, &[], &[], &[], "", stage,
     )
 }
 
@@ -152,12 +152,13 @@ fn local_report_has_input(
 }
 
 #[test]
-fn waiting_layer_remainder_defers_local_final_report_without_reopening_production() {
+fn waiting_layer_remainder_keeps_the_lamination_stage_open() {
     let map = map();
     let mut remainder = batch(PRESS, "press", LAM2, "lam2");
     remainder.payload_json["origin"] = serde_json::json!("layer_remainder");
     assert!(local_report_has_input(&map, &[remainder.clone()], &[], ""));
-    assert!(!unfinished(&map, LAM2, "lam2", &[remainder.clone()]));
+    assert!(unfinished(&map, LAM2, "lam2", &[remainder.clone()]));
+    assert!(!unfinished(&map, REZKA, "rezka", &[remainder.clone()]));
     assert!(!local_report_has_input(
         &map,
         &[remainder.clone()],

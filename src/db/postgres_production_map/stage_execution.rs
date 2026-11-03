@@ -43,7 +43,14 @@ pub(super) async fn inputs_tx(
         serde_json::from_value(map).map_err(|_| ProductionMapError::StoreFailed)?;
     let routes = sqlx::query_scalar::<_, serde_json::Value>(
         "SELECT route_json FROM mini_progress_batch_work_inputs
-         WHERE order_id = $1 AND batch_count > 0 ORDER BY route_key",
+         WHERE order_id = $1 AND batch_count > 0
+         UNION
+         SELECT mini_progress_batch_work_route(b)
+         FROM mini_layer_remainder_operations r
+         JOIN mini_progress_batches b
+           ON b.batch_id = r.response_json #>> '{progress_batch,batch_id}'
+         WHERE r.order_id = $1 AND r.source_kind = 'progress_batch'
+           AND b.order_id = $1 AND b.wip_status IN ('waiting', 'in_use')",
     )
     .bind(order_id)
     .fetch_all(&mut **tx)

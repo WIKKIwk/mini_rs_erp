@@ -43,8 +43,27 @@ impl PreparedApparatusQueueAction {
         }
     }
     /// Build the ordinary Pause/Complete write for an atomic layer return.
-    pub(crate) fn into_lamination_report_queue_write(mut self) -> super::QueueActionProgressWrite {
+    pub(crate) fn into_lamination_report_queue_write(
+        mut self,
+        returns_printed_wip: bool,
+    ) -> super::QueueActionProgressWrite {
         let completing = self.event.action == super::queue_state::ApparatusQueueAction::Complete;
+        if completing && returns_printed_wip {
+            // This execution is finished. Its returned input still needs the
+            // same stage and does not exist in the queue preparation snapshot.
+            let pending = super::queue_state::ApparatusQueueOrderState::Pending;
+            self.states
+                .insert(self.event.order_id.clone(), pending.as_str().into());
+            self.event.to_state = pending;
+            self.event.payload_json["to_state"] = serde_json::json!(pending.as_str());
+            self.event.payload_json["batch_complete_order_state"] =
+                serde_json::json!(pending.as_str());
+            self.event
+                .payload_json
+                .as_object_mut()
+                .expect("prepared queue event payload is an object")
+                .remove("stage_work_report_submitted");
+        }
         // The existing Astatka report owns these counters. In the zero-output
         // handoff they validated Pause, but must not become a second report in
         // the ordinary progress event.

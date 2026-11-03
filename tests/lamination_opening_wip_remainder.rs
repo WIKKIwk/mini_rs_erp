@@ -61,7 +61,6 @@ async fn report(
         .unwrap();
     assert_eq!(snapshot.sources.len(), 1);
     let source = &snapshot.sources[0];
-    assert_eq!(source.source_kind, "opening_wip");
     let input = LaminatsiyaAstatkaShiftInput {
         action,
         full_completion_report_required: action == Action::Complete,
@@ -129,7 +128,6 @@ async fn report(
     assert_eq!(result.remainders.len(), 1);
     assert_eq!(result.remainders[0].source_id, source.source_id);
     assert_eq!(result.remainders[0].remaining_net_kg, kg);
-    assert!(result.remainders[0].progress_batch.is_none());
     let after = store.progress_batches_for_order(order).await.unwrap();
     assert_eq!(
         service
@@ -281,6 +279,22 @@ async fn checks(pool: PgPool) {
                     }
                 );
                 let receipt = &result.remainders[0];
+                assert_eq!(receipt.source_kind, "opening_wip");
+                assert!(receipt.progress_batch.is_none());
+                if action == Action::Complete {
+                    assert_eq!(
+                        store.apparatus_queue_states().await.unwrap()[LAM][&order],
+                        if kg > 0.0 { "pending" } else { "completed" }
+                    );
+                    assert_eq!(
+                        result
+                            .session
+                            .payload_json
+                            .get("stage_work_report")
+                            .is_some(),
+                        kg == 0.0
+                    );
+                }
                 let parent = service.opening_wip_batch("", original_qr).await.unwrap();
                 assert_eq!(parent.batch.wip_status, OpeningWipBatchStatus::Processed);
                 assert_eq!(parent.batch.finished_goods_kg, Some(52.0));
@@ -331,6 +345,10 @@ async fn checks(pool: PgPool) {
                         report(&service, &store, &order, Action::Complete, 0.0).await;
                     assert!(exhausted.remainders[0].opening_wip.is_none());
                     assert_eq!(
+                        store.apparatus_queue_states().await.unwrap()[LAM][&order],
+                        "completed"
+                    );
+                    assert_eq!(
                         service
                             .record_laminatsiya_astatka_shift(request, actor(), &[LAM.into()])
                             .await
@@ -354,5 +372,107 @@ async fn checks(pool: PgPool) {
             }
         }
     }
+    printed_remainder_completion(&owner, &service, &store).await;
     runtime.close().await;
+}
+
+async fn printed_remainder_completion(
+    owner: &ProductionMapService,
+    service: &ProductionMapService,
+    store: &PostgresProductionMapStore,
+) {
+    const ORDER: &str = "zakaz-printed-return-completion";
+    owner.upsert_map(serde_json::from_value(json!({
+        "id": ORDER, "product_code": "PET", "title": "Printed roll completion",
+        "nodes": [
+            {"id":"s","kind":"start","title":"Start"},
+            {"id":"press","kind":"apparatus","title":"Print","apparatus_id":PRESS},
+            {"id":"lam","kind":"apparatus","title":"Lamination","apparatus_id":LAM},
+            {"id":"e","kind":"end","title":"End"}
+        ],
+        "edges":[{"from":"s","to":"press"},{"from":"press","to":"lam"},{"from":"lam","to":"e"}]
+    })).unwrap()).await.unwrap();
+    owner
+        .set_apparatus_sequence(LAM, vec![ORDER.into()])
+        .await
+        .unwrap();
+    store
+        .put_apparatus_queue_states(
+            PRESS,
+            std::collections::BTreeMap::from([(ORDER.into(), "completed".into())]),
+        )
+        .await
+        .unwrap();
+    let printed: OrderProgressBatch = serde_json::from_value(json!({
+        "batch_id": "printed-original", "session_id": "print-session", "order_id": ORDER,
+        "started_at_unix": 1, "completed_at_unix": 2, "apparatus": PRESS,
+        "action": "complete", "status": "completed", "produced_qty": 1500.0, "uom": "m",
+        "qr_payload": "40010000000000000000AA01", "label_item_code": "PET",
+        "label_item_name": "Printed PET", "executor_name": "Original Printer",
+        "worker_role": "aparatchi", "worker_ref": "printer", "worker_display_name": "Printer",
+        "wip_status": "waiting", "next_apparatus": LAM, "finished_goods_kg": 52.0,
+        "bobina_kg": 2.0, "finished_goods_meter": 1500.0,
+        "payload_json": {"stage_node_id":"press","next_stage_node_id":"lam","gross_qty":52.0}
+    }))
+    .unwrap();
+    store
+        .put_order_progress_batch(printed.clone())
+        .await
+        .unwrap();
+    scan(service, ORDER, &printed.qr_payload).await.unwrap();
+
+    let (_, partial) = report(service, store, ORDER, Action::Complete, 12.0).await;
+    assert_eq!(partial.session.status, OrderRunStatus::Completed);
+    assert!(
+        partial
+            .session
+            .payload_json
+            .get("stage_work_report")
+            .is_none()
+    );
+    assert_eq!(
+        store.apparatus_queue_states().await.unwrap()[LAM][ORDER],
+        "pending"
+    );
+    assert_eq!(
+        service
+            .order_status_detail(ORDER)
+            .await
+            .unwrap()
+            .lifecycle_status,
+        ProductionOrderLifecycleStatus::InProgress
+    );
+    let history = service
+        .completed_queue_orders_for_apparatuses(&[LAM.into()], 20)
+        .await
+        .unwrap();
+    assert!(
+        history.iter().any(|entry| entry.order_id == ORDER
+            && entry.status == CompletedQueueOrderStatus::InProgress)
+    );
+    let returned = partial.remainders[0].progress_batch.as_ref().unwrap();
+    assert_eq!(returned.wip_status, OrderProgressBatchWipStatus::Waiting);
+    assert_eq!(returned.parent_batch_id, printed.batch_id);
+    scan(service, ORDER, &returned.qr_payload).await.unwrap();
+
+    let (_, final_report) = report(service, store, ORDER, Action::Complete, 0.0).await;
+    assert!(
+        final_report
+            .session
+            .payload_json
+            .get("stage_work_report")
+            .is_some()
+    );
+    assert_eq!(
+        store.apparatus_queue_states().await.unwrap()[LAM][ORDER],
+        "completed"
+    );
+    assert_eq!(
+        service
+            .order_status_detail(ORDER)
+            .await
+            .unwrap()
+            .lifecycle_status,
+        ProductionOrderLifecycleStatus::ProductionCompleted
+    );
 }

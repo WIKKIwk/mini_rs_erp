@@ -382,7 +382,11 @@ impl ProductionMapService {
                     progress,
                 )
                 .await?;
-            Some(prepared.into_lamination_report_queue_write())
+            let returns_printed_wip = input.layer_remainders.iter().any(|layer| {
+                matches!(layer.source_kind.as_str(), "progress_batch" | "opening_wip")
+                    && layer.remaining_net_kg > 0.0
+            });
+            Some(prepared.into_lamination_report_queue_write(returns_printed_wip))
         } else {
             // A paused shift already recorded its output. Optional stale form
             // metrics cannot manufacture a second copy of the same roll.

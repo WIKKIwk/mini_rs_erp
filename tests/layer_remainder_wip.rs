@@ -145,7 +145,7 @@ fn actor() -> QueueActionActor {
 }
 
 #[tokio::test]
-async fn remainder_is_inventory_without_duplicate_production_or_reopened_stage() {
+async fn remainder_keeps_lamination_open_without_counting_another_printed_roll() {
     let (service, store) = fixture().await;
     let history = service
         .progress_batches_for_worker(&["printer".into()], "", 500)
@@ -161,7 +161,8 @@ async fn remainder_is_inventory_without_duplicate_production_or_reopened_stage()
     );
     let controls = service.queue_action_controls().await.unwrap();
     let control = &controls[LAM][ORDER];
-    assert!(control.stage_work.as_ref().unwrap().completed);
+    assert!(!control.stage_work.as_ref().unwrap().completed);
+    assert!(controls[PRESS][ORDER].stage_work.as_ref().unwrap().completed);
     assert!(
         control
             .allowed_actions
