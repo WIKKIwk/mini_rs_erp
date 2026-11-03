@@ -1123,7 +1123,7 @@ impl PostgresPreparationStore {
                 json!({"item_code": code, "name": material, "percent": decimal_text(*percent)})
             })
             .collect();
-        if let Some(recipe) = selected {
+        if let Some(recipe) = selected.filter(|recipe| recipe.is_pinned) {
             let mut formula = order_formula_contents::upsert_order_component(
                 &mut tx, &actor.ref_, order, &variant, recipe, &name, json!(payload),
             ).await?;
@@ -1254,7 +1254,7 @@ impl PostgresPreparationStore {
         let variant = formula_variants::variant_scope(&mut tx, owner, code, material, variant_id, false).await?;
         if let Some(mut recipe) = order_formula_contents::scoped_selection(
             &mut tx, owner, order, code, material, &variant,
-        ).await? {
+        ).await?.filter(|recipe| recipe.is_pinned) {
             let formulas = recipe.formulas.as_array_mut().expect("recipe formulas array");
             let before = formulas.len();
             formulas.retain(|entry| entry["name"] != formula);

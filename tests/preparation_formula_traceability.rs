@@ -122,6 +122,35 @@ async fn run_formula_checks(pool: sqlx::PgPool) {
     .execute(&pool)
     .await
     .unwrap();
+    apply_postgres_migrations_through_version(&pool, "0188").await.unwrap();
+    sqlx::raw_sql(r#"
+        INSERT INTO mini_preparation_formula_variants
+            (id,owner_ref,product_code,material_id,name,request_id,request_name)
+        VALUES ('fv-recover','prep-trace','P-TRACE','pe-pr','Reusable','old-request','Reusable'),
+               ('fv-cleared','prep-trace','P-TRACE','pe-pr','Cleared','cleared-request','Cleared');
+        INSERT INTO mini_preparation_formula_revisions(variant_id,content_key,formulas)
+        SELECT id, mini_preparation_recipe_key('[]'), '[]'
+        FROM mini_preparation_formula_variants WHERE id IN ('fv-recover','fv-cleared');
+
+        WITH recipe AS (
+            SELECT id, jsonb_agg(jsonb_build_object(
+                'variant_id', id, 'formula_code', mini_preparation_next_formula_code(),
+                'set_id', CASE WHEN id='fv-cleared' THEN '950200000001' ELSE NULL END,
+                'name', part.name, 'share_percent', part.share,
+                'lines', '[{"item_code":"TRACE-S1","name":"Seriya 1","percent":"100.000000"}]'::jsonb
+            ) ORDER BY part.name) AS formulas
+            FROM mini_preparation_formula_variants
+            CROSS JOIN (VALUES ('A','10.000000'),('B','90.000000')) part(name,share)
+            WHERE id IN ('fv-recover','fv-cleared') GROUP BY id
+        ), revisions AS (
+            INSERT INTO mini_preparation_formula_revisions(variant_id,content_key,formulas)
+            SELECT id, mini_preparation_recipe_key(formulas), formulas FROM recipe
+            RETURNING variant_id, id
+        )
+        INSERT INTO mini_preparation_order_formula_selections
+            (owner_ref,order_id,variant_id,product_code,material_id,revision_id,display_name)
+        SELECT 'prep-trace','zakaz-second',variant_id,'P-TRACE','pe-pr',id,'Local name' FROM revisions;
+    "#).execute(&pool).await.unwrap();
     apply_foundation_migration(&pool).await.unwrap();
     let actor = Principal {
         role: PrincipalRole::TayyorlovMasteri,
@@ -137,6 +166,25 @@ async fn run_formula_checks(pool: sqlx::PgPool) {
     ).await.unwrap();
     assert_eq!(legacy["variant_name"], "Old name");
     assert_eq!(legacy["formulas"][0]["lines"][0]["percent"], "100.000000");
+
+    let recovered = store.list_saved_formulas_variant(
+        &actor.ref_, "P-TRACE", "pe-pr", "fv-recover",
+    ).await.unwrap();
+    let local = store.list_order_formula_components(
+        &actor.ref_, "P-TRACE", "pe-pr", "fv-recover", "zakaz-second",
+    ).await.unwrap();
+    assert_eq!(local["variant_name"], "Local name");
+    assert_eq!(recovered["formulas"].as_array().unwrap().len(), 2);
+    for (saved, original) in recovered["formulas"].as_array().unwrap().iter()
+        .zip(local["formulas"].as_array().unwrap()) {
+        assert_eq!(saved["formula_code"], original["formula_code"]);
+        assert_eq!(saved["lines"], original["lines"]);
+        assert_eq!(saved["share_percent"], original["share_percent"]);
+    }
+    let cleared = store.list_saved_formulas_variant(
+        &actor.ref_, "P-TRACE", "pe-pr", "fv-cleared",
+    ).await.unwrap();
+    assert_eq!(cleared["formulas"], json!([]));
 
     let variant = store
         .create_formula_variant(

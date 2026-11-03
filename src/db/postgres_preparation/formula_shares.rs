@@ -47,7 +47,7 @@ impl PostgresPreparationStore {
         let variant = super::formula_variants::variant_scope(&mut tx, owner, code, material, variant_id, false).await?;
         if let Some(mut recipe) = order_formula_contents::scoped_selection(
             &mut tx, owner, order, code, material, &variant,
-        ).await? {
+        ).await?.filter(|recipe| recipe.is_pinned) {
             let formulas = recipe.formulas.as_array_mut().expect("recipe formulas array");
             let shares: std::collections::BTreeMap<_, _> = shares.into_iter().collect();
             if formulas.is_empty() || formulas.len() != shares.len() {

@@ -79,7 +79,7 @@ impl PostgresPreparationStore {
              FROM mini_preparation_formula_variants v
              LEFT JOIN mini_preparation_order_formula_selections s
                ON s.owner_ref=v.owner_ref AND s.order_id=$4 AND s.variant_id=v.id
-             LEFT JOIN mini_preparation_formula_revisions r ON r.id=s.revision_id
+             LEFT JOIN mini_preparation_formula_revisions r ON r.id=s.revision_id AND s.is_pinned
              CROSS JOIN LATERAL (
                 SELECT count(*) AS total,count(share) AS assigned,sum(share) AS share
                 FROM (
@@ -201,7 +201,18 @@ impl PostgresPreparationStore {
             json!({"id":variant,"name":name,"formula_code":code})
         } else {
             let mut recipe =
-                formula_revisions::pin_order_recipe(&mut tx, owner, order, variant).await?;
+                match formula_revisions::selected_recipe(&mut tx, owner, order, variant).await? {
+                    Some(mut recipe) => {
+                        if !recipe.is_pinned {
+                            recipe.formulas =
+                                formula_revisions::catalog_recipe(&mut tx, variant).await?;
+                        }
+                        recipe
+                    }
+                    None => {
+                        formula_revisions::pin_order_recipe(&mut tx, owner, order, variant).await?
+                    }
+                };
             sqlx::query(
                 "UPDATE mini_preparation_order_formula_selections SET display_name=$4
                  WHERE owner_ref=$1 AND order_id=$2 AND variant_id=$3 AND display_name<>$4",

@@ -148,6 +148,8 @@ async fn run_checks(pool: &PgPool, options: PgConnectOptions) {
         .execute(pool).await.unwrap();
     sqlx::raw_sql(include_str!("../migrations/postgres/0188_preparation_formula_revisions.sql"))
         .execute(pool).await.unwrap();
+    sqlx::raw_sql(include_str!("../migrations/postgres/0189_preparation_empty_recipe_drafts.sql"))
+        .execute(pool).await.unwrap();
     sqlx::raw_sql(r#"
         INSERT INTO mini_orders(id,code,order_number,product_name)
           VALUES ('order-2','O2','O2','Product'),('order-target','OT','OT','Target');
@@ -278,33 +280,54 @@ async fn run_checks(pool: &PgPool, options: PgConnectOptions) {
             percent: "100".into(),
         }],
     };
+    let order_target = || FormulaVariantTarget {
+        order_id: "order-1".into(),
+        product_code: "P".into(),
+        material_id: "mat-a".into(),
+        variant_id: id.clone(),
+        recipe_key: String::new(),
+    };
+    store.rename_formula_variant("prep-1", order_target(), "Qoralama nomi")
+        .await.unwrap();
     assert_eq!(
         store
-            .upsert_formula_variant(&actor, formula("A"), &id)
+            .upsert_formula_in_order(&actor, formula("A"), &id, "order-1")
             .await
             .unwrap()["share_percent"],
         "100.000000"
     );
+    let renamed_draft = store.rename_formula_variant("prep-1", order_target(), "Buyurtmadagi shnek")
+        .await.unwrap();
+    assert_eq!(renamed_draft["formula_count"], 1);
     store
-        .upsert_formula_variant(&actor, formula("B"), &id)
+        .upsert_formula_in_order(&actor, formula("B"), &id, "order-1")
         .await
         .unwrap();
     store
-        .upsert_formula_variant(&actor, formula("C"), &id)
+        .upsert_formula_in_order(&actor, formula("C"), &id, "order-1")
         .await
         .unwrap();
     let updated = store
-        .update_formula_variant_shares(
+        .update_formula_shares_in_order(
             "prep-1",
             allocation(&[("A", "20"), ("B", "60"), ("C", "20")]),
             false,
             &id,
+            "order-1",
         )
         .await
         .unwrap();
+    let order_draft = store.list_order_formula_components("prep-1", "P", "mat-a", &id, "order-1")
+        .await.unwrap();
+    assert_eq!(order_draft["variant_name"], "Buyurtmadagi shnek");
+    assert_eq!(order_draft["formulas"].as_array().unwrap().len(), 3);
+    let selected = store.select_formula_variant("prep-1", order_target()).await.unwrap();
+    assert_eq!(selected["name"], "Buyurtmadagi shnek");
+    assert_eq!(selected["formula_count"], 3);
     assert_eq!(updated["formulas"][0]["share_percent"], "20.000000");
     let catalog = store.formula_catalog("prep-1").await.unwrap();
     let recipe = catalog["formulas"].as_array().unwrap().iter().find(|f| f["id"] == id).unwrap();
+    assert_eq!(recipe["name"], "Yangi qatlam");
     assert_eq!(recipe["formula_code"], recipe_code);
     assert_eq!(recipe["formula_count"], 3);
     assert_eq!(recipe["shares_complete"], true);
@@ -341,6 +364,10 @@ async fn run_checks(pool: &PgPool, options: PgConnectOptions) {
         .delete_saved_formula_variant("prep-1", "P", "B", "mat-a", &id)
         .await
         .unwrap();
+    let pinned = store.list_order_formula_components("prep-1", "P", "mat-a", &id, "order-1")
+        .await.unwrap();
+    assert_eq!(pinned, order_draft, "catalog edits must preserve the selected recipe");
+
     assert_eq!(
         store
             .list_saved_formulas_variant("prep-1", "P", "mat-a", &id)

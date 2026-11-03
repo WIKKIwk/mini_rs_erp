@@ -47,6 +47,7 @@ pub(super) struct OrderRecipe {
     pub name: String,
     pub revision: i64,
     pub formulas: Value,
+    pub is_pinned: bool,
 }
 
 impl OrderRecipe {
@@ -69,8 +70,8 @@ pub(super) async fn selected_recipe(
     order: &str,
     variant: &str,
 ) -> Result<Option<OrderRecipe>, PreparationError> {
-    let row: Option<(String, i64, Value)> = sqlx::query_as(
-        "SELECT s.display_name, r.id, r.formulas
+    let row: Option<(String, i64, Value, bool)> = sqlx::query_as(
+        "SELECT s.display_name, r.id, r.formulas, s.is_pinned
          FROM mini_preparation_order_formula_selections s
          JOIN mini_preparation_formula_revisions r ON r.id=s.revision_id
          WHERE s.owner_ref=$1 AND s.order_id=$2 AND s.variant_id=$3",
@@ -80,11 +81,14 @@ pub(super) async fn selected_recipe(
     .bind(variant)
     .fetch_optional(&mut **tx)
     .await?;
-    Ok(row.map(|(name, revision, formulas)| OrderRecipe {
-        name,
-        revision,
-        formulas,
-    }))
+    Ok(
+        row.map(|(name, revision, formulas, is_pinned)| OrderRecipe {
+            name,
+            revision,
+            formulas,
+            is_pinned,
+        }),
+    )
 }
 
 pub(super) async fn pin_order_recipe(
@@ -93,7 +97,8 @@ pub(super) async fn pin_order_recipe(
     order: &str,
     variant: &str,
 ) -> Result<OrderRecipe, PreparationError> {
-    if let Some(selection) = selected_recipe(tx, owner, order, variant).await? {
+    let existing = selected_recipe(tx, owner, order, variant).await?;
+    if let Some(selection) = existing.filter(|selection| selection.is_pinned) {
         return Ok(selection);
     }
     let (name, product, material): (String, String, String) = sqlx::query_as(
@@ -106,10 +111,16 @@ pub(super) async fn pin_order_recipe(
     .await?;
     let formulas = catalog_recipe(tx, variant).await?;
     let revision = recipe_revision(tx, variant, &formulas).await?;
+    // An empty catalog has no recipe to freeze. Retain the order name while
+    // the operator fills in the reusable draft, then pin on an explicit selection.
+    let is_pinned = formulas.as_array().is_some_and(|parts| !parts.is_empty());
     sqlx::query(
         "INSERT INTO mini_preparation_order_formula_selections
-         (owner_ref,order_id,variant_id,product_code,material_id,revision_id,display_name)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)",
+         (owner_ref,order_id,variant_id,product_code,material_id,revision_id,display_name,is_pinned)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+         ON CONFLICT (owner_ref,order_id,variant_id)
+         DO UPDATE SET revision_id=EXCLUDED.revision_id,is_pinned=EXCLUDED.is_pinned
+         WHERE NOT mini_preparation_order_formula_selections.is_pinned",
     )
     .bind(owner)
     .bind(order)
@@ -118,6 +129,7 @@ pub(super) async fn pin_order_recipe(
     .bind(material)
     .bind(revision)
     .bind(&name)
+    .bind(is_pinned)
     .execute(&mut **tx)
     .await?;
     // Read the canonical revision when the same composition was saved before.

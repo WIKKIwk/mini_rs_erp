@@ -75,16 +75,18 @@ impl PostgresPreparationStore {
             .execute(&mut *tx)
             .await?;
         let selection = scoped_selection(&mut tx, owner, order, product, material, variant).await?;
-        let (name, formulas) = if let Some(recipe) = selection {
-            (recipe.name, recipe.formulas)
-        } else {
-            let name = sqlx::query_scalar(
-                "SELECT name FROM mini_preparation_formula_variants WHERE id=$1",
-            )
-            .bind(variant)
-            .fetch_one(&mut *tx)
-            .await?;
-            (name, catalog_recipe(&mut tx, variant).await?)
+        let (name, formulas) = match selection {
+            Some(recipe) if recipe.is_pinned => (recipe.name, recipe.formulas),
+            Some(draft) => (draft.name, catalog_recipe(&mut tx, variant).await?),
+            None => {
+                let name = sqlx::query_scalar(
+                    "SELECT name FROM mini_preparation_formula_variants WHERE id=$1",
+                )
+                .bind(variant)
+                .fetch_one(&mut *tx)
+                .await?;
+                (name, catalog_recipe(&mut tx, variant).await?)
+            }
         };
         let key: String =
             sqlx::query_scalar("SELECT encode(public.mini_preparation_recipe_key($1),'hex')")
