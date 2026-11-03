@@ -98,7 +98,12 @@ pub async fn production_map_progress_qr_lookup(
         .progress_batch_for_qr(&input.progress_batch_id, qr_payload)
         .await
         .map_err(production_map_error)?;
-    if principal.role == PrincipalRole::RezkaMaster && !scoped {
+    if principal.role == PrincipalRole::RezkaMaster {
+        // Validate the scanned roll before reporting order status. The caller's
+        // target apparatus does not establish access to the scanned order.
+        if scoped && input.order_id.trim() != batch.order_id.trim() {
+            return Err(bad_request("progress_batch_not_accepted"));
+        }
         super::super::rezka_master::require_order_scope(&state, &principal, &batch.order_id).await?;
     }
     if input.require_active_order {
