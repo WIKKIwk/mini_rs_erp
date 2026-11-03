@@ -27,6 +27,13 @@ impl PostgresPreparationStore {
 
     pub async fn update_formula_variant_shares(&self, owner: &str, input: FormulaSharesUpdate,
         saved_only: bool, variant_id: &str) -> Result<Value, PreparationError> {
+        self.update_formula_shares_in_order(owner, input, saved_only, variant_id, "").await
+    }
+
+    pub async fn update_formula_shares_in_order(
+        &self, owner: &str, input: FormulaSharesUpdate, saved_only: bool, variant_id: &str, order: &str,
+    ) -> Result<Value, PreparationError> {
+        let order = order.trim();
         let shares = input.normalized()?;
         let code = input.product_code.trim();
         let material = input.material_id.trim();
@@ -38,6 +45,23 @@ impl PostgresPreparationStore {
             responsibility_material_name(&mut tx, owner, material).await?;
         }
         let variant = super::formula_variants::variant_scope(&mut tx, owner, code, material, variant_id, false).await?;
+        if let Some(mut recipe) = order_formula_contents::scoped_selection(
+            &mut tx, owner, order, code, material, &variant,
+        ).await? {
+            let formulas = recipe.formulas.as_array_mut().expect("recipe formulas array");
+            let shares: std::collections::BTreeMap<_, _> = shares.into_iter().collect();
+            if formulas.is_empty() || formulas.len() != shares.len() {
+                return Err(PreparationError::Conflict("Shnek formulalari o‘zgargan. Ro‘yxatni yangilang"));
+            }
+            for formula in formulas {
+                let percent = formula["name"].as_str().and_then(|name| shares.get(name))
+                    .ok_or(PreparationError::Conflict("Shnek formulalari o‘zgargan. Ro‘yxatni yangilang"))?;
+                formula["share_percent"] = json!(decimal_text(*percent));
+            }
+            formula_revisions::update_order_revision(&mut tx, owner, order, &variant, &recipe.formulas).await?;
+            tx.commit().await?;
+            return Ok(json!({"product_code":code,"material_id":material,"formulas":recipe.formulas}));
+        }
         let current: Vec<String> = sqlx::query_scalar(
             "SELECT name FROM mini_preparation_formulas
              WHERE owner_ref=$1 AND product_code=$2 AND material_id=$3 AND variant_id=$4 ORDER BY name FOR UPDATE",
@@ -70,6 +94,7 @@ impl PostgresPreparationStore {
              FROM mini_preparation_formulas WHERE owner_ref=$1 AND product_code=$2 AND material_id=$3 AND variant_id=$4
              ORDER BY lower(name),name",
         ).bind(owner).bind(code).bind(material).bind(&variant).fetch_all(&mut *tx).await?;
+        order_formula_contents::record_catalog_revision(&mut tx, &variant).await?;
         tx.commit().await?;
         Ok(json!({"product_code":code,"material_id":material,"formulas":formulas}))
     }

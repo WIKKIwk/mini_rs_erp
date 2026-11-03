@@ -84,6 +84,8 @@ async fn run_checks(pool: &PgPool, options: PgConnectOptions) {
     apply_postgres_migrations_through_version(pool, "0128")
         .await
         .unwrap();
+    sqlx::raw_sql(include_str!("../migrations/postgres/0158_preparation_formula_sets.sql"))
+        .execute(pool).await.unwrap();
     sqlx::raw_sql(include_str!("../migrations/postgres/0159_preparation_screw_shares.sql"))
         .execute(pool).await.unwrap();
     sqlx::raw_sql(include_str!("../migrations/postgres/0160_preparation_formula_variants.sql"))
@@ -118,6 +120,10 @@ async fn run_checks(pool: &PgPool, options: PgConnectOptions) {
           ('t4','test','TEMPLATE','Saved product template','Product','template','{\"source_map_id\":\"template-o1\",\"layers\":[{\"material_id\":\"mat-a\"}]}');")
         .execute(pool).await.unwrap();
     sqlx::raw_sql(include_str!("../migrations/postgres/0175_preparation_formula_codes.sql"))
+        .execute(pool).await.unwrap();
+    sqlx::raw_sql(include_str!("../migrations/postgres/0176_preparation_recipe_codes.sql"))
+        .execute(pool).await.unwrap();
+    sqlx::raw_sql(include_str!("../migrations/postgres/0188_preparation_formula_revisions.sql"))
         .execute(pool).await.unwrap();
     let runtime = PgPoolOptions::new()
         .after_connect(|conn, _| {

@@ -118,6 +118,7 @@ impl PostgresPreparationStore {
                 "Formula topilmadi. Ro‘yxatni yangilang",
             ));
         };
+        order_formula_contents::record_catalog_revision(&mut tx, &variant).await?;
         tx.commit().await?;
         Ok(
             json!({"formula_code":formula_code,"product_code":code,"material_id":material,"material_name":material_name_saved,
@@ -162,6 +163,7 @@ impl PostgresPreparationStore {
                 "Formula topilmadi. Ro‘yxatni yangilang",
             ));
         }
+        order_formula_contents::record_catalog_revision(&mut tx, &variant).await?;
         tx.commit().await?;
         Ok(json!({"product_code":code,"material_id":material,"name":name,"deleted":true}))
     }

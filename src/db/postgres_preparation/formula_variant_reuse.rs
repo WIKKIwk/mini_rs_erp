@@ -78,7 +78,7 @@ impl PostgresPreparationStore {
             .ok_or(PreparationError::Forbidden)?;
         if source_product == product && source_material == material {
             formula_variant_orders::restore(&mut tx, owner, order_id, source).await?;
-            let result = variant_summary(&mut tx, owner, source).await?;
+            let result = variant_summary_in_order(&mut tx, owner, source, order_id.trim()).await?;
             tx.commit().await?;
             return Ok(result);
         }
@@ -98,7 +98,7 @@ impl PostgresPreparationStore {
         .await?;
         if let Some(id) = previous {
             formula_variant_orders::restore(&mut tx, owner, order_id, &id).await?;
-            let result = variant_summary(&mut tx, owner, &id).await?;
+            let result = variant_summary_in_order(&mut tx, owner, &id, order_id.trim()).await?;
             tx.commit().await?;
             return Ok(result);
         }
@@ -189,7 +189,8 @@ impl PostgresPreparationStore {
             ).bind(owner).bind(product).bind(material).bind(&target_material).bind(&id)
                 .bind(name).bind(json!(lines)).bind(share).execute(&mut *tx).await?;
         }
-        let result = variant_summary(&mut tx, owner, &id).await?;
+        order_formula_contents::record_catalog_revision(&mut tx, &id).await?;
+        let result = variant_summary_in_order(&mut tx, owner, &id, order_id.trim()).await?;
         tx.commit().await?;
         Ok(result)
     }
@@ -197,6 +198,23 @@ impl PostgresPreparationStore {
 
 fn reuse_request_id(product: &str, material: &str, source: &str) -> String {
     format!("reuse:{:x}", Sha256::digest(json!([product, material, source]).to_string()))
+}
+
+async fn variant_summary_in_order(
+    tx: &mut Transaction<'_, Postgres>,
+    owner: &str,
+    id: &str,
+    order: &str,
+) -> Result<Value, PreparationError> {
+    let mut summary = variant_summary(tx, owner, id).await?;
+    if !order.is_empty() {
+        let selected = formula_revisions::pin_order_recipe(tx, owner, order, id).await?;
+        let fields = selected.summary(id, summary["formula_code"].as_str().unwrap_or_default());
+        for (key, value) in fields.as_object().expect("variant summary object") {
+            summary[key] = value.clone();
+        }
+    }
+    Ok(summary)
 }
 
 async fn variant_summary(

@@ -15,10 +15,7 @@ impl PostgresPreparationStore {
                 "Buyurtma yoki shnek formulasi tanlanmagan",
             ));
         }
-        let mut tx = self.pool.begin().await?;
-        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-            .execute(&mut *tx)
-            .await?;
+        let mut tx = self.formula_write_transaction(owner).await?;
         let material_name =
             responsibility_material_name(&mut tx, owner, &reference.material_id).await?;
         if !order_matches_material_responsibility(&mut tx, owner, order_id, &reference.material_id)
@@ -57,27 +54,19 @@ impl PostgresPreparationStore {
             false,
         )
         .await?;
-        let removed: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM mini_preparation_order_formula_exclusions
-             WHERE owner_ref=$1 AND order_id=$2 AND variant_id=$3)",
-        ).bind(owner).bind(order_id.trim()).bind(&variant).fetch_one(&mut *tx).await?;
-        if removed {
-            return Err(PreparationError::Invalid("Bu shnek formulasi buyurtmadan olib tashlangan"));
-        }
-        let snapshot: Value = sqlx::query_scalar(
-            "SELECT jsonb_build_object('schema_version',1,'owner_ref',v.owner_ref,
-                'product_code',v.product_code,'material_id',v.material_id,'material_name',$2::text,
-                'variant_id',v.id,'variant_name',v.name,'captured_at',transaction_timestamp(),
-                'formulas',COALESCE((SELECT jsonb_agg(jsonb_build_object(
-                    'set_id',f.set_id,'name',f.name,'share_percent',f.share_percent::text,
-                    'lines',f.lines,'updated_at',f.updated_at) ORDER BY lower(f.name),f.name)
-                    FROM mini_preparation_formulas f WHERE f.variant_id=v.id),'[]'::jsonb))
-             FROM mini_preparation_formula_variants v WHERE v.id=$1",
-        )
-        .bind(&variant)
-        .bind(&material_name)
-        .fetch_one(&mut *tx)
-        .await?;
+        let order = order_id.trim();
+        formula_variant_orders::require_visible_variant(&mut tx, owner, order, &variant).await?;
+        let recipe = formula_revisions::pin_order_recipe(&mut tx, owner, order, &variant).await?;
+        let captured_at: String =
+            sqlx::query_scalar("SELECT to_jsonb(transaction_timestamp()) #>> '{}'")
+                .fetch_one(&mut *tx)
+                .await?;
+        let snapshot = json!({
+            "schema_version":1,"owner_ref":owner,"product_code":product,
+            "material_id":reference.material_id.trim(),"material_name":material_name,
+            "variant_id":variant,"variant_name":recipe.name,"revision_id":recipe.revision,
+            "captured_at":captured_at,"formulas":recipe.formulas
+        });
         validate_print_recipe(&snapshot)?;
         tx.commit().await?;
         Ok(snapshot)

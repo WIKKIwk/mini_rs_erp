@@ -129,6 +129,10 @@ async fn run_checks(pool: &PgPool, options: PgConnectOptions) {
         .execute(pool).await.unwrap();
     sqlx::raw_sql(include_str!("../migrations/postgres/0175_preparation_formula_codes.sql"))
         .execute(pool).await.unwrap();
+    sqlx::raw_sql(include_str!("../migrations/postgres/0176_preparation_recipe_codes.sql"))
+        .execute(pool).await.unwrap();
+    sqlx::raw_sql(include_str!("../migrations/postgres/0188_preparation_formula_revisions.sql"))
+        .execute(pool).await.unwrap();
     let runtime = PgPoolOptions::new()
         .after_connect(|c, _| {
             Box::pin(async move {

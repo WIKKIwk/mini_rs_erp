@@ -79,7 +79,7 @@ impl PostgresPreparationStore {
         let mut tx = self.formula_write_transaction(owner).await?;
         responsibility_material_name(&mut tx, owner, material).await?;
         let previous: Option<(String,String,String,String)> = sqlx::query_as(
-            "SELECT id,product_code,material_id,name FROM mini_preparation_formula_variants WHERE owner_ref=$1 AND request_id=$2",
+            "SELECT id,product_code,material_id,COALESCE(request_name,name) FROM mini_preparation_formula_variants WHERE owner_ref=$1 AND request_id=$2",
         ).bind(owner).bind(request).fetch_optional(&mut *tx).await?;
         let id = if let Some((id, previous_code, previous_material, previous_name)) = previous {
             if previous_code != code || previous_material != material || previous_name != name {
@@ -97,8 +97,8 @@ impl PostgresPreparationStore {
                     "Bunday nomli shnek varianti mavjud",
                 ));
             }
-            sqlx::query_scalar("INSERT INTO mini_preparation_formula_variants(owner_ref,product_code,material_id,name,request_id,is_default)
-                VALUES ($1,$2,$3,$4,$5,NOT EXISTS(SELECT 1 FROM mini_preparation_formula_variants
+            sqlx::query_scalar("INSERT INTO mini_preparation_formula_variants(owner_ref,product_code,material_id,name,request_id,request_name,is_default)
+                VALUES ($1,$2,$3,$4,$5,$4,NOT EXISTS(SELECT 1 FROM mini_preparation_formula_variants
                     WHERE owner_ref=$1 AND product_code=$2 AND material_id=$3 AND is_default)) RETURNING id")
                 .bind(owner).bind(code).bind(material).bind(&name).bind(request).fetch_one(&mut *tx).await?
         };

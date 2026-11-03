@@ -12,6 +12,8 @@ mod formula_sets;
 mod saved_formulas;
 mod formula_shares;
 mod formula_variants;
+mod formula_revisions;
+mod order_formula_contents;
 mod formula_variant_reuse;
 mod formula_variant_orders;
 mod formula_print_snapshot;
@@ -1084,18 +1086,21 @@ impl PostgresPreparationStore {
 
     pub async fn upsert_formula_variant(&self, actor: &Principal, input: FormulaUpsert, variant_id: &str)
         -> Result<Value, PreparationError> {
+        self.upsert_formula_in_order(actor, input, variant_id, "").await
+    }
+
+    pub async fn upsert_formula_in_order(
+        &self, actor: &Principal, input: FormulaUpsert, variant_id: &str, order: &str,
+    ) -> Result<Value, PreparationError> {
+        let order = order.trim();
         let product_code = input.product_key()?;
         let name = input.formula_name()?;
         let material_id = input.material_key()?;
         let normalized = input.normalized_lines()?;
-        let mut tx = self.pool.begin().await?;
-        sqlx::query("SET LOCAL lock_timeout = '5s'")
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
-            .bind(format!("preparation:formula:{}", actor.ref_))
-            .execute(&mut *tx)
-            .await?;
+        let mut tx = self.formula_write_transaction(&actor.ref_).await?;
+        let selected = order_formula_contents::scoped_selection(
+            &mut tx, &actor.ref_, order, &product_code, &material_id, variant_id.trim(),
+        ).await?;
         // Scope: formula faqat o'ziga biriktirilgan homashyoga yoziladi.
         let scope_material_name =
             responsibility_material_name(&mut tx, &actor.ref_, &material_id).await?;
@@ -1118,6 +1123,16 @@ impl PostgresPreparationStore {
                 json!({"item_code": code, "name": material, "percent": decimal_text(*percent)})
             })
             .collect();
+        if let Some(recipe) = selected {
+            let mut formula = order_formula_contents::upsert_order_component(
+                &mut tx, &actor.ref_, order, &variant, recipe, &name, json!(payload),
+            ).await?;
+            formula["product_code"] = json!(product_code);
+            formula["material_id"] = json!(material_id);
+            formula["material_name"] = json!(scope_material_name);
+            tx.commit().await?;
+            return Ok(formula);
+        }
         let (formula_code, share): (String, Option<String>) = sqlx::query_as(
             "INSERT INTO mini_preparation_formulas(owner_ref, product_code, material_id, material_name, name, lines, updated_at, variant_id, share_percent)
              VALUES ($1,$2,$3,$4,$5,$6,now(),$7, CASE WHEN NOT EXISTS (
@@ -1136,6 +1151,7 @@ impl PostgresPreparationStore {
         .bind(&variant)
         .fetch_one(&mut *tx)
         .await?;
+        order_formula_contents::record_catalog_revision(&mut tx, &variant).await?;
         tx.commit().await?;
         Ok(
             json!({"formula_code":formula_code,"product_code": product_code, "material_id": material_id,
@@ -1208,6 +1224,14 @@ impl PostgresPreparationStore {
 
     pub async fn delete_formula_variant(&self, owner: &str, product_code: &str, name: &str,
         material_id: &str, variant_id: &str) -> Result<Value, PreparationError> {
+        self.delete_formula_in_order(owner, product_code, name, material_id, variant_id, "").await
+    }
+
+    pub async fn delete_formula_in_order(
+        &self, owner: &str, product_code: &str, name: &str, material_id: &str,
+        variant_id: &str, order: &str,
+    ) -> Result<Value, PreparationError> {
+        let order = order.trim();
         let code = product_code.trim();
         let formula = name.trim();
         let material = material_id.trim();
@@ -1228,6 +1252,19 @@ impl PostgresPreparationStore {
             .ok_or(PreparationError::Forbidden)?;
         let mut tx = self.formula_write_transaction(owner).await?;
         let variant = formula_variants::variant_scope(&mut tx, owner, code, material, variant_id, false).await?;
+        if let Some(mut recipe) = order_formula_contents::scoped_selection(
+            &mut tx, owner, order, code, material, &variant,
+        ).await? {
+            let formulas = recipe.formulas.as_array_mut().expect("recipe formulas array");
+            let before = formulas.len();
+            formulas.retain(|entry| entry["name"] != formula);
+            if formulas.len() == before {
+                return Err(PreparationError::Invalid("Formula topilmadi"));
+            }
+            formula_revisions::update_order_revision(&mut tx, owner, order, &variant, &recipe.formulas).await?;
+            tx.commit().await?;
+            return Ok(json!({"product_code":code,"material_id":material,"name":formula,"deleted":true}));
+        }
         let deleted: bool = sqlx::query_scalar(
             "DELETE FROM mini_preparation_formulas
              WHERE owner_ref=$1 AND product_code=$2 AND name=$3
@@ -1245,6 +1282,7 @@ impl PostgresPreparationStore {
         if !deleted {
             return Err(PreparationError::Invalid("Formula topilmadi"));
         }
+        order_formula_contents::record_catalog_revision(&mut tx, &variant).await?;
         tx.commit().await?;
         Ok(json!({"product_code": code, "material_id": material,
             "name": formula, "deleted": true}))

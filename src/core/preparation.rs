@@ -289,6 +289,29 @@ pub struct FormulaVariantOrderRemove {
     pub variant_id: String,
 }
 
+/// A recipe in the catalog, or in the exact order/material context.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FormulaVariantTarget {
+    #[serde(default)]
+    pub order_id: String,
+    pub product_code: String,
+    pub material_id: String,
+    pub variant_id: String,
+    #[serde(default)]
+    pub recipe_key: String,
+}
+
+pub fn normalize_variant_name(value: &str) -> Result<String, PreparationError> {
+    let name = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if name.is_empty() || name.chars().count() > 160 {
+        return Err(PreparationError::Invalid(
+            "Variant nomi 1–160 ta belgidan iborat bo‘lishi kerak",
+        ));
+    }
+    Ok(name)
+}
+
 impl FormulaVariantReuse {
     pub fn validate(&self) -> Result<(), PreparationError> {
         for (value, limit) in [
@@ -306,17 +329,13 @@ impl FormulaVariantReuse {
 
 impl FormulaVariantCreate {
     pub fn normalized_name(&self) -> Result<String, PreparationError> {
-        let name = self.name.split_whitespace().collect::<Vec<_>>().join(" ");
         if self.product_code.trim().is_empty() || self.product_code.trim().chars().count() > 160
             || self.material_id.trim().is_empty() || self.material_id.trim().chars().count() > 128
             || self.request_id.trim().is_empty() || self.request_id.trim().chars().count() > 160
         {
             return Err(PreparationError::Invalid("Variant ma’lumotlari noto‘g‘ri"));
         }
-        if name.is_empty() || name.chars().count() > 160 {
-            return Err(PreparationError::Invalid("Variant nomi 1–160 ta belgidan iborat bo‘lishi kerak"));
-        }
-        Ok(name)
+        normalize_variant_name(&self.name)
     }
 }
 

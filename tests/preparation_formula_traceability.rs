@@ -3,6 +3,7 @@ use std::sync::Arc;
 use mini_rs_erp::core::auth::models::{Principal, PrincipalRole};
 use mini_rs_erp::core::gscale::GscaleService;
 use mini_rs_erp::core::preparation::*;
+use mini_rs_erp::core::rps_batch::models::RpsBatchSession;
 use mini_rs_erp::core::rps_batch::{
     RpsBatchPrintRequest, RpsBatchService, RpsBatchStartRequest, RpsBatchStopRequest,
 };
@@ -57,7 +58,7 @@ async fn run_formula_checks(pool: sqlx::PgPool) {
         .bootstrap_factory_defaults()
         .await
         .unwrap();
-    apply_foundation_migration(&pool).await.unwrap();
+    apply_postgres_migrations_through_version(&pool, "0187").await.unwrap();
     sqlx::raw_sql(r#"
         INSERT INTO mini_system_users(id,role,name,phone) VALUES
             ('prep-trace','tayyorlov_masteri','Master','901234599');
@@ -83,6 +84,45 @@ async fn run_formula_checks(pool: sqlx::PgPool) {
             ('trace-product','zakaz-trace','P-TRACE','[{"material_id":"pe-pr","material":"PE PR"}]'),
             ('other-product','zakaz-other','OTHER','[{"material_id":"pe-pr","material":"PE PR"}]');
     "#).execute(&pool).await.unwrap();
+    sqlx::raw_sql(r#"
+        INSERT INTO mini_orders(id,code,order_number,product_name)
+            VALUES ('zakaz-second','0319','0319','Trace order');
+        INSERT INTO mini_production_maps(id,product_code,title,code,map_json)
+            VALUES ('zakaz-second','P-TRACE','Trace order','0319','{}');
+        INSERT INTO mini_order_products(id,order_id,product_name,layers_json)
+            VALUES ('trace-second','zakaz-second','P-TRACE','[{"material_id":"pe-pr"}]');
+        INSERT INTO mini_preparation_formula_variants(id,owner_ref,product_code,material_id,name)
+            VALUES ('fv-legacy-trace','prep-trace','P-TRACE','pe-pr','Catalog legacy');
+    "#).execute(&pool).await.unwrap();
+    let legacy_batch = RpsBatchSession {
+        id: "legacy".into(),
+        order_assignment: Some(json!({
+            "order_id": "zakaz-second",
+            "preparation_formula": {
+                "schema_version":1,"variant_id":"fv-legacy-trace","variant_name":"Old name",
+                "owner_ref":"prep-trace","product_code":"P-TRACE","material_id":"pe-pr",
+                "captured_at":"2026-01-01T00:00:00Z",
+                "formulas":[{"name":"A","share_percent":"100.000000","lines":[
+                    {"item_code":"TRACE-S1","name":"Seriya 1","percent":"100.000000"}
+                ]}]
+            }
+        })),
+        ..RpsBatchSession::inactive("tayyorlov_masteri:prep-trace".into(),
+            "tayyorlov_masteri".into(), "prep-trace".into())
+    };
+    sqlx::query(
+        "INSERT INTO mini_rps_batch_history(batch_id,owner_key,owner_role,owner_ref,payload_json,completed_at)
+         VALUES ($1,$2,$3,$4,$5,'2026-01-01T00:00:00Z')",
+    )
+    .bind(&legacy_batch.id)
+    .bind(&legacy_batch.owner_key)
+    .bind(&legacy_batch.owner_role)
+    .bind(&legacy_batch.owner_ref)
+    .bind(serde_json::to_value(&legacy_batch).unwrap())
+    .execute(&pool)
+    .await
+    .unwrap();
+    apply_foundation_migration(&pool).await.unwrap();
     let actor = Principal {
         role: PrincipalRole::TayyorlovMasteri,
         ref_: "prep-trace".into(),
@@ -92,6 +132,12 @@ async fn run_formula_checks(pool: sqlx::PgPool) {
         avatar_url: String::new(),
     };
     let store = PostgresPreparationStore::new(pool.clone());
+    let legacy = store.list_order_formula_components(
+        &actor.ref_, "P-TRACE", "pe-pr", "fv-legacy-trace", "zakaz-second",
+    ).await.unwrap();
+    assert_eq!(legacy["variant_name"], "Old name");
+    assert_eq!(legacy["formulas"][0]["lines"][0]["percent"], "100.000000");
+
     let variant = store
         .create_formula_variant(
             &actor.ref_,
@@ -303,4 +349,63 @@ async fn run_formula_checks(pool: sqlx::PgPool) {
         snapshot
     );
     assert_eq!(history.batches[0].prints[0].epc, receipt.epc);
+
+    let target = |order: &str| FormulaVariantTarget {
+        order_id: order.into(),
+        product_code: "P-TRACE".into(),
+        material_id: "pe-pr".into(),
+        variant_id: variant_id.into(),
+        recipe_key: String::new(),
+    };
+    let first = store.rename_formula_variant(&actor.ref_, target("zakaz-trace"), "  Buyurtma   LG ")
+        .await.unwrap();
+    assert_eq!(first["id"], variant["id"]);
+    assert_eq!(first["formula_code"], variant["formula_code"]);
+    assert_eq!(first["revision_id"], snapshot["revision_id"]);
+    assert_eq!(first["name"], "Buyurtma LG");
+    assert!(matches!(
+        store.rename_formula_variant(&actor.ref_, target("zakaz-trace"), "catalog LEGACY").await,
+        Err(PreparationError::Conflict(_))
+    ));
+    assert!(store.rename_formula_variant("another-master", target("zakaz-trace"), "Foreign").await.is_err());
+    assert!(store.rename_formula_variant(&actor.ref_, target("zakaz-other"), "Foreign").await.is_err());
+
+    store.rename_formula_variant(&actor.ref_, target(""), "Catalog LG").await.unwrap();
+    let replay = store.create_formula_variant(&actor.ref_, FormulaVariantCreate {
+        product_code: "P-TRACE".into(), material_id: "pe-pr".into(),
+        name: "LG".into(), request_id: "trace-variant-create".into(),
+    }).await.unwrap();
+    assert_eq!(replay["id"], variant["id"]);
+
+    let first_read = store.list_order_formula_components(
+        &actor.ref_, "P-TRACE", "pe-pr", variant_id, "zakaz-trace",
+    ).await.unwrap();
+    assert_eq!(first_read["variant_name"], "Buyurtma LG");
+    assert_eq!(first_read["formulas"], snapshot["formulas"]);
+    let mut stale = target("zakaz-second");
+    stale.recipe_key = first_read["recipe_key"].as_str().unwrap().into();
+    assert!(matches!(store.select_formula_variant(&actor.ref_, stale).await,
+        Err(PreparationError::Conflict(_))));
+    let second = store.select_formula_variant(&actor.ref_, target("zakaz-second")).await.unwrap();
+    assert_eq!(second["name"], "Catalog LG");
+    assert_ne!(second["revision_id"], first["revision_id"]);
+    assert_eq!(second["formula_count"], 1);
+
+    let mut same = formula("A", "88.0", "12.000000");
+    same.lines.reverse();
+    store.upsert_formula_in_order(&actor, same, variant_id, "zakaz-trace").await.unwrap();
+    let no_change = store.select_formula_variant(&actor.ref_, target("zakaz-trace")).await.unwrap();
+    assert_eq!(no_change["revision_id"], first["revision_id"]);
+
+    store.upsert_formula_in_order(&actor, formula("A", "70", "30"), variant_id, "zakaz-trace").await.unwrap();
+    let changed = store.formula_print_snapshot(&actor.ref_, "zakaz-trace", "PE PR", &reference).await.unwrap();
+    assert_ne!(changed["revision_id"], first["revision_id"]);
+    assert_eq!(changed["variant_name"], "Buyurtma LG");
+    assert_eq!(changed["formulas"][0]["lines"][0]["percent"], "70.000000");
+    let other = store.list_order_formula_components(
+        &actor.ref_, "P-TRACE", "pe-pr", variant_id, "zakaz-second",
+    ).await.unwrap();
+    assert_eq!(other["formulas"][0]["lines"][0]["percent"], "50.000000");
+    assert_eq!(other["variant_name"], "Catalog LG");
+
 }
