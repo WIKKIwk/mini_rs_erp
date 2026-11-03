@@ -1,7 +1,9 @@
 use super::*;
+use crate::core::production_map::{OrderRunSession, OrderRunStatus, ProductionMapStorePort};
 
 const CUT: &str = "apparatus:default:asset-010";
 const CUT_TWO: &str = "apparatus:default:asset-011";
+const CUT_FOUR: &str = "apparatus:default:asset-013";
 const PRINT: &str = "apparatus:default:bosma_7";
 const MAPS: &str = "/v1/mobile/admin/production-maps";
 const WORKERS: &str = "/v1/mobile/rezka-master/workers";
@@ -280,6 +282,99 @@ async fn rezka_master_changes_only_cut_worker_access_and_detects_stale_choices()
         .unwrap();
     assert_eq!(list.status(), StatusCode::OK);
     assert_eq!(json_body(list).await["workers"], serde_json::json!([]));
+}
+
+#[tokio::test]
+async fn keeping_rezka_four_blocks_only_removed_machines_with_work_for_that_worker() {
+    let mut state = test_state();
+    state.apparatus.bootstrap_factory_defaults().await.unwrap();
+    let store = Arc::new(MemoryProductionMapStore::new());
+    state.production_maps = production_map_service_with_store(&state, store.clone());
+    let master = session_for(&state, PrincipalRole::RezkaMaster, "rezka-master-test").await;
+
+    for worker in ["cut-worker", "print-worker"] {
+        state
+            .workers
+            .upsert_worker(WorkerUpsert {
+                id: worker.into(),
+                name: worker.into(),
+                phone: String::new(),
+                level: "Master".into(),
+            })
+            .await
+            .unwrap();
+        state
+            .admin
+            .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+                principal_role: PrincipalRole::Aparatchi,
+                principal_ref: worker.into(),
+                role_id: "aparatchi".into(),
+                assigned_apparatus: [CUT, CUT_FOUR, PRINT].map(String::from).to_vec(),
+                assigned_item_groups: vec![],
+            })
+            .await
+            .unwrap();
+    }
+    for (order, worker, apparatus, status) in [
+        ("zakaz-0055", "cut-worker", CUT, OrderRunStatus::Paused),
+        ("zakaz-0243", "cut-worker", CUT_FOUR, OrderRunStatus::Active),
+        ("zakaz-0190", "print-worker", PRINT, OrderRunStatus::Paused),
+    ] {
+        store
+            .put_order_run_session(OrderRunSession {
+                session_id: order.into(),
+                apparatus: apparatus.into(),
+                order_id: order.into(),
+                stage_node_id: String::new(),
+                status,
+                worker_role: "aparatchi".into(),
+                worker_ref: worker.into(),
+                worker_display_name: worker.into(),
+                started_at_unix: 1,
+                updated_at_unix: 1,
+                payload_json: serde_json::json!({}),
+            })
+            .await
+            .unwrap();
+    }
+
+    let router = build_router(state.clone());
+    for (worker, expected) in [
+        ("cut-worker", StatusCode::CONFLICT),
+        ("print-worker", StatusCode::OK),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(request_with_body(
+                "PUT",
+                WORKERS,
+                &master,
+                &serde_json::json!({
+                    "worker_id": worker,
+                    "apparatus_ids": [CUT_FOUR],
+                    "previous_apparatus_ids": [CUT, CUT_FOUR],
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = json_body(response).await;
+        assert_eq!(status, expected, "{body}");
+        if expected == StatusCode::CONFLICT {
+            assert_eq!(body["error"], "rezka_worker_has_open_run");
+            assert_eq!(body["blocked_apparatus_ids"], serde_json::json!([CUT]));
+        }
+    }
+    let assignments = state.admin.role_assignments().await.unwrap();
+    assert_eq!(
+        assignments
+            .iter()
+            .find(|row| row.principal_ref == "print-worker")
+            .unwrap()
+            .assigned_apparatus,
+        vec![CUT_FOUR, PRINT]
+    );
 }
 
 #[tokio::test]

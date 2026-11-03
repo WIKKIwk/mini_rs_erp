@@ -411,6 +411,8 @@ pub struct AdminErrorDetails {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub apparatus_options: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub blocked_apparatus_ids: Option<std::collections::BTreeSet<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub apparatus_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub order_width_mm: Option<f64>,

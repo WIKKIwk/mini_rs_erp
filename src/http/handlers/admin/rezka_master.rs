@@ -242,17 +242,22 @@ pub async fn assign_worker(
         .filter(|id| !active_cut.contains(id))
         .collect();
     next.extend(selected);
-    if previous.iter().any(|id| !next.contains(id)) {
+    let removed: BTreeSet<_> = previous.difference(&next).collect();
+    if !removed.is_empty() {
         let sessions = state
             .production_maps
             .active_order_run_sessions_for_worker(std::slice::from_ref(&worker.id), "", 500)
             .await
             .map_err(production_maps::production_map_error)?;
-        if sessions
-            .iter()
-            .any(|run| previous.contains(&run.apparatus) && !next.contains(&run.apparatus))
-        {
-            return Err(conflict("rezka_worker_has_open_run"));
+        let blocked_apparatus_ids: BTreeSet<_> = sessions
+            .into_iter()
+            .filter(|run| removed.contains(&run.apparatus))
+            .map(|run| run.apparatus)
+            .collect();
+        if !blocked_apparatus_ids.is_empty() {
+            let (status, Json(mut error)) = conflict("rezka_worker_has_open_run");
+            error.blocked_apparatus_ids = Some(blocked_apparatus_ids);
+            return Err((status, Json(error)));
         }
     }
     state
