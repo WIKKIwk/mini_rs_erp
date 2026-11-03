@@ -45,18 +45,16 @@ impl PostgresPreparationStore {
         if !item_matches {
             return Err(PreparationError::Forbidden);
         }
-        let variant = formula_variants::variant_scope(
-            &mut tx,
+        let scope = formula_variant_orders::OrderRecipeScope::new(
             owner,
+            order_id,
             &product,
-            reference.material_id.trim(),
-            &reference.variant_id,
-            false,
-        )
-        .await?;
-        let order = order_id.trim();
-        formula_variant_orders::require_visible_variant(&mut tx, owner, order, &variant).await?;
-        let recipe = formula_revisions::pin_order_recipe(&mut tx, owner, order, &variant).await?;
+            &reference.material_id,
+        );
+        let variant =
+            formula_variant_orders::order_variant(&mut tx, &scope, &reference.variant_id).await?;
+        formula_variant_orders::require_visible_variant(&mut tx, &scope, &variant).await?;
+        let recipe = formula_revisions::pin_order_recipe(&mut tx, &scope, &variant).await?;
         let captured_at: String =
             sqlx::query_scalar("SELECT to_jsonb(transaction_timestamp()) #>> '{}'")
                 .fetch_one(&mut *tx)

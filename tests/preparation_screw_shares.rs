@@ -137,6 +137,8 @@ async fn run_checks(pool: &PgPool, options: PgConnectOptions) {
         .execute(pool).await.unwrap();
     sqlx::raw_sql(include_str!("../migrations/postgres/0189_preparation_empty_recipe_drafts.sql"))
         .execute(pool).await.unwrap();
+    sqlx::raw_sql(include_str!("../migrations/postgres/0190_preparation_shared_order_recipes.sql"))
+        .execute(pool).await.unwrap();
     let runtime = PgPoolOptions::new()
         .after_connect(|c, _| {
             Box::pin(async move {

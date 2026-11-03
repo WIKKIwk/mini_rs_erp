@@ -151,6 +151,31 @@ async fn run_formula_checks(pool: sqlx::PgPool) {
             (owner_ref,order_id,variant_id,product_code,material_id,revision_id,display_name)
         SELECT 'prep-trace','zakaz-second',variant_id,'P-TRACE','pe-pr',id,'Local name' FROM revisions;
     "#).execute(&pool).await.unwrap();
+    apply_postgres_migrations_through_version(&pool, "0189").await.unwrap();
+    sqlx::raw_sql(r#"
+        INSERT INTO mini_preparation_formula_variants
+            (id,owner_ref,product_code,material_id,name,request_id)
+        VALUES ('fv-old-copy','prep-trace','OTHER','pe-pr','Reusable',
+            'reuse:' || encode(sha256(convert_to('["OTHER","pe-pr","fv-recover"]','UTF8')), 'hex'));
+        INSERT INTO mini_preparation_formulas
+            (owner_ref,product_code,material_id,material_name,variant_id,name,lines,share_percent)
+        SELECT owner_ref,'OTHER',material_id,material_name,'fv-old-copy',name,lines,share_percent
+        FROM mini_preparation_formulas WHERE variant_id='fv-recover';
+
+        WITH recipe AS (
+            SELECT jsonb_agg(jsonb_build_object(
+                'name',name,'formula_code',formula_code,'lines',lines,'share_percent',share_percent::text
+            ) ORDER BY name) AS formulas
+            FROM mini_preparation_formulas WHERE variant_id='fv-old-copy'
+        ), revision AS (
+            INSERT INTO mini_preparation_formula_revisions(variant_id,content_key,formulas)
+            SELECT 'fv-old-copy', mini_preparation_recipe_key(formulas), formulas FROM recipe
+            RETURNING id
+        )
+        INSERT INTO mini_preparation_order_formula_selections
+            (owner_ref,order_id,variant_id,product_code,material_id,revision_id,display_name)
+        SELECT 'prep-trace','zakaz-other','fv-old-copy','OTHER','pe-pr',id,'Historical alias' FROM revision;
+    "#).execute(&pool).await.unwrap();
     apply_foundation_migration(&pool).await.unwrap();
     let actor = Principal {
         role: PrincipalRole::TayyorlovMasteri,
@@ -185,6 +210,18 @@ async fn run_formula_checks(pool: sqlx::PgPool) {
         &actor.ref_, "P-TRACE", "pe-pr", "fv-cleared",
     ).await.unwrap();
     assert_eq!(cleared["formulas"], json!([]));
+
+    let catalog = store.formula_catalog(&actor.ref_).await.unwrap();
+    let entries = catalog["formulas"].as_array().unwrap();
+    assert!(!entries.iter().any(|entry| entry["id"] == "fv-old-copy"));
+    let reusable = entries.iter().find(|entry| entry["id"] == "fv-recover").unwrap();
+    assert!(reusable["order_codes"].as_array().unwrap().contains(&json!("0318")));
+    let old_copy = store.reuse_formula_variant_in_order(&actor.ref_, FormulaVariantReuse {
+        source_variant_id: "fv-recover".into(), product_code: "OTHER".into(), material_id: "pe-pr".into(),
+    }, "zakaz-other").await.unwrap();
+    assert_eq!(old_copy["id"], "fv-old-copy");
+    assert_eq!(old_copy["name"], "Historical alias");
+    assert_eq!(old_copy["formula_count"], 2);
 
     let variant = store
         .create_formula_variant(
@@ -283,6 +320,60 @@ async fn run_formula_checks(pool: sqlx::PgPool) {
                 .is_err()
         );
     }
+    sqlx::raw_sql(r#"
+        INSERT INTO mini_preparation_material_responsibilities
+            (principal_role,principal_ref,material_id,material_name)
+        VALUES ('tayyorlov_masteri','prep-trace','pet','PET');
+        UPDATE mini_order_products SET layers_json='[{"material_id":"pe-pr"},{"material_id":"pet"}]'
+        WHERE order_id='zakaz-other';
+    "#).execute(&pool).await.unwrap();
+    let before_reuse = store.formula_catalog(&actor.ref_).await.unwrap();
+    for material in ["pe-pr", "pet"] {
+        let reuse = || FormulaVariantReuse {
+            source_variant_id: variant_id.into(), product_code: "OTHER".into(), material_id: material.into(),
+        };
+        let (shared, repeated) = tokio::join!(
+            store.reuse_formula_variant_in_order(&actor.ref_, reuse(), "zakaz-other"),
+            store.reuse_formula_variant_in_order(&actor.ref_, reuse(), "zakaz-other")
+        );
+        let shared = shared.unwrap();
+        assert_eq!(shared, repeated.unwrap());
+        assert_eq!(shared["id"], variant["id"]);
+        assert_eq!(shared["formula_code"], variant["formula_code"]);
+        assert_eq!(shared["material_id"], material);
+        assert_eq!(shared["formula_count"], 2);
+    }
+    let alias = store.rename_formula_variant(&actor.ref_, FormulaVariantTarget {
+        order_id: "zakaz-other".into(), product_code: "OTHER".into(), material_id: "pe-pr".into(),
+        variant_id: variant_id.into(), recipe_key: String::new(),
+    }, "Other order alias").await.unwrap();
+    assert_eq!(alias["name"], "Other order alias");
+    assert_eq!(alias["id"], variant["id"]);
+    let mut edited = formula("A", "80", "20");
+    edited.product_code = "OTHER".into();
+    store.upsert_formula_in_order(&actor, edited, variant_id, "zakaz-other").await.unwrap();
+    let other = store.formula_print_snapshot(&actor.ref_, "zakaz-other", "PE PR", &reference).await.unwrap();
+    assert_eq!(other["variant_name"], "Other order alias");
+    assert_eq!(other["product_code"], "OTHER");
+    assert_eq!(other["formulas"][0]["lines"][0]["percent"], "80.000000");
+    let pet = store.list_order_formula_components(&actor.ref_, "OTHER", "pet", variant_id, "zakaz-other")
+        .await.unwrap();
+    assert_eq!(pet["variant_name"], "LG");
+    assert_eq!(pet["formulas"][0]["lines"][0]["percent"], "88.000000");
+    let after_reuse = store.formula_catalog(&actor.ref_).await.unwrap();
+    assert_eq!(before_reuse["formulas"].as_array().unwrap().len(), after_reuse["formulas"].as_array().unwrap().len());
+    assert_eq!(after_reuse["formulas"].as_array().unwrap().iter().find(|entry| entry["id"] == variant_id).unwrap()["name"], "LG");
+    store.remove_formula_variant_from_order(&actor.ref_, FormulaVariantOrderRemove {
+        order_id: "zakaz-other".into(), product_code: "OTHER".into(),
+        material_id: "pe-pr".into(), variant_id: variant_id.into(),
+    }).await.unwrap();
+    assert!(store.formula_print_snapshot(&actor.ref_, "zakaz-other", "PE PR", &reference).await.is_err());
+    assert!(store.list_order_formula_components(&actor.ref_, "OTHER", "pet", variant_id, "zakaz-other").await.is_ok());
+    let restored = store.reuse_formula_variant_in_order(&actor.ref_, FormulaVariantReuse {
+        source_variant_id: variant_id.into(), product_code: "OTHER".into(), material_id: "pe-pr".into(),
+    }, "zakaz-other").await.unwrap();
+    assert_eq!(restored["name"], "Other order alias");
+
     let batches = RpsBatchService::new(Arc::new(PostgresRpsBatchStore::new(pool.clone())));
     let started = batches
         .start(

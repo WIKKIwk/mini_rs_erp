@@ -49,7 +49,7 @@ impl PostgresPreparationStore {
                     ORDER BY lower(COALESCE(r.material_name,f.material_name)),f.material_id,lower(f.name),f.name))
             FROM mini_preparation_formula_sets s
             JOIN mini_preparation_formulas f ON f.set_id=s.set_id
-            JOIN mini_preparation_formula_variants v ON v.id=f.variant_id
+            JOIN mini_preparation_formula_variants v ON v.id=f.variant_id AND v.catalog_source_id IS NULL
             LEFT JOIN mini_preparation_material_responsibilities r
               ON r.principal_role='tayyorlov_masteri' AND r.principal_ref=s.owner_ref
              AND lower(r.material_id)=lower(f.material_id)

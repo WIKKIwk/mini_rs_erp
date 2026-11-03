@@ -4,15 +4,22 @@ impl PostgresPreparationStore {
     /// List recipes, including empty and historical variants, once per owner.
     pub async fn formula_catalog(&self, owner: &str) -> Result<Value, PreparationError> {
         let recipes: Vec<Value> = sqlx::query_scalar(
-            "WITH matched_orders AS (
-                SELECT DISTINCT m.id AS order_id, m.product_code, v.material_id,
+            "WITH recipe_scopes AS (
+                SELECT product_code,material_id FROM mini_preparation_formula_variants
+                WHERE owner_ref=$1 AND catalog_source_id IS NULL
+                UNION
+                SELECT product_code,material_id FROM mini_preparation_order_formula_selections
+                WHERE owner_ref=$1
+            ), matched_orders AS (
+                SELECT DISTINCT m.id AS order_id, v.product_code, v.material_id,
                     COALESCE(NULLIF(btrim(m.code), ''), m.order_number) AS code
-                FROM mini_preparation_formula_variants v
-                JOIN mini_production_maps m ON m.product_code=v.product_code
+                FROM recipe_scopes v
+                JOIN mini_production_maps m
+                  ON COALESCE(NULLIF(m.map_json->>'product_code',''),m.product_code)=v.product_code
                 JOIN mini_preparation_material_responsibilities r
-                  ON r.principal_role='tayyorlov_masteri' AND r.principal_ref=v.owner_ref
+                  ON r.principal_role='tayyorlov_masteri' AND r.principal_ref=$1
                  AND lower(r.material_id)=lower(v.material_id)
-                WHERE v.owner_ref=$1 AND m.id NOT LIKE 'template-%' AND (EXISTS (
+                WHERE m.id NOT LIKE 'template-%' AND (EXISTS (
                     SELECT 1 FROM mini_order_products p
                     LEFT JOIN LATERAL jsonb_array_elements(COALESCE(p.layers_json,'[]'::jsonb)) l ON true
                     WHERE p.order_id=m.id AND (
@@ -54,12 +61,25 @@ impl PostgresPreparationStore {
                     (SELECT NULLIF(btrim(m.payload_json->>'name'),'') FROM mini_calculate_materials m
                      WHERE lower(m.id)=lower(v.material_id) LIMIT 1), v.material_id),
                 'order_codes',COALESCE((SELECT jsonb_agg(code ORDER BY code) FROM (
-                    SELECT DISTINCT m.code FROM matched_orders m
+                    SELECT m.code FROM matched_orders m
                     WHERE m.product_code=v.product_code AND lower(m.material_id)=lower(v.material_id)
                       AND btrim(m.code)<>''
                       AND NOT EXISTS(SELECT 1 FROM mini_preparation_order_formula_exclusions removed
                           WHERE removed.owner_ref=v.owner_ref AND removed.order_id=m.order_id
-                            AND removed.variant_id=v.id)
+                            AND removed.variant_id=v.id AND removed.product_code=m.product_code
+                            AND lower(removed.material_id)=lower(m.material_id))
+                    UNION
+                    SELECT m.code FROM matched_orders m
+                    JOIN mini_preparation_order_formula_selections chosen
+                      ON chosen.owner_ref=v.owner_ref AND chosen.order_id=m.order_id
+                      AND chosen.product_code=m.product_code AND lower(chosen.material_id)=lower(m.material_id)
+                    JOIN mini_preparation_formula_variants selected_variant ON selected_variant.id=chosen.variant_id
+                    WHERE COALESCE(selected_variant.catalog_source_id, selected_variant.id)=v.id
+                      AND btrim(m.code)<>''
+                      AND NOT EXISTS(SELECT 1 FROM mini_preparation_order_formula_exclusions removed
+                          WHERE removed.owner_ref=chosen.owner_ref AND removed.order_id=chosen.order_id
+                            AND removed.variant_id=chosen.variant_id AND removed.product_code=chosen.product_code
+                            AND removed.material_id=chosen.material_id)
                 ) codes),'[]'::jsonb),
                 'formula_count',f.formula_count,
                 'shares_complete',f.formula_count>0 AND f.formula_count=f.share_count AND f.share_total=100
@@ -71,7 +91,7 @@ impl PostgresPreparationStore {
                        COALESCE(sum(share_percent),0) AS share_total
                 FROM mini_preparation_formulas WHERE variant_id=v.id
             ) f ON true
-            WHERE v.owner_ref=$1
+            WHERE v.owner_ref=$1 AND v.catalog_source_id IS NULL
             ORDER BY v.created_at DESC,v.id",
         ).bind(owner).fetch_all(&self.pool).await?;
         Ok(json!({"formulas": recipes}))

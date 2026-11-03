@@ -1098,13 +1098,12 @@ impl PostgresPreparationStore {
         let material_id = input.material_key()?;
         let normalized = input.normalized_lines()?;
         let mut tx = self.formula_write_transaction(&actor.ref_).await?;
-        let selected = order_formula_contents::scoped_selection(
-            &mut tx, &actor.ref_, order, &product_code, &material_id, variant_id.trim(),
-        ).await?;
+        let scope = formula_variant_orders::OrderRecipeScope::new(&actor.ref_, order, &product_code, &material_id);
+        let selected = order_formula_contents::scoped_selection(&mut tx, &scope, variant_id.trim())
+            .await?.filter(|recipe| recipe.is_pinned);
         // Scope: formula faqat o'ziga biriktirilgan homashyoga yoziladi.
         let scope_material_name =
             responsibility_material_name(&mut tx, &actor.ref_, &material_id).await?;
-        let variant = formula_variants::variant_scope(&mut tx, &actor.ref_, &product_code, &material_id, variant_id, true).await?;
         // Resolve names in code order (deadlock-safe), then sort lines
         // alphabetically by material name for stable display.
         let mut lines: Vec<(String, String, i64)> = Vec::new();
@@ -1123,9 +1122,9 @@ impl PostgresPreparationStore {
                 json!({"item_code": code, "name": material, "percent": decimal_text(*percent)})
             })
             .collect();
-        if let Some(recipe) = selected.filter(|recipe| recipe.is_pinned) {
+        if let Some(recipe) = selected {
             let mut formula = order_formula_contents::upsert_order_component(
-                &mut tx, &actor.ref_, order, &variant, recipe, &name, json!(payload),
+                &mut tx, &scope, variant_id.trim(), recipe, &name, json!(payload),
             ).await?;
             formula["product_code"] = json!(product_code);
             formula["material_id"] = json!(material_id);
@@ -1133,6 +1132,7 @@ impl PostgresPreparationStore {
             tx.commit().await?;
             return Ok(formula);
         }
+        let variant = formula_variants::variant_scope(&mut tx, &actor.ref_, &product_code, &material_id, variant_id, true).await?;
         let (formula_code, share): (String, Option<String>) = sqlx::query_as(
             "INSERT INTO mini_preparation_formulas(owner_ref, product_code, material_id, material_name, name, lines, updated_at, variant_id, share_percent)
              VALUES ($1,$2,$3,$4,$5,$6,now(),$7, CASE WHEN NOT EXISTS (
@@ -1251,20 +1251,21 @@ impl PostgresPreparationStore {
             .await?
             .ok_or(PreparationError::Forbidden)?;
         let mut tx = self.formula_write_transaction(owner).await?;
-        let variant = formula_variants::variant_scope(&mut tx, owner, code, material, variant_id, false).await?;
-        if let Some(mut recipe) = order_formula_contents::scoped_selection(
-            &mut tx, owner, order, code, material, &variant,
-        ).await?.filter(|recipe| recipe.is_pinned) {
+        let scope = formula_variant_orders::OrderRecipeScope::new(owner, order, code, material);
+        if let Some(mut recipe) = order_formula_contents::scoped_selection(&mut tx, &scope, variant_id.trim())
+            .await?.filter(|recipe| recipe.is_pinned)
+        {
             let formulas = recipe.formulas.as_array_mut().expect("recipe formulas array");
             let before = formulas.len();
             formulas.retain(|entry| entry["name"] != formula);
             if formulas.len() == before {
                 return Err(PreparationError::Invalid("Formula topilmadi"));
             }
-            formula_revisions::update_order_revision(&mut tx, owner, order, &variant, &recipe.formulas).await?;
+            formula_revisions::update_order_revision(&mut tx, &scope, variant_id.trim(), &recipe.formulas).await?;
             tx.commit().await?;
             return Ok(json!({"product_code":code,"material_id":material,"name":formula,"deleted":true}));
         }
+        let variant = formula_variants::variant_scope(&mut tx, owner, code, material, variant_id, false).await?;
         let deleted: bool = sqlx::query_scalar(
             "DELETE FROM mini_preparation_formulas
              WHERE owner_ref=$1 AND product_code=$2 AND name=$3

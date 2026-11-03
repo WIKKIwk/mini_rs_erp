@@ -1,22 +1,19 @@
 use super::formula_revisions::{
     OrderRecipe, catalog_recipe, recipe_revision, selected_recipe, update_order_revision,
 };
+use super::formula_variant_orders::OrderRecipeScope;
 use super::*;
 
 pub(super) async fn scoped_selection(
     tx: &mut Transaction<'_, Postgres>,
-    owner: &str,
-    order: &str,
-    product: &str,
-    material: &str,
+    scope: &OrderRecipeScope<'_>,
     variant: &str,
 ) -> Result<Option<OrderRecipe>, PreparationError> {
-    if order.is_empty() {
+    if scope.order.is_empty() {
         return Ok(None);
     }
-    formula_variant_orders::order_recipe_scope(tx, owner, order, product, material, variant)
-        .await?;
-    selected_recipe(tx, owner, order, variant).await
+    formula_variant_orders::order_recipe_scope(tx, scope, variant).await?;
+    selected_recipe(tx, scope, variant).await
 }
 
 pub(super) async fn record_catalog_revision(
@@ -30,8 +27,7 @@ pub(super) async fn record_catalog_revision(
 
 pub(super) async fn upsert_order_component(
     tx: &mut Transaction<'_, Postgres>,
-    owner: &str,
-    order: &str,
+    scope: &OrderRecipeScope<'_>,
     variant: &str,
     mut recipe: OrderRecipe,
     name: &str,
@@ -57,7 +53,7 @@ pub(super) async fn upsert_order_component(
         formulas.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
         formula
     };
-    update_order_revision(tx, owner, order, variant, &recipe.formulas).await?;
+    update_order_revision(tx, scope, variant, &recipe.formulas).await?;
     Ok(formula)
 }
 
@@ -74,7 +70,8 @@ impl PostgresPreparationStore {
         sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
             .execute(&mut *tx)
             .await?;
-        let selection = scoped_selection(&mut tx, owner, order, product, material, variant).await?;
+        let scope = OrderRecipeScope::new(owner, order, product, material);
+        let selection = scoped_selection(&mut tx, &scope, variant).await?;
         let (name, formulas) = match selection {
             Some(recipe) if recipe.is_pinned => (recipe.name, recipe.formulas),
             Some(draft) => (draft.name, catalog_recipe(&mut tx, variant).await?),

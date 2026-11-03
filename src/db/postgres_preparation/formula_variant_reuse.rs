@@ -1,3 +1,4 @@
+use super::formula_variant_orders::OrderRecipeScope;
 use super::*;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -32,9 +33,8 @@ impl PostgresPreparationStore {
         if let Some(entries) = catalog["formulas"].as_array_mut() {
             entries.retain(|entry| {
                 let id = entry["id"].as_str().unwrap_or_default();
-                if entry["product_code"].as_str() == Some(product.trim())
-                    && entry["material_id"].as_str() == Some(material.trim()) {
-                    return !linked.contains(id);
+                if linked.contains(id) {
+                    return false;
                 }
                 let key = reuse_request_id(product.trim(), material.trim(), id);
                 !copies.get(&key).is_some_and(|target| linked.contains(target))
@@ -61,15 +61,16 @@ impl PostgresPreparationStore {
         let product = input.product_code.trim();
         let material = input.material_id.trim();
         let source = input.source_variant_id.trim();
+        let scope = OrderRecipeScope::new(owner, order_id, product, material);
         let mut tx = self.formula_write_transaction(owner).await?;
         let target_material = responsibility_material_name(&mut tx, owner, material).await?;
-        if !order_id.trim().is_empty() {
-            formula_variant_orders::order_scope(&mut tx, owner, order_id, product, material).await?;
+        if !scope.order.is_empty() {
+            formula_variant_orders::order_scope(&mut tx, owner, scope.order, product, material).await?;
         }
         let (source_product, source_material, source_name): (String, String, String) =
             sqlx::query_as(
                 "SELECT product_code, material_id, name FROM mini_preparation_formula_variants
-                 WHERE id=$1 AND owner_ref=$2",
+                 WHERE id=$1 AND owner_ref=$2 AND catalog_source_id IS NULL",
             )
             .bind(source)
             .bind(owner)
@@ -77,28 +78,40 @@ impl PostgresPreparationStore {
             .await?
             .ok_or(PreparationError::Forbidden)?;
         if source_product == product && source_material == material {
-            formula_variant_orders::restore(&mut tx, owner, order_id, source).await?;
-            let result = variant_summary_in_order(&mut tx, owner, source, order_id.trim()).await?;
+            let result = variant_summary_in_order(&mut tx, &scope, source).await?;
             tx.commit().await?;
             return Ok(result);
         }
 
-        // Re-selecting a recipe, concurrent taps and a lost response all refer
-        // to the same copy. Keep this identity in the existing request registry.
+        // An order may already hold the shared recipe or a historical copy.
+        if !scope.order.is_empty() && formula_revisions::selected_recipe(&mut tx, &scope, source).await?.is_some() {
+            let result = variant_summary_in_order(&mut tx, &scope, source).await?;
+            tx.commit().await?;
+            return Ok(result);
+        }
+
+        // Preserve the product-scoped copy for the legacy catalog-only API.
+        // An existing copy also preserves earlier order choices and codes.
         let request_id = reuse_request_id(product, material, source);
         let previous: Option<String> = sqlx::query_scalar(
             "SELECT id FROM mini_preparation_formula_variants
-             WHERE owner_ref=$1 AND request_id=$2 AND product_code=$3 AND material_id=$4",
+             WHERE owner_ref=$1 AND request_id=$2 AND product_code=$3 AND material_id=$4
+               AND ($5='' OR catalog_source_id IS NULL OR EXISTS (
+                   SELECT 1 FROM mini_preparation_order_formula_selections s
+                   WHERE s.owner_ref=$1 AND s.order_id=$5
+                     AND s.product_code=$3 AND s.material_id=$4
+                     AND s.variant_id=mini_preparation_formula_variants.id
+               ))",
         )
         .bind(owner)
         .bind(&request_id)
         .bind(product)
         .bind(material)
+        .bind(scope.order)
         .fetch_optional(&mut *tx)
         .await?;
         if let Some(id) = previous {
-            formula_variant_orders::restore(&mut tx, owner, order_id, &id).await?;
-            let result = variant_summary_in_order(&mut tx, owner, &id, order_id.trim()).await?;
+            let result = variant_summary_in_order(&mut tx, &scope, &id).await?;
             tx.commit().await?;
             return Ok(result);
         }
@@ -135,6 +148,12 @@ impl PostgresPreparationStore {
         let mut names = BTreeMap::new();
         for code in ingredients {
             names.insert(code.clone(), material_name(&mut tx, owner, &code).await?);
+        }
+
+        if !scope.order.is_empty() {
+            let result = variant_summary_in_order(&mut tx, &scope, source).await?;
+            tx.commit().await?;
+            return Ok(result);
         }
 
         let mut name = source_name.clone();
@@ -190,7 +209,7 @@ impl PostgresPreparationStore {
                 .bind(name).bind(json!(lines)).bind(share).execute(&mut *tx).await?;
         }
         order_formula_contents::record_catalog_revision(&mut tx, &id).await?;
-        let result = variant_summary_in_order(&mut tx, owner, &id, order_id.trim()).await?;
+        let result = variant_summary(&mut tx, owner, &id).await?;
         tx.commit().await?;
         Ok(result)
     }
@@ -202,17 +221,19 @@ fn reuse_request_id(product: &str, material: &str, source: &str) -> String {
 
 async fn variant_summary_in_order(
     tx: &mut Transaction<'_, Postgres>,
-    owner: &str,
+    scope: &OrderRecipeScope<'_>,
     id: &str,
-    order: &str,
 ) -> Result<Value, PreparationError> {
-    let mut summary = variant_summary(tx, owner, id).await?;
-    if !order.is_empty() {
-        let selected = formula_revisions::pin_order_recipe(tx, owner, order, id).await?;
+    let mut summary = variant_summary(tx, scope.owner, id).await?;
+    if !scope.order.is_empty() {
+        formula_variant_orders::restore(tx, scope, id).await?;
+        let selected = formula_revisions::pin_order_recipe(tx, scope, id).await?;
         let fields = selected.summary(id, summary["formula_code"].as_str().unwrap_or_default());
         for (key, value) in fields.as_object().expect("variant summary object") {
             summary[key] = value.clone();
         }
+        summary["product_code"] = json!(scope.product);
+        summary["material_id"] = json!(scope.material);
     }
     Ok(summary)
 }

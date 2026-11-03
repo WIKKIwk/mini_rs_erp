@@ -61,7 +61,7 @@ impl PostgresPreparationStore {
                 'shares_complete',count(f.name)>0 AND count(f.name)=count(f.share_percent)
                     AND COALESCE(sum(f.share_percent),0)=100)
              FROM mini_preparation_formula_variants v LEFT JOIN mini_preparation_formulas f ON f.variant_id=v.id
-             WHERE v.owner_ref=$1 AND v.product_code=$2 AND v.material_id=$3
+             WHERE v.owner_ref=$1 AND v.product_code=$2 AND v.material_id=$3 AND v.catalog_source_id IS NULL
              GROUP BY v.id ORDER BY v.created_at,v.id",
         ).bind(owner).bind(code).bind(material).fetch_all(&self.pool).await?;
         Ok(json!({"product_code":code,"material_id":material,"variants":variants}))

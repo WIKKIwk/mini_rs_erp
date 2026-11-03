@@ -1,3 +1,4 @@
+use super::formula_variant_orders::OrderRecipeScope;
 use super::*;
 
 pub(super) async fn catalog_recipe(
@@ -66,19 +67,21 @@ impl OrderRecipe {
 
 pub(super) async fn selected_recipe(
     tx: &mut Transaction<'_, Postgres>,
-    owner: &str,
-    order: &str,
+    scope: &OrderRecipeScope<'_>,
     variant: &str,
 ) -> Result<Option<OrderRecipe>, PreparationError> {
     let row: Option<(String, i64, Value, bool)> = sqlx::query_as(
         "SELECT s.display_name, r.id, r.formulas, s.is_pinned
          FROM mini_preparation_order_formula_selections s
          JOIN mini_preparation_formula_revisions r ON r.id=s.revision_id
-         WHERE s.owner_ref=$1 AND s.order_id=$2 AND s.variant_id=$3",
+         WHERE s.owner_ref=$1 AND s.order_id=$2 AND s.variant_id=$3
+           AND s.product_code=$4 AND s.material_id=$5",
     )
-    .bind(owner)
-    .bind(order)
+    .bind(scope.owner)
+    .bind(scope.order)
     .bind(variant)
+    .bind(scope.product)
+    .bind(scope.material)
     .fetch_optional(&mut **tx)
     .await?;
     Ok(
@@ -93,11 +96,10 @@ pub(super) async fn selected_recipe(
 
 pub(super) async fn pin_order_recipe(
     tx: &mut Transaction<'_, Postgres>,
-    owner: &str,
-    order: &str,
+    scope: &OrderRecipeScope<'_>,
     variant: &str,
 ) -> Result<OrderRecipe, PreparationError> {
-    let existing = selected_recipe(tx, owner, order, variant).await?;
+    let existing = selected_recipe(tx, scope, variant).await?;
     if let Some(selection) = existing.filter(|selection| selection.is_pinned) {
         return Ok(selection);
     }
@@ -106,53 +108,57 @@ pub(super) async fn pin_order_recipe(
          WHERE id=$1 AND owner_ref=$2",
     )
     .bind(variant)
-    .bind(owner)
+    .bind(scope.owner)
     .fetch_one(&mut **tx)
     .await?;
     let formulas = catalog_recipe(tx, variant).await?;
     let revision = recipe_revision(tx, variant, &formulas).await?;
     // An empty catalog has no recipe to freeze. Retain the order name while
     // the operator fills in the reusable draft, then pin on an explicit selection.
-    let is_pinned = formulas.as_array().is_some_and(|parts| !parts.is_empty());
+    let is_pinned = product != scope.product
+        || material != scope.material
+        || formulas.as_array().is_some_and(|parts| !parts.is_empty());
     sqlx::query(
         "INSERT INTO mini_preparation_order_formula_selections
          (owner_ref,order_id,variant_id,product_code,material_id,revision_id,display_name,is_pinned)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-         ON CONFLICT (owner_ref,order_id,variant_id)
+         ON CONFLICT (owner_ref,order_id,variant_id,product_code,material_id)
          DO UPDATE SET revision_id=EXCLUDED.revision_id,is_pinned=EXCLUDED.is_pinned
          WHERE NOT mini_preparation_order_formula_selections.is_pinned",
     )
-    .bind(owner)
-    .bind(order)
+    .bind(scope.owner)
+    .bind(scope.order)
     .bind(variant)
-    .bind(product)
-    .bind(material)
+    .bind(scope.product)
+    .bind(scope.material)
     .bind(revision)
     .bind(&name)
     .bind(is_pinned)
     .execute(&mut **tx)
     .await?;
     // Read the canonical revision when the same composition was saved before.
-    selected_recipe(tx, owner, order, variant)
+    selected_recipe(tx, scope, variant)
         .await?
         .ok_or(PreparationError::StoreFailed)
 }
 
 pub(super) async fn update_order_revision(
     tx: &mut Transaction<'_, Postgres>,
-    owner: &str,
-    order: &str,
+    scope: &OrderRecipeScope<'_>,
     variant: &str,
     formulas: &Value,
 ) -> Result<(), PreparationError> {
     let revision = recipe_revision(tx, variant, formulas).await?;
     sqlx::query(
-        "UPDATE mini_preparation_order_formula_selections SET revision_id=$4
-         WHERE owner_ref=$1 AND order_id=$2 AND variant_id=$3 AND revision_id<>$4",
+        "UPDATE mini_preparation_order_formula_selections SET revision_id=$6
+         WHERE owner_ref=$1 AND order_id=$2 AND variant_id=$3
+           AND product_code=$4 AND material_id=$5 AND revision_id<>$6",
     )
-    .bind(owner)
-    .bind(order)
+    .bind(scope.owner)
+    .bind(scope.order)
     .bind(variant)
+    .bind(scope.product)
+    .bind(scope.material)
     .bind(revision)
     .execute(&mut **tx)
     .await?;

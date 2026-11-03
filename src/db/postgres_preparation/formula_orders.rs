@@ -12,7 +12,7 @@ impl PostgresPreparationStore {
                        f.material_id, r.material_name, f.formula_code, f.name, f.lines, f.share_percent, f.variant_id, v.name AS variant_name
                 FROM mini_production_maps m
                 JOIN mini_preparation_formulas f ON f.product_code=m.product_code AND f.owner_ref=$1
-                JOIN mini_preparation_formula_variants v ON v.id=f.variant_id
+                JOIN mini_preparation_formula_variants v ON v.id=f.variant_id AND v.catalog_source_id IS NULL
                 JOIN mini_preparation_material_responsibilities r
                   ON r.principal_role='tayyorlov_masteri' AND r.principal_ref=$1
                  AND lower(r.material_id)=lower(f.material_id)
@@ -50,7 +50,7 @@ impl PostgresPreparationStore {
                         f.product_code),
                     f.updated_at, f.material_id, f.material_name, f.formula_code, f.name, f.lines, f.share_percent, f.variant_id, v.name, false
                 FROM mini_preparation_formulas f
-                JOIN mini_preparation_formula_variants v ON v.id=f.variant_id
+                JOIN mini_preparation_formula_variants v ON v.id=f.variant_id AND v.catalog_source_id IS NULL
                 WHERE f.owner_ref=$1 AND NOT EXISTS (
                     SELECT 1 FROM matched m WHERE m.product_code=f.product_code
                       AND m.material_id=f.material_id AND m.name=f.name AND m.variant_id=f.variant_id

@@ -150,6 +150,8 @@ async fn run_checks(pool: &PgPool, options: PgConnectOptions) {
         .execute(pool).await.unwrap();
     sqlx::raw_sql(include_str!("../migrations/postgres/0189_preparation_empty_recipe_drafts.sql"))
         .execute(pool).await.unwrap();
+    sqlx::raw_sql(include_str!("../migrations/postgres/0190_preparation_shared_order_recipes.sql"))
+        .execute(pool).await.unwrap();
     sqlx::raw_sql(r#"
         INSERT INTO mini_orders(id,code,order_number,product_name)
           VALUES ('order-2','O2','O2','Product'),('order-target','OT','OT','Target');

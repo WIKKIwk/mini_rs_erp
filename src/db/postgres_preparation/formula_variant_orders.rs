@@ -1,5 +1,23 @@
 use super::*;
 
+pub(super) struct OrderRecipeScope<'a> {
+    pub owner: &'a str,
+    pub order: &'a str,
+    pub product: &'a str,
+    pub material: &'a str,
+}
+
+impl<'a> OrderRecipeScope<'a> {
+    pub fn new(owner: &'a str, order: &'a str, product: &'a str, material: &'a str) -> Self {
+        Self {
+            owner,
+            order: order.trim(),
+            product: product.trim(),
+            material: material.trim(),
+        }
+    }
+}
+
 pub(super) async fn order_scope(
     tx: &mut Transaction<'_, Postgres>,
     owner: &str,
@@ -28,21 +46,20 @@ pub(super) async fn order_scope(
 
 pub(super) async fn restore(
     tx: &mut Transaction<'_, Postgres>,
-    owner: &str,
-    order: &str,
+    scope: &OrderRecipeScope<'_>,
     variant: &str,
 ) -> Result<(), PreparationError> {
-    if !order.trim().is_empty() {
-        sqlx::query(
-            "DELETE FROM mini_preparation_order_formula_exclusions
-                     WHERE owner_ref=$1 AND order_id=$2 AND variant_id=$3",
-        )
-        .bind(owner)
-        .bind(order.trim())
-        .bind(variant)
-        .execute(&mut **tx)
-        .await?;
-    }
+    sqlx::query(
+        "DELETE FROM mini_preparation_order_formula_exclusions
+         WHERE owner_ref=$1 AND order_id=$2 AND variant_id=$3 AND product_code=$4 AND material_id=$5",
+    )
+    .bind(scope.owner)
+    .bind(scope.order)
+    .bind(variant)
+    .bind(scope.product)
+    .bind(scope.material)
+    .execute(&mut **tx)
+    .await?;
     Ok(())
 }
 
@@ -73,12 +90,13 @@ impl PostgresPreparationStore {
         let variants: Vec<Value> = sqlx::query_scalar(
             "SELECT jsonb_build_object(
                 'id',v.id,'name',COALESCE(s.display_name,v.name),'formula_code',v.formula_code,
-                'product_code',v.product_code,'material_id',v.material_id,'revision_id',r.id,
+                'product_code',$2::text,'material_id',$3::text,'revision_id',r.id,
                 'formula_count',counts.total,
                 'shares_complete',counts.total>0 AND counts.total=counts.assigned AND counts.share=100)
              FROM mini_preparation_formula_variants v
              LEFT JOIN mini_preparation_order_formula_selections s
                ON s.owner_ref=v.owner_ref AND s.order_id=$4 AND s.variant_id=v.id
+               AND s.product_code=$2 AND s.material_id=$3
              LEFT JOIN mini_preparation_formula_revisions r ON r.id=s.revision_id AND s.is_pinned
              CROSS JOIN LATERAL (
                 SELECT count(*) AS total,count(share) AS assigned,sum(share) AS share
@@ -89,10 +107,12 @@ impl PostgresPreparationStore {
                     SELECT (f->>'share_percent')::numeric FROM jsonb_array_elements(r.formulas) f
                 ) shares
              ) counts
-             WHERE v.owner_ref=$1 AND v.product_code=$2 AND v.material_id=$3
+             WHERE v.owner_ref=$1 AND (s.variant_id IS NOT NULL OR (
+                 v.product_code=$2 AND v.material_id=$3 AND v.catalog_source_id IS NULL))
                AND NOT EXISTS (
                  SELECT 1 FROM mini_preparation_order_formula_exclusions x
-                 WHERE x.owner_ref=v.owner_ref AND x.order_id=$4 AND x.variant_id=v.id)
+                 WHERE x.owner_ref=v.owner_ref AND x.order_id=$4 AND x.variant_id=v.id
+                   AND x.product_code=$2 AND x.material_id=$3)
              ORDER BY v.created_at,v.id",
         )
         .bind(owner)
@@ -110,19 +130,16 @@ impl PostgresPreparationStore {
         owner: &str,
         target: FormulaVariantTarget,
     ) -> Result<Value, PreparationError> {
-        let order = target.order_id.trim();
-        let variant = target.variant_id.trim();
-        let mut tx = self.formula_write_transaction(owner).await?;
-        order_recipe_scope(
-            &mut tx,
+        let scope = OrderRecipeScope::new(
             owner,
-            order,
+            &target.order_id,
             &target.product_code,
             &target.material_id,
-            variant,
-        )
-        .await?;
-        let recipe = formula_revisions::pin_order_recipe(&mut tx, owner, order, variant).await?;
+        );
+        let variant = target.variant_id.trim();
+        let mut tx = self.formula_write_transaction(owner).await?;
+        order_recipe_scope(&mut tx, &scope, variant).await?;
+        let recipe = formula_revisions::pin_order_recipe(&mut tx, &scope, variant).await?;
         if !target.recipe_key.is_empty() {
             let key: String = sqlx::query_scalar(
                 "SELECT encode(content_key,'hex') FROM mini_preparation_formula_revisions WHERE id=$1",
@@ -152,13 +169,14 @@ impl PostgresPreparationStore {
         let product = target.product_code.trim();
         let material = target.material_id.trim();
         let variant = target.variant_id.trim();
+        let scope = OrderRecipeScope::new(owner, order, product, material);
         validate_target(product, material, variant)?;
         let mut tx = self.formula_write_transaction(owner).await?;
         if order.is_empty() {
             formula_variants::variant_scope(&mut tx, owner, product, material, variant, false)
                 .await?;
         } else {
-            order_recipe_scope(&mut tx, owner, order, product, material, variant).await?;
+            order_recipe_scope(&mut tx, &scope, variant).await?;
         }
 
         let duplicate: bool = sqlx::query_scalar(
@@ -166,11 +184,14 @@ impl PostgresPreparationStore {
                  SELECT 1 FROM mini_preparation_formula_variants v
                  LEFT JOIN mini_preparation_order_formula_selections s
                    ON s.owner_ref=v.owner_ref AND s.order_id=$5 AND s.variant_id=v.id
-                 WHERE v.owner_ref=$1 AND v.product_code=$2 AND v.material_id=$3
+                   AND s.product_code=$2 AND s.material_id=$3
+                 WHERE v.owner_ref=$1 AND (s.variant_id IS NOT NULL OR (
+                    v.product_code=$2 AND v.material_id=$3 AND v.catalog_source_id IS NULL))
                    AND v.id<>$4 AND lower(COALESCE(s.display_name,v.name))=lower($6)
                    AND NOT EXISTS (
                        SELECT 1 FROM mini_preparation_order_formula_exclusions x
-                       WHERE x.owner_ref=v.owner_ref AND x.order_id=$5 AND x.variant_id=v.id)
+                       WHERE x.owner_ref=v.owner_ref AND x.order_id=$5 AND x.variant_id=v.id
+                         AND x.product_code=$2 AND x.material_id=$3)
              )",
         )
         .bind(owner)
@@ -201,7 +222,7 @@ impl PostgresPreparationStore {
             json!({"id":variant,"name":name,"formula_code":code})
         } else {
             let mut recipe =
-                match formula_revisions::selected_recipe(&mut tx, owner, order, variant).await? {
+                match formula_revisions::selected_recipe(&mut tx, &scope, variant).await? {
                     Some(mut recipe) => {
                         if !recipe.is_pinned {
                             recipe.formulas =
@@ -209,17 +230,18 @@ impl PostgresPreparationStore {
                         }
                         recipe
                     }
-                    None => {
-                        formula_revisions::pin_order_recipe(&mut tx, owner, order, variant).await?
-                    }
+                    None => formula_revisions::pin_order_recipe(&mut tx, &scope, variant).await?,
                 };
             sqlx::query(
-                "UPDATE mini_preparation_order_formula_selections SET display_name=$4
-                 WHERE owner_ref=$1 AND order_id=$2 AND variant_id=$3 AND display_name<>$4",
+                "UPDATE mini_preparation_order_formula_selections SET display_name=$6
+                 WHERE owner_ref=$1 AND order_id=$2 AND variant_id=$3
+                   AND product_code=$4 AND material_id=$5 AND display_name<>$6",
             )
             .bind(owner)
             .bind(order)
             .bind(variant)
+            .bind(product)
+            .bind(material)
             .bind(&name)
             .execute(&mut *tx)
             .await?;
@@ -241,28 +263,19 @@ impl PostgresPreparationStore {
             source_variant_id: input.variant_id.clone(),
         }
         .validate()?;
-        let mut tx = self.formula_write_transaction(owner).await?;
-        order_scope(
-            &mut tx,
+        let scope = OrderRecipeScope::new(
             owner,
             &input.order_id,
             &input.product_code,
             &input.material_id,
-        )
-        .await?;
-        let variant = formula_variants::variant_scope(
-            &mut tx,
-            owner,
-            input.product_code.trim(),
-            input.material_id.trim(),
-            &input.variant_id,
-            false,
-        )
-        .await?;
+        );
+        let mut tx = self.formula_write_transaction(owner).await?;
+        order_scope(&mut tx, owner, scope.order, scope.product, scope.material).await?;
+        let variant = order_variant(&mut tx, &scope, &input.variant_id).await?;
         sqlx::query(
             "INSERT INTO mini_preparation_order_formula_exclusions
             (owner_ref,order_id,variant_id,product_code,material_id) VALUES($1,$2,$3,$4,$5)
-            ON CONFLICT(owner_ref,order_id,variant_id) DO NOTHING",
+            ON CONFLICT(owner_ref,order_id,variant_id,product_code,material_id) DO NOTHING",
         )
         .bind(owner)
         .bind(input.order_id.trim())
@@ -290,35 +303,64 @@ fn validate_target(product: &str, material: &str, variant: &str) -> Result<(), P
 
 pub(super) async fn order_recipe_scope(
     tx: &mut Transaction<'_, Postgres>,
-    owner: &str,
-    order: &str,
-    product: &str,
-    material: &str,
+    scope: &OrderRecipeScope<'_>,
     variant: &str,
 ) -> Result<(), PreparationError> {
-    validate_target(product.trim(), material.trim(), variant.trim())?;
-    if material.trim().is_empty() {
+    validate_target(scope.product, scope.material, variant.trim())?;
+    if scope.material.is_empty() {
         return Err(PreparationError::Invalid("Homashyo tanlanmadi"));
     }
-    order_scope(tx, owner, order, product, material).await?;
-    formula_variants::variant_scope(tx, owner, product.trim(), material.trim(), variant, false)
-        .await?;
-    require_visible_variant(tx, owner, order.trim(), variant.trim()).await
+    order_scope(tx, scope.owner, scope.order, scope.product, scope.material).await?;
+    let id = order_variant(tx, scope, variant).await?;
+    require_visible_variant(tx, scope, &id).await
+}
+
+// A variant outside its catalog product/material can be used only by an
+// order that already has an explicit selection for that exact material.
+pub(super) async fn order_variant(
+    tx: &mut Transaction<'_, Postgres>,
+    scope: &OrderRecipeScope<'_>,
+    variant: &str,
+) -> Result<String, PreparationError> {
+    sqlx::query_scalar(
+        "SELECT v.id FROM mini_preparation_formula_variants v
+         LEFT JOIN mini_preparation_order_formula_selections s
+           ON s.owner_ref=v.owner_ref AND s.variant_id=v.id AND s.order_id=$2
+           AND s.product_code=$3 AND s.material_id=$4
+         WHERE v.owner_ref=$1 AND (
+            (v.id=$5 AND s.variant_id IS NOT NULL) OR (
+                v.product_code=$3 AND v.material_id=$4
+                AND (v.catalog_source_id IS NULL OR s.variant_id IS NOT NULL)
+                AND (v.id=$5 OR ($5='' AND v.is_default))
+            )
+         )",
+    )
+    .bind(scope.owner)
+    .bind(scope.order)
+    .bind(scope.product)
+    .bind(scope.material)
+    .bind(variant.trim())
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or(PreparationError::Invalid(
+        "Shnek varianti topilmadi. Ro‘yxatni yangilang",
+    ))
 }
 
 pub(super) async fn require_visible_variant(
     tx: &mut Transaction<'_, Postgres>,
-    owner: &str,
-    order: &str,
+    scope: &OrderRecipeScope<'_>,
     variant: &str,
 ) -> Result<(), PreparationError> {
     let excluded: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM mini_preparation_order_formula_exclusions
-         WHERE owner_ref=$1 AND order_id=$2 AND variant_id=$3)",
+         WHERE owner_ref=$1 AND order_id=$2 AND variant_id=$3 AND product_code=$4 AND material_id=$5)",
     )
-    .bind(owner)
-    .bind(order)
+    .bind(scope.owner)
+    .bind(scope.order)
     .bind(variant)
+    .bind(scope.product)
+    .bind(scope.material)
     .fetch_one(&mut **tx)
     .await?;
     if excluded {
