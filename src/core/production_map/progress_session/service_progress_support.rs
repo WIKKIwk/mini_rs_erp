@@ -486,6 +486,18 @@ mod rezka_output_kadr_count_tests {
     }
 
     #[test]
+    fn bobina_sale_applies_only_to_the_final_rezka_occurrence() {
+        let mut map = repeated_rezka_map();
+        assert!(!map.includes_bobina_in_output_net(true, "rezka_final"));
+        map.include_bobina_in_net = Some(true);
+        assert!(!map.includes_bobina_in_output_net(true, "rezka_before_lamination"));
+        assert!(!map.includes_bobina_in_output_net(false, "rezka_final"));
+        assert!(!map.includes_bobina_in_output_net(true, ""));
+        assert!(!map.includes_bobina_in_output_net(true, "missing"));
+        assert!(map.includes_bobina_in_output_net(true, "rezka_final"));
+    }
+
+    #[test]
     fn projected_rezka_groups_match_reference_for_repeated_stages_and_invalid_data() {
         for variant in 0..4 {
             let mut map = repeated_rezka_map();

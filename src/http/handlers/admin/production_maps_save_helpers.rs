@@ -62,6 +62,7 @@ fn template_map_copy_for_save(
     template_map.order_number.clear();
     template_map.order_kg = None;
     template_map.base_length = None;
+    template_map.include_bobina_in_net = None;
     Some(template_map)
 }
 

@@ -145,6 +145,9 @@ async fn execute_queue_action(
                 } else {
                     fallback_bobina_kg.unwrap_or(0.0)
                 },
+                include_bobina_in_net: batch.payload_json
+                    .get("include_bobina_in_net")
+                    .and_then(serde_json::Value::as_bool) == Some(true),
                 progress_qty: if frame_specific_metrics {
                     batch.finished_goods_meter.unwrap_or(batch.produced_qty)
                 } else {

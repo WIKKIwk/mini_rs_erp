@@ -140,7 +140,7 @@ pub async fn paddon_qr_print(
         apparatus: String::new(), apparatus_display_name: String::new(), customer_name: String::new(),
         executor_name: principal.display_name.trim().to_string(), printer: input.printer,
         print_mode: input.print_mode, label_kind: "paddon_code".to_string(),
-        gross_qty: 1.0, tare_enabled: false, tare_kg: 0.0, progress_qty: 1.0,
+        gross_qty: 1.0, tare_enabled: false, tare_kg: 0.0, include_bobina_in_net: false, progress_qty: 1.0,
         unit: "dona".to_string(), progress_unit: "dona".to_string(), print_count: input.print_count,
     };
     let print = if input.print_transport.trim().eq_ignore_ascii_case("offline") {

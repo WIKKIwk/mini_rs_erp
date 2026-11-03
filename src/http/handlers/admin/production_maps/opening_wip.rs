@@ -214,6 +214,7 @@ pub async fn production_map_opening_wip_print(
         progress_unit: "m".to_string(),
         tare_enabled: details.batch.bobina_kg.is_some(),
         tare_kg: details.batch.bobina_kg.unwrap_or(0.0),
+        include_bobina_in_net: false,
         label_kind: "progress".to_string(),
         print_count: input.print_count.max(1),
     };

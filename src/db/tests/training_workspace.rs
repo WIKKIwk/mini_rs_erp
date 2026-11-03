@@ -360,6 +360,7 @@ fn training_map(
         width_mm: None,
         order_kg: None,
         base_length: None,
+        include_bobina_in_net: None,
         nodes,
         edges,
     }

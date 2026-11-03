@@ -98,6 +98,8 @@ pub struct ProgressLabelPrintRequest {
     #[serde(default)]
     pub tare_kg: f64,
     #[serde(default)]
+    pub include_bobina_in_net: bool,
+    #[serde(default)]
     pub progress_qty: f64,
     #[serde(default)]
     pub unit: String,
@@ -124,6 +126,7 @@ pub struct ProgressLabelPrintResponse {
     pub gross_qty: f64,
     pub tare_enabled: bool,
     pub tare_kg: f64,
+    pub include_bobina_in_net: bool,
     pub unit: String,
     pub progress_unit: String,
     pub label_kind: String,
@@ -217,6 +220,7 @@ pub struct ScaleDriverPrintRequest {
     pub progress_unit: String,
     pub tare_enabled: bool,
     pub tare_kg: f64,
+    pub include_bobina_in_net: bool,
     pub print_count: u32,
 }
 

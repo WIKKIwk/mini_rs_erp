@@ -19,6 +19,7 @@ pub(super) struct NormalizedProgressLabelJob {
     pub(super) gross_qty: f64,
     pub(super) tare_enabled: bool,
     pub(super) tare_kg: f64,
+    pub(super) include_bobina_in_net: bool,
     pub(super) progress_qty: f64,
     pub(super) unit: String,
     pub(super) progress_unit: String,
@@ -47,7 +48,9 @@ impl NormalizedProgressLabelJob {
             Some(gross_qty)
         }
         .ok_or_else(|| GscaleServiceError::InvalidInput("progress_qty_required".to_string()))?;
-        let tare_enabled = request.tare_enabled || request.tare_kg > 0.0;
+        let include_bobina_in_net = request.include_bobina_in_net
+            && normalize_label_kind(&request.label_kind) == "progress";
+        let tare_enabled = !include_bobina_in_net && (request.tare_enabled || request.tare_kg > 0.0);
         let tare_kg = if tare_enabled && request.tare_kg > 0.0 {
             positive_erp_quantity(request.tare_kg)
                 .ok_or_else(|| GscaleServiceError::InvalidInput("tare_kg_invalid".to_string()))?
@@ -69,6 +72,7 @@ impl NormalizedProgressLabelJob {
             gross_qty,
             tare_enabled: tare_kg > 0.0,
             tare_kg,
+            include_bobina_in_net,
             progress_qty,
             unit: blank_default(&request.unit, "kg"),
             progress_unit: blank_default(&request.progress_unit, "m"),
@@ -94,6 +98,7 @@ impl NormalizedProgressLabelJob {
             progress_unit: self.progress_unit.clone(),
             tare_enabled: self.tare_enabled,
             tare_kg: self.tare_kg,
+            include_bobina_in_net: self.include_bobina_in_net,
             print_count: self.print_count,
         }
     }
@@ -218,6 +223,7 @@ impl NormalizedMaterialReceiptJob {
                 .unwrap_or_default(),
             tare_enabled: self.tare_enabled,
             tare_kg: self.tare_kg,
+            include_bobina_in_net: false,
             print_count: self.print_count,
         }
     }

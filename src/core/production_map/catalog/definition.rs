@@ -41,6 +41,9 @@ pub struct ProductionMapDefinition {
     /// Planned production meters including waste and rounding; legacy wire name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_length: Option<f64>,
+    /// Sell final Rezka output including its bobina in the labelled net weight.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_bobina_in_net: Option<bool>,
     #[serde(default)]
     pub nodes: Vec<ProductionMapNode>,
     #[serde(default)]
@@ -48,6 +51,16 @@ pub struct ProductionMapDefinition {
 }
 
 impl ProductionMapDefinition {
+    pub(crate) fn includes_bobina_in_output_net(
+        &self,
+        is_rezka: bool,
+        stage_node_id: &str,
+    ) -> bool {
+        self.include_bobina_in_net == Some(true)
+            && is_rezka
+            && crate::core::production_map::chain::is_final_work_stage_node(self, stage_node_id)
+    }
+
     pub fn layout_lanes(&self) -> Vec<crate::core::order_layout::OrderLane> {
         crate::core::order_layout::lanes(&self.products, &self.id, &self.order_number)
     }

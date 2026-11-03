@@ -56,10 +56,14 @@ pub(crate) fn product_weights(
             }
         }
     };
-    let net = gross
-        .zip(units(batch.bobina_kg))
-        .and_then(|(gross, tare)| gross.checked_sub(tare))
-        .filter(|net| *net >= 0);
+    let net = if batch.payload_json.get("include_bobina_in_net").and_then(Value::as_bool) == Some(true) {
+        gross
+    } else {
+        gross
+            .zip(units(batch.bobina_kg))
+            .and_then(|(gross, tare)| gross.checked_sub(tare))
+            .filter(|net| *net >= 0)
+    };
     (gross, net)
 }
 
@@ -157,6 +161,20 @@ mod tests {
         b.payload_json = json!({});
         b.finished_goods_kg = None;
         assert_eq!(product_weights(&b, None), (None, None));
+    }
+
+    #[test]
+    fn sold_bobina_counts_in_net_even_when_its_weight_is_unknown() {
+        let mut sold = batch();
+        sold.bobina_kg = None;
+        sold.payload_json["include_bobina_in_net"] = json!(true);
+        assert_eq!(product_weights(&sold, None), (Some(12_000_000), Some(12_000_000)));
+        sold.bobina_kg = Some(0.5);
+        assert_eq!(product_weights(&sold, None), (Some(12_000_000), Some(12_000_000)));
+        assert_eq!(product_weights(&sold, Some(Some(9.0))), (Some(9_000_000), Some(9_000_000)));
+        assert_eq!(product_weights(&sold, Some(None)), (None, None));
+        sold.payload_json["include_bobina_in_net"] = json!(false);
+        assert_eq!(product_weights(&sold, None), (Some(12_000_000), Some(11_500_000)));
     }
     #[test]
     fn empty_is_zero_and_duplicate_members_are_counted_once() {

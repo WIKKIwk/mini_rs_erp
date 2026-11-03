@@ -64,6 +64,7 @@ mod tests {
             width_mm: None,
             order_kg: Some(12.0),
             base_length: None,
+            include_bobina_in_net: None,
             nodes: vec![
                 node("start", ProductionMapNodeKind::Start, "Boshlanish"),
                 node(

@@ -46,7 +46,16 @@ pub(super) async fn put_map_inner_tx(
             order_number = excluded.order_number,
             roll_count = excluded.roll_count,
             width_mm = excluded.width_mm,
-            map_json = excluded.map_json,
+            map_json = CASE
+                WHEN excluded.map_json ? 'include_bobina_in_net'
+                    THEN excluded.map_json
+                WHEN mini_production_maps.map_json ? 'include_bobina_in_net'
+                    THEN excluded.map_json || jsonb_build_object(
+                        'include_bobina_in_net',
+                        mini_production_maps.map_json -> 'include_bobina_in_net'
+                    )
+                ELSE excluded.map_json
+            END,
             updated_at = excluded.updated_at",
     )
     .bind(map.id.trim())

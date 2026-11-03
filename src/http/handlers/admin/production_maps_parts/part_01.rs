@@ -310,6 +310,8 @@ struct ProductionMapSaveWithOrderRequest {
 #[derive(serde::Deserialize)]
 struct ProductionMapAutoOpenRequest {
     template: CalculateOrderTemplate,
+    #[serde(default)]
+    include_bobina_in_net: bool,
 }
 
 /// Saves a production map and (optionally) its calculate order template in one
@@ -358,7 +360,7 @@ pub async fn production_map_auto_open(
     if method != Method::POST {
         return Err(method_not_allowed());
     }
-    let ProductionMapAutoOpenRequest { mut template } = parse_json(&body)?;
+    let ProductionMapAutoOpenRequest { mut template, include_bobina_in_net } = parse_json(&body)?;
     super::combos::validate_combo_template(&state, &template).await?;
     if !template.products.is_empty() {
         template = crate::core::calculate_orders::hydrate_template_dimensions(template);
@@ -387,8 +389,9 @@ pub async fn production_map_auto_open(
         .list()
         .await
         .map_err(|_| server_error("material catalog failed"))?;
-    let map = automatic::generate(&template, &apparatus, &materials)
+    let mut map = automatic::generate(&template, &apparatus, &materials)
         .map_err(|error| bad_request(&error))?;
+    map.include_bobina_in_net = Some(include_bobina_in_net);
     template.order_number = map.order_number.clone();
     template.code = map.code.clone();
     template.width_mm = map.width_mm.unwrap_or_default();

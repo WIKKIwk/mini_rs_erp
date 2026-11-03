@@ -436,6 +436,9 @@ async fn laminatsiya_astatka_shift_response(
                 .or(batch.finished_goods_kg)
                 .unwrap_or(batch.produced_qty),
             tare_kg: batch.bobina_kg.unwrap_or(0.0),
+            include_bobina_in_net: batch.payload_json
+                .get("include_bobina_in_net")
+                .and_then(serde_json::Value::as_bool) == Some(true),
             tare_enabled: batch.bobina_kg.is_some_and(|v| v > 0.0),
             progress_qty: batch.finished_goods_meter.unwrap_or(batch.produced_qty),
             unit: "kg".into(),

@@ -296,6 +296,7 @@ pub async fn production_map_paddon_qr_print(
         gross_qty: 1.0,
         tare_enabled: false,
         tare_kg: 0.0,
+        include_bobina_in_net: false,
         progress_qty: 1.0,
         unit: "dona".to_string(),
         progress_unit: "dona".to_string(),

@@ -281,6 +281,7 @@ fn training_progress_print_request(
             .unwrap_or(batch.produced_qty),
         tare_enabled: input.bobina_kg.is_some_and(|value| value > 0.0),
         tare_kg: input.bobina_kg.unwrap_or(0.0),
+        include_bobina_in_net: false,
         progress_qty: batch.produced_qty,
         unit: "kg".to_string(),
         progress_unit: if batch.uom.trim().is_empty() {

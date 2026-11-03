@@ -19,6 +19,21 @@ const FLEXO_ID: &str = "apparatus:default:asset-005";
 const LAMINATION_ID: &str = "apparatus:default:asset-007";
 const REZKA_ID: &str = "apparatus:default:asset-010";
 
+#[tokio::test]
+async fn legacy_map_save_preserves_bobina_sale_setting() {
+    let store = std::sync::Arc::new(MemoryProductionMapStore::new());
+    let service = service_with_default_apparatus(store).await;
+    let mut map = canonical_apparatus_stage_map("zakaz-bobina-setting", REZKA_ID, "Rezka");
+    map.include_bobina_in_net = Some(true);
+    service.upsert_map(map.clone()).await.unwrap();
+    map.include_bobina_in_net = None;
+    let saved = service.upsert_map(map.clone()).await.unwrap();
+    assert_eq!(saved.map.include_bobina_in_net, Some(true));
+    map.include_bobina_in_net = Some(false);
+    let saved = service.upsert_map(map).await.unwrap();
+    assert_eq!(saved.map.include_bobina_in_net, Some(false));
+}
+
 fn service_with_flexo_limits() -> ProductionMapService {
     let mut flexo = TestApparatusSpec::print(
         FLEXO_ID,

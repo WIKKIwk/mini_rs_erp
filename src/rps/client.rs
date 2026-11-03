@@ -121,6 +121,7 @@ struct RpsPrintRequest {
     progress_unit: String,
     tare_enabled: bool,
     tare_kg: f64,
+    include_bobina_in_net: bool,
     print_count: u32,
 }
 
@@ -141,6 +142,7 @@ impl From<ScaleDriverPrintRequest> for RpsPrintRequest {
             progress_unit: request.progress_unit,
             tare_enabled: request.tare_enabled,
             tare_kg: request.tare_kg,
+            include_bobina_in_net: request.include_bobina_in_net,
             print_count: request.print_count,
         }
     }

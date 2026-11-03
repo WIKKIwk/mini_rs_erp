@@ -749,6 +749,7 @@ fn test_map(id: &str, order_number: &str, product_code: &str) -> ProductionMapDe
         width_mm: Some(650.0),
         order_kg: None,
         base_length: None,
+        include_bobina_in_net: None,
         nodes: vec![
             test_node("start", ProductionMapNodeKind::Start, "Start", 0.0),
             test_node(

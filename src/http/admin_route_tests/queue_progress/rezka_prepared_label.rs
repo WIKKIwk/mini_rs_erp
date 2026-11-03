@@ -15,6 +15,10 @@ struct PreparedLabelFixture {
 
 impl PreparedLabelFixture {
     async fn new(driver_fails: bool) -> Self {
+        Self::new_for_mode(driver_fails, false, false).await
+    }
+
+    async fn new_for_mode(driver_fails: bool, include_bobina: bool, intermediate: bool) -> Self {
         let store = Arc::new(MemoryProductionMapStore::new());
         let driver_requests = Arc::new(Mutex::new(Vec::new()));
         let mut state = test_state();
@@ -41,6 +45,17 @@ impl PreparedLabelFixture {
             ORDER, "Prepared label rolls", "9531", APPARATUS,
         )).unwrap();
         map["code"] = serde_json::json!("ISH-42");
+        map["include_bobina_in_net"] = serde_json::json!(include_bobina);
+        if intermediate {
+            map["nodes"].as_array_mut().unwrap().insert(2, serde_json::json!({
+                "id":"lam", "kind":"apparatus", "title":"Laminatsiya",
+                "apparatus_id":"apparatus:default:asset-007"
+            }));
+            map["edges"][1]["to"] = serde_json::json!("lam");
+            map["edges"].as_array_mut().unwrap().push(serde_json::json!({
+                "from":"lam", "to":"end"
+            }));
+        }
         let saved = router
             .clone()
             .oneshot(request_with_body(
@@ -125,6 +140,47 @@ impl PreparedLabelFixture {
             .unwrap();
         (response.status(), json_body(response).await)
     }
+}
+
+#[tokio::test]
+async fn bobina_sale_final_roll_survives_reprint_and_order_setting_change() {
+    let fixture = PreparedLabelFixture::new_for_mode(false, true, false).await;
+    let mut input = fixture.frame_request("offline");
+    input["rezka_frames"][0].as_object_mut().unwrap().remove("bobina_kg");
+    let (status, saved) =
+        super::rezka::queue_action_json(&fixture.router, &fixture.worker, input).await;
+    assert_eq!(status, StatusCode::OK, "{saved:?}");
+    let batch = &saved["progress_batch"];
+    assert!(batch["bobina_kg"].is_null());
+    assert_eq!(batch["payload_json"]["include_bobina_in_net"], true);
+    assert_eq!(saved["print"]["include_bobina_in_net"], true);
+    assert_eq!(saved["print"]["gross_qty"], 12.75);
+    assert_eq!(saved["print"]["tare_kg"], 0.0);
+    let mut map = fixture.store.map_by_id(ORDER).await.unwrap().unwrap();
+    map.include_bobina_in_net = Some(false);
+    fixture.store.put_map(map).await.unwrap();
+    let (status, reprint) = fixture.reprint(batch, "offline").await;
+    assert_eq!(status, StatusCode::OK, "{reprint:?}");
+    assert_eq!(reprint["print"]["include_bobina_in_net"], true);
+    assert_eq!(reprint["print"]["gross_qty"], 12.75);
+    assert_eq!(reprint["print"]["tare_kg"], 0.0);
+    let (status, wifi_reprint) = fixture.reprint(batch, "wifi").await;
+    assert_eq!(status, StatusCode::OK, "{wifi_reprint:?}");
+    let requests = fixture.driver_requests.lock().await;
+    assert!(requests.last().unwrap().include_bobina_in_net);
+    assert_eq!(requests.last().unwrap().tare_kg, 0.0);
+}
+
+#[tokio::test]
+async fn bobina_sale_does_not_change_intermediate_rezka() {
+    let fixture = PreparedLabelFixture::new_for_mode(false, true, true).await;
+    let (status, saved) = super::rezka::queue_action_json(
+        &fixture.router, &fixture.worker, fixture.frame_request("offline"),
+    ).await;
+    assert_eq!(status, StatusCode::OK, "{saved:?}");
+    assert!(saved["progress_batch"]["payload_json"]["include_bobina_in_net"].is_null());
+    assert_eq!(saved["print"]["include_bobina_in_net"], false);
+    assert_eq!(saved["print"]["tare_kg"], 0.75);
 }
 
 fn assert_prepared_label_matches_batch(saved: &serde_json::Value) {

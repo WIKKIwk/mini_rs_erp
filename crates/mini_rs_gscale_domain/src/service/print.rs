@@ -357,6 +357,7 @@ fn progress_label_response(
         gross_qty: job.gross_qty,
         tare_enabled: job.tare_enabled,
         tare_kg: job.tare_kg,
+        include_bobina_in_net: job.include_bobina_in_net,
         unit: job.unit,
         progress_unit: job.progress_unit,
         label_kind: job.label_kind,

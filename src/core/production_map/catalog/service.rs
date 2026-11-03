@@ -484,6 +484,11 @@ impl ProductionMapService {
         mut map: ProductionMapDefinition,
         allow_preflight_edit: bool,
     ) -> Result<ProductionMapSaved, ProductionMapError> {
+        if map.include_bobina_in_net.is_none()
+            && let Some(previous) = self.store.map_by_id(&map.id).await?
+        {
+            map.include_bobina_in_net = previous.include_bobina_in_net;
+        }
         normalize_map(&mut map);
         compile_map(&map)?;
         self.validate_and_normalize_map_apparatus(&mut map).await?;
@@ -501,6 +506,11 @@ impl ProductionMapService {
         let mut normalized = Vec::with_capacity(maps.len());
         let mut saved = Vec::with_capacity(maps.len());
         for mut map in maps {
+            if map.include_bobina_in_net.is_none()
+                && let Some(previous) = self.store.map_by_id(&map.id).await?
+            {
+                map.include_bobina_in_net = previous.include_bobina_in_net;
+            }
             normalize_map(&mut map);
             compile_map(&map)?;
             self.validate_and_normalize_map_apparatus(&mut map).await?;

@@ -200,6 +200,7 @@ fn saved_print_request(
             .unwrap_or_default(),
         tare_enabled: measured,
         tare_kg: as_print_qty(bobina),
+        include_bobina_in_net: false,
         print_count: 1,
     })
 }

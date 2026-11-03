@@ -151,6 +151,7 @@ impl NormalizedRezkaSplit {
             progress_unit: String::new(),
             tare_enabled: false,
             tare_kg: 0.0,
+            include_bobina_in_net: false,
             print_count: 1,
         }
     }

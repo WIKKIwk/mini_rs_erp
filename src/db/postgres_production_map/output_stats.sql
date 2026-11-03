@@ -53,8 +53,11 @@ WITH eligible AS MATERIALIZED (
       -- Gross zero is an unknown measurement in the existing ERP contract.
       -- A *net* zero (gross == explicitly known tare) is a real known zero.
       CASE WHEN gross > 0 AND gross < 1000000000000
-                 AND bobina_kg >= 0 AND bobina_kg <= gross
-           THEN gross - bobina_kg END AS net_kg
+             THEN CASE WHEN payload_json->'include_bobina_in_net' = 'true'::jsonb
+                       THEN gross
+                       WHEN bobina_kg >= 0 AND bobina_kg <= gross
+                       THEN gross - bobina_kg END
+           END AS net_kg
     FROM raw_quantities
 ), buckets AS (
     SELECT (ordinality - 1)::integer AS ordinal,

@@ -123,6 +123,50 @@ async fn fingerprint(pool: &PgPool) -> Value {
 
 #[tokio::test]
 #[ignore = "requires OUTPUT_STATS_TEST_DATABASE_URL pointing at a disposable PostgreSQL server"]
+async fn bobina_sale_output_stats_use_gross_as_net_only_for_saved_special_rolls() {
+    let (pool, admin, name) = fixture().await;
+    let day = request(
+        "2026-10-18T19:00:00Z",
+        "2026-10-20T19:00:00Z",
+        "day",
+        "Asia/Tashkent",
+    );
+    for (id, extra) in [
+        ("sale-unknown-bobina", json!({
+            "bobina_kg": null,
+            "payload_json": {"gross_qty": 10.0, "include_bobina_in_net": true,
+                "production_timing_source": {"completion": "output_event"}}
+        })),
+        ("sale-known-bobina", json!({
+            "bobina_kg": 0.5,
+            "payload_json": {"gross_qty": 12.0, "include_bobina_in_net": true,
+                "production_timing_source": {"completion": "output_event"}}
+        })),
+        ("ordinary", json!({})),
+    ] {
+        save(&pool, batch(id, CUT, "2026-10-19T11:00:00Z", extra)).await;
+    }
+    let result = report(&pool, &day, None).await;
+    let totals = &series(&result, CUT)["totals"];
+    assert_eq!(totals["batch_count"], 3);
+    assert_eq!(totals["net_kg"]["value"].as_f64(), Some(31.0));
+
+    save(&pool, batch("ordinary-unknown-bobina", CUT, "2026-10-19T11:00:00Z",
+        json!({"bobina_kg": null}))).await;
+    let result = report(&pool, &day, None).await;
+    let net = &series(&result, CUT)["totals"]["net_kg"];
+    assert!(net["value"].is_null());
+    assert_eq!(net["known_value"].as_f64(), Some(31.0));
+    assert_eq!(net["missing_count"], 1);
+
+    pool.close().await;
+    sqlx::query(&format!("DROP DATABASE {name} WITH (FORCE)"))
+        .execute(&admin).await.unwrap();
+    admin.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires OUTPUT_STATS_TEST_DATABASE_URL pointing at a disposable PostgreSQL server"]
 async fn output_stats_postgres_contracts() {
     let (pool, admin, name) = fixture().await;
     let day = request(

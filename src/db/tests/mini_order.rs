@@ -204,6 +204,7 @@ fn test_map() -> ProductionMapDefinition {
         width_mm: Some(650.00003),
         order_kg: None,
         base_length: None,
+        include_bobina_in_net: None,
         nodes: vec![
             test_node("start", ProductionMapNodeKind::Start, "Start", 0.0),
             test_node("end", ProductionMapNodeKind::End, "End", 120.0),

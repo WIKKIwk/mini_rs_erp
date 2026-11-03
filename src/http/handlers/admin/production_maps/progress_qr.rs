@@ -553,6 +553,9 @@ fn progress_reprint_request(
             .unwrap_or(batch.produced_qty),
         tare_enabled: batch.bobina_kg.is_some_and(|value| value > 0.0),
         tare_kg: batch.bobina_kg.unwrap_or(0.0),
+        include_bobina_in_net: batch.payload_json
+            .get("include_bobina_in_net")
+            .and_then(serde_json::Value::as_bool) == Some(true),
         progress_qty: batch.finished_goods_meter.unwrap_or(batch.produced_qty),
         unit: "kg".to_string(),
         progress_unit: if batch.uom.trim().is_empty() {

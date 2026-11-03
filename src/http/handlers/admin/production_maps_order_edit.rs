@@ -103,7 +103,10 @@ pub async fn production_map_order_edit(
     if method == Method::GET {
         return Ok(json_response(current));
     }
-    let input: OpenedOrderEditRequest = parse_json(&body)?;
+    let mut input: OpenedOrderEditRequest = parse_json(&body)?;
+    if input.original.map.include_bobina_in_net.is_none() {
+        input.original.map.include_bobina_in_net = current.map.include_bobina_in_net;
+    }
     if input.original.map != current.map
         || input.original.revision != current.revision
         || input.original.template != current.template

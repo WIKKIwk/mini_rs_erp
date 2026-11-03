@@ -1189,6 +1189,9 @@ impl ProductionMapService {
             })?;
             if apparatus::is_rezka_apparatus(canonical) {
                 apply_rezka_frame_metadata(&mut batch, identity, order_map, apparatus);
+                if order_map.includes_bobina_in_output_net(true, &stage.node_id) {
+                    batch.payload_json["include_bobina_in_net"] = serde_json::json!(true);
+                }
                 if frame_issues
                     .as_array()
                     .is_some_and(|items| !items.is_empty())
