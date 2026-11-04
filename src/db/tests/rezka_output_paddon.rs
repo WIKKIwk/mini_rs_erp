@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use crate::core::production_map::{
     ProductionMapError, ProductionMapService, ProductionMapStorePort, QueueActionActor,
-    QueueProgressInput, queue_state::ApparatusQueueAction as Action,
+    OrderProgressBatchWipStatus, QueueProgressInput, WipProgressBatchQuery,
+    queue_state::ApparatusQueueAction as Action,
 };
 use crate::db::postgres::{
     apply_foundation_migration, apply_postgres_migrations_through_version,
@@ -48,6 +49,10 @@ async fn rezka_outputs_and_paddon_membership_commit_atomically() {
     let paddon_a = service.create_paddon_for_apparatus(Some(apparatus), "", "A", &actor).await.unwrap();
     let paddon_b = service.create_paddon_for_apparatus(Some(apparatus), "", "B", &actor).await.unwrap();
 
+    service
+        .set_active_rezka_paddon(apparatus, &actor, &paddon_a.code)
+        .await
+        .unwrap();
     for intermediate in [false, true] {
         let order = if intermediate {
             "zakaz-paddon-intermediate"
@@ -128,7 +133,7 @@ async fn rezka_outputs_and_paddon_membership_commit_atomically() {
             )
             .await
             .unwrap();
-        prepared.attach_output_paddon(&paddon_a.code);
+        prepared.attach_active_paddon();
         let saved = service
             .commit_prepared_queue_action(prepared)
             .await
@@ -153,8 +158,13 @@ async fn rezka_outputs_and_paddon_membership_commit_atomically() {
             "replay must not move a previously printed roll"
         );
 
-        let issue =
-            serde_json::from_value(serde_json::json!({"issue_note":"Kadr yirtilgan"})).unwrap();
+        let issue = if intermediate {
+            serde_json::from_value(serde_json::json!({"issue_note":"Kadr yirtilgan"})).unwrap()
+        } else {
+            let mut held = single.rezka_frames[0].clone();
+            held.peremotka_reason = "Notekis o‘ralgan".into();
+            held
+        };
         let issue_input = QueueProgressInput {
             rezka_record_frame_index: Some(2),
             rezka_output_cycle: cycle.clone(),
@@ -172,12 +182,36 @@ async fn rezka_outputs_and_paddon_membership_commit_atomically() {
             )
             .await
             .unwrap();
-        issue_write.attach_output_paddon("missing-paddon");
-        assert!(issue_write.progress_output_batches().is_empty());
-        service
-            .commit_prepared_queue_action(issue_write)
-            .await
-            .unwrap();
+        issue_write.attach_active_paddon();
+        let result = service.commit_prepared_queue_action(issue_write).await.unwrap();
+        if intermediate {
+            assert!(result.progress_batches.is_empty());
+        } else {
+            let held = result.progress_batch.unwrap();
+            assert_eq!(held.wip_status, OrderProgressBatchWipStatus::Peremotka);
+            assert!(held.label_item_name.starts_with("PEREMOTKA"));
+            assert!(!held.qr_payload.is_empty());
+            assert_eq!(held.payload_json["peremotka_reason"], "Notekis o‘ralgan");
+            assert!(!held.is_finished_goods_output());
+            let membership: Option<String> = sqlx::query_scalar(
+                "SELECT paddon_id FROM mini_paddon_items WHERE progress_batch_id=$1 AND removed_at IS NULL",
+            ).bind(&held.batch_id).fetch_optional(&pool).await.unwrap();
+            assert_eq!(membership, None);
+            assert!(matches!(
+                service.add_paddon_item(&paddon_a.code, &held.batch_id, &actor).await,
+                Err(ProductionMapError::ProgressBatchNotAccepted)
+            ));
+            let tasks = service.wip_progress_batches(WipProgressBatchQuery::new(
+                apparatus, "", "", Some(OrderProgressBatchWipStatus::Peremotka), false, order, 10,
+            )).await.unwrap();
+            assert_eq!(tasks.len(), 1);
+            assert_eq!(tasks[0].batch_id, held.batch_id);
+            let replay = service.apply_apparatus_queue_action_with_progress(
+                apparatus, order, Action::RollComplete, &[apparatus.into()], actor.clone(),
+                issue_input.clone(),
+            ).await.unwrap();
+            assert!(replay.progress_batches.is_empty());
+        }
         let mut frames = vec![
             single.rezka_frames[0].clone(),
             issue_input.rezka_frames[0].clone(),
@@ -220,7 +254,7 @@ async fn rezka_outputs_and_paddon_membership_commit_atomically() {
             ));
             assert_eq!(
                 store.progress_batches_for_order(order).await.unwrap().len(),
-                1
+                2
             );
             sqlx::query("UPDATE mini_paddons SET receipt_json=NULL WHERE id=$1")
                 .bind(&paddon_b.id)
@@ -242,8 +276,12 @@ async fn rezka_outputs_and_paddon_membership_commit_atomically() {
         finish.attach_output_paddon(&paddon_b.code);
         service.commit_prepared_queue_action(finish).await.unwrap();
         let batches = store.progress_batches_for_order(order).await.unwrap();
-        assert_eq!(batches.len(), if intermediate { 1 } else { 2 });
+        assert_eq!(batches.len(), if intermediate { 1 } else { 3 });
         for batch in batches {
+            if batch.wip_status == OrderProgressBatchWipStatus::Peremotka {
+                assert!(!intermediate);
+                continue;
+            }
             let id: String = sqlx::query_scalar("SELECT paddon_id FROM mini_paddon_items WHERE progress_batch_id=$1 AND removed_at IS NULL").bind(&batch.batch_id).fetch_one(&pool).await.unwrap();
             assert_eq!(
                 id,

@@ -479,7 +479,7 @@ fn audit_progress_batch(
     }
 
     match batch.wip_status {
-        OrderProgressBatchWipStatus::Waiting => {
+        OrderProgressBatchWipStatus::Waiting | OrderProgressBatchWipStatus::Peremotka => {
             if !batch.used_by_session_id.trim().is_empty()
                 || !batch.used_by_apparatus.trim().is_empty()
                 || !batch.processed_by_session_id.trim().is_empty()

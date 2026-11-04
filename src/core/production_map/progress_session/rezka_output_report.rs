@@ -65,7 +65,10 @@ impl RezkaOutputReport {
             }
             let frame = &mut progress.rezka_frames[0];
             frame.issue_note = frame.issue_note.trim().to_string();
-            if (!frame.issue_note.is_empty()
+            frame.peremotka_reason = frame.peremotka_reason.trim().to_string();
+            if frame.peremotka_reason.chars().count() > 250
+                || (!frame.peremotka_reason.is_empty() && !frame.issue_note.is_empty())
+                || (!frame.issue_note.is_empty()
                 && [frame.produced_qty, frame.gross_qty, frame.finished_goods_kg,
                     frame.finished_goods_meter, frame.diameter, frame.bobina_kg]
                     .iter().any(Option::is_some))
@@ -96,6 +99,14 @@ impl RezkaOutputReport {
                 }
                 *frame = slot.input.clone();
             }
+        }
+        if record_index.is_none()
+            && progress.rezka_frames.iter().enumerate().any(|(index, frame)| {
+                !frame.peremotka_reason.is_empty()
+                    && !saved.iter().any(|slot| slot.frame_index == index + 1)
+            })
+        {
+            return Err(ProductionMapError::ProgressInputInvalid);
         }
         if record_index.is_some() || !saved.is_empty() {
             let stamp = cycle_id
@@ -148,7 +159,8 @@ impl RezkaOutputReport {
             saved.sort_by_key(|slot| slot.frame_index);
         }
         let reference = super::rezka_reference_frame_index(&session.payload_json)
-            .or_else(|| saved.iter().filter(|slot| slot.input.issue_note.trim().is_empty())
+            .or_else(|| saved.iter().filter(|slot| slot.input.issue_note.trim().is_empty()
+                && slot.input.peremotka_reason.is_empty())
                 .map(|slot| slot.frame_index).min());
         session.payload_json["rezka_output_cycle"] = serde_json::json!(self.cycle_id);
         if let Some(index) = reference {

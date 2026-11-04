@@ -1202,6 +1202,20 @@ impl ProductionMapService {
             })?;
             if is_rezka {
                 apply_rezka_frame_metadata(&mut batch, identity, order_map, apparatus);
+                if let Some(frame) = progress.rezka_frames.get(if recording { 0 } else { index })
+                    && !frame.peremotka_reason.is_empty()
+                {
+                    batch.wip_status = OrderProgressBatchWipStatus::Peremotka;
+                    batch.payload_json["peremotka_reason"] = serde_json::json!(frame.peremotka_reason);
+                    batch.payload_json["order_number"] = serde_json::json!(order_map.order_number);
+                    let product = if order_map.products.is_empty() {
+                        non_empty_or(&order_map.title, &order_map.product_code)
+                    } else {
+                        batch.label_item_name.clone()
+                    };
+                    batch.label_item_name = format!("PEREMOTKA - {product}");
+                    batch.refresh_status_detail();
+                }
                 if includes_bobina {
                     batch.payload_json["include_bobina_in_net"] = serde_json::json!(true);
                 }

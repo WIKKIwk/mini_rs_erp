@@ -1,7 +1,7 @@
 use sqlx::{Postgres, Transaction};
 
 use crate::core::production_map::{
-    OrderProgressBatch, ProductionMapError, QueueActionProgressWrite,
+    OrderProgressBatch, OrderProgressBatchWipStatus, ProductionMapError, QueueActionProgressWrite,
 };
 
 fn outputs(write: &QueueActionProgressWrite) -> &[OrderProgressBatch] {
@@ -16,7 +16,9 @@ pub(super) async fn lock_for_output(
     tx: &mut Transaction<'_, Postgres>,
     write: &QueueActionProgressWrite,
 ) -> Result<Option<String>, ProductionMapError> {
-    if outputs(write).is_empty() { return Ok(None); }
+    if outputs(write).iter().all(|batch| batch.wip_status == OrderProgressBatchWipStatus::Peremotka) {
+        return Ok(None);
+    }
     let code = selection_for_output(tx, &write.apparatus, &write.event.actor, &write.event.payload_json).await?;
     let Some(code) = code else {
         // A WIP label may be printed before the roll is assigned to a pallet.
@@ -60,7 +62,9 @@ pub(super) async fn assign_outputs(
     paddon_id: &str,
     write: &QueueActionProgressWrite,
 ) -> Result<(), ProductionMapError> {
-    for batch in outputs(write) {
+    for batch in outputs(write).iter().filter(|batch| {
+        batch.wip_status != OrderProgressBatchWipStatus::Peremotka
+    }) {
         let existing = sqlx::query_scalar::<_, String>(
             "SELECT paddon_id FROM mini_paddon_items WHERE progress_batch_id = $1 AND removed_at IS NULL FOR UPDATE",
         ).bind(&batch.batch_id).fetch_optional(&mut **tx).await

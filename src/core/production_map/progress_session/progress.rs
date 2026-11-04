@@ -871,6 +871,8 @@ pub struct RezkaFrameProgressInput {
     /// output. This is accepted by Rezka roll progress actions.
     #[serde(default)]
     pub issue_note: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub peremotka_reason: String,
 }
 
 impl RezkaFrameProgressInput {

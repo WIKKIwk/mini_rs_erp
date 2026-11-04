@@ -398,6 +398,7 @@ pub(super) async fn wip_progress_batches(
                     first < day.until_unix && last >= day.from_unix
                         && day.producer_apparatus_ids.contains(&batch.apparatus)
                         && !batch.is_layer_remainder()
+                        && batch.wip_status != OrderProgressBatchWipStatus::Peremotka
                 })
                 && (apparatus.is_empty()
                     || super::super::types::apparatus_ids_match(
@@ -412,7 +413,7 @@ pub(super) async fn wip_progress_batches(
                 && (order_id.is_empty() || batch.order_id.trim() == order_id)
                 && (include_processed
                     || status.map_or(
-                        batch.wip_status != OrderProgressBatchWipStatus::Processed,
+                        matches!(batch.wip_status, OrderProgressBatchWipStatus::Waiting | OrderProgressBatchWipStatus::InUse),
                         |value| batch.wip_status == value,
                     ))
         })

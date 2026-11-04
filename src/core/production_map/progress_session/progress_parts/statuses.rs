@@ -103,6 +103,7 @@ pub enum OrderProgressBatchWipStatus {
     Waiting,
     InUse,
     Processed,
+    Peremotka,
 }
 
 impl OrderProgressBatchWipStatus {
@@ -111,6 +112,7 @@ impl OrderProgressBatchWipStatus {
             value,
             &[
                 ("waiting", Self::Waiting),
+                ("peremotka", Self::Peremotka),
                 ("in_use", Self::InUse),
                 ("processed", Self::Processed),
             ],
@@ -120,6 +122,7 @@ impl OrderProgressBatchWipStatus {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Waiting => "waiting",
+            Self::Peremotka => "peremotka",
             Self::InUse => "in_use",
             Self::Processed => "processed",
         }

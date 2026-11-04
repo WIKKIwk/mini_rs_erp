@@ -504,6 +504,7 @@ pub async fn production_map_progress_qr_reprint(
     let order_map = state.production_maps.raw_map(&batch.order_id).await
         .map_err(production_map_error)?;
     let item_name = match order_map.as_ref() {
+        _ if batch.wip_status == OrderProgressBatchWipStatus::Peremotka => batch.label_item_name.clone(),
         Some(order_map) if !order_map.products.is_empty() => batch.label_item_name.clone(),
         Some(order_map) => crate::core::production_map::progress_label_item_name(
             order_map,

@@ -1455,6 +1455,7 @@ impl ProductionMapService {
                                 .map(|session| {
                                     serde_json::json!({
                                         "layout_outputs": super::super::layout::output_layout(order_map, session, &rezka_output_kadr_counts),
+                                        "peremotka_supported": true,
                                         "cycle_id": session.payload_json.get("rezka_output_cycle")
                                             .and_then(serde_json::Value::as_str)
                                             .unwrap_or(&session.session_id),

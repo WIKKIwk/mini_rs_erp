@@ -320,7 +320,7 @@ impl ProductionMapService {
         if !include_processed {
             batches.retain(|batch| {
                 requested_status.map_or(
-                    batch.wip_status != OrderProgressBatchWipStatus::Processed,
+                    matches!(batch.wip_status, OrderProgressBatchWipStatus::Waiting | OrderProgressBatchWipStatus::InUse),
                     |status| batch.wip_status == status,
                 )
             });

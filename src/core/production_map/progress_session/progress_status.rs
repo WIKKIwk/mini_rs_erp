@@ -19,7 +19,8 @@ impl OrderProgressBatch {
     }
 
     pub fn is_finished_goods_output(&self) -> bool {
-        !self.is_layer_remainder()
+        self.wip_status != OrderProgressBatchWipStatus::Peremotka
+            && !self.is_layer_remainder()
             && self.next_apparatus.trim().is_empty()
             && self.has_consistent_action_status()
     }
@@ -73,6 +74,7 @@ impl OrderProgressBatchStatusDetail {
             OrderProgressBatchWipStatus::Waiting if batch.is_finished_goods_output() => "free_wip",
             OrderProgressBatchWipStatus::Waiting => "waiting_next_stage",
             OrderProgressBatchWipStatus::InUse => "in_progress",
+            OrderProgressBatchWipStatus::Peremotka => "peremotka",
             OrderProgressBatchWipStatus::Processed
                 if processed_by.to_ascii_lowercase().starts_with("warehouse:") =>
             {

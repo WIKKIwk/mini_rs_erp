@@ -179,6 +179,7 @@ fn wip_source(
             b.processed_by_session_id == s.session_id && b.processed_by_apparatus == s.apparatus
         }
         OrderProgressBatchWipStatus::Waiting => removed_wip_source_owned(s, b),
+        OrderProgressBatchWipStatus::Peremotka => false,
     };
     if !linked || !owned || b.order_id != s.order_id {
         return Err(ProductionMapError::ProgressBatchCorrectionConflict);

@@ -31,7 +31,8 @@ pub(super) fn progress_batch_usage_error(
             ProductionMapError::ProgressBatchAlreadyUsed { apparatus_name },
         OrderProgressBatchWipStatus::InUse =>
             ProductionMapError::ProgressBatchInUse { apparatus_name },
-        OrderProgressBatchWipStatus::Waiting => ProductionMapError::ProgressBatchNotAccepted,
+        OrderProgressBatchWipStatus::Waiting | OrderProgressBatchWipStatus::Peremotka =>
+            ProductionMapError::ProgressBatchNotAccepted,
     }
 }
 

@@ -111,7 +111,7 @@ async fn load_wip_progress_batches_inner(
          FROM mini_progress_batches AS batch
          WHERE ($1 = '' OR COALESCE(batch.canonical_current_apparatus_id, '') = $1)
            AND ($2 = '' OR order_id = $2)
-           AND ($7 OR (($3 = '' AND wip_status <> 'processed') OR ($3 <> '' AND wip_status = $3)))
+           AND ($7 OR (($3 = '' AND wip_status IN ('waiting', 'in_use')) OR ($3 <> '' AND wip_status = $3)))
            AND ($4 = '' OR current_location = $4)
            AND (
              $5 = ''
@@ -122,6 +122,7 @@ async fn load_wip_progress_batches_inner(
            AND ($10 = '' OR batch.batch_id < $10)
            AND ($11::text[] IS NULL OR (
                 batch.canonical_apparatus_id = ANY($11)
+                AND batch.wip_status <> 'peremotka'
                 AND COALESCE(batch.payload_json->>'origin', '') <> 'layer_remainder'
                 AND LEAST(batch.production_started_at, batch.production_completed_at) < to_timestamp($13)
                 AND GREATEST(batch.production_started_at, batch.production_completed_at) >= to_timestamp($12)

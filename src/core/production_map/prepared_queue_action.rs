@@ -114,7 +114,9 @@ impl PreparedApparatusQueueAction {
         }
     }
     pub(crate) fn attach_active_paddon(&mut self) {
-        if !self.progress_output_batches().is_empty() {
+        if self.progress_output_batches().iter().any(|batch| {
+            batch.wip_status != super::OrderProgressBatchWipStatus::Peremotka
+        }) {
             self.event.payload_json["use_active_paddon"] = serde_json::json!(true);
         }
     }

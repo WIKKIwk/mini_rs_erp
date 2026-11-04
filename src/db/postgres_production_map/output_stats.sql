@@ -8,6 +8,7 @@ WITH eligible AS MATERIALIZED (
     FROM mini_progress_batches b
     WHERE canonical_apparatus_id = ANY($4::text[])
       AND COALESCE(payload_json->>'origin', '') <> 'layer_remainder'
+      AND wip_status <> 'peremotka'
       AND order_id NOT LIKE 'training-%' AND order_id NOT LIKE 'demo-%'
       AND ((action = 'pause' AND status IN ('paused', 'resumed'))
         OR (action = 'detach_roll' AND status IN ('roll_detached', 'resumed'))

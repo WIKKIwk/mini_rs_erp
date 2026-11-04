@@ -103,7 +103,7 @@ async fn read_report(
     Ok(json_response(serde_json::json!({
         "ok": true, "apparatus": apparatus, "order_id": order_id,
         "rezka_output_report": report.report, "kadr_counts": report.kadr_counts,
-        "atomic_frame_save": true,
+        "atomic_frame_save": true, "peremotka_supported": true,
         "session_status": "active", "order_control": "active",
         "epoch": state.production_maps.snapshot_epoch(), "rev": revision,
     })))
