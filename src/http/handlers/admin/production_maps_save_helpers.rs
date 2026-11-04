@@ -132,6 +132,46 @@ fn is_quick_template_order_clone(
     !source_map_id.is_empty() && source_map_id != map.id.trim() && is_sheet_order_map(map)
 }
 
+async fn refresh_reused_order_product(
+    state: &AppState,
+    template: &mut CalculateOrderTemplate,
+    map: &mut ProductionMapDefinition,
+    fork_map: Option<&mut ProductionMapDefinition>,
+) -> Result<(), AdminError> {
+    let code = template.item_code.trim();
+    if code.is_empty() || !template.products.is_empty() || template.combo.is_some() {
+        return Ok(());
+    }
+    let items = state
+        .admin
+        .items_by_codes(&[code.to_owned()])
+        .await
+        .map_err(|_| server_error("order product catalog lookup failed"))?;
+    let Some(item) = items.iter().find(|item| item.code.eq_ignore_ascii_case(code)) else {
+        // Legacy templates can reference a product outside the catalog.
+        return Ok(());
+    };
+    let name = item.name.trim();
+    if name.is_empty() {
+        return Ok(());
+    }
+    for map in std::iter::once(map).chain(fork_map) {
+        for node in &mut map.nodes {
+            if node.kind == ProductionMapNodeKind::End
+                && (node.item_code.trim().eq_ignore_ascii_case(code)
+                    || (node.item_code.trim().is_empty()
+                        && node.title.trim() == template.product.trim()))
+            {
+                node.title = name.to_owned();
+            }
+        }
+        map.title = name.to_owned();
+    }
+    template.product = name.to_owned();
+    template.name = name.to_owned();
+    Ok(())
+}
+
 fn template_source_map_id_for_save(
     map: &ProductionMapDefinition,
     template: &CalculateOrderTemplate,

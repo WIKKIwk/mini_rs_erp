@@ -70,7 +70,8 @@ async fn postgres_calculate_order_store_round_trips_and_dedupes_quick_templates(
 
     sqlx::query(
         "UPDATE mini_quick_order_templates
-         SET payload_json = jsonb_set(payload_json, '{roll_count}', '7.0'::jsonb)
+         SET product_name = 'Renamed product',
+             payload_json = jsonb_set(payload_json, '{roll_count}', '7.0'::jsonb)
          WHERE id = $1",
     )
     .bind(&rows[0].id)
@@ -83,6 +84,7 @@ async fn postgres_calculate_order_store_round_trips_and_dedupes_quick_templates(
         .expect("list legacy decimal roll count");
     assert_eq!(legacy_rows.len(), 1);
     assert_eq!(legacy_rows[0].roll_count, Some(7));
+    assert_eq!(legacy_rows[0].product, "Renamed product");
 
     let mut telegram_template = test_template("TG-1", 530.0, 100.0);
     telegram_template.name = "Telegram order".to_string();

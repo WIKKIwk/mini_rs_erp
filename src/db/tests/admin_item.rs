@@ -262,7 +262,7 @@ async fn postgres_admin_item_update_preserves_details_and_live_references() {
          VALUES
              ('TEMPLATE-001', 'admin:ADMIN-001', 'TMP-001', 'Template One',
               'ITEM-OLD', 'Old item name',
-              '{\"item_code\":\"ITEM-OLD\",\"product_name\":\"Old item name\"}'::jsonb,
+              '{\"item_code\":\"ITEM-OLD\",\"name\":\"Template One\",\"product\":\"Old item name\"}'::jsonb,
               'admin:ADMIN-001:TMP-001');
          INSERT INTO mini_rps_batches
              (owner_key, batch_id, active, owner_role, owner_ref, item_code, payload_json)
@@ -286,6 +286,17 @@ async fn postgres_admin_item_update_preserves_details_and_live_references() {
     assert!(updated.is_finished_goods);
     assert_eq!(updated.customers.len(), 1);
     assert_eq!(updated.customers[0].ref_, "CUST-001");
+    let quick_template: (String, String, String) = sqlx::query_as(
+        "SELECT product_name, payload_json->>'product', payload_json->>'name'
+         FROM mini_quick_order_templates WHERE id = 'TEMPLATE-001'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("renamed quick template");
+    assert_eq!(
+        quick_template,
+        ("New item name".into(), "New item name".into(), "Template One".into())
+    );
     assert!(matches!(
         store.item_detail("ITEM-OLD").await,
         Err(AdminPortError::NotFound)

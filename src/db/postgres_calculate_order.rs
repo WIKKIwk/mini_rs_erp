@@ -70,8 +70,17 @@ impl CalculateOrderStorePort for PostgresCalculateOrderStore {
         &self,
         owner_key: &str,
     ) -> Result<Vec<CalculateOrderTemplate>, CalculateOrderError> {
+        // Older catalog renames updated the column but left the serialized
+        // product stale. Read the column for single-product templates.
         let rows = sqlx::query_scalar::<_, serde_json::Value>(
-            "SELECT payload_json
+            "SELECT CASE
+                 WHEN COALESCE(payload_json->'products', '[]'::jsonb) = '[]'::jsonb
+                      AND payload_json->>'product' IS DISTINCT FROM product_name
+                 THEN payload_json || jsonb_build_object(
+                     'product', product_name,
+                     'name', CASE WHEN payload_json->>'name' = payload_json->>'product'
+                                  THEN product_name ELSE COALESCE(payload_json->>'name', name) END)
+                 ELSE payload_json END
              FROM mini_quick_order_templates
              WHERE owner_key = $1
                 OR ($1 LIKE 'admin:%' AND owner_key LIKE 'telegram:%')

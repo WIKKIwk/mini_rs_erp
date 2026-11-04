@@ -518,8 +518,12 @@ async fn save_production_map_with_order(
     }
     if previous.is_none()
         && (is_sheet_order_map(&input.map) || fork_template)
-        && let Some(template) = input.template.as_ref()
+        && let Some(template) = input.template.as_mut()
     {
+        if is_quick_template_order_clone(&input.map, template) {
+            refresh_reused_order_product(state, template, &mut input.map, fork_map.as_mut())
+                .await?;
+        }
         let cut_apparatus_ids = canonical_cut_apparatus_ids(state).await?;
         apply_order_rezka_kadr_count(&mut input.map, template, &cut_apparatus_ids)?;
         if let Some(map) = fork_map.as_mut() {

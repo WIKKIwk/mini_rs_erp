@@ -882,6 +882,7 @@ async fn production_map_save_with_order_does_not_store_cloned_order_as_quick_tem
     let value = json_body(response).await;
     assert_eq!(value["ok"], true);
     assert_eq!(value["saved"]["map"]["id"], "zakaz-5555");
+    assert_eq!(value["saved"]["map"]["title"], "Rice");
     assert!(value["template"].is_null());
 
     let list_response = build_router(state)

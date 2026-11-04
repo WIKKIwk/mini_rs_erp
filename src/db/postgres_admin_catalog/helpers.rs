@@ -268,7 +268,17 @@ pub(crate) async fn update_operational_item_projections(
     sqlx::query(
         "UPDATE mini_quick_order_templates
          SET item_code = $2, product_name = $3,
-             payload_json = jsonb_set(jsonb_set(payload_json, '{item_code}', to_jsonb($2::text), true), '{product_name}', to_jsonb($3::text), true)
+             name = CASE
+                 WHEN COALESCE(payload_json->'products', '[]'::jsonb) = '[]'::jsonb
+                      AND name = COALESCE(payload_json->>'product', product_name)
+                 THEN $3 ELSE name END,
+             payload_json = payload_json || jsonb_build_object('item_code', $2::text) ||
+                 CASE WHEN COALESCE(payload_json->'products', '[]'::jsonb) = '[]'::jsonb
+                 THEN jsonb_build_object(
+                     'product', $3::text,
+                     'name', CASE WHEN name = COALESCE(payload_json->>'product', product_name)
+                                  THEN $3 ELSE name END)
+                 ELSE '{}'::jsonb END
          WHERE item_code = $1",
     )
     .bind(original_code)
