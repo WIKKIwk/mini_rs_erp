@@ -3,6 +3,104 @@ use crate::core::production_map::{
     ProductionMapError, QueueActionActor, QueueProgressInput, queue_state,
 };
 
+#[tokio::test]
+async fn rezka_card_save_checks_current_weight_mode_and_reuses_saved_slots() {
+    let state = test_state();
+    let master = session_for(&state, PrincipalRole::RezkaMaster, "mode-master").await;
+    let service = state.production_maps.clone();
+    let router = build_router(state);
+    let apparatus = "apparatus:default:asset-010";
+    let order = "zakaz-rezka-weight-mode";
+    let map = serde_json::from_value(serde_json::json!({
+        "id": order, "product_code": "REZKA-MODE", "title": "Weight mode",
+        "order_number": "9581", "include_bobina_in_net": true,
+        "nodes": [
+            {"id":"start","kind":"start","title":"Start"},
+            {"id":"rezka","kind":"apparatus","title":"Rezka","apparatus_id":apparatus,
+             "rezka_kadr_count":3},
+            {"id":"end","kind":"end","title":"End"}
+        ],
+        "edges":[{"from":"start","to":"rezka"},{"from":"rezka","to":"end"}]
+    })).unwrap();
+    service.upsert_map(map).await.unwrap();
+    let (status, start) = super::rezka::queue_action_json(&router, &master,
+        serde_json::json!({"apparatus":apparatus,"order_id":order,"action":"start"})).await;
+    assert_eq!(status, StatusCode::OK, "{start}");
+    let cycle = start["session"]["session_id"].as_str().unwrap();
+    let card = |index, tare: Option<f64>| serde_json::json!({
+        "apparatus":apparatus,"order_id":order,"action":"roll_complete",
+        "rezka_output_cycle":cycle,"rezka_record_frame_index":index,
+        "rezka_expected_epoch": service.snapshot_epoch(),
+        "rezka_expected_kadr_counts":[1,1,1],
+        "rezka_frames":[{"produced_qty":100.0,"gross_qty":10.0,"bobina_kg":tare,"diameter":45.0}],
+        "uom":"m","print_transport":"offline","printer":"zebra"
+    });
+    let mut wrong_epoch = card(1, None);
+    wrong_epoch["rezka_expected_epoch"] = "retired-server".into();
+    let mut wrong_counts = card(1, None);
+    wrong_counts["rezka_expected_kadr_counts"] = serde_json::json!([1,2,1]);
+    for input in [wrong_epoch, wrong_counts] {
+        let (status, rejected) = super::rezka::queue_action_json(&router, &master, input).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{rejected}");
+        assert_eq!(rejected["error"], "rezka_output_cycle_conflict");
+    }
+
+    let (status, first) = super::rezka::queue_action_json(&router, &master, card(1, None)).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    assert_eq!(first["progress_batch"]["payload_json"]["include_bobina_in_net"], true);
+    let actor = QueueActionActor {
+        role: "rezka_master".into(), ref_: "mode-master".into(), display_name: "Master".into(),
+    };
+    let stale_write = service.prepare_apparatus_queue_action_with_progress(
+        apparatus, order, queue_state::ApparatusQueueAction::RollComplete,
+        &[apparatus.to_string()], actor, QueueProgressInput {
+            rezka_record_frame_index: Some(2),
+            rezka_output_cycle: cycle.to_string(),
+            rezka_frames: vec![serde_json::from_value(card(2, None)["rezka_frames"][0].clone()).unwrap()],
+            ..QueueProgressInput::default()
+        },
+    ).await.unwrap();
+    let response = router.clone().oneshot(request_with_body(
+        "PUT", "/v1/mobile/rezka-master/order-settings", &master,
+        &serde_json::json!({
+            "order_id":order,"include_bobina_in_net":false,
+            "previous_include_bobina_in_net":true,"duplicate_rezka_labels":false,
+            "previous_duplicate_rezka_labels":false,
+        }).to_string(),
+    )).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK, "{}", json_body(response).await);
+    assert!(matches!(
+        service.commit_prepared_queue_action(stale_write).await,
+        Err(ProductionMapError::RezkaBobinaModeChanged(false))
+    ));
+    let (status, missing_tare) = super::rezka::queue_action_json(&router, &master, card(2, None)).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{missing_tare}");
+    assert_eq!(missing_tare["error"], "rezka_bobina_mode_changed");
+    assert_eq!(missing_tare["include_bobina_in_net"], false);
+    let (status, replay) = super::rezka::queue_action_json(&router, &master, card(1, None)).await;
+    assert_eq!(status, StatusCode::OK, "{replay}");
+    assert!(replay["progress_batches"].as_array().unwrap().is_empty());
+    assert_eq!(replay["session"]["payload_json"]["rezka_output_report"]
+        .as_array().unwrap().len(), 1);
+
+    let (a, b) = tokio::join!(
+        super::rezka::queue_action_json(&router, &master, card(2, Some(0.5))),
+        super::rezka::queue_action_json(&router, &master, card(2, Some(0.5))),
+    );
+    let mut created = 0;
+    for (status, reply) in [a, b] {
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        created += reply["progress_batches"].as_array().unwrap().len();
+        assert_eq!(reply["session"]["payload_json"]["rezka_output_report"]
+            .as_array().unwrap().len(), 2);
+        if !reply["progress_batch"].is_null() {
+            assert_eq!(reply["progress_batch"]["bobina_kg"], 0.5);
+            assert_eq!(reply["progress_batch"]["payload_json"]["include_bobina_in_net"], serde_json::Value::Null);
+        }
+    }
+    assert_eq!(created, 1);
+}
+
 async fn verify_recorded_rezka_outputs(intermediate: bool, all_individual: bool, correct_first: bool, duplicate_labels: bool) {
     let requests = Arc::new(Mutex::new(Vec::<ScaleDriverPrintRequest>::new()));
     let mut state = test_state();

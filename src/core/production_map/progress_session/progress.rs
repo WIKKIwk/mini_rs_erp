@@ -878,6 +878,7 @@ impl RezkaFrameProgressInput {
             rezka_frames: Vec::new(),
             rezka_record_frame_index: None,
             rezka_output_cycle: String::new(),
+            rezka_expected_kadr_counts: Vec::new(),
             produced_qty: self.produced_qty,
             gross_qty: self.gross_qty,
             uom: if self.produced_qty.is_some() || self.finished_goods_meter.is_some() {
@@ -945,6 +946,8 @@ pub struct QueueProgressInput {
     pub rezka_record_frame_index: Option<usize>,
     /// Server-issued cycle identity prevents stale dialogs from creating new rolls.
     pub rezka_output_cycle: String,
+    /// Layout the operator used when entering the card.
+    pub rezka_expected_kadr_counts: Vec<usize>,
     pub produced_qty: Option<f64>,
     pub gross_qty: Option<f64>,
     pub uom: String,

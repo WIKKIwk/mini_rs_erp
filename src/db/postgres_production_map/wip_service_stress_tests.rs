@@ -313,6 +313,57 @@ async fn run_mode(serialized: bool) -> serde_json::Value {
     report
 }
 
+#[tokio::test]
+#[ignore = "requires MINI_ERP_TEST_ADMIN_DATABASE_URL on a disposable PostgreSQL server"]
+async fn postgres_rezka_card_rejects_a_mode_changed_after_prepare() {
+    let (pool, store, admin, name) = fixture().await;
+    let canonical = CanonicalApparatusService::new(Arc::new(
+        PostgresCanonicalApparatusRepository::new(pool.clone()),
+    ));
+    let service = ProductionMapService::new(
+        store.clone(),
+        Arc::new(CanonicalServiceApparatusResolver::new(canonical)),
+    );
+    let device = prepare_devices(&pool, &service).await.remove(0);
+    let mut map = service.raw_map(&device.order).await.unwrap().unwrap();
+    map.include_bobina_in_net = Some(true);
+    service.upsert_map(map.clone()).await.unwrap();
+    let started = service.apply_apparatus_queue_action_with_progress(
+        &device.apparatus, &device.order, queue_state::ApparatusQueueAction::Start,
+        std::slice::from_ref(&device.apparatus), device.actor.clone(), Default::default(),
+    ).await.unwrap();
+    let cycle = started.session.unwrap().session_id;
+    let mut prepared = service.prepare_apparatus_queue_action_with_progress(
+        &device.apparatus, &device.order, queue_state::ApparatusQueueAction::RollComplete,
+        std::slice::from_ref(&device.apparatus), device.actor.clone(), QueueProgressInput {
+            rezka_record_frame_index: Some(1),
+            rezka_output_cycle: cycle.clone(),
+            rezka_expected_kadr_counts: vec![1; CARDS],
+            rezka_frames: vec![serde_json::from_value(serde_json::json!({
+                "produced_qty":120.0,"gross_qty":12.0,"diameter":45.0
+            })).unwrap()],
+            ..Default::default()
+        },
+    ).await.unwrap();
+    prepared.attach_active_paddon();
+
+    // Use the store directly to model an independent process committing
+    // settings after preparation, while sharing the same database lock.
+    map.include_bobina_in_net = Some(false);
+    store.put_map(map).await.unwrap();
+    assert!(matches!(
+        service.commit_prepared_queue_action(prepared).await,
+        Err(ProductionMapError::RezkaBobinaModeChanged(false))
+    ));
+    assert!(store.progress_batches_for_order(&device.order).await.unwrap().is_empty());
+    let batch_id = card_action(&service, &device, 1, &cycle).await.unwrap().unwrap();
+    let batch = store.progress_batch(&batch_id).await.unwrap().unwrap();
+    assert_eq!(batch.bobina_kg, Some(0.5));
+    assert_eq!(batch.payload_json["include_bobina_in_net"], serde_json::Value::Null);
+    drop(service);
+    cleanup(pool, store, admin, name).await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 #[ignore = "manual real PostgreSQL service contention benchmark; uses two disposable databases"]
 async fn benchmark_postgres_service_eight_apparatuses_and_selected_paddons() {

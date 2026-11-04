@@ -95,6 +95,10 @@ struct ApparatusQueueActionRequest {
     #[serde(default)]
     rezka_output_cycle: String,
     #[serde(default)]
+    rezka_expected_kadr_counts: Vec<usize>,
+    #[serde(default)]
+    rezka_expected_epoch: String,
+    #[serde(default)]
     output_paddon_code: String,
     #[serde(default)]
     print_preflight_hold_id: String,

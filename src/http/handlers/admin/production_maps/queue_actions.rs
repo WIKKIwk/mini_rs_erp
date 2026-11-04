@@ -79,6 +79,11 @@ pub async fn production_map_queue_action(
     if request.apparatus.trim().is_empty() || request.order_id.trim().is_empty() {
         return Err(bad_request("apparatus and order_id are required"));
     }
+    if !request.rezka_expected_epoch.is_empty()
+        && request.rezka_expected_epoch != state.production_maps.snapshot_epoch()
+    {
+        return Err(conflict("rezka_output_cycle_conflict"));
+    }
     let apparatus = resolve_queue_apparatus(&state, &request.apparatus).await?;
     if principal.role == PrincipalRole::RezkaMaster && (!apparatus.is_rezka()
         || !state.principal_assigned_apparatus(&principal).await.contains(&apparatus.id.to_string())

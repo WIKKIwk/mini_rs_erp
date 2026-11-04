@@ -1385,16 +1385,25 @@ pub(super) async fn apply_queue_progress_tx(
         if let Some(expected) = write.event.payload_json.get("rezka_expected_output_revision") {
             let session_id = write.event.payload_json.get("rezka_expected_session_id")
                 .and_then(serde_json::Value::as_str).unwrap_or_default();
-            let current = sqlx::query_scalar::<_, serde_json::Value>(
-                "SELECT payload_json FROM mini_order_run_sessions
+            let expected_bobina_mode = write.event.payload_json
+                .get("rezka_expected_bobina_mode");
+            let (current, bobina_mode) = sqlx::query_as::<_, (serde_json::Value, Option<bool>)>(
+                "SELECT payload_json, CASE WHEN $3 THEN (
+                    SELECT (map_json->>'include_bobina_in_net')::boolean
+                    FROM mini_production_maps WHERE id = $2
+                 ) END FROM mini_order_run_sessions
                  WHERE session_id = $1 AND order_id = $2 FOR UPDATE",
             ).bind(session_id).bind(&write.event.order_id)
+                .bind(expected_bobina_mode.is_some())
                 .fetch_optional(&mut **tx).await.map_err(|_| ProductionMapError::StoreFailed)?
                 .ok_or(ProductionMapError::RezkaOutputCycleConflict)?;
             if current.get("rezka_output_revision").cloned()
                 .unwrap_or_else(|| serde_json::json!(0)) != *expected
             {
                 return Err(ProductionMapError::RezkaOutputCycleConflict);
+            }
+            if expected_bobina_mode.is_some_and(|expected| expected.as_bool() != bobina_mode) {
+                return Err(ProductionMapError::RezkaBobinaModeChanged(bobina_mode.unwrap_or(false)));
             }
         }
         validate_merge_session_transition_tx(tx, &write.event, write.session.as_ref()).await?;

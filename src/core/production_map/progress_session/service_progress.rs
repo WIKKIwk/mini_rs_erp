@@ -1159,6 +1159,10 @@ impl ProductionMapService {
             actor,
         };
         let mut batches = Vec::with_capacity(output_identities.len());
+        let is_rezka = apparatus::is_rezka_apparatus(canonical);
+        let final_rezka = is_rezka
+            && chain::is_final_work_stage_node(order_map, &stage.node_id);
+        let includes_bobina = final_rezka && order_map.include_bobina_in_net == Some(true);
         for (index, identity) in output_identities.iter().enumerate() {
             if report.as_ref().is_some_and(|report| report.is_saved(index)) {
                 continue;
@@ -1174,6 +1178,15 @@ impl ProductionMapService {
             let Some(frame_quantity) = frame_value.quantity.as_ref() else {
                 continue;
             };
+            if final_rezka
+                && !progress.rezka_frames.is_empty()
+                && !includes_bobina
+                && (order_map.include_bobina_in_net.is_some()
+                    || !progress.rezka_expected_kadr_counts.is_empty())
+                && frame_value.metrics.bobina_kg.is_none()
+            {
+                return Err(ProductionMapError::RezkaBobinaModeChanged(false));
+            }
             let mut batch = progress_batch_record(ProgressBatchRecordInput {
                 order_map,
                 context,
@@ -1187,9 +1200,9 @@ impl ProductionMapService {
                     .and_then(|frame| frame.gross_qty),
                 description: &description,
             })?;
-            if apparatus::is_rezka_apparatus(canonical) {
+            if is_rezka {
                 apply_rezka_frame_metadata(&mut batch, identity, order_map, apparatus);
-                if order_map.includes_bobina_in_output_net(true, &stage.node_id) {
+                if includes_bobina {
                     batch.payload_json["include_bobina_in_net"] = serde_json::json!(true);
                 }
                 if frame_issues

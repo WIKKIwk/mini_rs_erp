@@ -786,6 +786,16 @@ impl MemoryProductionMapStore {
                 return Err(ProductionMapError::RezkaOutputCycleConflict);
             }
         }
+        if let Some(expected) = write.event.payload_json
+            .get("rezka_expected_bobina_mode")
+        {
+            let current = self.map_by_id(&write.event.order_id).await?
+                .ok_or(ProductionMapError::MapNotFound)?
+                .include_bobina_in_net;
+            if current != expected.as_bool() {
+                return Err(ProductionMapError::RezkaBobinaModeChanged(current.unwrap_or(false)));
+            }
+        }
         if let Some(expected) = write.event.payload_json.get("wip_input_expected_batch") {
             let expected: OrderProgressBatch = serde_json::from_value(expected.clone())
                 .map_err(|_| ProductionMapError::WipRouteChanged)?;

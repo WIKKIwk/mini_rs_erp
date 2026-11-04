@@ -479,6 +479,11 @@ pub(in crate::http::handlers::admin) fn production_map_error(error: ProductionMa
         ProductionMapError::InvalidRezkaFrameGroups => bad_request("rezka_frame_groups_invalid"),
         ProductionMapError::RezkaFrameCountMismatch => bad_request("rezka_frame_count_mismatch"),
         ProductionMapError::RezkaOutputCycleConflict => conflict("rezka_output_cycle_conflict"),
+        ProductionMapError::RezkaBobinaModeChanged(enabled) => {
+            let (status, Json(mut response)) = conflict("rezka_bobina_mode_changed");
+            response.include_bobina_in_net = Some(enabled);
+            (status, Json(response))
+        }
         ProductionMapError::RezkaFinalRollRequired => bad_request("rezka_final_roll_required"),
         ProductionMapError::WarehouseQrAmbiguous => conflict("qr_ambiguous"),
         ProductionMapError::WarehouseWipConflict => conflict("wip_receipt_conflict"),

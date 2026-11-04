@@ -195,6 +195,7 @@ impl QueueActionCommand {
                 rezka_frames: request.rezka_frames,
                 rezka_record_frame_index: request.rezka_record_frame_index,
                 rezka_output_cycle: request.rezka_output_cycle,
+                rezka_expected_kadr_counts: request.rezka_expected_kadr_counts,
                 produced_qty,
                 gross_qty: request.gross_qty,
                 uom,

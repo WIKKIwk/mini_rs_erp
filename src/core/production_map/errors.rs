@@ -227,6 +227,8 @@ pub enum ProductionMapError {
     RezkaFrameCountMismatch,
     #[error("Rezka output cycle changed or a recorded roll was edited")]
     RezkaOutputCycleConflict,
+    #[error("Rezka bobina mode changed or the current mode requires a bobina weight")]
+    RezkaBobinaModeChanged(bool),
     #[error("rezka final roll is required")]
     RezkaFinalRollRequired,
     #[error("QR matches more than one production item")]

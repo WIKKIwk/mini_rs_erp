@@ -167,6 +167,7 @@ impl ProductionMapService {
             .map_err(|_| ProductionMapError::StoreFailed)?;
         Ok(CurrentRezkaOutputReport {
             report: serde_json::json!({"cycle_id": cycle, "frames": frames,
+                "include_bobina_in_net": map.includes_bobina_in_output_net(true, &stage.node_id),
                 "reference_frame_index": super::super::rezka_reference_frame_index(&session.payload_json),
                 "layout_outputs": super::super::layout::output_layout(&map, &session, &kadr_counts)}),
             kadr_counts,

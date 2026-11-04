@@ -420,6 +420,8 @@ impl ProductionMapService {
         }
         let local_report_submitted = queue_action == queue_state::ApparatusQueueAction::Complete
             && !progress.allow_partial_station_completion;
+        let framed_rezka_output = !progress.rezka_frames.is_empty()
+            && apparatus::is_rezka_apparatus(&canonical);
         let mut progress = if print_preflight_freeze {
             QueueProgressRecords {
                 session: None,
@@ -442,6 +444,14 @@ impl ProductionMapService {
             )
             .await?
         };
+        if framed_rezka_output
+            && progress.progress_batch.iter().chain(&progress.progress_batches).any(|batch| {
+                batch.payload_json["rezka_output_kind"].as_str() == Some("frame")
+            })
+        {
+            event.payload_json["rezka_expected_bobina_mode"] =
+                serde_json::json!(order_map.include_bobina_in_net);
+        }
         if let Some(waste) = progress.progress_event.as_ref()
             .and_then(|event| event.payload_json.get("zero_output_waste"))
         {

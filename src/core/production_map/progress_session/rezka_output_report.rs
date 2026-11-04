@@ -40,6 +40,11 @@ impl RezkaOutputReport {
             .iter()
             .map(|identity| identity.contained_kadr_count.unwrap_or(1))
             .collect();
+        if !progress.rezka_expected_kadr_counts.is_empty()
+            && progress.rezka_expected_kadr_counts != kadr_counts
+        {
+            return Err(ProductionMapError::RezkaOutputCycleConflict);
+        }
         if !saved.is_empty()
             && session
                 .payload_json

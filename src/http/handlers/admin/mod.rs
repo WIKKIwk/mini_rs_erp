@@ -430,6 +430,8 @@ pub struct AdminErrorDetails {
     pub active_kadr_count: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scanned_kadr_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_bobina_in_net: Option<bool>,
 }
 
 impl std::ops::Deref for AdminErrorResponse {
