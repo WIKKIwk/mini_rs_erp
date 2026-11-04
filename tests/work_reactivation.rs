@@ -81,6 +81,13 @@ struct Fixture {
 
 impl Fixture {
     async fn new(apparatus: &'static str, final_complete: bool) -> Self {
+        Self::with_completion_actor(apparatus, final_complete, actor()).await
+    }
+    async fn with_completion_actor(
+        apparatus: &'static str,
+        final_complete: bool,
+        completion_actor: QueueActionActor,
+    ) -> Self {
         let pool = pool().await;
         let store = Arc::new(PostgresProductionMapStore::new(pool.clone()));
         let service = ProductionMapService::new(
@@ -147,6 +154,7 @@ impl Fixture {
             if index >= depth {
                 continue;
             }
+            let worker = if station == apparatus { completion_actor.clone() } else { actor() };
             let id = format!("run-{}-{node}", f.order);
             let output = format!("output-{}-{node}", f.order);
             let input = if index == 0 {
@@ -162,7 +170,7 @@ impl Fixture {
                 "input_progress_qr_payload":if input.is_empty(){String::new()}else{format!("qr-{input}")},
                 "input_progress_apparatus":if index==1 {PRESS}else if index==2 {LAM}else{""},
                 "input_wip_source_kind":if input.is_empty(){""}else{"progress_batch"},
-                "stage_work_report":{"report_id":format!("complete-{id}"),"sequence":index+1,"submitted_at_unix":10+index,"worker_ref":actor().ref_,"worker_role":actor().role,"worker_display_name":"Worker"}});
+                "stage_work_report":{"report_id":format!("complete-{id}"),"sequence":index+1,"submitted_at_unix":10+index,"worker_ref":worker.ref_,"worker_role":worker.role,"worker_display_name":worker.display_name}});
             if !input.is_empty() {
                 payload["input_lineage"] = json!([{"input_batch_id":input,"input_qr_payload":format!("qr-{input}"),"source_apparatus":if index==1{PRESS}else{LAM},"source_kind":"progress_batch","stage_node_id":node,"sequence_no":1,"status":"processed","linked_at_unix":1,"processed_at_unix":10+index}]);
             }
@@ -173,9 +181,9 @@ impl Fixture {
                     order_id: f.order.clone(),
                     stage_node_id: node.into(),
                     status: OrderRunStatus::Completed,
-                    worker_role: actor().role,
-                    worker_ref: actor().ref_,
-                    worker_display_name: "Worker".into(),
+                    worker_role: worker.role.clone(),
+                    worker_ref: worker.ref_.clone(),
+                    worker_display_name: worker.display_name.clone(),
                     started_at_unix: 1 + index as i64,
                     updated_at_unix: 10 + index as i64,
                     payload_json: payload,
@@ -187,7 +195,7 @@ impl Fixture {
                 "batch_id":output,"session_id":id,"started_at_unix":1,"completed_at_unix":10,
                 "apparatus":station,"order_id":f.order,"action":"complete","status":"completed",
                 "produced_qty":100.0,"uom":"m","qr_payload":format!("qr-{output}"),"label_item_code":"REOPEN","label_item_name":"Film","executor_name":"Worker",
-                "worker_role":"aparatchi","worker_ref":actor().ref_,"worker_display_name":"Worker",
+                "worker_role":worker.role,"worker_ref":worker.ref_,"worker_display_name":worker.display_name,
                 "wip_status":if processed{"processed"}else{"waiting"},"next_apparatus":next,
                 "current_apparatus":if processed{next}else{station},"current_location":station,
                 "processed_by_session_id":if processed{format!("run-{}-{next_node}",f.order)}else{String::new()},
@@ -202,8 +210,8 @@ impl Fixture {
                     "event_id":format!("progress-complete-{id}"),"session_id":id,
                     "batch_id":output,"apparatus":station,"order_id":f.order,
                     "action":"complete","produced_qty":100.0,"uom":"m",
-                    "worker_role":"aparatchi","worker_ref":actor().ref_,
-                    "worker_display_name":"Worker","lamination_print_leftover_rolls":1.0,
+                    "worker_role":worker.role,"worker_ref":worker.ref_,
+                    "worker_display_name":worker.display_name,"lamination_print_leftover_rolls":1.0,
                     "lamination_film_leftover_rolls":1.0,"finished_goods_meter":100.0,
                     "finished_goods_kg":10.0,"bobina_kg":1.0,"total_waste":0.0,"payload_json":{}
                 })).unwrap()).await.unwrap();
@@ -218,7 +226,7 @@ impl Fixture {
                     from_state: queue_state::ApparatusQueueOrderState::InProgress,
                     to_state: queue_state::ApparatusQueueOrderState::Completed,
                     policy: ApparatusQueuePolicy::FreePick,
-                    actor: actor(),
+                    actor: worker,
                     assigned_apparatus: vec![station.into()],
                     payload_json: json!({}),
                 })
@@ -263,7 +271,7 @@ impl Fixture {
             .await
             .unwrap()
     }
-    async fn execute(&self, target: &ReactivationTarget) -> Result<(), ProductionMapError> {
+    async fn runtime_service(&self) -> ProductionMapService {
         // Seed with the database owner, but execute every correction using the
         // restricted runtime login that serves real worker requests.
         let runtime_pool = sqlx::PgPool::connect_with(
@@ -275,13 +283,16 @@ impl Fixture {
         )
         .await
         .unwrap();
-        let runtime = ProductionMapService::new(
+        ProductionMapService::new(
             Arc::new(PostgresProductionMapStore::new(runtime_pool.clone())),
             Arc::new(CanonicalServiceApparatusResolver::new(
                 postgres::canonical_apparatus_service(runtime_pool),
             )),
-        );
-        runtime
+        )
+    }
+    async fn execute(&self, target: &ReactivationTarget) -> Result<(), ProductionMapError> {
+        self.runtime_service()
+            .await
             .reactivate_completed_work(target, &[self.apparatus.into()], &actor(), &[])
             .await
     }
@@ -300,10 +311,77 @@ impl Fixture {
             token: session.payload_json["reactivation_token"].as_str().unwrap().into() }
     }
     async fn reclose(&self, target: &ReactivationRecloseTarget) -> Result<(), ProductionMapError> {
-        let pool = sqlx::PgPool::connect_with(self.pool.connect_options().as_ref().clone().username("mini_rs_erp")).await.unwrap();
-        let service = ProductionMapService::new(Arc::new(PostgresProductionMapStore::new(pool.clone())),
-            Arc::new(CanonicalServiceApparatusResolver::new(postgres::canonical_apparatus_service(pool))));
-        service.reclose_reactivated_work(target, &[self.apparatus.into()], &actor()).await
+        self.runtime_service()
+            .await
+            .reclose_reactivated_work(target, &[self.apparatus.into()], &actor())
+            .await
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires REACTIVATION_TEST_DATABASE_URL on a disposable server"]
+async fn rezka_master_can_reopen_and_reclose_eligible_cutting_work() {
+    let master = QueueActionActor {
+        role: "rezka_master".into(),
+        ref_: "rezka-master".into(),
+        display_name: "Rezka master".into(),
+    };
+    let assigned = [CUT.into()];
+    for worker in [actor(), master.clone()] {
+        let f = Fixture::with_completion_actor(CUT, false, worker).await;
+        let service = f.runtime_service().await;
+        assert!(matches!(
+            service.preview_reactivation(&f.selector(), &[], &master).await,
+            Err(ProductionMapError::QueueActionNotAllowed)
+        ));
+        let lamination = ReactivationSelector {
+            apparatus: LAM.into(),
+            batch_id: f.input.clone(),
+            ..f.selector()
+        };
+        assert!(matches!(
+            service
+                .preview_reactivation(&lamination, &[LAM.into()], &master)
+                .await,
+            Err(ProductionMapError::QueueActionNotAllowed)
+        ));
+        let preview = service
+            .preview_reactivation(&f.selector(), &assigned, &master)
+            .await
+            .unwrap();
+        let target = preview.target.unwrap_or_else(|| {
+            panic!("cutting work was denied: {:?}", preview.denial_reason)
+        });
+        for _ in 0..2 {
+            service
+                .reactivate_completed_work(&target, &assigned, &master, &[])
+                .await
+                .unwrap();
+        }
+        let continuation = f.reclose_target().await;
+        let worker = QueueActionActor {
+            role: actor().role,
+            ..master.clone()
+        };
+        assert!(matches!(
+            service
+                .reclose_reactivated_work(&continuation, &assigned, &worker)
+                .await,
+            Err(ProductionMapError::QueueActionNotAllowed)
+        ));
+        for _ in 0..2 {
+            service
+                .reclose_reactivated_work(&continuation, &assigned, &master)
+                .await
+                .unwrap();
+        }
+        assert!(
+            f.store
+                .active_order_run_session(CUT, &f.order)
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 }
 

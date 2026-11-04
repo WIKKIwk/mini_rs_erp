@@ -450,7 +450,7 @@ async fn re_pause_belongs_to_the_worker_who_resumed_another_workers_session() {
 
 #[tokio::test]
 #[ignore = "requires RE_PAUSE_TEST_DATABASE_URL pointing at a disposable PostgreSQL database"]
-async fn re_pause_after_another_workers_rezka_resume_preserves_input_and_revision() {
+async fn rezka_master_can_re_pause_after_resuming_an_apparatchi_run() {
     const REZKA: &str = "apparatus:default:asset-010";
     let f = Fixture::new().await;
     f.cancel(&f.control().await.unwrap().resume_id)
@@ -509,9 +509,9 @@ async fn re_pause_after_another_workers_rezka_resume_preserves_input_and_revisio
         .unwrap();
     let before = f.batch_rows().await;
     let resumer = QueueActionActor {
-        ref_: "another-rezka-worker".into(),
-        display_name: "Another Rezka worker".into(),
-        ..actor()
+        role: "rezka_master".into(),
+        ref_: "rezka-master".into(),
+        display_name: "Rezka master".into(),
     };
     f.service
         .apply_apparatus_queue_action_with_progress(
@@ -529,7 +529,24 @@ async fn re_pause_after_another_workers_rezka_resume_preserves_input_and_revisio
         .re_pause
         .as_ref()
         .expect("Rezka exposes re-pause to the worker who pressed Continue");
+    assert_eq!(control.worker_role, resumer.role);
     assert_eq!(control.worker_ref, resumer.ref_);
+    assert!(matches!(
+        f.service
+            .re_pause_resumed_work(REZKA, &f.order, &control.resume_id, &[], resumer.clone())
+            .await,
+        Err(ProductionMapError::QueueActionNotAllowed)
+    ));
+    let other_role = QueueActionActor {
+        role: actor().role,
+        ..resumer.clone()
+    };
+    assert!(matches!(
+        f.service
+            .re_pause_resumed_work(REZKA, &f.order, &control.resume_id, &[REZKA.into()], other_role)
+            .await,
+        Err(ProductionMapError::QueueActionNotAllowed)
+    ));
     f.service
         .re_pause_resumed_work(
             REZKA,

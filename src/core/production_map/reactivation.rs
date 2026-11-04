@@ -114,13 +114,13 @@ impl ProductionMapService {
         let canonical = self
             .resolve_canonical_apparatus_text(&selector.apparatus)
             .await?;
-        if !pechat::is_pechat_apparatus(&canonical)
-            && !apparatus::is_rezka_apparatus(&canonical)
-            && !apparatus::uses_lamination_workflow(&canonical)
-        {
+        let is_rezka = apparatus::is_rezka_apparatus(&canonical);
+        let is_print = pechat::is_pechat_apparatus(&canonical);
+        let is_lamination = apparatus::uses_lamination_workflow(&canonical);
+        if (actor.role == "rezka_master" || !(is_print || is_lamination)) && !is_rezka {
             return Err(ProductionMapError::QueueActionNotAllowed);
         }
-        Ok((pechat::is_pechat_apparatus(&canonical), apparatus::uses_lamination_workflow(&canonical)))
+        Ok((is_print, is_lamination))
     }
     /// A matching immutable receipt acknowledges a retry without reading or
     /// preparing resources for whatever work is current now.

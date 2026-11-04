@@ -16,7 +16,7 @@ pub(in crate::db::postgres_production_map) async fn execute(
     actor: &QueueActionActor,
     assigned: &[String],
 ) -> Result<(), ProductionMapError> {
-    if actor.role != "aparatchi"
+    if !matches!(actor.role.as_str(), "aparatchi" | "rezka_master")
         || actor.ref_.is_empty()
         || !assigned.contains(&target.apparatus)
         || target.order_id.starts_with("training-")

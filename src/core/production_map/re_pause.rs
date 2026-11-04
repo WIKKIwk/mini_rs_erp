@@ -50,7 +50,7 @@ pub(crate) fn attach_checkpoint(
         )
         || !matches!(previous.worker_role.as_str(), "aparatchi" | "rezka_master")
         || previous.worker_ref.trim().is_empty()
-        || previous.worker_role != prepared.event.actor.role
+        || !matches!(prepared.event.actor.role.as_str(), "aparatchi" | "rezka_master")
         || prepared.event.actor.ref_.trim().is_empty()
         || prepared.progress_batch.is_some()
         || !prepared.progress_batches.is_empty()
@@ -236,7 +236,10 @@ impl ProductionMapService {
         {
             return Err(ProductionMapError::QueueActionNotAllowed);
         }
-        self.resolve_canonical_apparatus_text(apparatus).await?;
+        let canonical = self.resolve_canonical_apparatus_text(apparatus).await?;
+        if actor.role == "rezka_master" && !super::apparatus::is_rezka_apparatus(&canonical) {
+            return Err(ProductionMapError::QueueActionNotAllowed);
+        }
         let _guard = self.queue_action_guard().await;
         self.store
             .re_pause_resumed_work(apparatus, order_id, resume_id, &actor, assigned_apparatus)

@@ -58,7 +58,7 @@ pub(super) async fn re_pause(
     actor: &QueueActionActor,
     assigned_apparatus: &[String],
 ) -> Result<(), ProductionMapError> {
-    if actor.role != "aparatchi"
+    if !matches!(actor.role.as_str(), "aparatchi" | "rezka_master")
         || actor.ref_.trim().is_empty()
         || !assigned_apparatus.iter().any(|id| id == apparatus)
         || order_id.starts_with("training-")

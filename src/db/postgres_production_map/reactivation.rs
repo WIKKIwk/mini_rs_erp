@@ -150,8 +150,10 @@ async fn prepare(
     let Some(session) = selected else {
         deny!("stale_target");
     };
+    let allowed_worker = session.worker_role == "aparatchi"
+        || (!is_print && !is_lamination && session.worker_role == "rezka_master");
     if session.status != OrderRunStatus::Completed
-        || session.worker_role != "aparatchi"
+        || !allowed_worker
         || session.worker_ref.trim().is_empty()
         || session.stage_node_id.is_empty()
     {
@@ -645,7 +647,7 @@ pub(super) async fn execute(
     is_print: bool,
     is_lamination: bool,
 ) -> Result<(), ProductionMapError> {
-    if actor.role != "aparatchi"
+    if !matches!(actor.role.as_str(), "aparatchi" | "rezka_master")
         || actor.ref_.is_empty()
         || !assigned.iter().any(|id| id == &target.apparatus)
     {
