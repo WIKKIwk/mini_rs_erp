@@ -551,6 +551,10 @@ async fn save_production_map_with_order(
             .template
             .as_ref()
             .ok_or_else(|| bad_request("Order ochish uchun Calculate hisob-kitobi kerak"))?;
+        if input.map.standard_print_side.is_none() {
+            input.map.standard_print_side = Some(state.production_orders.print_side_preference(template)
+                .await.map_err(|_| server_error("print side preference lookup failed"))?.unwrap_or(true));
+        }
         let _guard = state.production_maps.queue_action_guard().await;
         let saved = state
             .production_maps

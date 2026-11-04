@@ -7,6 +7,66 @@ use crate::db::postgres::{apply_foundation_migration, postgres_test_database_opt
 use crate::db::postgres_mini_order::PostgresMiniOrderSink;
 
 #[tokio::test]
+async fn postgres_print_side_updates_closed_order_and_remembers_its_layout() {
+    use crate::core::production_map::ProductionMapStorePort;
+    use crate::db::postgres_production_map::PostgresProductionMapStore;
+
+    let url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://wikki@127.0.0.1:5432/postgres".into());
+    let pool = sqlx::postgres::PgPoolOptions::new().max_connections(1)
+        .connect(&url).await.unwrap();
+    sqlx::raw_sql(
+        "CREATE TEMP TABLE mini_orders (
+             id text PRIMARY KEY, customer_ref text, product_code text, calculation_json jsonb
+         );
+         CREATE TEMP TABLE mini_production_maps (
+             id text PRIMARY KEY, map_json jsonb, created_at timestamptz DEFAULT now(),
+             lifecycle_status text DEFAULT 'closed'
+         );",
+    ).execute(&pool).await.unwrap();
+    let migration = include_str!("../../../migrations/postgres/0194_order_print_side_preferences.sql");
+    sqlx::raw_sql(&migration.replacen("CREATE TABLE", "CREATE TEMP TABLE", 1))
+        .execute(&pool).await.unwrap();
+
+    let cut = "apparatus:default:asset-010";
+    let mut map = test_map();
+    map.standard_print_side = Some(true);
+    let mut node = test_node("cut", ProductionMapNodeKind::Apparatus, "Rezka", 60.0);
+    node.apparatus_id = cut.into();
+    map.nodes.insert(1, node);
+    map.edges[0].to = "cut".into();
+    map.edges.push(ProductionMapEdge { from: "cut".into(), to: "end".into(), branch: String::new() });
+    let mut template = test_template();
+    template.customer_ref = "customer-a".into();
+    template.item_code = map.product_code.clone();
+    sqlx::query("INSERT INTO mini_orders VALUES ($1,$2,$3,$4)")
+        .bind(&map.id).bind(&template.customer_ref).bind(&template.item_code)
+        .bind(serde_json::to_value(&template).unwrap())
+        .execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO mini_production_maps (id,map_json) VALUES ($1,$2)")
+        .bind(&map.id).bind(serde_json::to_value(&map).unwrap())
+        .execute(&pool).await.unwrap();
+
+    let sink = PostgresMiniOrderSink::new(pool.clone());
+    assert_eq!(sink.print_side_preference(&template).await.unwrap(), Some(true));
+    let store = PostgresProductionMapStore::new(pool.clone());
+    store.set_order_print_side(&map.id, &[cut.into()], false, true).await.unwrap();
+    let (stored, lifecycle): (serde_json::Value, String) =
+        sqlx::query_as("SELECT map_json, lifecycle_status FROM mini_production_maps WHERE id=$1")
+            .bind(&map.id).fetch_one(&pool).await.unwrap();
+    map.standard_print_side = Some(false);
+    assert_eq!(stored, serde_json::to_value(&map).unwrap());
+    assert_eq!(lifecycle, "closed");
+    template.kg += 100.0;
+    assert_eq!(sink.print_side_preference(&template).await.unwrap(), Some(false));
+    template.customer_ref = "customer-b".into();
+    assert_eq!(sink.print_side_preference(&template).await.unwrap(), None);
+    template.customer_ref = "customer-a".into();
+    template.frame_count += 1.0;
+    assert_eq!(sink.print_side_preference(&template).await.unwrap(), None);
+}
+
+#[tokio::test]
 async fn postgres_order_materials_read_saved_layers_in_one_query() {
     let url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
         .unwrap_or_else(|_| "postgres://wikki@127.0.0.1:5432/postgres".into());

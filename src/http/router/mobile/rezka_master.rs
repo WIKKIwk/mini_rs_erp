@@ -15,6 +15,7 @@ pub(super) fn routes() -> Router<AppState> {
             "/v1/mobile/rezka-master/order-settings",
             put(rezka_master::order_settings),
         )
+        .route("/v1/mobile/rezka-master/print-side", put(rezka_master::print_side))
 }
 
 pub(super) fn allows(method: &Method, path: &str) -> bool {
@@ -43,7 +44,7 @@ pub(super) fn allows(method: &Method, path: &str) -> bool {
     if path == "rezka-master/workers" {
         return matches!(*method, Method::GET | Method::PUT);
     }
-    if path == "rezka-master/order-settings" {
+    if matches!(path, "rezka-master/order-settings" | "rezka-master/print-side") {
         return *method == Method::PUT;
     }
     if path == "admin/apparatus" {

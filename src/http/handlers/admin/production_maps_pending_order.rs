@@ -47,6 +47,10 @@ async fn complete_pending_order(
         .await
         .map_err(|_| server_error("material catalog failed"))?;
     apply_authoritative_calculation(&mut input.map, &template, &materials)?;
+    if input.map.standard_print_side.is_none() {
+        input.map.standard_print_side = Some(state.production_orders.print_side_preference(&template)
+            .await.map_err(|_| server_error("print side preference lookup failed"))?.unwrap_or(true));
+    }
     template.width_mm = input.map.width_mm.unwrap_or_default();
     let cut_ids = canonical_cut_apparatus_ids(state).await?;
     apply_order_rezka_kadr_count(&mut input.map, &template, &cut_ids)?;

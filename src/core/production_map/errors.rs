@@ -6,6 +6,8 @@ pub enum ProductionMapError {
     ReactivationDenied(String),
     #[error("template identity belongs to another SKU or owner")]
     TemplateIdentityConflict,
+    #[error("print side changed since the order was opened")]
+    PrintSideChanged,
     #[error("map id is required")]
     MissingId,
     #[error("product code is required")]

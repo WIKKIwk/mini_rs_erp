@@ -107,6 +107,7 @@ fn allows(method: &Method, path: &str) -> bool {
         (
             "POST",
             "calculate"
+                | "calculate/print-side"
                 | "calculate/orders"
                 | "calculate/orders/image"
                 | "admin/customers"

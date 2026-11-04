@@ -79,8 +79,62 @@ async fn legacy_order_creator(
     }))
 }
 
+pub(crate) async fn remember_print_side(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    template: &CalculateOrderTemplate,
+    standard: bool,
+) -> Result<(), sqlx::Error> {
+    if let Some(key) = crate::core::mini_orders::print_side_layout_key(template) {
+        sqlx::query(
+            "INSERT INTO mini_order_print_side_preferences (layout_key, standard_print_side)
+             VALUES ($1, $2) ON CONFLICT (layout_key) DO UPDATE
+             SET standard_print_side = excluded.standard_print_side",
+        )
+        .bind(key).bind(standard).execute(&mut **tx).await?;
+    }
+    Ok(())
+}
+
 #[async_trait]
 impl MiniOrderSink for PostgresMiniOrderSink {
+    async fn print_side_preference(
+        &self, template: &CalculateOrderTemplate,
+    ) -> Result<Option<bool>, MiniOrderError> {
+        let Some(key) = crate::core::mini_orders::print_side_layout_key(template) else {
+            return Ok(None);
+        };
+        let preference = sqlx::query_scalar(
+            "SELECT standard_print_side FROM mini_order_print_side_preferences WHERE layout_key = $1",
+        )
+        .bind(&key)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|_| MiniOrderError::StoreFailed)?;
+        if preference.is_some() || template.item_code.trim().is_empty() {
+            return Ok(preference);
+        }
+        // Orders created before preferences can still supply an explicit side
+        // when their stored calculation proves the same print layout.
+        let candidates = sqlx::query_as::<_, (serde_json::Value, bool)>(
+            "SELECT o.calculation_json, (m.map_json->>'standard_print_side')::boolean
+             FROM mini_orders o JOIN mini_production_maps m ON o.id = m.id
+             WHERE o.customer_ref = $1 AND o.product_code = $2
+               AND o.calculation_json IS NOT NULL
+               AND jsonb_typeof(m.map_json->'standard_print_side') = 'boolean'
+             ORDER BY m.created_at DESC, m.id DESC",
+        )
+        .bind(template.customer_ref.trim())
+        .bind(template.item_code.trim())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|_| MiniOrderError::StoreFailed)?;
+        Ok(candidates.into_iter().find_map(|(calculation, side)| {
+            let stored = serde_json::from_value(calculation).ok()?;
+            (crate::core::mini_orders::print_side_layout_key(&stored).as_deref() == Some(key.as_str()))
+                .then_some(side)
+        }))
+    }
+
     async fn order_creation_metadata(
         &self,
         order_id: &str,
@@ -486,10 +540,13 @@ async fn save_order_tx_inner(
     // Only the actual order-creation path owns the original input. A periodic
     // reconciliation's product-code match is not evidence of that input.
     if capture_snapshot {
-        sqlx::query("UPDATE mini_orders SET calculation_json = $2 WHERE id = $1 AND calculation_json IS NULL")
-        .bind(&order_id)
-        .bind(serde_json::to_value(template).map_err(|_| MiniOrderError::StoreFailed)?)
-        .execute(&mut **tx).await.map_err(|_| MiniOrderError::StoreFailed)?;
+        let inserted = sqlx::query("UPDATE mini_orders SET calculation_json = $2 WHERE id = $1 AND calculation_json IS NULL")
+            .bind(&order_id)
+            .bind(serde_json::to_value(template).map_err(|_| MiniOrderError::StoreFailed)?)
+            .execute(&mut **tx).await.map_err(|_| MiniOrderError::StoreFailed)?;
+        if inserted.rows_affected() == 1 && let Some(standard) = map.standard_print_side {
+            remember_print_side(tx, template, standard).await.map_err(|_| MiniOrderError::StoreFailed)?;
+        }
     }
 
     let products: Vec<(String, String, String)> = if template.products.is_empty() {

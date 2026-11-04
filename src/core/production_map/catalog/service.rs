@@ -437,6 +437,15 @@ impl ProductionMapService {
         Ok(())
     }
 
+    pub(crate) async fn set_order_print_side(
+        &self, order_id: &str, assigned: &[String], standard: bool, previous: bool,
+    ) -> Result<(), ProductionMapError> {
+        let _guard = self.queue_action_guard().await;
+        self.store.set_order_print_side(order_id, assigned, standard, previous).await?;
+        self.notify_live();
+        Ok(())
+    }
+
     pub async fn upsert_map(
         &self,
         map: ProductionMapDefinition,
@@ -484,16 +493,10 @@ impl ProductionMapService {
         mut map: ProductionMapDefinition,
         allow_preflight_edit: bool,
     ) -> Result<ProductionMapSaved, ProductionMapError> {
-        if map.duplicate_rezka_labels.is_none()
-            && let Some(previous) = self.store.map_by_id(&map.id).await?
-        {
-            map.duplicate_rezka_labels = previous.duplicate_rezka_labels;
-        }
-        if (map.include_bobina_in_net.is_none() || map.standard_print_side.is_none())
-            && let Some(previous) = self.store.map_by_id(map.id.trim()).await?
-        {
+        if let Some(previous) = self.store.map_by_id(map.id.trim()).await? {
+            map.duplicate_rezka_labels = map.duplicate_rezka_labels.or(previous.duplicate_rezka_labels);
             map.include_bobina_in_net = map.include_bobina_in_net.or(previous.include_bobina_in_net);
-            map.standard_print_side = map.standard_print_side.or(previous.standard_print_side);
+            map.standard_print_side = previous.standard_print_side;
         }
         normalize_map(&mut map);
         compile_map(&map)?;
@@ -512,16 +515,10 @@ impl ProductionMapService {
         let mut normalized = Vec::with_capacity(maps.len());
         let mut saved = Vec::with_capacity(maps.len());
         for mut map in maps {
-            if map.duplicate_rezka_labels.is_none()
-                && let Some(previous) = self.store.map_by_id(map.id.trim()).await?
-            {
-                map.duplicate_rezka_labels = previous.duplicate_rezka_labels;
-            }
-            if (map.include_bobina_in_net.is_none() || map.standard_print_side.is_none())
-                && let Some(previous) = self.store.map_by_id(map.id.trim()).await?
-            {
+            if let Some(previous) = self.store.map_by_id(map.id.trim()).await? {
+                map.duplicate_rezka_labels = map.duplicate_rezka_labels.or(previous.duplicate_rezka_labels);
                 map.include_bobina_in_net = map.include_bobina_in_net.or(previous.include_bobina_in_net);
-                map.standard_print_side = map.standard_print_side.or(previous.standard_print_side);
+                map.standard_print_side = previous.standard_print_side;
             }
             normalize_map(&mut map);
             compile_map(&map)?;

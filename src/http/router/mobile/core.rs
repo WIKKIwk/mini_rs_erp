@@ -1,6 +1,6 @@
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
-use axum::routing::{any, get};
+use axum::routing::{any, get, post};
 
 use crate::app::AppState;
 use crate::core::chat_media::{MAX_CHAT_IMAGE_SIZE_BYTES, MAX_CHAT_MEDIA_CHUNK_SIZE_BYTES};
@@ -109,6 +109,7 @@ pub(super) fn routes() -> Router<AppState> {
         )
         .route("/v1/mobile/iroh-ticket", any(iroh_discovery::ticket))
         .route("/v1/mobile/calculate", any(calculate::calculate_route))
+        .route("/v1/mobile/calculate/print-side", post(calculate::print_side_preference))
         .route(
             "/v1/mobile/calculate/orders",
             any(calculate::calculate_orders_route),

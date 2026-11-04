@@ -46,7 +46,7 @@ pub(super) async fn put_map_inner_tx(
             order_number = excluded.order_number,
             roll_count = excluded.roll_count,
             width_mm = excluded.width_mm,
-            map_json = excluded.map_json
+            map_json = (excluded.map_json - 'standard_print_side')
                 || CASE WHEN NOT (excluded.map_json ? 'duplicate_rezka_labels')
                             AND mini_production_maps.map_json ? 'duplicate_rezka_labels'
                     THEN jsonb_build_object('duplicate_rezka_labels', mini_production_maps.map_json -> 'duplicate_rezka_labels')
@@ -55,8 +55,7 @@ pub(super) async fn put_map_inner_tx(
                             AND mini_production_maps.map_json ? 'include_bobina_in_net'
                     THEN jsonb_build_object('include_bobina_in_net', mini_production_maps.map_json -> 'include_bobina_in_net')
                     ELSE '{}'::jsonb END
-                || CASE WHEN NOT (excluded.map_json ? 'standard_print_side')
-                            AND mini_production_maps.map_json ? 'standard_print_side'
+                || CASE WHEN mini_production_maps.map_json ? 'standard_print_side'
                     THEN jsonb_build_object('standard_print_side', mini_production_maps.map_json -> 'standard_print_side')
                     ELSE '{}'::jsonb END,
             updated_at = excluded.updated_at",

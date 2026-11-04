@@ -95,6 +95,27 @@ pub async fn order_settings(
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct PrintSide {
+    order_id: String,
+    standard_print_side: bool,
+    previous_standard_print_side: bool,
+}
+
+pub async fn print_side(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<PrintSide>,
+) -> Result<Response, AdminError> {
+    let principal = authorize_master(&state, &headers).await?;
+    let assigned = state.principal_assigned_apparatus(&principal).await;
+    state.production_maps.set_order_print_side(
+        input.order_id.trim(), &assigned, input.standard_print_side, input.previous_standard_print_side,
+    ).await.map_err(production_maps::production_map_error)?;
+    Ok(json_response(serde_json::json!({"standard_print_side": input.standard_print_side})))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WorkerApparatus {
     worker_id: String,
     apparatus_ids: Vec<String>,

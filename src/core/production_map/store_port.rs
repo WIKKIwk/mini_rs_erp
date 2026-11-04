@@ -221,6 +221,16 @@ fn is_warehouse_processing_marker(value: &str) -> bool {
 
 #[async_trait]
 pub trait ProductionMapStorePort: Send + Sync {
+    async fn set_order_print_side(
+        &self,
+        _order_id: &str,
+        _assigned: &[String],
+        _standard: bool,
+        _previous: bool,
+    ) -> StoreResult<()> {
+        Err(ProductionMapError::StoreFailed)
+    }
+
     async fn qolip_start_settings(&self) -> StoreResult<super::QolipStartSettings> {
         Ok(super::QolipStartSettings::default())
     }

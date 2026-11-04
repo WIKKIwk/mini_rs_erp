@@ -1,5 +1,33 @@
 #[async_trait]
 impl ProductionMapStorePort for PostgresProductionMapStore {
+    async fn set_order_print_side(
+        &self, order_id: &str, assigned: &[String], standard: bool, previous: bool,
+    ) -> Result<(), ProductionMapError> {
+        let mut tx = self.pool.begin().await.map_err(|_| ProductionMapError::StoreFailed)?;
+        lock_order_for_edit_tx(&mut tx, order_id).await?;
+        let (map, calculation) = sqlx::query_as::<_, (serde_json::Value, Option<serde_json::Value>)>(
+            "SELECT m.map_json, o.calculation_json
+             FROM mini_production_maps m LEFT JOIN mini_orders o ON o.id = m.id
+             WHERE m.id = $1 FOR UPDATE OF m",
+        )
+        .bind(order_id)
+        .fetch_optional(&mut *tx).await.map_err(|_| ProductionMapError::StoreFailed)?
+        .ok_or(ProductionMapError::MapNotFound)?;
+        let map: ProductionMapDefinition = serde_json::from_value(map)
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        map.validate_print_side_update(assigned, standard, previous)?;
+        sqlx::query("UPDATE mini_production_maps
+            SET map_json = jsonb_set(map_json, '{standard_print_side}', to_jsonb($2::boolean))
+            WHERE id = $1")
+            .bind(order_id).bind(standard).execute(&mut *tx).await
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        if let Some(template) = calculation.and_then(|value| serde_json::from_value(value).ok()) {
+            super::postgres_mini_order::remember_print_side(&mut tx, &template, standard)
+                .await.map_err(|_| ProductionMapError::StoreFailed)?;
+        }
+        tx.commit().await.map_err(|_| ProductionMapError::StoreFailed)
+    }
+
     async fn qolip_start_settings(&self) -> Result<crate::core::production_map::QolipStartSettings, ProductionMapError> {
         qolip_start_settings::load(&self.pool).await
     }

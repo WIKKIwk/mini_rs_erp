@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use thiserror::Error;
+use sha2::{Digest, Sha256};
 
 use crate::core::calculate_orders::CalculateOrderTemplate;
 use crate::core::production_map::{ProductionMapDefinition, ProductionMapError, QueueActionActor};
@@ -52,11 +53,52 @@ pub enum MiniOrderError {
     StoreFailed,
 }
 
+/// Match repeat orders by customer, SKU and physical print specification.
+pub(crate) fn print_side_layout_key(template: &CalculateOrderTemplate) -> Option<String> {
+    let customer = template.customer_ref.trim();
+    let item = template.item_code.trim();
+    if customer.is_empty() || (item.is_empty() && template.products.is_empty()) {
+        return None;
+    }
+    let products = template.products.iter().map(|product| {
+        (product.item_code.trim(), product.frame_product_size_mm, product.frame_count)
+    }).collect::<Vec<_>>();
+    if products.iter().any(|(sku, _, _)| sku.is_empty()) {
+        return None;
+    }
+    let flexo = template.production_options.as_ref().map_or_else(
+        || template.status.trim().eq_ignore_ascii_case("flexo"),
+        |options| options.print_method == super::production_map::automatic::PrintMethod::Flexo,
+    );
+    let layout = serde_json::json!({
+        "version": 1,
+        "customer": customer,
+        "item": if products.is_empty() { item } else {
+            template.combo.as_ref().map(|combo| combo.item_code.as_str()).unwrap_or("")
+        },
+        "products": products,
+        "frame_width": if products.is_empty() { template.frame_product_size_mm } else { 0.0 },
+        "frame_count": if products.is_empty() { template.frame_count } else { 0.0 },
+        "print_method": if flexo { "flexo" } else { "metal" },
+        "print_val": template.print_val_size_mm,
+        "color": template.color.trim(),
+        "artwork": template.image_id.trim(),
+    });
+    Some(format!("{:x}", Sha256::digest(serde_json::to_vec(&layout).ok()?)))
+}
+
 #[async_trait]
 pub trait MiniOrderSink: Send + Sync {
     async fn save_template_map_atomic(
         &self, _map: &ProductionMapDefinition, _template: &CalculateOrderTemplate, _owner: &str,
     ) -> Result<CalculateOrderTemplate, ProductionMapError> { Err(ProductionMapError::StoreFailed) }
+    async fn print_side_preference(
+        &self,
+        _template: &CalculateOrderTemplate,
+    ) -> Result<Option<bool>, MiniOrderError> {
+        Ok(None)
+    }
+
     async fn order_creation_result(
         &self,
         _owner: &str,
@@ -173,6 +215,26 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
+
+    #[test]
+    fn print_side_preferences_follow_customer_and_print_layout() {
+        let mut order = CalculateOrderTemplate {
+            customer_ref: "customer-a".into(),
+            item_code: "SKU".into(),
+            frame_product_size_mm: 515.0,
+            frame_count: 2.0,
+            ..Default::default()
+        };
+        let original = print_side_layout_key(&order).unwrap();
+        order.kg = 1000.0;
+        order.order_number = "0123".into();
+        assert_eq!(print_side_layout_key(&order).as_deref(), Some(original.as_str()));
+        order.customer_ref = "customer-b".into();
+        assert_ne!(print_side_layout_key(&order).unwrap(), original);
+        order.customer_ref = "customer-a".into();
+        order.frame_count = 3.0;
+        assert_ne!(print_side_layout_key(&order).unwrap(), original);
+    }
 
     #[derive(Default)]
     struct RecordingSink {

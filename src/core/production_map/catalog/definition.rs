@@ -57,6 +57,24 @@ pub struct ProductionMapDefinition {
 }
 
 impl ProductionMapDefinition {
+    pub(crate) fn validate_print_side_update(
+        &self, assigned: &[String], standard: bool, previous: bool,
+    ) -> Result<(), super::super::ProductionMapError> {
+        use super::super::{ProductionMapError, chain};
+        if self.id.starts_with("training-") || self.id.starts_with("template-")
+            || !chain::linear_work_stages(self).iter().any(|stage| {
+                stage.apparatus_id.as_ref().is_some_and(|id| assigned.contains(id))
+            })
+        {
+            return Err(ProductionMapError::MapNotFound);
+        }
+        let current = self.standard_print_side.unwrap_or(true);
+        if current != previous && current != standard {
+            return Err(ProductionMapError::PrintSideChanged);
+        }
+        Ok(())
+    }
+
     pub(crate) fn includes_bobina_in_output_net(
         &self,
         is_rezka: bool,

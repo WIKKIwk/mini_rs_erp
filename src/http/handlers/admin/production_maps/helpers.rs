@@ -273,6 +273,7 @@ pub(in crate::http::handlers::admin) fn production_map_error(error: ProductionMa
         ProductionMapError::ReactivationDenied(reason) => {
             conflict(format!("reactivation_{reason}"))
         }
+        ProductionMapError::PrintSideChanged => conflict("print_side_changed"),
         ProductionMapError::TemplateIdentityConflict => conflict("template_identity_conflict"),
         ProductionMapError::MissingId => bad_request("map_id_required"),
         ProductionMapError::MissingProductCode => bad_request("map_product_code_required"),

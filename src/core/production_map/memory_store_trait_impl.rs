@@ -1,6 +1,16 @@
 #[async_trait]
 #[cfg(any(test, feature = "verification"))]
 impl ProductionMapStorePort for MemoryProductionMapStore {
+    async fn set_order_print_side(
+        &self, order_id: &str, assigned: &[String], standard: bool, previous: bool,
+    ) -> Result<(), ProductionMapError> {
+        let mut maps = self.maps.write().await;
+        let map = maps.get_mut(order_id).ok_or(ProductionMapError::MapNotFound)?;
+        map.validate_print_side_update(assigned, standard, previous)?;
+        map.standard_print_side = Some(standard);
+        Ok(())
+    }
+
     fn supports_temporary_pause(&self) -> bool { true }
     async fn temporarily_pause_work(&self, apparatus: &str, order_id: &str, session_id: &str, token: &str,
         actor: &QueueActionActor, assigned: &[String], policy: ApparatusQueuePolicy) -> Result<(), ProductionMapError> {

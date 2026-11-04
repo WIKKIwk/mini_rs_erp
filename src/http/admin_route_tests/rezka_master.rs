@@ -559,6 +559,32 @@ async fn rezka_master_updates_order_flags_and_paddon_sharing_within_cut_scope() 
         json_body(after_completion).await["error"],
         "rezka_order_settings_order_finished"
     );
+    let body = r#"{"order_id":"zakaz-cut","standard_print_side":false,
+        "previous_standard_print_side":true}"#;
+    let side_update = router.clone().oneshot(request_with_body(
+        "PUT", "/v1/mobile/rezka-master/print-side", &token, body,
+    )).await.unwrap();
+    assert_eq!(side_update.status(), StatusCode::OK);
+    assert_eq!(json_body(side_update).await["standard_print_side"], false);
+    let saved = state.production_maps.raw_map("zakaz-cut").await.unwrap().unwrap();
+    assert_eq!(saved.standard_print_side, Some(false));
+    assert_eq!(saved.include_bobina_in_net, Some(true));
+    assert_eq!(saved.duplicate_rezka_labels, Some(true));
+    assert_eq!(
+        state.production_maps.production_order_lifecycle("zakaz-cut").await.unwrap().status,
+        crate::core::production_map::ProductionOrderLifecycleStatus::ProductionCompleted,
+    );
+    let foreign = router.clone().oneshot(request_with_body(
+        "PUT", "/v1/mobile/rezka-master/print-side", &token,
+        &body.replace("zakaz-cut", "zakaz-print"),
+    )).await.unwrap();
+    assert_eq!(foreign.status(), StatusCode::NOT_FOUND);
+    let worker = session(&state, PrincipalRole::Aparatchi).await;
+    let denied = router.clone().oneshot(request_with_body(
+        "PUT", "/v1/mobile/rezka-master/print-side", &worker, body,
+    )).await.unwrap();
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+
     let response = router
         .oneshot(request_with_body(
             "PUT",

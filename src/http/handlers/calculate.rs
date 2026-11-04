@@ -56,6 +56,17 @@ pub async fn calculate_route(
     ))
 }
 
+pub async fn print_side_preference(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(template): Json<CalculateOrderTemplate>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<CalculateErrorResponse>)> {
+    authorize_calculate_admin(&state, &headers).await?;
+    let standard = state.production_orders.print_side_preference(&template).await
+        .map_err(|_| store_error(CalculateOrderError::StoreFailed))?;
+    Ok(Json(serde_json::json!({"standard_print_side": standard})))
+}
+
 pub async fn calculate_orders_route(
     State(state): State<AppState>,
     method: Method,
