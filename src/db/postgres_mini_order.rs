@@ -120,6 +120,7 @@ impl MiniOrderSink for PostgresMiniOrderSink {
              FROM mini_orders o JOIN mini_production_maps m ON o.id = m.id
              WHERE o.customer_ref = $1 AND o.product_code = $2
                AND o.calculation_json IS NOT NULL
+               AND NOT m.standard_print_side_defaulted
                AND jsonb_typeof(m.map_json->'standard_print_side') = 'boolean'
              ORDER BY m.created_at DESC, m.id DESC",
         )

@@ -17,7 +17,8 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
             .map_err(|_| ProductionMapError::StoreFailed)?;
         map.validate_print_side_update(assigned, standard, previous)?;
         sqlx::query("UPDATE mini_production_maps
-            SET map_json = jsonb_set(map_json, '{standard_print_side}', to_jsonb($2::boolean))
+            SET map_json = jsonb_set(map_json, '{standard_print_side}', to_jsonb($2::boolean)),
+                standard_print_side_defaulted = false
             WHERE id = $1")
             .bind(order_id).bind(standard).execute(&mut *tx).await
             .map_err(|_| ProductionMapError::StoreFailed)?;

@@ -30,7 +30,6 @@ async fn postgres_print_side_updates_closed_order_and_remembers_its_layout() {
 
     let cut = "apparatus:default:asset-010";
     let mut map = test_map();
-    map.standard_print_side = Some(true);
     let mut node = test_node("cut", ProductionMapNodeKind::Apparatus, "Rezka", 60.0);
     node.apparatus_id = cut.into();
     map.nodes.insert(1, node);
@@ -39,7 +38,7 @@ async fn postgres_print_side_updates_closed_order_and_remembers_its_layout() {
     let mut template = test_template();
     template.customer_ref = "customer-a".into();
     template.item_code = map.product_code.clone();
-    sqlx::query("INSERT INTO mini_orders VALUES ($1,$2,$3,$4)")
+    sqlx::query("INSERT INTO mini_orders VALUES ($1,$2,$3,$4), ('zakaz-8999',$2,$3,$4)")
         .bind(&map.id).bind(&template.customer_ref).bind(&template.item_code)
         .bind(serde_json::to_value(&template).unwrap())
         .execute(&pool).await.unwrap();
@@ -47,16 +46,62 @@ async fn postgres_print_side_updates_closed_order_and_remembers_its_layout() {
         .bind(&map.id).bind(serde_json::to_value(&map).unwrap())
         .execute(&pool).await.unwrap();
 
+    sqlx::raw_sql(
+        "INSERT INTO mini_production_maps (id, map_json, created_at) VALUES
+         ('zakaz-8999', '{\"standard_print_side\":false}', now() - interval '1 day'),
+         ('zakaz-9002', '{\"standard_print_side\":null}', now()),
+         ('zakaz-9003', '{\"standard_print_side\":true}', now()),
+         ('template-9001', '{}', now()),
+         ('zakaz-draft-9001', '{}', now());",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/postgres/0195_backfill_order_print_side.sql"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let stored: Vec<(String, Option<bool>, bool)> = sqlx::query_as(
+        "SELECT id, (map_json->>'standard_print_side')::boolean, standard_print_side_defaulted
+         FROM mini_production_maps ORDER BY id",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        stored,
+        [
+            ("template-9001".to_string(), None, false),
+            ("zakaz-8999".to_string(), Some(false), false),
+            ("zakaz-9001".to_string(), Some(true), true),
+            ("zakaz-9002".to_string(), Some(true), true),
+            ("zakaz-9003".to_string(), Some(true), false),
+            ("zakaz-draft-9001".to_string(), None, false),
+        ]
+    );
+
     let sink = PostgresMiniOrderSink::new(pool.clone());
-    assert_eq!(sink.print_side_preference(&template).await.unwrap(), Some(true));
+    assert_eq!(sink.print_side_preference(&template).await.unwrap(), Some(false));
     let store = PostgresProductionMapStore::new(pool.clone());
+    store.set_order_print_side(&map.id, &[cut.into()], true, true).await.unwrap();
+    assert_eq!(sink.print_side_preference(&template).await.unwrap(), Some(true));
     store.set_order_print_side(&map.id, &[cut.into()], false, true).await.unwrap();
-    let (stored, lifecycle): (serde_json::Value, String) =
-        sqlx::query_as("SELECT map_json, lifecycle_status FROM mini_production_maps WHERE id=$1")
-            .bind(&map.id).fetch_one(&pool).await.unwrap();
+    let (stored, lifecycle, defaulted): (serde_json::Value, String, bool) =
+        sqlx::query_as(
+            "SELECT map_json, lifecycle_status, standard_print_side_defaulted
+             FROM mini_production_maps WHERE id=$1",
+        )
+        .bind(&map.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     map.standard_print_side = Some(false);
     assert_eq!(stored, serde_json::to_value(&map).unwrap());
     assert_eq!(lifecycle, "closed");
+    assert!(!defaulted);
     template.kg += 100.0;
     assert_eq!(sink.print_side_preference(&template).await.unwrap(), Some(false));
     template.customer_ref = "customer-b".into();
