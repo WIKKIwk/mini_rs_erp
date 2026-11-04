@@ -38,6 +38,8 @@ pub struct PaddonSummary {
     pub created_at_unix: i64,
     pub updated_at_unix: i64,
     pub item_count: i64,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub contains_peremotka: bool,
     #[serde(default)]
     pub locked_at_unix: Option<i64>,
     /// Product weights only; pallet tare is excluded. None means incomplete knowledge.

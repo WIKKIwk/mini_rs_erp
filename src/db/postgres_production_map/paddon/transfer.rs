@@ -77,11 +77,13 @@ pub(super) async fn transfer(
     } else if actor.role == "aparatchi" && source.apparatus_id != target.apparatus_id {
         return Err(ProductionMapError::PaddonTransferForbidden);
     }
+    let mut target_peremotka = super::paddon_movement::paddon_roll_kind(&mut tx, &target.id).await?;
+    super::paddon_movement::enforce_roll_kind(&mut target_peremotka, false)?;
     let mut batch_ids = input.progress_batch_ids.clone();
     batch_ids.sort();
     let mut memberships = Vec::with_capacity(batch_ids.len());
     for batch_id in &batch_ids {
-        super::paddon_movement::lock_movable_roll(&mut tx, batch_id).await?;
+        super::paddon_movement::lock_movable_roll(&mut tx, batch_id, false).await?;
         if allowed.is_some() && matches!(actor.role.as_str(), "aparatchi" | "rezka_master") {
             let origin: Option<String> = sqlx::query_scalar("SELECT canonical_apparatus_id FROM mini_progress_batches WHERE batch_id=$1")
                 .bind(batch_id).fetch_one(&mut *tx).await.map_err(|_| ProductionMapError::StoreFailed)?;

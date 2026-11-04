@@ -542,6 +542,7 @@ pub(in crate::http::handlers::admin) fn production_map_error(error: ProductionMa
         ProductionMapError::OpeningWipDeleteLocked => conflict("opening_wip_delete_locked"),
         ProductionMapError::OpeningWipDeleteForbidden => forbidden(),
         ProductionMapError::PaddonInvalidInput => bad_request("paddon_invalid_input"),
+        ProductionMapError::PaddonRollKindConflict => conflict("paddon_roll_kind_conflict"),
         ProductionMapError::PaddonLocked => conflict("paddon_locked"),
         ProductionMapError::PaddonUnlockForbidden => (
             StatusCode::FORBIDDEN,

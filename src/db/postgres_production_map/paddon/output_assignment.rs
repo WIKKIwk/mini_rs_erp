@@ -43,6 +43,9 @@ pub(super) async fn lock_for_output(
     if receipt.is_some_and(|value| !value.is_null()) {
         return Err(ProductionMapError::PaddonInvalidInput);
     }
+    if super::paddon_movement::paddon_roll_kind(tx, &id).await? == Some(true) {
+        return Ok(None);
+    }
     Ok(Some(id))
 }
 

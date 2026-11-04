@@ -197,10 +197,67 @@ async fn rezka_outputs_and_paddon_membership_commit_atomically() {
                 "SELECT paddon_id FROM mini_paddon_items WHERE progress_batch_id=$1 AND removed_at IS NULL",
             ).bind(&held.batch_id).fetch_optional(&pool).await.unwrap();
             assert_eq!(membership, None);
-            assert!(matches!(
-                service.add_paddon_item(&paddon_a.code, &held.batch_id, &actor).await,
-                Err(ProductionMapError::ProgressBatchNotAccepted)
-            ));
+            let hold_paddon = service
+                .create_paddon_for_apparatus(Some(apparatus), "", "Peremotka", &actor)
+                .await.unwrap();
+            let assigned_apparatus = [apparatus.into()];
+            let held_ids = [held.batch_id.clone()];
+            let admin_actor = QueueActionActor {
+                role: "admin".into(), ref_: "admin".into(), display_name: "Admin".into(),
+            };
+            for free_movement in [false, true] {
+                service.update_paddon_settings(Some(free_movement), None, &admin_actor)
+                    .await.unwrap();
+                let available = service.paddon_snapshot_for_apparatuses(
+                    &hold_paddon.code, &actor, &assigned_apparatus,
+                ).await.unwrap();
+                assert!(available.available_items.iter().any(|roll| roll.batch_id == held.batch_id));
+                let normal = service.paddon_snapshot_for_apparatuses(
+                    &paddon_a.code, &actor, &assigned_apparatus,
+                ).await.unwrap();
+                assert!(!normal.available_items.iter().any(|roll| roll.batch_id == held.batch_id));
+                assert!(matches!(
+                    service.add_paddon_items_for_apparatuses(
+                        &paddon_a.code, &held_ids, &actor, &assigned_apparatus,
+                    ).await,
+                    Err(ProductionMapError::PaddonRollKindConflict)
+                ));
+                service.set_active_rezka_paddon(apparatus, &actor, &hold_paddon.code)
+                    .await.unwrap();
+                let attached = service.add_paddon_items_for_apparatuses(
+                    &hold_paddon.code, &held_ids, &actor, &assigned_apparatus,
+                ).await.unwrap();
+                assert!(attached.paddon.contains_peremotka);
+                assert_eq!(attached.items[0].wip_status, OrderProgressBatchWipStatus::Peremotka);
+                assert_eq!(attached.items[0].qr_payload, held.qr_payload);
+                assert!(attached.paddon.total_gross_kg.is_some_and(|kg| kg > 0.0));
+                assert!(matches!(
+                    service.validate_paddon_receiving_items(&attached.items).await,
+                    Err(ProductionMapError::ProgressBatchNotAccepted)
+                ));
+                assert_eq!(service.active_rezka_paddon(apparatus, &actor).await.unwrap(), None);
+                assert!(matches!(
+                    service.set_active_rezka_paddon(apparatus, &actor, &hold_paddon.code).await,
+                    Err(ProductionMapError::PaddonRollKindConflict)
+                ));
+                let other = service.paddon_snapshot_for_apparatuses(
+                    &paddon_b.code, &actor, &assigned_apparatus,
+                ).await.unwrap();
+                assert!(!other.available_items.iter().any(|roll| roll.batch_id == held.batch_id));
+                assert!(matches!(
+                    service.add_paddon_items_for_apparatuses(
+                        &paddon_b.code, &held_ids, &actor, &assigned_apparatus,
+                    ).await,
+                    Err(ProductionMapError::PaddonItemAlreadyAssigned)
+                ));
+                if !free_movement {
+                    service.remove_paddon_item(&hold_paddon.code, &held.batch_id, &actor)
+                        .await.unwrap();
+                }
+            }
+            service.update_paddon_settings(Some(false), None, &admin_actor).await.unwrap();
+            service.set_active_rezka_paddon(apparatus, &actor, &paddon_a.code)
+                .await.unwrap();
             let tasks = service.wip_progress_batches(WipProgressBatchQuery::new(
                 apparatus, "", "", Some(OrderProgressBatchWipStatus::Peremotka), false, order, 10,
             )).await.unwrap();

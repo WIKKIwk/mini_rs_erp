@@ -285,6 +285,8 @@ pub enum ProductionMapError {
     OpeningWipDeleteForbidden,
     #[error("paddon input is invalid")]
     PaddonInvalidInput,
+    #[error("a paddon cannot mix peremotka and normal rolls")]
+    PaddonRollKindConflict,
     #[error("paddon is locked after QR printing")]
     PaddonLocked,
     #[error("another worker's paddon cannot be unlocked without free movement permission")]

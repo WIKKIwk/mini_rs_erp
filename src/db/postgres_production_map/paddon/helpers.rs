@@ -4,12 +4,10 @@ use sqlx::{FromRow, PgPool, Postgres, Transaction};
 
 use crate::core::production_map::{
     PaddonCreateInput, PaddonSnapshot, PaddonSummary, ProductionMapError, QueueActionActor,
-    WipProgressBatchQuery,
 };
 
 use super::paddon_weights::{load_batches, correction_gross};
 use crate::core::production_map::{OrderProgressBatchWipStatus, paddon_weights::set_totals};
-use super::wip_query_helpers::load_unassigned_wip_progress_batches;
 
 #[derive(FromRow)]
 struct PaddonRow {
@@ -53,6 +51,7 @@ fn summary_from_row(row: PaddonRow) -> PaddonSummary {
         updated_at_unix: row.updated_at_unix,
         item_count: row.item_count,
         locked_at_unix: row.locked_at_unix,
+        contains_peremotka: false,
         total_gross_kg: None, total_net_kg: None,
     }
 }
@@ -109,12 +108,17 @@ async fn load_snapshot_by_code(
     .map_err(|_| ProductionMapError::StoreFailed)?;
     let items = load_batches(pool, &batch_ids).await?;
     paddon.item_count = i64::try_from(items.len()).unwrap_or(i64::MAX);
+    paddon.contains_peremotka = items.iter().any(|batch| {
+        batch.wip_status == OrderProgressBatchWipStatus::Peremotka
+    });
+    let target_peremotka = (!items.is_empty()).then_some(paddon.contains_peremotka);
     let corrections = correction_gross(pool, &items).await?;
     set_totals(
         &mut paddon,
         items
             .iter()
-            .filter(|b| b.wip_status == OrderProgressBatchWipStatus::Waiting)
+            .filter(|b| matches!(b.wip_status,
+                OrderProgressBatchWipStatus::Waiting | OrderProgressBatchWipStatus::Peremotka))
             .map(|b| (b, corrections.get(&b.batch_id).copied())),
     );
     let receipt = super::paddon_receipts::load(pool, code).await?;
@@ -130,13 +134,13 @@ async fn load_snapshot_by_code(
         paddon.total_net_kg = receipt.paddon.total_net_kg;
     }
     let mut available_items = if let Some((actor, allowed)) = scope.filter(|_| include_available_items && can_manage_items) {
-        super::paddon_movement::load_available_scoped(pool, &paddon.id, actor, allowed, &settings).await?
-    } else if include_available_items && can_manage_items && free_movement_enabled {
-        super::paddon_movement::load_available(pool, &paddon.id, &paddon.apparatus_id).await?
+        super::paddon_movement::load_available_scoped(
+            pool, &paddon.id, actor, allowed, &settings, target_peremotka,
+        ).await?
     } else if include_available_items && can_manage_items {
-        let mut query = WipProgressBatchQuery::new("", "", "", None, false, "", 500);
-        query.producer_apparatus = paddon.apparatus_id.clone();
-        load_unassigned_wip_progress_batches(pool, query).await?
+        super::paddon_movement::load_available(
+            pool, &paddon.id, &paddon.apparatus_id, free_movement_enabled, target_peremotka,
+        ).await?
     } else {
         Vec::new()
     };
@@ -199,13 +203,17 @@ pub(super) async fn load_paddons(
         batches.iter().map(|b| (b.batch_id.as_str(), b)).collect();
     for summary in &mut summaries {
         let summary_id = summary.id.clone();
+        let items = members.iter()
+            .filter(|(id, _)| id == &summary_id)
+            .filter_map(|(_, id)| batches.get(id.as_str()).copied());
+        summary.contains_peremotka = items.clone().any(|batch| {
+            batch.wip_status == OrderProgressBatchWipStatus::Peremotka
+        });
         set_totals(
             summary,
-            members
-                .iter()
-                .filter(|(id, _)| id == &summary_id)
-                .filter_map(|(_, id)| batches.get(id.as_str()).copied())
-                .filter(|b| b.wip_status == OrderProgressBatchWipStatus::Waiting)
+            items
+                .filter(|b| matches!(b.wip_status,
+                OrderProgressBatchWipStatus::Waiting | OrderProgressBatchWipStatus::Peremotka))
                 .map(|b| (b, corrections.get(&b.batch_id).copied())),
         );
     }
@@ -359,6 +367,7 @@ pub(super) async fn add_paddon_items_with_scope(
             .fetch_one(&mut *tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
         super::paddon_movement::ensure_visible(actor, &paddon.created_by_ref, visible)?;
     }
+    let mut target_peremotka = super::paddon_movement::paddon_roll_kind(&mut tx, &paddon.id).await?;
     let mut changed = false;
     let mut batch_ids: Vec<_> = progress_batch_ids.iter().map(|id| id.trim()).collect();
     batch_ids.sort_unstable();
@@ -392,12 +401,14 @@ pub(super) async fn add_paddon_items_with_scope(
             }
             continue;
         }
-        if status != "waiting"
+        let peremotka = status == "peremotka";
+        if !(status == "waiting" || peremotka)
             || payload.get("finished_goods_stock_id").and_then(|v| v.as_str()).is_some_and(|id| !id.is_empty())
             || payload.get("received_warehouse").and_then(|v| v.as_str()).is_some_and(|name| !name.is_empty())
         {
             return Err(ProductionMapError::ProgressBatchNotAccepted);
         }
+        super::paddon_movement::enforce_roll_kind(&mut target_peremotka, peremotka)?;
         sqlx::query(
             "INSERT INTO mini_paddon_items (
                  id, paddon_id, progress_batch_id, added_by_ref, added_by_display_name
@@ -462,7 +473,7 @@ pub(super) async fn remove_paddon_items(
     batch_ids.sort();
     for progress_batch_id in &batch_ids {
         if allow_printed {
-            super::paddon_movement::lock_movable_roll(&mut tx, progress_batch_id).await?;
+            super::paddon_movement::lock_movable_roll(&mut tx, progress_batch_id, true).await?;
         }
         let item_id = sqlx::query_scalar::<_, String>(
             "SELECT id

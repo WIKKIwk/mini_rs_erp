@@ -9,21 +9,7 @@ pub(super) async fn load_wip_progress_batches(
     pool: &PgPool,
     query: WipProgressBatchQuery,
 ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
-    load_wip_progress_batches_inner(pool, query, false).await
-}
 
-pub(super) async fn load_unassigned_wip_progress_batches(
-    pool: &PgPool,
-    query: WipProgressBatchQuery,
-) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
-    load_wip_progress_batches_inner(pool, query, true).await
-}
-
-async fn load_wip_progress_batches_inner(
-    pool: &PgPool,
-    query: WipProgressBatchQuery,
-    exclude_assigned_paddon_items: bool,
-) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
     let WipProgressBatchQuery {
         producer_apparatus,
         worker_ref,
@@ -70,17 +56,7 @@ async fn load_wip_progress_batches_inner(
     let current_location = current_location.trim();
     let status = status.map(|value| value.as_str()).unwrap_or_default();
     let limit = i64::try_from(limit.min(500)).unwrap_or(500);
-    let paddon_filter = if exclude_assigned_paddon_items {
-        "AND NOT EXISTS (
-                 SELECT 1
-                 FROM mini_paddon_items AS paddon_item
-                 WHERE btrim(paddon_item.progress_batch_id) = btrim(batch.batch_id)
-                   AND paddon_item.removed_at IS NULL
-             )"
-    } else {
-        ""
-    };
-    let sql = format!(
+    let sql =
         "SELECT batch.batch_id, batch.revision, batch.session_id,
                 COALESCE(EXTRACT(EPOCH FROM batch.production_started_at)::bigint, 0) AS started_at_unix,
                 EXTRACT(EPOCH FROM batch.production_completed_at)::bigint AS completed_at_unix,
@@ -127,12 +103,10 @@ async fn load_wip_progress_batches_inner(
                 AND LEAST(batch.production_started_at, batch.production_completed_at) < to_timestamp($13)
                 AND GREATEST(batch.production_started_at, batch.production_completed_at) >= to_timestamp($12)
            ))
-           {paddon_filter}
          ORDER BY CASE WHEN $8 <> '' OR $11 IS NOT NULL THEN batch.batch_id END DESC,
                   updated_at DESC, created_at DESC, batch.batch_id DESC
-         LIMIT $6"
-    );
-    let rows = sqlx::query_as::<_, ProgressBatchRow>(&sql)
+         LIMIT $6";
+    let rows = sqlx::query_as::<_, ProgressBatchRow>(sql)
         .bind(query_apparatus_key)
         .bind(order_id.trim())
         .bind(status)

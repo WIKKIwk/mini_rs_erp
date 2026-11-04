@@ -27,19 +27,22 @@ pub(super) fn ensure_visible(actor: &QueueActionActor, creator: &str, visible: b
 pub(super) async fn load_available_scoped(
     pool: &PgPool, target_id: &str, actor: &QueueActionActor, allowed: &[String],
     settings: &crate::core::production_map::PaddonManagementSettings,
+    target_peremotka: Option<bool>,
 ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
     let ids = sqlx::query_scalar::<_, String>(
         "SELECT b.batch_id FROM mini_progress_batches b
-         WHERE b.wip_status='waiting' AND b.canonical_apparatus_id=ANY($2)
+         WHERE b.wip_status IN ('waiting', 'peremotka') AND b.canonical_apparatus_id=ANY($2)
+           AND ($6::boolean IS NULL OR (b.wip_status='peremotka')=$6)
            AND COALESCE(b.payload_json->>'finished_goods_stock_id', '')=''
            AND COALESCE(b.payload_json->>'received_warehouse', '')=''
            AND NOT EXISTS (SELECT 1 FROM mini_paddon_items i JOIN mini_paddons p ON p.id=i.paddon_id
                WHERE i.progress_batch_id=b.batch_id AND i.removed_at IS NULL
-                 AND (p.id=$1 OR p.receipt_json IS NOT NULL OR p.locked_at IS NOT NULL OR NOT $3
+                 AND (b.wip_status='peremotka' OR p.id=$1 OR p.receipt_json IS NOT NULL
+                      OR p.locked_at IS NOT NULL OR NOT $3
                       OR NOT (p.apparatus_id=ANY($2)) OR (NOT $4 AND p.created_by_ref<>$5)))
          ORDER BY b.updated_at DESC, b.batch_id LIMIT 500",
     ).bind(target_id).bind(allowed).bind(settings.free_movement_enabled)
-        .bind(settings.worker_visibility_enabled).bind(actor.ref_.trim())
+        .bind(settings.worker_visibility_enabled).bind(actor.ref_.trim()).bind(target_peremotka)
         .fetch_all(pool).await.map_err(|_| ProductionMapError::StoreFailed)?;
     super::paddon_weights::load_batches(pool, &ids).await
 }
@@ -48,20 +51,26 @@ pub(super) async fn load_available(
     pool: &PgPool,
     target_id: &str,
     target_apparatus: &str,
+    free_movement: bool,
+    target_peremotka: Option<bool>,
 ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
     let ids = sqlx::query_scalar::<_, String>(
         "SELECT b.batch_id FROM mini_progress_batches b
-         WHERE b.wip_status='waiting'
+         WHERE b.wip_status IN ('waiting', 'peremotka')
            AND ($2='' OR b.canonical_apparatus_id=$2)
+           AND ($4::boolean IS NULL OR (b.wip_status='peremotka')=$4)
            AND COALESCE(b.payload_json->>'finished_goods_stock_id', '')=''
            AND COALESCE(b.payload_json->>'received_warehouse', '')=''
            AND NOT EXISTS (SELECT 1 FROM mini_paddon_items i JOIN mini_paddons p ON p.id=i.paddon_id
                WHERE i.progress_batch_id=b.batch_id AND i.removed_at IS NULL
-                 AND (p.id=$1 OR p.receipt_json IS NOT NULL OR p.locked_at IS NOT NULL))
+                 AND (b.wip_status='peremotka' OR NOT $3 OR p.id=$1
+                      OR p.receipt_json IS NOT NULL OR p.locked_at IS NOT NULL))
          ORDER BY b.updated_at DESC, b.batch_id LIMIT 500",
     )
     .bind(target_id)
     .bind(target_apparatus)
+    .bind(free_movement)
+    .bind(target_peremotka)
     .fetch_all(pool)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
@@ -115,12 +124,14 @@ pub(super) async fn move_items(
     } else if actor.role == "aparatchi" && locked.iter().any(|(_, _, _, id, _)| id != target_apparatus) {
         return Err(ProductionMapError::PaddonTransferForbidden);
     }
+    let mut target_peremotka = paddon_roll_kind(tx, &target).await?;
     let mut changed = BTreeSet::new();
     let mut batch_ids = batch_ids.to_vec();
     batch_ids.sort();
     batch_ids.dedup();
     for batch in batch_ids {
-        lock_movable_roll(tx, &batch).await?;
+        let peremotka = lock_movable_roll(tx, &batch, true).await?;
+        enforce_roll_kind(&mut target_peremotka, peremotka)?;
         if matches!(actor.role.as_str(), "aparatchi" | "rezka_master") {
             let origin = sqlx::query_scalar::<_, Option<String>>("SELECT canonical_apparatus_id FROM mini_progress_batches WHERE batch_id=$1")
                 .bind(&batch).fetch_one(&mut **tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
@@ -134,7 +145,7 @@ pub(super) async fn move_items(
             }
             // Another output transaction may have attached an initially free roll
             // after our source lookup. Roll back rather than touch an unlocked pallet.
-            if !lock_ids.contains(&source) {
+            if peremotka || !lock_ids.contains(&source) {
                 return Err(ProductionMapError::PaddonItemAlreadyAssigned);
             }
             sqlx::query("UPDATE mini_paddon_items SET removed_at=now(), removed_by_ref=$2, removed_by_display_name=$3 WHERE id=$1")
@@ -156,13 +167,40 @@ pub(super) async fn move_items(
     Ok(())
 }
 
+// Callers hold the paddon row lock before reading or changing membership.
+pub(super) async fn paddon_roll_kind(
+    tx: &mut Transaction<'_, Postgres>,
+    paddon_id: &str,
+) -> Result<Option<bool>, ProductionMapError> {
+    sqlx::query_scalar(
+        "SELECT bool_or(b.wip_status='peremotka')
+         FROM mini_paddon_items i JOIN mini_progress_batches b ON b.batch_id=i.progress_batch_id
+         WHERE i.paddon_id=$1 AND i.removed_at IS NULL",
+    )
+    .bind(paddon_id)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)
+}
+
+pub(super) fn enforce_roll_kind(
+    target_peremotka: &mut Option<bool>,
+    peremotka: bool,
+) -> Result<(), ProductionMapError> {
+    if *target_peremotka.get_or_insert(peremotka) != peremotka {
+        return Err(ProductionMapError::PaddonRollKindConflict);
+    }
+    Ok(())
+}
+
 pub(super) async fn lock_movable_roll(
     tx: &mut Transaction<'_, Postgres>,
     batch: &str,
-) -> Result<(), ProductionMapError> {
-    let movable = sqlx::query_scalar::<_, bool>(
-        "SELECT wip_status='waiting'
-            AND COALESCE(payload_json->>'finished_goods_stock_id', '')=''
+    allow_peremotka: bool,
+) -> Result<bool, ProductionMapError> {
+    let (status, unreceived) = sqlx::query_as::<_, (String, bool)>(
+        "SELECT wip_status,
+            COALESCE(payload_json->>'finished_goods_stock_id', '')=''
             AND COALESCE(payload_json->>'received_warehouse', '')=''
          FROM mini_progress_batches WHERE batch_id=$1 FOR UPDATE",
     )
@@ -171,8 +209,9 @@ pub(super) async fn lock_movable_roll(
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?
     .ok_or(ProductionMapError::ProgressBatchNotFound)?;
-    if !movable {
+    let peremotka = status == "peremotka";
+    if !unreceived || !(status == "waiting" || allow_peremotka && peremotka) {
         return Err(ProductionMapError::ProgressBatchNotAccepted);
     }
-    Ok(())
+    Ok(peremotka)
 }

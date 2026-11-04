@@ -126,7 +126,7 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         let paddon = PaddonSummary {
             id: code.clone(), code: code.clone(), apparatus_id: input.apparatus_id, location: input.location, note: input.note,
             created_by_ref: input.actor_ref, created_by_display_name: input.actor_display_name,
-            created_at_unix: 0, updated_at_unix: 0, item_count: 0,
+            created_at_unix: 0, updated_at_unix: 0, item_count: 0, contains_peremotka: false,
             total_gross_kg: Some(0.0), total_net_kg: Some(0.0), locked_at_unix: None,
         };
         paddons.insert(code, paddon.clone());

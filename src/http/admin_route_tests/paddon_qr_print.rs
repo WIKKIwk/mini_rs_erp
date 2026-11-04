@@ -116,6 +116,7 @@ fn print_state(
                 created_at_unix: 1,
                 updated_at_unix: 2,
                 item_count: 0,
+                contains_peremotka: false,
                 locked_at_unix: locked.then_some(3),
                 total_gross_kg: Some(0.0),
                 total_net_kg: Some(0.0),
