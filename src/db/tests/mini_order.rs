@@ -206,6 +206,7 @@ fn test_map() -> ProductionMapDefinition {
         base_length: None,
         duplicate_rezka_labels: None,
         include_bobina_in_net: None,
+        standard_print_side: None,
         nodes: vec![
             test_node("start", ProductionMapNodeKind::Start, "Start", 0.0),
             test_node("end", ProductionMapNodeKind::End, "End", 120.0),

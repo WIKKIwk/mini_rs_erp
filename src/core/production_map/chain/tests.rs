@@ -83,6 +83,7 @@ fn hotlunch_map() -> ProductionMapDefinition {
         base_length: None,
         duplicate_rezka_labels: None,
         include_bobina_in_net: None,
+        standard_print_side: None,
         nodes: vec![
             node("start", ProductionMapNodeKind::Start, "Start"),
             node("order", ProductionMapNodeKind::Task, "Hotlunch mahsulot"),

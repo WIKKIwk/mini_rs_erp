@@ -27,6 +27,7 @@ fn order_sheet_row_matches_legacy_excel_columns() {
         base_length: None,
         duplicate_rezka_labels: None,
         include_bobina_in_net: None,
+        standard_print_side: None,
         nodes: vec![ProductionMapNode {
             id: "apparatus".to_string(),
             kind: ProductionMapNodeKind::Apparatus,
@@ -104,6 +105,7 @@ fn order_sheet_row_marks_flexo_orders_with_f() {
         base_length: None,
         duplicate_rezka_labels: None,
         include_bobina_in_net: None,
+        standard_print_side: None,
         nodes: Vec::new(),
         edges: Vec::new(),
     };
@@ -180,6 +182,7 @@ fn test_map(
         base_length: None,
         duplicate_rezka_labels: None,
         include_bobina_in_net: None,
+        standard_print_side: None,
         nodes: vec![ProductionMapNode {
             id: "apparatus".to_string(),
             kind: ProductionMapNodeKind::Apparatus,

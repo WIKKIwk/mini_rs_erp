@@ -110,6 +110,9 @@ pub async fn production_map_order_edit(
     if input.original.map.include_bobina_in_net.is_none() {
         input.original.map.include_bobina_in_net = current.map.include_bobina_in_net;
     }
+    if input.original.map.standard_print_side.is_none() {
+        input.original.map.standard_print_side = current.map.standard_print_side;
+    }
     if input.original.map != current.map
         || input.original.revision != current.revision
         || input.original.template != current.template

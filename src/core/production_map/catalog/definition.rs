@@ -47,6 +47,9 @@ pub struct ProductionMapDefinition {
     /// Sell final Rezka output including its bobina in the labelled net weight.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include_bobina_in_net: Option<bool>,
+    /// Customer's print side selection for this order. Omitted on legacy orders.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub standard_print_side: Option<bool>,
     #[serde(default)]
     pub nodes: Vec<ProductionMapNode>,
     #[serde(default)]

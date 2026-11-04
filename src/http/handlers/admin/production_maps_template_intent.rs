@@ -178,6 +178,7 @@ async fn prepare_template_fork(
     copy.base_length = None;
     copy.duplicate_rezka_labels = None;
     copy.include_bobina_in_net = None;
+    copy.standard_print_side = None;
     for node in &mut copy.nodes {
         node.alternative_assigned_apparatus_id.clear();
         node.alternative_assigned_title.clear();

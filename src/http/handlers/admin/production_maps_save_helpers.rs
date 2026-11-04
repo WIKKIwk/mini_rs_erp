@@ -64,6 +64,7 @@ fn template_map_copy_for_save(
     template_map.base_length = None;
     template_map.duplicate_rezka_labels = None;
     template_map.include_bobina_in_net = None;
+    template_map.standard_print_side = None;
     Some(template_map)
 }
 

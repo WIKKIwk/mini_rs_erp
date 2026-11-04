@@ -317,6 +317,8 @@ struct ProductionMapAutoOpenRequest {
     duplicate_rezka_labels: bool,
     #[serde(default)]
     include_bobina_in_net: bool,
+    #[serde(default)]
+    standard_print_side: Option<bool>,
 }
 
 /// Saves a production map and (optionally) its calculate order template in one
@@ -369,6 +371,7 @@ pub async fn production_map_auto_open(
         mut template,
         duplicate_rezka_labels,
         include_bobina_in_net,
+        standard_print_side,
     } = parse_json(&body)?;
     super::combos::validate_combo_template(&state, &template).await?;
     if !template.products.is_empty() {
@@ -402,6 +405,7 @@ pub async fn production_map_auto_open(
         .map_err(|error| bad_request(&error))?;
     map.duplicate_rezka_labels = Some(duplicate_rezka_labels);
     map.include_bobina_in_net = Some(include_bobina_in_net);
+    map.standard_print_side = standard_print_side;
     template.order_number = map.order_number.clone();
     template.code = map.code.clone();
     template.width_mm = map.width_mm.unwrap_or_default();

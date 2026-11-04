@@ -20,6 +20,7 @@ pub(super) fn sample_map() -> ProductionMapDefinition {
         base_length: None,
         duplicate_rezka_labels: None,
         include_bobina_in_net: None,
+        standard_print_side: None,
         nodes: vec![
             ProductionMapNode {
                 id: "start".to_string(),
@@ -147,6 +148,7 @@ pub(super) fn apparatus_stage_map(id: &str, apparatus: &str) -> ProductionMapDef
         base_length: None,
         duplicate_rezka_labels: None,
         include_bobina_in_net: None,
+        standard_print_side: None,
         nodes: vec![
             ProductionMapNode {
                 id: "start".to_string(),
@@ -346,6 +348,7 @@ pub(super) fn condition_map() -> ProductionMapDefinition {
         base_length: None,
         duplicate_rezka_labels: None,
         include_bobina_in_net: None,
+        standard_print_side: None,
         nodes: vec![
             ProductionMapNode {
                 id: "start".to_string(),

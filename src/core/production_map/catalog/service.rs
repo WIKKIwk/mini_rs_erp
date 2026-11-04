@@ -489,10 +489,11 @@ impl ProductionMapService {
         {
             map.duplicate_rezka_labels = previous.duplicate_rezka_labels;
         }
-        if map.include_bobina_in_net.is_none()
-            && let Some(previous) = self.store.map_by_id(&map.id).await?
+        if (map.include_bobina_in_net.is_none() || map.standard_print_side.is_none())
+            && let Some(previous) = self.store.map_by_id(map.id.trim()).await?
         {
-            map.include_bobina_in_net = previous.include_bobina_in_net;
+            map.include_bobina_in_net = map.include_bobina_in_net.or(previous.include_bobina_in_net);
+            map.standard_print_side = map.standard_print_side.or(previous.standard_print_side);
         }
         normalize_map(&mut map);
         compile_map(&map)?;
@@ -516,10 +517,11 @@ impl ProductionMapService {
             {
                 map.duplicate_rezka_labels = previous.duplicate_rezka_labels;
             }
-            if map.include_bobina_in_net.is_none()
-                && let Some(previous) = self.store.map_by_id(&map.id).await?
+            if (map.include_bobina_in_net.is_none() || map.standard_print_side.is_none())
+                && let Some(previous) = self.store.map_by_id(map.id.trim()).await?
             {
-                map.include_bobina_in_net = previous.include_bobina_in_net;
+                map.include_bobina_in_net = map.include_bobina_in_net.or(previous.include_bobina_in_net);
+                map.standard_print_side = map.standard_print_side.or(previous.standard_print_side);
             }
             normalize_map(&mut map);
             compile_map(&map)?;

@@ -63,6 +63,7 @@ async fn complete_pending_order(
     source.base_length = None;
     source.duplicate_rezka_labels = None;
     source.include_bobina_in_net = None;
+    source.standard_print_side = None;
     template.source_map_id = source.id.clone();
     template = crate::db::postgres_calculate_order::stamp_template(template, None);
     let source = state

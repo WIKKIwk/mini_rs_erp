@@ -54,6 +54,10 @@ pub(super) async fn put_map_inner_tx(
                 || CASE WHEN NOT (excluded.map_json ? 'include_bobina_in_net')
                             AND mini_production_maps.map_json ? 'include_bobina_in_net'
                     THEN jsonb_build_object('include_bobina_in_net', mini_production_maps.map_json -> 'include_bobina_in_net')
+                    ELSE '{}'::jsonb END
+                || CASE WHEN NOT (excluded.map_json ? 'standard_print_side')
+                            AND mini_production_maps.map_json ? 'standard_print_side'
+                    THEN jsonb_build_object('standard_print_side', mini_production_maps.map_json -> 'standard_print_side')
                     ELSE '{}'::jsonb END,
             updated_at = excluded.updated_at",
     )
