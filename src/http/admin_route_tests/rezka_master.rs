@@ -11,6 +11,53 @@ const ADMIN_ASSIGNMENTS: &str = "/v1/mobile/admin/role-assignments";
 const SETTINGS: &str = "/v1/mobile/rezka-master/order-settings";
 
 #[tokio::test]
+async fn rezka_master_daily_history_is_scoped_by_producer_date_and_cursor() {
+    let mut state = test_state();
+    state.apparatus.bootstrap_factory_defaults().await.unwrap();
+    let store = Arc::new(MemoryProductionMapStore::new());
+    state.production_maps = production_map_service_with_store(&state, store.clone());
+    for (id, producer, worker, start, end, payload) in [
+        ("z-print", PRINT, "anis", 105, 110, serde_json::json!({})),
+        ("z-outside", CUT, "anis", 200, 210, serde_json::json!({})),
+        ("z-remainder", CUT, "anis", 105, 110, serde_json::json!({"origin":"layer_remainder"})),
+        ("b-anis", CUT_FOUR, "anis", 0, 110, serde_json::json!({})),
+        ("a-other", CUT, "abdusamad", 95, 100, serde_json::json!({})),
+    ] {
+        store.put_order_progress_batch(serde_json::from_value(serde_json::json!({
+            "batch_id":id,"session_id":"daily-work","apparatus":producer,"order_id":"zakaz-daily-work",
+            "action":"complete","status":"completed","produced_qty":10,"uom":"m",
+            "started_at_unix":start,"completed_at_unix":end,"qr_payload":format!("qr-{id}"),
+            "label_item_code":"DAILY","label_item_name":"Daily work","executor_name":worker,
+            "worker_role":"aparatchi","worker_ref":worker,"worker_display_name":worker,
+            "wip_status":"processed","current_apparatus":if producer == PRINT {CUT} else {PRINT},
+            "payload_json":payload
+        })).unwrap()).await.unwrap();
+    }
+    let master = session_for(&state, PrincipalRole::RezkaMaster, "rezka-master-daily").await;
+    let worker = session_for(&state, PrincipalRole::Aparatchi, "anis").await;
+    let router = build_router(state);
+    let base = format!("{MAPS}/progress-qr/history");
+    let team = format!("{base}?rezka_team=true&from_unix=100&until_unix=200&limit=1");
+    let first = router.clone().oneshot(request("GET", &team, &master)).await.unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    let first = json_body(first).await;
+    assert_eq!(first["batches"][0]["batch_id"], "b-anis");
+    assert_eq!(first["next_before_batch_id"], "b-anis");
+    let second = router.clone().oneshot(request(
+        "GET", &format!("{team}&before_batch_id=b-anis"), &master,
+    )).await.unwrap();
+    assert_eq!(second.status(), StatusCode::OK);
+    let second = json_body(second).await;
+    assert_eq!(second["batches"][0]["batch_id"], "a-other");
+    assert!(second["next_before_batch_id"].is_null());
+    let denied = router.clone().oneshot(request("GET", &team, &worker)).await.unwrap();
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    let personal = router.oneshot(request("GET", &base, &master)).await.unwrap();
+    assert_eq!(personal.status(), StatusCode::OK);
+    assert_eq!(json_body(personal).await["batches"], serde_json::json!([]));
+}
+
+#[tokio::test]
 async fn rezka_master_login_grants_only_cut_apparatus_and_scoped_routes() {
     let mut state = test_state();
     state.worker_show_all_apparatus_tabs = true;

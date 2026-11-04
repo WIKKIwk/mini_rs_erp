@@ -1,7 +1,8 @@
 use super::queue_actions::progress_print_failure_json;
 use super::*;
 use crate::core::production_map::{
-    OrderControlState, OrderProgressBatch, ProgressBatchCorrectionInput,
+    OrderControlState, OrderProgressBatch, ProgressBatchCorrectionInput, WipProductionDay,
+    WipProgressBatchQuery,
 };
 
 #[derive(serde::Deserialize)]
@@ -303,6 +304,12 @@ pub struct ProgressQrHistoryQuery {
     worker_ref: String,
     #[serde(default)]
     limit: Option<usize>,
+    #[serde(default)]
+    rezka_team: bool,
+    from_unix: Option<i64>,
+    until_unix: Option<i64>,
+    #[serde(default)]
+    before_batch_id: String,
 }
 
 pub async fn production_map_progress_qr_history(
@@ -326,8 +333,11 @@ pub async fn production_map_progress_qr_history(
     if method != Method::GET {
         return Err(method_not_allowed());
     }
-    let (worker_refs, worker_display_name) = progress_history_scope(&principal, &query)?;
     let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    if query.rezka_team {
+        return rezka_team_daily_history(&state, &principal, query, limit).await;
+    }
+    let (worker_refs, worker_display_name) = progress_history_scope(&principal, &query)?;
     let batches = state
         .production_maps
         .progress_batches_for_worker(&worker_refs, &worker_display_name, limit)
@@ -336,6 +346,48 @@ pub async fn production_map_progress_qr_history(
     Ok(json_response(serde_json::json!({
         "ok": true,
         "batches": batches,
+    })))
+}
+
+async fn rezka_team_daily_history(
+    state: &AppState,
+    principal: &Principal,
+    query: ProgressQrHistoryQuery,
+    limit: usize,
+) -> Result<Response, AdminError> {
+    if principal.role != PrincipalRole::RezkaMaster || principal.ref_.trim().is_empty() {
+        return Err(forbidden());
+    }
+    let (Some(from_unix), Some(until_unix)) = (query.from_unix, query.until_unix) else {
+        return Err(bad_request("invalid daily work date"));
+    };
+    if from_unix <= 0
+        || !(1..=26 * 3600).contains(&until_unix.saturating_sub(from_unix))
+        || until_unix > 253_402_300_799
+        || query.before_batch_id.len() > 4096
+    {
+        return Err(bad_request("invalid daily work range or cursor"));
+    }
+    let producer_apparatus_ids = state.principal_assigned_apparatus(principal).await;
+    let mut batches = if producer_apparatus_ids.is_empty() {
+        Vec::new()
+    } else {
+        let mut store_query = WipProgressBatchQuery::new("", "", "", None, true, "", limit + 1);
+        store_query.production_day = Some(WipProductionDay {
+            producer_apparatus_ids,
+            from_unix,
+            until_unix,
+        });
+        store_query.before_batch_id = query.before_batch_id;
+        state.production_maps.wip_progress_batches(store_query).await.map_err(production_map_error)?
+    };
+    let has_more = batches.len() > limit;
+    batches.truncate(limit);
+    let next_before_batch_id = has_more.then(|| batches.last().map(|batch| &batch.batch_id)).flatten();
+    Ok(json_response(serde_json::json!({
+        "ok": true,
+        "batches": batches,
+        "next_before_batch_id": next_before_batch_id,
     })))
 }
 

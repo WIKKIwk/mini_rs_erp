@@ -222,6 +222,7 @@ pub struct WipProgressBatchQuery {
     pub worker_ref: String,
     /// Stable keyset cursor for producer history, ordered by immutable batch ID.
     pub before_batch_id: String,
+    pub production_day: Option<WipProductionDay>,
     pub apparatus: String,
     pub next_apparatus: String,
     pub current_location: String,
@@ -229,6 +230,13 @@ pub struct WipProgressBatchQuery {
     pub include_processed: bool,
     pub order_id: String,
     pub limit: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct WipProductionDay {
+    pub producer_apparatus_ids: Vec<String>,
+    pub from_unix: i64,
+    pub until_unix: i64,
 }
 
 impl WipProgressBatchQuery {
@@ -245,6 +253,7 @@ impl WipProgressBatchQuery {
             producer_apparatus: String::new(),
             worker_ref: String::new(),
             before_batch_id: String::new(),
+            production_day: None,
             apparatus: apparatus.trim().to_string(),
             next_apparatus: next_apparatus.trim().to_string(),
             current_location: current_location.trim().to_string(),

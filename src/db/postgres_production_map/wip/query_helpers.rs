@@ -28,6 +28,7 @@ async fn load_wip_progress_batches_inner(
         producer_apparatus,
         worker_ref,
         before_batch_id,
+        production_day,
         apparatus,
         next_apparatus,
         current_location,
@@ -119,8 +120,14 @@ async fn load_wip_progress_batches_inner(
            AND ($8 = '' OR batch.canonical_apparatus_id = $8)
            AND ($9 = '' OR worker_ref = $9)
            AND ($10 = '' OR batch.batch_id < $10)
+           AND ($11::text[] IS NULL OR (
+                batch.canonical_apparatus_id = ANY($11)
+                AND COALESCE(batch.payload_json->>'origin', '') <> 'layer_remainder'
+                AND LEAST(batch.production_started_at, batch.production_completed_at) < to_timestamp($13)
+                AND GREATEST(batch.production_started_at, batch.production_completed_at) >= to_timestamp($12)
+           ))
            {paddon_filter}
-         ORDER BY CASE WHEN $8 <> '' THEN batch.batch_id END DESC,
+         ORDER BY CASE WHEN $8 <> '' OR $11 IS NOT NULL THEN batch.batch_id END DESC,
                   updated_at DESC, created_at DESC, batch.batch_id DESC
          LIMIT $6"
     );
@@ -135,6 +142,9 @@ async fn load_wip_progress_batches_inner(
         .bind(producer_apparatus)
         .bind(worker_ref.trim())
         .bind(before_batch_id.trim())
+        .bind(production_day.as_ref().map(|day| day.producer_apparatus_ids.as_slice()))
+        .bind(production_day.as_ref().map(|day| day.from_unix as f64))
+        .bind(production_day.as_ref().map(|day| day.until_unix as f64))
         .fetch_all(pool)
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;

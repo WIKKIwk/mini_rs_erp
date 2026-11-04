@@ -350,6 +350,7 @@ pub(super) async fn wip_progress_batches(
         producer_apparatus,
         worker_ref,
         before_batch_id,
+        production_day,
         apparatus,
         next_apparatus,
         current_location,
@@ -387,6 +388,17 @@ pub(super) async fn wip_progress_batches(
                 && (worker_ref.is_empty() || batch.worker_ref.trim() == worker_ref.trim())
                 && (before_batch_id.is_empty()
                     || batch.batch_id.as_str() < before_batch_id.as_str())
+                && production_day.as_ref().is_none_or(|day| {
+                    let last = batch.started_at_unix.max(batch.completed_at_unix);
+                    let first = if batch.started_at_unix > 0 && batch.completed_at_unix > 0 {
+                        batch.started_at_unix.min(batch.completed_at_unix)
+                    } else {
+                        last
+                    };
+                    first < day.until_unix && last >= day.from_unix
+                        && day.producer_apparatus_ids.contains(&batch.apparatus)
+                        && !batch.is_layer_remainder()
+                })
                 && (apparatus.is_empty()
                     || super::super::types::apparatus_ids_match(
                         &batch.current_apparatus,

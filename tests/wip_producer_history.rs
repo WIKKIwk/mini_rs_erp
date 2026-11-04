@@ -83,6 +83,35 @@ async fn assert_history(store: &dyn ProductionMapStorePort) {
     assert!(store.wip_progress_batches(query).await.unwrap().is_empty());
 }
 
+async fn assert_daily_history(store: &dyn ProductionMapStorePort) {
+    for (id, producer, start, end) in [
+        ("daily-z-wrong-producer", DOWNSTREAM, 100, 110),
+        ("daily-z-next-day", PRODUCER, 200, 210),
+        ("daily-b-second-worker", PRODUCER, 0, 110),
+        ("daily-a-crosses-midnight", PRODUCER, 90, 100),
+    ] {
+        let mut output = batch(id, producer, id);
+        output.started_at_unix = start;
+        output.completed_at_unix = end;
+        output.current_apparatus = if producer == PRODUCER { DOWNSTREAM } else { PRODUCER }.into();
+        store.put_order_progress_batch(output).await.unwrap();
+    }
+    let mut query = WipProgressBatchQuery::new("", "", "", None, true, "", 1);
+    query.production_day = Some(WipProductionDay {
+        producer_apparatus_ids: vec![PRODUCER.into()],
+        from_unix: 100,
+        until_unix: 200,
+    });
+    let first = store.wip_progress_batches(query.clone()).await.unwrap();
+    assert_eq!(first[0].batch_id, "daily-b-second-worker");
+    assert_eq!(first[0].current_apparatus, DOWNSTREAM);
+    query.before_batch_id = first[0].batch_id.clone();
+    let next = store.wip_progress_batches(query.clone()).await.unwrap();
+    assert_eq!(next[0].batch_id, "daily-a-crosses-midnight");
+    query.before_batch_id = next[0].batch_id.clone();
+    assert!(store.wip_progress_batches(query).await.unwrap().is_empty());
+}
+
 #[tokio::test]
 async fn memory_producer_history_filters_before_limit_and_pages_to_old_free_output() {
     assert_history(&MemoryProductionMapStore::new()).await;
@@ -131,6 +160,7 @@ async fn postgres_producer_history_filters_before_limit_and_pages_to_old_free_ou
         "edges":[{"from":"start","to":"press"},{"from":"press","to":"lam"},{"from":"lam","to":"end"}]
     })).unwrap()).await.unwrap();
     assert_history(store.as_ref()).await;
+    assert_daily_history(store.as_ref()).await;
     pool.close().await;
     sqlx::query(&format!("DROP DATABASE {database} WITH (FORCE)"))
         .execute(&admin)
