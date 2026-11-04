@@ -436,7 +436,9 @@ async fn project(
         "other_worker"
     } else if session.status != OrderRunStatus::Active || link.is_none() {
         "session_changed"
-    } else if !claim.before_json.is_object() || claim.map_json != h.map {
+    } else if !claim.before_json.is_object()
+        || !cancel_start::map_matches_checkpoint(&h.map, &claim.map_json)
+    {
         "checkpoint_unavailable"
     } else {
         ""

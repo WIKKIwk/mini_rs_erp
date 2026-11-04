@@ -1,4 +1,4 @@
-//! Compare the entire Start witness under the normal order/resource locks.
+//! Validate the Start witness under the normal order/resource locks.
 //! Never infer an unused roll from a zero quantity or its current colour.
 use super::*;
 use crate::core::production_map::{
@@ -18,6 +18,19 @@ fn failed(error: sqlx::Error) -> ProductionMapError {
 }
 fn text<'a>(value: &'a Value, key: &str) -> &'a str {
     value[key].as_str().unwrap_or_default()
+}
+
+pub(super) fn map_matches_checkpoint(current: &Value, checkpoint: &Value) -> bool {
+    let (Some(current), Some(checkpoint)) = (current.as_object(), checkpoint.as_object()) else {
+        return false;
+    };
+    // These settings apply to future output and are retained on rollback.
+    current.keys().chain(checkpoint.keys()).all(|key| {
+        matches!(
+            key.as_str(),
+            "duplicate_rezka_labels" | "include_bobina_in_net"
+        ) || current.get(key) == checkpoint.get(key)
+    })
 }
 
 pub(super) async fn restore_scanned_input_tx(
@@ -44,7 +57,7 @@ pub(super) async fn can_finish_scanned_session_tx(
         .bind(&session.session_id).fetch_one(&mut **tx).await.map_err(failed)?;
     let map: Value=sqlx::query_scalar("SELECT map_json FROM mini_production_maps WHERE id=$1")
         .bind(&session.order_id).fetch_one(&mut **tx).await.map_err(failed)?;
-    if outputs || map!=checkpoint.map
+    if outputs || !map_matches_checkpoint(&map, &checkpoint.map)
         || assignments(tx,&session.apparatus,&session.order_id).await?!=checkpoint.assignments
         || reports(tx,&session.apparatus,&session.order_id).await?!=checkpoint.reports
     { return Ok(false); }
@@ -171,7 +184,7 @@ pub(super) async fn execute(
     if blocked
         || changed
         || state.as_deref() != Some("in_progress")
-        || map != checkpoint.map
+        || !map_matches_checkpoint(&map, &checkpoint.map)
         || assignments(&mut tx, apparatus, order).await? != checkpoint.assignments
         || reports(&mut tx, apparatus, order).await? != checkpoint.reports
     {

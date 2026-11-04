@@ -302,7 +302,7 @@ async fn all_wip_operators_can_undo_only_their_untouched_start_and_retry_safely(
 #[tokio::test]
 #[ignore = "requires CANCEL_START_TEST_DATABASE_URL pointing at a disposable PostgreSQL server"]
 async fn later_work_stale_resources_and_missing_checkpoints_cannot_be_undone() {
-    for change in ["session", "output", "input", "waste", "freeze", "legacy"] {
+    for change in ["session", "output", "input", "waste", "freeze", "map", "legacy"] {
         let f = Fixture::new(MACHINES[0]).await;
         let c = f.start().await;
         match change {
@@ -320,6 +320,11 @@ async fn later_work_stale_resources_and_missing_checkpoints_cannot_be_undone() {
             "input" => {
                 sqlx::query("UPDATE mini_progress_batches SET revision=revision+1,description='correction' WHERE batch_id=$1")
                 .bind(&f.original.batch_id).execute(&f.pool).await.unwrap();
+            }
+            "map" => {
+                let mut map = f.service.raw_map(&f.order).await.unwrap().unwrap();
+                map.width_mm = Some(700.0);
+                f.service.upsert_map(map).await.unwrap();
             }
             "freeze" => {
                 sqlx::query("INSERT INTO mini_order_control_states(order_id,state,frozen_at_unix) VALUES($1,'frozen',1) ON CONFLICT(order_id) DO UPDATE SET state='frozen',frozen_at_unix=1")

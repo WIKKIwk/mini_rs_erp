@@ -90,6 +90,53 @@ async fn return_input(f: &Fixture, item: &ScannedWipInput) -> Result<(), Product
         .return_scanned_wip(&target(f, item), &[f.machine.clone()], actor())
         .await
 }
+
+#[tokio::test]
+#[ignore = "requires CANCEL_START_TEST_DATABASE_URL pointing at a disposable PostgreSQL server"]
+async fn rezka_settings_changes_allow_both_unused_start_rollbacks() {
+    for return_from_history in [false, true] {
+        let f = Fixture::new_scanned(MACHINES[0]).await;
+        let started = f.start().await;
+        let scanned = inputs(&f).await.pop().unwrap();
+        let return_request = target(&f, &scanned);
+        let mut map = f.service.raw_map(&f.order).await.unwrap().unwrap();
+        map.duplicate_rezka_labels = Some(true);
+        map.include_bobina_in_net = Some(true);
+        let saved = f.service.upsert_map(map).await.unwrap().map;
+
+        if return_from_history {
+            let row = inputs(&f).await.pop().unwrap();
+            assert_eq!(
+                row.return_token.as_deref(),
+                Some(return_request.token.as_str())
+            );
+            f.service
+                .return_scanned_wip(&return_request, &[f.machine.clone()], actor())
+                .await
+                .unwrap();
+        } else {
+            f.cancel(&started).await.unwrap();
+        }
+
+        let restored = f.batch().await;
+        assert_eq!(restored.wip_status, OrderProgressBatchWipStatus::Waiting);
+        assert_eq!(restored.qr_payload, f.original.qr_payload);
+        assert!(restored.used_by_session_id.is_empty());
+        assert!(
+            f.store
+                .active_order_run_session(&f.machine, &f.order)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            f.store.apparatus_queue_states().await.unwrap()[&f.machine][&f.order],
+            "pending"
+        );
+        assert_eq!(f.service.raw_map(&f.order).await.unwrap(), Some(saved));
+    }
+}
+
 async fn another(f: &Fixture, suffix: &str) -> OrderProgressBatch {
     let mut batch = f.original.clone();
     batch.batch_id = format!("{}-{suffix}", batch.batch_id);
