@@ -6,8 +6,7 @@ async fn postgres_print_preflight_persists_common_status_and_restores_without_ex
     use super::super::print_preflight;
     let pool = isolated_pool().await;
     sqlx::raw_sql("
-        CREATE TEMP TABLE mini_apparatus (id TEXT PRIMARY KEY, name TEXT);
-        CREATE TEMP TABLE mini_order_control_states (order_id TEXT PRIMARY KEY, state TEXT);
+        CREATE TABLE mini_apparatus (id TEXT PRIMARY KEY, name TEXT);
         ALTER TABLE mini_queue_states ADD COLUMN apparatus TEXT, ADD COLUMN updated_at TIMESTAMPTZ;
         ALTER TABLE mini_queue_states ADD PRIMARY KEY (canonical_apparatus_id, order_id);
         ALTER TABLE mini_queue_states ADD CONSTRAINT mini_queue_states_state_allowed
@@ -25,8 +24,7 @@ async fn postgres_print_preflight_persists_common_status_and_restores_without_ex
                 'waiting_next_stage', 'partially_completed', 'completed', 'completed_with_issue',
                 'free_wip', 'accepted_to_stock'));
     ").execute(&pool).await.unwrap();
-    sqlx::raw_sql(&include_str!("../../../migrations/postgres/0120_print_preflight_holds.sql")
-        .replace("CREATE TABLE IF NOT EXISTS", "CREATE TEMP TABLE"))
+    sqlx::raw_sql(include_str!("../../../migrations/postgres/0120_print_preflight_holds.sql"))
         .execute(&pool).await.unwrap();
     sqlx::raw_sql(include_str!("../../../migrations/postgres/0121_print_preflight_order_status.sql"))
         .execute(&pool).await.expect("migration accepts the new common status");
@@ -102,21 +100,30 @@ async fn postgres_print_preflight_persists_common_status_and_restores_without_ex
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM mini_queue_states WHERE order_id = 'colour'")
         .fetch_one(&pool).await.unwrap();
     assert_eq!(count, 0, "missing queue row is restored exactly");
-    pool.close().await;
+    close_isolated_pool(pool).await;
 }
 
-// Connection-local tables exercise the real SQL/transaction path without
-// creating, resetting, or modifying any application database or shared tables.
+// Give each test its own namespace. PostgreSQL does not resolve unqualified
+// function calls against pg_temp, even when the referenced tables are temporary.
 async fn isolated_pool() -> PgPool {
     let url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
-        .unwrap_or_else(|_| "postgres://wikki@127.0.0.1:5432/postgres".into());
+        .expect("isolated PostgreSQL test database required");
+    let schema = format!("test_lifecycle_{:016x}", rand::random::<u64>());
+    let options = url
+        .parse::<sqlx::postgres::PgConnectOptions>()
+        .unwrap()
+        .options([("search_path", schema.as_str())]);
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(1)
-        .connect(&url)
+        .connect_with(options)
+        .await
+        .unwrap();
+    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        .execute(&pool)
         .await
         .unwrap();
     sqlx::raw_sql("
-        CREATE TEMP TABLE mini_production_maps (
+        CREATE TABLE mini_production_maps (
             id TEXT PRIMARY KEY, map_json JSONB NOT NULL,
             lifecycle_status TEXT NOT NULL DEFAULT 'in_progress', lifecycle_version BIGINT NOT NULL DEFAULT 1,
             operational_status TEXT NOT NULL DEFAULT 'partially_completed',
@@ -126,38 +133,59 @@ async fn isolated_pool() -> PgPool {
             operational_status_changed_at TIMESTAMPTZ DEFAULT now(), production_completed_at TIMESTAMPTZ,
             closed_at TIMESTAMPTZ
         );
-        CREATE TEMP TABLE mini_queue_states (order_id TEXT, canonical_apparatus_id TEXT, state TEXT);
-        CREATE TEMP TABLE mini_queue_action_events (
+        CREATE TABLE mini_queue_states (order_id TEXT, canonical_apparatus_id TEXT, state TEXT);
+        CREATE TABLE mini_order_control_states (order_id TEXT PRIMARY KEY, state TEXT);
+        CREATE TABLE mini_stage_order_controls (
+            order_id TEXT, canonical_apparatus_id TEXT, record_json JSONB
+        );
+        CREATE TABLE mini_queue_action_events (
             id BIGSERIAL PRIMARY KEY, order_id TEXT, stage_node_id TEXT, action TEXT, to_state TEXT,
             payload_json JSONB DEFAULT '{}'::jsonb
         );
-        CREATE TEMP TABLE mini_order_run_sessions (order_id TEXT, status TEXT,
+        CREATE TABLE mini_order_run_sessions (order_id TEXT, status TEXT,
             session_id TEXT, canonical_apparatus_id TEXT, stage_node_id TEXT,
             worker_role TEXT, worker_ref TEXT, worker_display_name TEXT,
             started_at TIMESTAMPTZ, updated_at TIMESTAMPTZ, payload_json JSONB);
-        CREATE TEMP TABLE mini_progress_batches (
-            order_id TEXT, wip_status TEXT, canonical_next_apparatus_id TEXT, processed_by_apparatus TEXT,
+        CREATE TABLE mini_progress_batches (
+            batch_id TEXT, order_id TEXT, wip_status TEXT,
+            canonical_next_apparatus_id TEXT, processed_by_apparatus TEXT,
             canonical_apparatus_id TEXT, payload_json JSONB,
             action TEXT DEFAULT 'complete', canonical_current_apparatus_id TEXT,
             canonical_used_by_apparatus_id TEXT, used_by_session_id TEXT,
             canonical_processed_by_apparatus_id TEXT, processed_by_session_id TEXT
         );
-        CREATE TEMP TABLE mini_opening_wip_intakes (intake_id TEXT, order_id TEXT, status TEXT,
+        CREATE TABLE mini_layer_remainder_operations (
+            order_id TEXT, source_kind TEXT, response_json JSONB
+        );
+        CREATE TABLE mini_opening_wip_intakes (intake_id TEXT, order_id TEXT, status TEXT,
             source_apparatus TEXT, resume_apparatus TEXT, resume_stage_node_id TEXT);
-        CREATE TEMP TABLE mini_opening_wip_batches (intake_id TEXT, wip_status TEXT);
-        CREATE TEMP TABLE mini_production_order_lifecycle_events (
+        CREATE TABLE mini_opening_wip_batches (intake_id TEXT, wip_status TEXT);
+        CREATE TABLE mini_production_order_lifecycle_events (
             event_id TEXT UNIQUE, order_id TEXT, from_status TEXT, to_status TEXT,
             completion_outcome TEXT, actor_role TEXT, actor_ref TEXT, actor_display_name TEXT,
             source_event_id TEXT, reason TEXT, lifecycle_version BIGINT, created_at TIMESTAMPTZ
         );
     ").execute(&pool).await.unwrap();
-    let projection = include_str!("../../../migrations/postgres/0138_incremental_wip_lifecycle.sql")
-        .replace("CREATE TABLE", "CREATE TEMP TABLE");
-    let names = ["mini_progress_batch_work_route", "mini_progress_batch_adjust_work_input",
-        "mini_progress_batch_adjust_lifecycle_totals", "mini_progress_batch_refresh_lifecycle_projection"];
-    let projection = names.into_iter().fold(projection, |sql, name| sql.replace(name, &format!("pg_temp.{name}")));
-    sqlx::raw_sql(&projection).execute(&pool).await.unwrap();
+    sqlx::raw_sql(include_str!("../../../migrations/postgres/0138_incremental_wip_lifecycle.sql"))
+        .execute(&pool)
+        .await
+        .unwrap();
     pool
+}
+
+async fn close_isolated_pool(pool: PgPool) {
+    let schema: String = sqlx::query_scalar("SELECT current_schema()")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let suffix = schema.strip_prefix("test_lifecycle_").unwrap();
+    assert_eq!(suffix.len(), 16);
+    assert!(suffix.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
 }
 
 async fn seed(pool: &PgPool) {
@@ -251,7 +279,7 @@ async fn postgres_stage_lifecycle_split_work_and_reconciliation_are_idempotent()
         old_state, "pending",
         "repair must not rewrite individual apparatus history"
     );
-    pool.close().await;
+    close_isolated_pool(pool).await;
 }
 
 #[tokio::test]
@@ -275,15 +303,14 @@ async fn postgres_stage_lifecycle_latest_partial_event_blocks_old_completion() {
             .await
             .unwrap();
     assert_eq!(status, "in_progress");
-    pool.close().await;
+    close_isolated_pool(pool).await;
 }
 
 #[tokio::test]
 async fn incremental_wip_projection_preserves_routes_counts_and_rollback() {
     let pool = isolated_pool().await;
     seed(&pool).await;
-    sqlx::raw_sql("ALTER TABLE mini_progress_batches ADD COLUMN batch_id TEXT;
-        INSERT INTO mini_progress_batches (batch_id, order_id, action, wip_status,
+    sqlx::raw_sql("INSERT INTO mini_progress_batches (batch_id, order_id, action, wip_status,
             canonical_apparatus_id, canonical_next_apparatus_id, payload_json)
         SELECT n::text, 'split', 'roll_complete', 'waiting', 'apparatus:test:rezka',
             'apparatus:test:lam1', '{\"stage_node_id\":\"before\",\"next_stage_node_id\":\"lam1\"}'::jsonb
@@ -323,7 +350,7 @@ async fn incremental_wip_projection_preserves_routes_counts_and_rollback() {
     let empty: i64 = sqlx::query_scalar("SELECT count(*) FROM mini_progress_batch_work_inputs WHERE order_id='split'")
         .fetch_one(&pool).await.unwrap();
     assert_eq!(empty, 0, "reset removes obsolete route classes");
-    pool.close().await;
+    close_isolated_pool(pool).await;
 }
 
 #[tokio::test]
@@ -373,5 +400,5 @@ async fn recorded_card_refresh_uses_counts_without_reading_roll_history() {
         .execute(&mut *tx).await.unwrap();
     assert!(!refresh_recorded_rezka_output_tx(&mut tx, &write).await.unwrap(), "non-running projections use normal derivation");
     tx.rollback().await.unwrap();
-    pool.close().await;
+    close_isolated_pool(pool).await;
 }

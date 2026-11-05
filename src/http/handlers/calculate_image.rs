@@ -89,7 +89,6 @@ fn webp_file_name(file_name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use image::ImageEncoder;
 
     fn sample_jpeg_bytes(width: u32, height: u32) -> Vec<u8> {
         let rgb = image::RgbImage::from_fn(width, height, |x, y| {

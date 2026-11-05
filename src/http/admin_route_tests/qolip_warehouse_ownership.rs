@@ -1,6 +1,8 @@
 use super::*;
 use crate::core::qolip::{QolipService, QolipStorePort};
-use crate::db::postgres::{apply_foundation_migration, postgres_test_database_options};
+use crate::db::postgres::{
+    apply_foundation_migration, apply_postgres_migrations_through, postgres_test_database_options,
+};
 use crate::db::postgres_qolip::PostgresQolipStore;
 
 const OWNERSHIP_MIGRATION: &str =
@@ -26,8 +28,14 @@ async fn qolip_warehouse_ownership_backfills_history_and_enforces_api_isolation(
     let pool = sqlx::PgPool::connect_with(postgres_test_database_options(&admin_url, &db_name))
         .await
         .expect("test db");
-    apply_foundation_migration(&pool).await.expect("migrations");
+    apply_postgres_migrations_through(&pool, 93)
+        .await
+        .expect("migrations before warehouse ownership");
     sqlx::raw_sql(r#"
+        INSERT INTO mini_item_groups (name, parent_item_group)
+            VALUES ('Tayyor mahsulot', 'All Item Groups') ON CONFLICT DO NOTHING;
+        INSERT INTO mini_items (code, name, uom, item_group, payload_json)
+            VALUES ('ITEM', 'Product', 'dona', 'Tayyor mahsulot', '{}'::jsonb);
         INSERT INTO mini_warehouses(id,name,parent_warehouse) VALUES
             ('owner-a','North molds',''), ('owner-b','Flexo molds',''),
             ('block-a','A','North molds'), ('block-b','B','Flexo molds');
@@ -35,7 +43,6 @@ async fn qolip_warehouse_ownership_backfills_history_and_enforces_api_isolation(
             (warehouse,warehouse_name,assignment_kind,principal_role,principal_ref) VALUES
             ('North molds','North molds','warehouse','qolipchi','owner-a'),
             ('Flexo molds','Flexo molds','warehouse','qolipchi','owner-b');
-        DROP TRIGGER mini_qolip_specs_persist_warehouse ON mini_qolip_product_specs;
         INSERT INTO mini_qolip_product_specs
             (item_code,item_name,item_group,qolip_code,size,created_by_role,created_by_ref,payload_json) VALUES
             ('ITEM','Product','Tayyor mahsulot','OLD-A',40,'qolipchi','owner-a','{"color":"Red"}'),
@@ -52,14 +59,16 @@ async fn qolip_warehouse_ownership_backfills_history_and_enforces_api_isolation(
             (id,location_id,block,warehouse,item_code,item_name,qolip_code,size,quantity,issued_to_ref,issued_to_name)
             VALUES ('issued-b','old-location','B','Flexo molds','ITEM','Product','ISSUED-B',40,1,'worker','Worker');
     "#).execute(&pool).await.expect("pre-migration fixtures");
-    sqlx::raw_sql(OWNERSHIP_MIGRATION)
-        .execute(&pool)
+    apply_postgres_migrations_through(&pool, 94)
         .await
         .expect("automatic backfill");
     sqlx::raw_sql(OWNERSHIP_MIGRATION)
         .execute(&pool)
         .await
         .expect("idempotent backfill");
+    apply_foundation_migration(&pool)
+        .await
+        .expect("upgrade warehouse ownership to the current schema");
 
     let store = Arc::new(PostgresQolipStore::new(pool.clone()));
     for (code, warehouse) in [

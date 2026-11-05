@@ -1337,18 +1337,14 @@ async fn production_map_order_number_is_immutable_on_update() {
         .expect("save");
     assert_eq!(save.status(), StatusCode::OK);
 
-    let changed = pechat_order_map_json(
-        "zakaz-1234",
-        "Locked zakaz",
-        "5678",
-        "apparatus:default:paket",
-    );
+    let mut changed = json_body(save).await["map"].clone();
+    changed["order_number"] = serde_json::json!("5678");
     let response = build_router(state.clone())
         .oneshot(request_with_body(
             "PUT",
             "/v1/mobile/admin/production-maps",
             &token,
-            &changed,
+            &changed.to_string(),
         ))
         .await
         .expect("update");
@@ -1498,7 +1494,6 @@ async fn production_map_order_image_view_serves_photo_linked_at_order_open() {
 }
 
 fn sample_camera_jpeg() -> Vec<u8> {
-    use image::ImageEncoder;
     let rgb = image::RgbImage::from_fn(64, 48, |x, y| {
         image::Rgb([(x % 256) as u8, (y % 256) as u8, 128])
     });

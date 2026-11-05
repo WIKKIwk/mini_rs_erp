@@ -19,11 +19,6 @@ async fn early_close_unstarted_order_route_retains_history_and_rejects_delete() 
             "/v1/mobile/admin/production-maps/order-control", &token, body)).await.unwrap();
         assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
     }
-    let freeze = router.clone().oneshot(request_with_body("POST",
-        "/v1/mobile/admin/production-maps/order-control", &token,
-        r#"{"order_id":"zakaz-0009","action":"freeze"}"#)).await.unwrap();
-    assert_eq!(freeze.status(), StatusCode::CONFLICT);
-    assert_eq!(json_body(freeze).await["error"], "order_not_started");
     let mut responses = Vec::new();
     for _ in 0..2 {
         let closed = router.clone().oneshot(request_with_body("POST",

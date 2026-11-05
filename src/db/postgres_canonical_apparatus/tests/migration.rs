@@ -9,7 +9,8 @@ use super::fixtures::TestDatabase;
 
 #[tokio::test]
 async fn fresh_current_schema_bootstraps_factory_defaults_and_is_restart_stable() {
-    let database = TestDatabase::create_through("factory_defaults", 74).await;
+    const FACTORY_DEFAULT_COUNT: i64 = 14;
+    let database = TestDatabase::create_through("factory_defaults", usize::MAX).await;
     let before_bootstrap: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM mini_apparatus WHERE source_revision IS NOT NULL")
             .fetch_one(&database.pool)
@@ -18,15 +19,19 @@ async fn fresh_current_schema_bootstraps_factory_defaults_and_is_restart_stable(
     assert_eq!(before_bootstrap, 0);
 
     let service = database.service();
-    assert_eq!(service.bootstrap_factory_defaults().await.unwrap(), 10);
+    assert_eq!(
+        service.bootstrap_factory_defaults().await.unwrap() as i64,
+        FACTORY_DEFAULT_COUNT,
+    );
     let before_restart = service.list_runtime_projections().await.unwrap();
-    assert_eq!(before_restart.len(), 10);
+    assert_eq!(before_restart.len() as i64, FACTORY_DEFAULT_COUNT);
     assert!(
         before_restart
             .iter()
             .all(|projection| projection.source_revision == 1)
     );
 
+    database.migrate_current().await;
     let restarted_service = database.service();
     assert_eq!(
         restarted_service
@@ -53,7 +58,7 @@ async fn fresh_current_schema_bootstraps_factory_defaults_and_is_restart_stable(
             .fetch_one(&database.pool)
             .await
             .unwrap();
-        assert_eq!(count, 10, "unexpected row count in {table}");
+        assert_eq!(count, FACTORY_DEFAULT_COUNT, "unexpected row count in {table}");
     }
     database.close().await;
 }
@@ -84,7 +89,7 @@ async fn migration_0068_to_0072_uses_exact_cutover_and_is_restart_stable() {
     let draft = super::cutover::draft_manifest(&report, false);
     let manifest = build_cutover_manifest(&report, draft).unwrap();
     service.apply_legacy_cutover(manifest).await.unwrap();
-    database.migrate_current().await;
+    database.migrate_through(74).await;
     let after_upgrade = migration_history(&database).await;
     assert_eq!(after_upgrade.len(), 74);
     assert_eq!(&after_upgrade[..69], through_authority.as_slice());
@@ -94,7 +99,7 @@ async fn migration_0068_to_0072_uses_exact_cutover_and_is_restart_stable() {
         "0074_calculate_material_roll_catalog"
     );
 
-    database.migrate_current().await;
+    database.migrate_through(74).await;
     assert_eq!(migration_history(&database).await, after_upgrade);
     for obsolete_index in [
         "idx_mini_apparatus_lower_name",

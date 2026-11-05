@@ -201,10 +201,26 @@ async fn apply_migration(
         .execute(&mut **tx)
         .await?;
     }
-    for statement in split_sql_statements(sql) {
-        sqlx::query::<Postgres>(&statement)
-            .execute(&mut **tx)
-            .await?;
+    // These backfills require factory apparatuses to repair existing maps and
+    // sequences. A fresh installation creates the apparatuses after migration.
+    // Keep the historical SQL and its recorded checksums intact on upgrades.
+    let empty_lamination_backfill = matches!(
+        version,
+        "0122_production_map_alternative_backfill"
+            | "0123_repair_duplicate_laminate_alternatives"
+    ) && sqlx::query_scalar::<_, bool>(
+        "SELECT NOT EXISTS (SELECT 1 FROM mini_apparatus)
+             AND NOT EXISTS (SELECT 1 FROM mini_production_maps)
+             AND NOT EXISTS (SELECT 1 FROM mini_queue_sequences)",
+    )
+    .fetch_one(&mut **tx)
+    .await?;
+    if !empty_lamination_backfill {
+        for statement in split_sql_statements(sql) {
+            sqlx::query::<Postgres>(&statement)
+                .execute(&mut **tx)
+                .await?;
+        }
     }
     if rewrites_append_only_raw_material_events {
         sqlx::query(

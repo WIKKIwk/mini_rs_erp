@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::types::{ProductionMapDefinition, ProductionMapNodeKind};
-use super::{chain, queue_state};
+use super::chain;
+#[cfg(test)]
+use super::queue_state;
 use crate::core::apparatus_standard::{
     ApparatusId, EquipmentCapabilityCode, ExecutionOperation, RuntimeApparatusConfiguration,
 };

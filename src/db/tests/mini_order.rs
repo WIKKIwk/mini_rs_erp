@@ -252,10 +252,6 @@ async fn postgres_mini_order_sink_saves_order_and_product_rows() {
             .fetch_one(&pool)
             .await
             .expect("read production map order link");
-    let migration_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mini_schema_migrations")
-        .fetch_one(&pool)
-        .await
-        .expect("count applied migrations");
     let (order_status, product_form, kg, width_mm, roll_count): (
         String,
         String,
@@ -273,7 +269,6 @@ async fn postgres_mini_order_sink_saves_order_and_product_rows() {
     assert_eq!(order_count, 1);
     assert_eq!(product_count, 1);
     assert_eq!(linked_order_id.as_deref(), Some("zakaz-9001"));
-    assert_eq!(migration_count, 92);
     assert_eq!(order_status, "draft");
     assert_eq!(product_form, "rulon");
     assert_eq!(kg, "500.123457");

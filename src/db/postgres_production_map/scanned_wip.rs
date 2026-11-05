@@ -128,6 +128,7 @@ pub(super) async fn after_claim_tx(
     } else {
         source
     };
+    // Resuming with a previously linked roll preserves its active receipt.
     sqlx::query("INSERT INTO mini_scanned_wip_inputs
         (claim_id,session_id,order_id,canonical_apparatus_id,stage_node_id,batch_id,source_kind,
          qr_payload,source_apparatus,worker_ref,worker_display_name,linked_at_unix,before_json,claimed_json,map_json,
@@ -135,7 +136,7 @@ pub(super) async fn after_claim_tx(
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
          (SELECT COALESCE(max(id),0) FROM mini_order_progress_events WHERE session_id=$2),
          (SELECT COALESCE(max(id),0) FROM mini_raw_material_events WHERE order_id=$3 AND canonical_apparatus_id=$4))
-        ON CONFLICT(claim_id) DO NOTHING")
+        ON CONFLICT DO NOTHING")
         .bind(&write.event.event_id).bind(&session.session_id).bind(&session.order_id)
         .bind(&session.apparatus).bind(&session.stage_node_id).bind(&claim.batch_id).bind(claim.source_kind)
         .bind(text(&claim.before,"qr_payload")).bind(source).bind(&write.event.actor.ref_)

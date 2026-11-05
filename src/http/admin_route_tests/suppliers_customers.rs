@@ -22,7 +22,7 @@ async fn admin_suppliers_page_filters_removed_and_counts_blocked_like_go() {
 }
 
 #[tokio::test]
-async fn admin_supplier_detail_returns_assigned_items_like_go() {
+async fn admin_supplier_detail_returns_current_code_and_assigned_items() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
 
@@ -38,7 +38,7 @@ async fn admin_supplier_detail_returns_assigned_items_like_go() {
     assert_eq!(response.status(), StatusCode::OK);
     let value = json_body(response).await;
     assert_eq!(value["ref"], "SUP-001");
-    assert_eq!(value["code"], "");
+    assert_eq!(value["code"], "10CUSTOM");
     assert_eq!(value["assigned_items"][0]["code"], "ITEM-001");
 }
 

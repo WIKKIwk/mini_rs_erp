@@ -383,7 +383,6 @@ async fn calculate_order_image_upload_rejects_non_image_bytes() {
 /// Realistic camera-shaped input for upload tests: lossy jpeg,
 /// like a phone gallery photo.
 fn sample_camera_jpeg() -> Vec<u8> {
-    use image::ImageEncoder;
     let rgb = image::RgbImage::from_fn(64, 48, |x, y| {
         image::Rgb([(x % 256) as u8, (y % 256) as u8, 128])
     });

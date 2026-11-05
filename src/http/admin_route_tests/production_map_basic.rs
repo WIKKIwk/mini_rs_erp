@@ -253,7 +253,10 @@ async fn production_map_sequence_returns_backend_visible_order_ids() {
         body["visible_order_ids"]["apparatus:default:asset-010"],
         serde_json::json!(["zakaz-visible-alt"])
     );
-    assert!(body["visible_order_ids"]["apparatus:default:asset-008"].is_null());
+    assert_eq!(
+        body["visible_order_ids"]["apparatus:default:asset-008"],
+        serde_json::json!(["zakaz-visible-alt"])
+    );
 }
 
 #[tokio::test]

@@ -1506,6 +1506,9 @@ async fn postgres_drop_progress_batch_current_apparatus_key_real_migration_and_i
     assert_eq!(repaired_current_apparatus, apparatus_10);
 
     // e) Real Postgres WIP queries return exact canonical apparatus matches
+    apply_foundation_migration(&pool)
+        .await
+        .expect("upgrade to the schema used by the current WIP store");
     let store = Arc::new(PostgresProductionMapStore::new(pool.clone()));
     let service = ProductionMapService::new_for_test(store.clone());
 
@@ -1784,6 +1787,9 @@ async fn postgres_0091_migration_backfill_and_write_side_persistence() {
     assert_eq!(in_progress_stock, "");
 
     // 5. Test Live Service Write Boundaries:
+    apply_foundation_migration(&pool)
+        .await
+        .expect("upgrade to the schema used by the current production map store");
     let store = Arc::new(PostgresProductionMapStore::new(pool.clone()));
     let service = ProductionMapService::new_for_test(store.clone());
 

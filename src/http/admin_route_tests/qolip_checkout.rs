@@ -1,7 +1,7 @@
 use super::*;
 use crate::core::qolip::{
-    QolipBlock, QolipCellQr, QolipCheckout, QolipError, QolipLocation, QolipProduct,
-    QolipProductSpec, QolipService, QolipStorePort,
+    MemoryQolipStore, QolipBlock, QolipCellQr, QolipCheckout, QolipError, QolipLocation,
+    QolipProduct, QolipProductSpec, QolipService, QolipStorePort,
 };
 
 #[tokio::test]
@@ -112,7 +112,17 @@ async fn qolip_checkout_decrements_location_and_rejects_overdraw() {
 
 #[tokio::test]
 async fn bosma_queue_start_requires_qolip_scan_even_without_product_spec() {
-    let state = test_state();
+    let mut state = test_state();
+    let qolip_store = Arc::new(MemoryQolipStore::new());
+    qolip_store
+        .seed_products(vec![QolipProduct {
+            code: "ITEM-QOLIP-REQUIRED".into(),
+            name: "Qolip required order".into(),
+            item_group: "Tayyor mahsulot".into(),
+            ..Default::default()
+        }])
+        .await;
+    state.qolip = QolipService::new(qolip_store);
     state
         .admin
         .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
@@ -209,31 +219,39 @@ async fn pechat_queue_start_requires_matching_qolip_code_scan() {
         .expect("map save");
     assert_eq!(map.status(), StatusCode::OK);
 
-    for (qolip_code, color, column_number) in [
+    let molds = [
         ("QOLIP-SCAN-1", "#E53935", 2),
         ("QOLIP-SCAN-2", "#43A047", 3),
-    ] {
-        let spec = router
-            .clone()
-            .oneshot(request_with_body(
-                "POST",
-                "/v1/mobile/qolip/product-specs",
-                &token,
-                &serde_json::json!({
-                    "warehouse": "Qolip ombor",
-                    "item_code": "ITEM-QOLIP",
-                    "item_name": "Test qolip order",
-                    "item_group": "Tayyor mahsulot",
-                    "qolip_code": qolip_code,
-                    "size": 42,
-                    "color": color,
-                })
-                .to_string(),
-            ))
-            .await
-            .expect("spec save");
-        assert_eq!(spec.status(), StatusCode::OK);
+    ];
+    let specs = molds.map(|(qolip_code, color, _)| {
+        serde_json::json!({
+            "warehouse": "Qolip ombor",
+            "item_code": "ITEM-QOLIP",
+            "item_name": "Test qolip order",
+            "item_group": "Tayyor mahsulot",
+            "qolip_code": qolip_code,
+            "size": 42,
+            "color": color,
+        })
+    });
+    let saved_set = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/qolip/product-specs/batch",
+            &token,
+            &serde_json::json!({ "specs": specs }).to_string(),
+        ))
+        .await
+        .expect("save one mold set");
+    assert_eq!(saved_set.status(), StatusCode::OK);
+    let saved_set_body = json_body(saved_set).await;
+    let set_id = saved_set_body["products"][0]["qolip_set_id"]
+        .as_str()
+        .expect("mold set ID");
+    assert!(!set_id.is_empty());
 
+    for (qolip_code, _, column_number) in molds {
         let location = router
             .clone()
             .oneshot(request_with_body(
@@ -288,11 +306,15 @@ async fn pechat_queue_start_requires_matching_qolip_code_scan() {
         serde_json::json!([
             {
                 "qolip_code": "QOLIP-SCAN-1",
-                "color": "#E53935"
+                "color": "#E53935",
+                "qolip_set_id": set_id,
+                "is_extension": false
             },
             {
                 "qolip_code": "QOLIP-SCAN-2",
-                "color": "#43A047"
+                "color": "#43A047",
+                "qolip_set_id": set_id,
+                "is_extension": false
             }
         ])
     );

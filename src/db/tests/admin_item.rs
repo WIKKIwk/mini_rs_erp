@@ -241,20 +241,20 @@ async fn postgres_admin_item_update_preserves_details_and_live_references() {
               2, 'dona', 'available',
               '{\"item_code\":\"ITEM-OLD\",\"item_name\":\"Old item name\"}'::jsonb);
          INSERT INTO mini_qolip_locations
-             (id, block, item_code, item_name, qolip_code, size, quantity, payload_json)
+             (id, block, warehouse, item_code, item_name, qolip_code, size, quantity, payload_json)
          VALUES
-             ('LOC-001', 'A', 'ITEM-OLD', 'Old item name', 'Q-001', 10, 1,
+             ('LOC-001', 'A', 'Qolip ombori', 'ITEM-OLD', 'Old item name', 'Q-001', 10, 1,
               '{\"item_code\":\"ITEM-OLD\",\"item_name\":\"Old item name\"}'::jsonb);
          INSERT INTO mini_qolip_product_specs
              (item_code, item_name, item_group, qolip_code, size, payload_json)
          VALUES
              ('ITEM-OLD', 'Old item name', 'Tayyor mahsulot / Paket', 'Q-001', 10,
-              '{\"item_code\":\"ITEM-OLD\",\"item_name\":\"Old item name\"}'::jsonb);
+              '{\"item_code\":\"ITEM-OLD\",\"item_name\":\"Old item name\",\"warehouse\":\"Qolip ombori\"}'::jsonb);
          INSERT INTO mini_qolip_checkouts
-             (id, location_id, block, item_code, item_name, qolip_code, size, quantity,
+             (id, location_id, block, warehouse, item_code, item_name, qolip_code, size, quantity,
               issued_to_ref, issued_to_name, status, payload_json)
          VALUES
-             ('CHECKOUT-001', 'LOC-001', 'A', 'ITEM-OLD', 'Old item name', 'Q-001',
+             ('CHECKOUT-001', 'LOC-001', 'A', 'Qolip ombori', 'ITEM-OLD', 'Old item name', 'Q-001',
               10, 1, 'WORKER-001', 'Worker One', 'open',
               '{\"item_code\":\"ITEM-OLD\",\"item_name\":\"Old item name\"}'::jsonb);
          INSERT INTO mini_quick_order_templates

@@ -1333,7 +1333,12 @@ mod tests {
             .expect("apply foundation migration");
         let migration_history = postgres_0062_migration_history(&pool).await;
         assert_eq!(migration_history.len(), POSTGRES_MIGRATIONS.len());
-        assert_eq!(migration_history.len(), 93);
+        for ((actual_version, actual_checksum, _), (version, sql)) in
+            migration_history.iter().zip(POSTGRES_MIGRATIONS)
+        {
+            assert_eq!(actual_version, version);
+            assert_eq!(actual_checksum, &migration_checksum(sql));
+        }
         let obsolete_material_index_exists: bool = sqlx::query_scalar(
             "SELECT EXISTS (
                  SELECT 1 FROM pg_indexes
@@ -2118,6 +2123,12 @@ mod tests {
             Err(ProductionMapError::RawMaterialAlreadyAssigned)
         );
 
+        // Keep the historical pending-completion index, but give the current
+        // queue writer its stage column before exercising that index.
+        sqlx::raw_sql(include_str!("../../migrations/postgres/0087_queue_event_stage_identity.sql"))
+            .execute(pool)
+            .await
+            .expect("add queue event stage identity to the test fixture");
         let blocker_pool = PgPoolOptions::new()
             .max_connections(1)
             .connect(database_url)

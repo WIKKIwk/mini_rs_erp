@@ -97,36 +97,3 @@ impl AdminAccessStateLookup for FakeAdminStatePort {
             .collect())
     }
 }
-
-pub(crate) struct FailingAdminStatePort;
-
-#[async_trait]
-impl AdminStatePort for FailingAdminStatePort {
-    async fn states(&self) -> Result<BTreeMap<String, AdminState>, AdminPortError> {
-        Err(AdminPortError::LookupFailed)
-    }
-
-    async fn put_state(&self, _ref_: &str, _state: AdminState) -> Result<(), AdminPortError> {
-        Err(AdminPortError::LookupFailed)
-    }
-}
-
-pub(crate) struct LockedCustomerStatePort;
-
-#[async_trait]
-impl AdminStatePort for LockedCustomerStatePort {
-    async fn states(&self) -> Result<BTreeMap<String, AdminState>, AdminPortError> {
-        Ok(BTreeMap::from([(
-            "CUST-001".to_string(),
-            AdminState {
-                custom_code: "30LOCKED".to_string(),
-                cooldown_until: Some(time::OffsetDateTime::now_utc() + time::Duration::hours(1)),
-                ..AdminState::default()
-            },
-        )]))
-    }
-
-    async fn put_state(&self, _ref_: &str, _state: AdminState) -> Result<(), AdminPortError> {
-        Ok(())
-    }
-}

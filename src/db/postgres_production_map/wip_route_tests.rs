@@ -684,6 +684,16 @@ async fn postgres_route_claim_revalidates_batch_and_binding_without_partial_writ
         resumed.payload_json["wip_route_binding"],
         claimed.payload_json["wip_route_binding"]
     );
+    let active_receipt: String = sqlx::query_scalar(
+        "SELECT claim_id FROM mini_scanned_wip_inputs
+         WHERE session_id = $1 AND batch_id = $2 AND returned_at_unix IS NULL",
+    )
+    .bind(&resumed.used_by_session_id)
+    .bind(&resumed.batch_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(active_receipt, fresh_write.event.event_id);
     cleanup(pool, store, admin, name).await;
 }
 
