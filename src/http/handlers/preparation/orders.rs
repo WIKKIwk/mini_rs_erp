@@ -27,6 +27,8 @@ pub struct OrderListQuery {
     #[serde(default)]
     apparatus: String,
     #[serde(default)]
+    all_apparatus: bool,
+    #[serde(default)]
     search: String,
     #[serde(default)]
     cursor: String,
@@ -68,6 +70,7 @@ impl OrderListQuery {
             || self
                 .length
                 .is_some_and(|length| !(1..=MAX_LIVE_PREFIX).contains(&length))
+            || (self.all_apparatus && !self.apparatus.is_empty())
             || (!self.apparatus.is_empty()
                 && !crate::core::apparatus_standard::ApparatusId::is_valid(&self.apparatus))
         {
@@ -141,6 +144,7 @@ struct ReadScope {
     apparatus: Value,
     selected: Option<RuntimeApparatusConfiguration>,
     responsibilities: Vec<(String, String)>,
+    all_apparatus: bool,
 }
 
 async fn read_scope(
@@ -170,16 +174,20 @@ async fn read_scope(
         .await
         .map_err(error)?;
     let assignments = responsibilities(&assignments);
-    let mut configurations = state
-        .apparatus
-        .list_runtime_configurations()
-        .await
-        .map_err(|_| {
-            api_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "preparation_orders_apparatus",
-            )
-        })?;
+    let mut configurations = if query.all_apparatus {
+        Vec::new()
+    } else {
+        state
+            .apparatus
+            .list_runtime_configurations()
+            .await
+            .map_err(|_| {
+                api_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "preparation_orders_apparatus",
+                )
+            })?
+    };
     configurations.retain(|item| item.is_active());
     let selected = configurations
         .iter()
@@ -209,22 +217,35 @@ async fn read_scope(
             )
         })
         .collect::<Vec<_>>();
-    let key = digest((
-        PROJECTION,
-        &principal.role,
-        &principal.ref_,
-        &apparatus_id,
-        &query.search,
-        query.limit,
-        &assignments,
-        &picker_scope,
-    ));
+    let key = if query.all_apparatus {
+        digest((
+            PROJECTION,
+            "all_apparatus",
+            &principal.role,
+            &principal.ref_,
+            &query.search,
+            query.limit,
+            &assignments,
+        ))
+    } else {
+        digest((
+            PROJECTION,
+            &principal.role,
+            &principal.ref_,
+            &apparatus_id,
+            &query.search,
+            query.limit,
+            &assignments,
+            &picker_scope,
+        ))
+    };
     Ok(ReadScope {
         key,
         apparatus_id,
         apparatus,
         selected,
         responsibilities: assignments,
+        all_apparatus: query.all_apparatus,
     })
 }
 
@@ -357,7 +378,7 @@ async fn read_list(
         }
         if cached.is_none() {
             let catalog = store(state)?
-                .order_list_catalog(&principal.ref_, &scope.apparatus_id)
+                .order_list_catalog(&principal.ref_, &scope.apparatus_id, scope.all_apparatus)
                 .await
                 .map_err(error)?;
             if responsibilities(&catalog.responsibilities) != scope.responsibilities {
@@ -368,22 +389,31 @@ async fn read_list(
                 .iter()
                 .map(|c| c.map.clone())
                 .collect::<Vec<_>>();
-            let mut ids = scope
-                .selected
-                .as_ref()
-                .map(|selected| {
-                    ProductionMapService::preparation_catalog_sequence(
-                        &maps,
-                        &catalog.sequence,
-                        selected,
-                        &BTreeSet::new(),
-                    )
-                })
-                .unwrap_or_default();
+            let mut ids = if scope.all_apparatus {
+                catalog
+                    .candidates
+                    .iter()
+                    .filter(|candidate| candidate.allowed)
+                    .map(|candidate| candidate.map.id.clone())
+                    .collect::<Vec<_>>()
+            } else {
+                scope
+                    .selected
+                    .as_ref()
+                    .map(|selected| {
+                        ProductionMapService::preparation_catalog_sequence(
+                            &maps,
+                            &catalog.sequence,
+                            selected,
+                            &BTreeSet::new(),
+                        )
+                    })
+                    .unwrap_or_default()
+            };
             let affected = catalog
                 .candidates
                 .iter()
-                .filter(|c| c.needs_authority && ids.contains(&c.map.id))
+                .filter(|c| !scope.all_apparatus && c.needs_authority && ids.contains(&c.map.id))
                 .map(|c| c.map.id.clone())
                 .collect::<Vec<_>>();
             let mut priority = BTreeMap::<String, (u8, i64)>::new();
@@ -549,13 +579,15 @@ async fn read_list(
         {
             continue;
         }
-        return Ok(
-            json!({"ok":true,"projection":PROJECTION,"scope":scope.key,"epoch":epoch,
+        let mut payload = json!({"ok":true,"projection":PROJECTION,"scope":scope.key,"epoch":epoch,
             "rev":revision,"version":version,"apparatus_id":scope.apparatus_id,
             "apparatus":scope.apparatus,"search":query.search,"limit":query.limit,
             "rows":&rows[start..end],"total":rows.len(),
-            "next_cursor":next_cursor}),
-        );
+            "next_cursor":next_cursor});
+        if scope.all_apparatus {
+            payload["all_apparatus"] = true.into();
+        }
+        return Ok(payload);
     }
     Err(api_error(
         StatusCode::CONFLICT,
@@ -564,11 +596,11 @@ async fn read_list(
 }
 
 async fn read_metadata_stamp(state: &AppState, scope: &ReadScope) -> Result<String, ApiError> {
-    if scope.selected.is_none() || scope.responsibilities.is_empty() {
+    if (!scope.all_apparatus && scope.selected.is_none()) || scope.responsibilities.is_empty() {
         return Ok(String::new());
     }
     store(state)?
-        .order_list_metadata_stamp(&scope.apparatus_id)
+        .order_list_metadata_stamp(&scope.apparatus_id, scope.all_apparatus)
         .await
         .map_err(error)
 }

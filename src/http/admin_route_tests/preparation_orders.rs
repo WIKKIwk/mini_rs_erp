@@ -98,13 +98,24 @@ impl Fixture {
     }
 
     async fn seed_order(&self, number: &str, material: &str, cross_machine: bool) -> String {
+        self.seed_order_for(number, material, cross_machine, PRINT)
+            .await
+    }
+
+    async fn seed_order_for(
+        &self,
+        number: &str,
+        material: &str,
+        cross_machine: bool,
+        apparatus: &str,
+    ) -> String {
         let id = format!("zakaz-{number}");
         let source = if cross_machine {
             two_apparatus_order_map_json(
                 &id,
                 &format!("Master label {number}"),
                 number,
-                PRINT,
+                apparatus,
                 LAMINATION,
             )
         } else {
@@ -112,7 +123,7 @@ impl Fixture {
                 &id,
                 &format!("Master label {number}"),
                 number,
-                PRINT,
+                apparatus,
                 7,
                 700.0,
             )
@@ -236,6 +247,157 @@ fn assert_compact(page: &Value) {
             BTreeSet::from(["id", "name"])
         );
     }
+}
+
+#[tokio::test]
+async fn preparation_orders_all_apparatus_keeps_material_scope_and_legacy_pages() {
+    let _serial = DATABASE_GATE.lock().await;
+    let fixture = Fixture::create().await;
+    let print = fixture.seed_order("8901", "list-film", false).await;
+    let lamination = fixture
+        .seed_order_for("8902", "list-film", false, LAMINATION)
+        .await;
+    let both = fixture.seed_order("8903", "list-film", true).await;
+    let other_material = fixture.seed_order("8904", "list-foil", false).await;
+    let no_apparatus = fixture.seed_order("8905", "list-film", false).await;
+    sqlx::query("DELETE FROM mini_production_map_nodes WHERE map_id=$1")
+        .bind(&no_apparatus)
+        .execute(&fixture.pool)
+        .await
+        .unwrap();
+    fixture
+        .state
+        .production_maps
+        .set_apparatus_sequence(
+            PRINT,
+            vec![print.clone(), both.clone(), other_material.clone()],
+        )
+        .await
+        .unwrap();
+
+    let legacy = fixture.page("limit=30").await;
+    assert!(ids(&legacy).contains(&print.as_str()));
+    assert!(!ids(&legacy).contains(&lamination.as_str()));
+    assert!(legacy.get("all_apparatus").is_none());
+
+    let first_response = fixture
+        .get(
+            &format!("{LIST}?all_apparatus=true&limit=2"),
+            &fixture.master,
+        )
+        .await;
+    assert_eq!(first_response.status(), StatusCode::OK);
+    let first = json_body(first_response).await;
+    assert_eq!(first["all_apparatus"], true);
+    assert_eq!(first["apparatus_id"], "");
+    assert_eq!(first["apparatus"], json!([]));
+    assert_eq!(first["total"], 4);
+    let cursor = first["next_cursor"].as_str().unwrap();
+    let second = fixture
+        .get(
+            &format!(
+                "{LIST}?all_apparatus=true&limit=2&cursor={}",
+                urlencoding::encode(cursor)
+            ),
+            &fixture.master,
+        )
+        .await;
+    assert_eq!(second.status(), StatusCode::OK);
+    let second = json_body(second).await;
+    let all_ids = ids(&first)
+        .into_iter()
+        .chain(ids(&second))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        all_ids,
+        BTreeSet::from([
+            print.as_str(),
+            lamination.as_str(),
+            both.as_str(),
+            no_apparatus.as_str()
+        ])
+    );
+    assert!(second["next_cursor"].is_null());
+    assert_compact(&first);
+
+    let searched = fixture
+        .get(
+            &format!("{LIST}?all_apparatus=true&search=8902"),
+            &fixture.master,
+        )
+        .await;
+    assert_eq!(ids(&json_body(searched).await), vec![lamination.as_str()]);
+    let other = fixture
+        .get(&format!("{LIST}?all_apparatus=true"), &fixture.other)
+        .await;
+    assert_eq!(ids(&json_body(other).await), vec![other_material.as_str()]);
+    let invalid = fixture
+        .get(
+            &format!("{LIST}?all_apparatus=true&apparatus={PRINT}"),
+            &fixture.master,
+        )
+        .await;
+    assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        fixture
+            .get(&format!("{LIST}?all_apparatus=true"), "")
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+
+    sqlx::query("UPDATE mini_order_products SET layers_json=$1 WHERE order_id=$2")
+        .bind(json!([{"material_id":"list-foil"}]))
+        .bind(&lamination)
+        .execute(&fixture.pool)
+        .await
+        .unwrap();
+    let changed = fixture
+        .get(
+            &format!(
+                "{LIST}?all_apparatus=true&limit=2&if_version={}",
+                first["version"].as_str().unwrap()
+            ),
+            &fixture.master,
+        )
+        .await;
+    assert_eq!(changed.status(), StatusCode::OK);
+    let changed = json_body(changed).await;
+    assert_eq!(changed["total"], 3);
+    assert_ne!(changed["version"], first["version"]);
+    let removed = fixture
+        .get(
+            &format!("{LIST}?all_apparatus=true&search=8902"),
+            &fixture.master,
+        )
+        .await;
+    assert!(ids(&json_body(removed).await).is_empty());
+
+    let preparation = fixture.state.preparation.as_ref().unwrap();
+    preparation
+        .unassign_responsibility(MaterialResponsibilityDelete {
+            principal_ref: MASTER.into(),
+            material_id: "list-film".into(),
+        })
+        .await
+        .unwrap();
+    preparation
+        .assign_responsibility(MaterialResponsibilityAssign {
+            principal_ref: MASTER.into(),
+            material_id: "list-foil".into(),
+        })
+        .await
+        .unwrap();
+    let reassigned = fixture
+        .get(&format!("{LIST}?all_apparatus=true"), &fixture.master)
+        .await;
+    assert_eq!(
+        ids(&json_body(reassigned).await)
+            .into_iter()
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([other_material.as_str(), lamination.as_str()])
+    );
+    fixture.close().await;
 }
 
 #[tokio::test]
@@ -453,8 +615,13 @@ async fn preparation_orders_conditional_cache_rechecks_independent_label_and_mat
 
 #[tokio::test]
 async fn preparation_orders_live_updates_keep_one_socket_for_checkpoints_deltas_and_reassignment() {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let _serial = DATABASE_GATE.lock().await;
+    assert_preparation_orders_live(false).await;
+    assert_preparation_orders_live(true).await;
+}
+
+async fn assert_preparation_orders_live(all_apparatus: bool) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let fixture = Fixture::create().await;
     let own = fixture.seed_order("8401", "list-film", false).await;
     fixture
@@ -463,7 +630,17 @@ async fn preparation_orders_live_updates_keep_one_socket_for_checkpoints_deltas_
         .set_apparatus_sequence(PRINT, vec![own.clone()])
         .await
         .unwrap();
-    let first = fixture.page("limit=30").await;
+    let scope_query = if all_apparatus {
+        "all_apparatus=true".to_string()
+    } else {
+        format!("apparatus={PRINT}")
+    };
+    let first = json_body(
+        fixture
+            .get(&format!("{LIST}?{scope_query}&limit=30"), &fixture.master)
+            .await,
+    )
+    .await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let router = build_router(fixture.state.clone());
@@ -472,7 +649,7 @@ async fn preparation_orders_live_updates_keep_one_socket_for_checkpoints_deltas_
     });
     let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
     let path = format!(
-        "{LIST}/live?apparatus={PRINT}&limit=30&length=30&token={}&epoch={}&rev={}&scope={}&version={}",
+        "{LIST}/live?{scope_query}&limit=30&length=30&token={}&epoch={}&rev={}&scope={}&version={}",
         urlencoding::encode(&fixture.master),
         first["epoch"].as_str().unwrap(),
         first["rev"],
@@ -514,7 +691,11 @@ async fn preparation_orders_live_updates_keep_one_socket_for_checkpoints_deltas_
         .await
         .expect("preparation live frame")
     }
-    assert_eq!(frame(&mut stream).await["type"], "ready");
+    let ready = frame(&mut stream).await;
+    assert_eq!(ready["type"], "ready");
+    if all_apparatus {
+        assert_eq!(ready["all_apparatus"], true);
+    }
     fixture.state.production_maps.notify_live();
     let checkpoint = frame(&mut stream).await;
     assert_eq!(checkpoint["type"], "checkpoint");
@@ -541,6 +722,9 @@ async fn preparation_orders_live_updates_keep_one_socket_for_checkpoints_deltas_
     fixture.state.production_maps.notify_live();
     let reassigned = frame(&mut stream).await;
     assert_eq!(reassigned["type"], "list_snapshot");
+    if all_apparatus {
+        assert_eq!(reassigned["all_apparatus"], true);
+    }
     assert_eq!(reassigned["rows"], json!([]));
     assert_ne!(reassigned["scope"], first["scope"]);
     drop(stream);

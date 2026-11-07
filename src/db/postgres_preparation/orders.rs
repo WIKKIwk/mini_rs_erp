@@ -24,14 +24,15 @@ impl PostgresPreparationStore {
     pub(crate) async fn order_list_metadata_stamp(
         &self,
         apparatus: &str,
+        all_apparatus: bool,
     ) -> Result<String, PreparationError> {
         Ok(sqlx::query_scalar(
             "WITH candidates AS MATERIALIZED (
                 SELECT m.id,m.xmin::text AS version,m.ctid::text AS location
                 FROM mini_production_maps m
                 WHERE m.id LIKE 'zakaz-%' AND m.lifecycle_status IN ('released','in_progress')
-                  AND m.id IN (SELECT map_id FROM mini_production_map_nodes
-                    WHERE canonical_apparatus_id=$1 OR canonical_alternative_apparatus_id=$1)
+                  AND ($2 OR m.id IN (SELECT map_id FROM mini_production_map_nodes
+                    WHERE canonical_apparatus_id=$1 OR canonical_alternative_apparatus_id=$1))
              ) SELECT md5(jsonb_build_array(
                 (SELECT COALESCE(string_agg(id||':'||version||':'||location,',' ORDER BY id),'')
                  FROM candidates),
@@ -44,6 +45,7 @@ impl PostgresPreparationStore {
              )::text)",
         )
         .bind(apparatus)
+        .bind(all_apparatus)
         .fetch_one(&self.pool)
         .await?)
     }
@@ -52,6 +54,7 @@ impl PostgresPreparationStore {
         &self,
         owner: &str,
         apparatus: &str,
+        all_apparatus: bool,
     ) -> Result<PreparationOrderCatalog, PreparationError> {
         let mut tx = self.pool.begin().await?;
         sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
@@ -132,10 +135,10 @@ impl PostgresPreparationStore {
               OR EXISTS (SELECT 1 FROM mini_progress_batches b WHERE b.order_id=m.id)) AS needs_authority
              FROM mini_production_maps m
              WHERE m.id LIKE 'zakaz-%' AND m.lifecycle_status IN ('released','in_progress')
-               AND m.id IN (SELECT map_id FROM mini_production_map_nodes
-                   WHERE canonical_apparatus_id=$2 OR canonical_alternative_apparatus_id=$2)
-             ORDER BY m.updated_at DESC,m.id ASC",
-        ).bind(owner).bind(apparatus).fetch_all(&mut *tx).await?;
+               AND ($3 OR m.id IN (SELECT map_id FROM mini_production_map_nodes
+                   WHERE canonical_apparatus_id=$2 OR canonical_alternative_apparatus_id=$2))
+             ORDER BY CASE WHEN $3 THEN m.created_at ELSE m.updated_at END DESC,m.id ASC",
+        ).bind(owner).bind(apparatus).bind(all_apparatus).fetch_all(&mut *tx).await?;
         let mut candidates = Vec::with_capacity(rows.len());
         for row in rows {
             let payload: Value = row.try_get("summary")?;
