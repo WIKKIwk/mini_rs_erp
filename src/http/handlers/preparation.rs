@@ -302,6 +302,19 @@ pub async fn update_material_warehouses(
         .map_err(error)
 }
 
+pub async fn material_warehouse_options(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(input): Query<MaterialDelete>,
+) -> Result<impl axum::response::IntoResponse, ApiError> {
+    let actor = authorize(&state, &headers).await?;
+    let options = store(&state)?
+        .material_warehouse_options(&actor.ref_, &input.item_code)
+        .await
+        .map_err(error)?;
+    Ok(([(axum::http::header::CACHE_CONTROL, "private, no-store")], Json(options)))
+}
+
 pub async fn receipt(
     State(state): State<AppState>,
     headers: HeaderMap,

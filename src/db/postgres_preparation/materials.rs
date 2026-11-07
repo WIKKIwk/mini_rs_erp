@@ -4,6 +4,45 @@ use crate::db::postgres_admin_catalog::{
 };
 
 impl PostgresPreparationStore {
+    pub async fn material_warehouse_options(
+        &self,
+        owner: &str,
+        item_code: &str,
+    ) -> Result<Value, PreparationError> {
+        let code = item_code.trim();
+        if code.is_empty() || code.len() > 512 {
+            return Err(PreparationError::Invalid("Homashyo kodi noto‘g‘ri"));
+        }
+        let result: Option<Value> = sqlx::query_scalar(
+            "SELECT jsonb_build_object('item_code', i.code,
+                'warehouses', COALESCE((SELECT jsonb_agg(w.name ORDER BY w.name)
+                    FROM mini_preparation_material_warehouse_scopes s
+                    JOIN mini_warehouses w ON w.id=s.warehouse_id
+                    WHERE s.item_code=i.code AND s.active),
+                    CASE WHEN m.warehouse_name IS NULL THEN '[]'::jsonb
+                         ELSE jsonb_build_array(m.warehouse_name) END),
+                'editable_warehouses', COALESCE((SELECT jsonb_agg(w.name ORDER BY w.name)
+                    FROM mini_warehouses w
+                    WHERE NOT w.is_group
+                      AND EXISTS (SELECT 1 FROM mini_warehouse_assignments mine
+                        WHERE mine.assignment_kind='warehouse'
+                          AND lower(mine.warehouse_name)=lower(w.name)
+                          AND mine.principal_role='tayyorlov_masteri' AND mine.principal_ref=$1)
+                      AND NOT EXISTS (SELECT 1 FROM mini_warehouse_assignments other
+                        WHERE other.assignment_kind='warehouse'
+                          AND lower(other.warehouse_name)=lower(w.name)
+                          AND (other.principal_role<>'tayyorlov_masteri' OR other.principal_ref<>$1))
+                ), '[]'::jsonb))
+             FROM mini_preparation_materials m JOIN mini_items i ON i.code=m.item_code
+             WHERE m.owner_ref=$1 AND m.item_code=$2",
+        )
+        .bind(owner)
+        .bind(code)
+        .fetch_optional(&self.pool)
+        .await?;
+        result.ok_or(PreparationError::MaterialNotOwned)
+    }
+
     pub async fn list_owned_materials(&self, owner: &str) -> Result<Value, PreparationError> {
         let rows: Vec<Value> = sqlx::query_scalar(
             "SELECT jsonb_build_object('item_code', i.code, 'name', i.name,

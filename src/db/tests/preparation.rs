@@ -12,6 +12,51 @@ use std::collections::BTreeMap;
 use super::seed_standard_canonical_apparatus;
 
 #[tokio::test]
+async fn preparation_material_warehouse_options_are_fresh_and_owner_scoped() {
+    let url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
+        .unwrap_or_else(|_| "postgres:///postgres".into());
+    let admin = sqlx::PgPool::connect(&url).await.unwrap();
+    let db = format!("mini_rs_erp_test_material_options_{:016x}", rand::random::<u64>());
+    sqlx::query(&format!("CREATE DATABASE {db}")).execute(&admin).await.unwrap();
+    let pool = sqlx::PgPool::connect_with(url.parse::<PgConnectOptions>().unwrap().database(&db))
+        .await.unwrap();
+    apply_foundation_migration(&pool).await.unwrap();
+    sqlx::raw_sql("INSERT INTO mini_system_users(id,role,name,phone) VALUES
+            ('options-master','tayyorlov_masteri','Master','901234567');
+        INSERT INTO mini_warehouses(id,name) VALUES ('opt-own','Own W'),('opt-shared','Shared W'),('opt-new','New W');
+        INSERT INTO mini_warehouse_assignments(assignment_kind,warehouse,warehouse_name,principal_role,principal_ref) VALUES
+            ('warehouse','Own W','Own W','tayyorlov_masteri','options-master'),
+            ('warehouse','New W','New W','tayyorlov_masteri','options-master'),
+            ('warehouse','Shared W','Shared W','tayyorlov_masteri','options-master'),
+            ('warehouse','Shared W','Shared W','material_taminotchi','other');")
+        .execute(&pool).await.unwrap();
+    let actor = Principal { role: PrincipalRole::TayyorlovMasteri, display_name: "Master".into(),
+        legal_name: String::new(), ref_: "options-master".into(), phone: String::new(), avatar_url: String::new() };
+    let store = PostgresPreparationStore::new(pool.clone());
+    let material = store.create_material(&actor, MaterialCreate { request_id: "options-material".into(),
+        name: "Options material".into(), warehouse: "Own W".into() }).await.unwrap();
+    let code = material["item_code"].as_str().unwrap();
+    sqlx::query("INSERT INTO mini_preparation_material_warehouse_scopes
+        (item_code,warehouse_id,scope_kind,created_by_role,created_by_ref)
+        VALUES ($1,'opt-shared','exclusive','tayyorlov_masteri','options-master')")
+        .bind(code).execute(&pool).await.unwrap();
+    let choices = store.material_warehouse_options("options-master", code).await.unwrap();
+    assert_eq!(choices["item_code"], code);
+    assert_eq!(choices["warehouses"], json!(["Own W", "Shared W"]));
+    assert_eq!(choices["editable_warehouses"], json!(["New W", "Own W"]));
+    assert!(matches!(store.material_warehouse_options("another-master", code).await,
+        Err(PreparationError::MaterialNotOwned)));
+    sqlx::raw_sql("INSERT INTO mini_warehouse_assignments(assignment_kind,warehouse,warehouse_name,principal_role,principal_ref)
+        VALUES ('warehouse','Own W','Own W','omborchi','other');")
+        .execute(&pool).await.unwrap();
+    let revoked = store.material_warehouse_options("options-master", code).await.unwrap();
+    assert_eq!(revoked["editable_warehouses"], json!(["New W"]));
+    assert_eq!(revoked["warehouses"], json!(["Own W", "Shared W"]));
+    pool.close().await;
+    sqlx::query(&format!("DROP DATABASE {db}")).execute(&admin).await.unwrap();
+}
+
+#[tokio::test]
 async fn preparation_material_stock_lists_scoped_lots_and_untruncated_ledger_totals() {
     let url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
         .unwrap_or_else(|_| "postgres:///postgres".into());
