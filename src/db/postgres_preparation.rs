@@ -6,6 +6,7 @@ use sqlx::{PgPool, Postgres, Row, Transaction};
 
 mod warehouses;
 mod materials;
+mod material_stock;
 mod formula_orders;
 mod formula_catalog;
 mod formula_sets;

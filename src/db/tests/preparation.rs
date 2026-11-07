@@ -11,6 +11,139 @@ use std::collections::BTreeMap;
 
 use super::seed_standard_canonical_apparatus;
 
+#[tokio::test]
+async fn preparation_material_stock_lists_scoped_lots_and_untruncated_ledger_totals() {
+    let url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
+        .unwrap_or_else(|_| "postgres:///postgres".into());
+    let admin = sqlx::PgPool::connect(&url).await.unwrap();
+    let db = format!(
+        "mini_rs_erp_test_material_stock_{:016x}",
+        rand::random::<u64>()
+    );
+    sqlx::query(&format!("CREATE DATABASE {db}"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    let pool = sqlx::PgPool::connect_with(url.parse::<PgConnectOptions>().unwrap().database(&db))
+        .await
+        .unwrap();
+    apply_foundation_migration(&pool).await.unwrap();
+    sqlx::raw_sql("INSERT INTO mini_system_users(id,role,name,phone) VALUES ('stock-master','tayyorlov_masteri','Master','901234567');
+        INSERT INTO mini_warehouses(id,name) VALUES ('stock-w','Stock W'),('stock-other','Other Stock W');
+        INSERT INTO mini_warehouse_assignments(assignment_kind,warehouse,warehouse_name,principal_role,principal_ref)
+            VALUES ('warehouse','Stock W','Stock W','tayyorlov_masteri','stock-master');
+        INSERT INTO mini_item_groups(name,parent_item_group,is_group)
+            SELECT 'Stock Journal Group',name,true FROM mini_item_groups WHERE lower(name)='homashyo' AND is_group LIMIT 1;
+        INSERT INTO mini_items(code,name,uom,item_group) VALUES ('STOCK-RAW','BOPP','Kg','Stock Journal Group'),('STOCK-OTHER','Other','Kg','Stock Journal Group');
+        INSERT INTO mini_raw_material_stock(id,warehouse,item_code,item_name,barcode,qty,status,reserved_order_id,payload_json) VALUES
+            ('stock-1','Stock W','STOCK-RAW','BOPP','QR-1',10.250001,'available','','{}'),
+            ('stock-2','Stock W','STOCK-RAW','BOPP','QR-2',5.5,'available','','{}'),
+            ('stock-held','Stock W','STOCK-RAW','BOPP','QR-HOLD',30,'reserved','','{}'),
+            ('stock-linked','Stock W','STOCK-RAW','BOPP','QR-LINK',40,'available','order','{}'),
+            ('stock-transit','Stock W','STOCK-RAW','BOPP','QR-TRANSIT',50,'available','','{\"inventory_transfer_id\":\"transfer\"}'),
+            ('stock-other-warehouse','Other Stock W','STOCK-RAW','BOPP','QR-OTHER-W',70,'available','','{}'),
+            ('stock-other-material','Stock W','STOCK-OTHER','Other','QR-OTHER-M',80,'available','','{}');
+        INSERT INTO mini_raw_material_events(event_id,idempotency_key,event_type,warehouse,barcode,item_code,item_name,qty_delta,
+            stock_status_after,actor_role,actor_ref,source_type,source_id)
+            SELECT 'stock-in-'||n,'stock-in-'||n,'receipt_posted','Stock W','IN-'||n,'STOCK-RAW','BOPP',1,
+                'available','material_taminotchi','another-user','system','receipt-'||n FROM generate_series(1,105) n;
+        INSERT INTO mini_raw_material_events(event_id,idempotency_key,event_type,warehouse,barcode,item_code,item_name,qty_delta,
+            stock_status_after,actor_role,actor_ref,source_type,source_id) VALUES
+            ('stock-out','stock-out','adjustment_decrease','Stock W','QR-1','STOCK-RAW','BOPP',-2.500001,'available','admin','admin','manual_adjustment','out'),
+            ('stock-other-event','stock-other-event','receipt_posted','Other Stock W','QR-OTHER-W','STOCK-RAW','BOPP',700,'available','admin','admin','system','other');")
+        .execute(&pool).await.unwrap();
+    let store = PostgresPreparationStore::new(pool.clone());
+    let scopes = BTreeMap::from([(
+        "Stock W".into(),
+        PreparationWarehouseMaterialScope::AssignedItemGroups(vec!["Stock Journal Group".into()]),
+    )]);
+    let mut query = MaterialStockQuery {
+        warehouse: "stock w".into(),
+        item_code: "stock-raw".into(),
+        tab: MaterialStockTab::Available,
+        offset: 0,
+        limit: 1,
+    };
+    let first = store
+        .material_stock("stock-master", &scopes, &query)
+        .await
+        .unwrap();
+    assert_eq!(first["warehouse"], "Stock W");
+    assert_eq!(
+        first["summary"]["available_kg"]
+            .as_str()
+            .unwrap()
+            .parse::<f64>()
+            .unwrap(),
+        15.750001
+    );
+    assert_eq!(
+        first["summary"]["receipt_kg"]
+            .as_str()
+            .unwrap()
+            .parse::<f64>()
+            .unwrap(),
+        105.0
+    );
+    assert_eq!(
+        first["summary"]["issue_kg"]
+            .as_str()
+            .unwrap()
+            .parse::<f64>()
+            .unwrap(),
+        2.500001
+    );
+    assert_eq!(first["summary"]["available_count"], 2);
+    assert_eq!(first["has_more"], true);
+    query.offset = 1;
+    let second = store
+        .material_stock("stock-master", &scopes, &query)
+        .await
+        .unwrap();
+    assert_ne!(first["rows"][0]["id"], second["rows"][0]["id"]);
+    assert_eq!(second["has_more"], false);
+    query.tab = MaterialStockTab::Receipts;
+    query.offset = 100;
+    query.limit = 50;
+    let receipts = store
+        .material_stock("stock-master", &scopes, &query)
+        .await
+        .unwrap();
+    assert_eq!(receipts["rows"].as_array().unwrap().len(), 5);
+    assert_eq!(receipts["summary"]["receipt_count"], 105);
+    query.tab = MaterialStockTab::Issues;
+    query.offset = 0;
+    let issues = store
+        .material_stock("stock-master", &scopes, &query)
+        .await
+        .unwrap();
+    assert_eq!(issues["rows"].as_array().unwrap().len(), 1);
+    assert_eq!(issues["rows"][0]["kg"], "2.500001");
+    assert!(matches!(
+        store.material_stock("unassigned", &scopes, &query).await,
+        Err(PreparationError::Forbidden)
+    ));
+    let denied = BTreeMap::from([(
+        "Stock W".into(),
+        PreparationWarehouseMaterialScope::AssignedItemGroups(vec![]),
+    )]);
+    assert!(matches!(
+        store.material_stock("stock-master", &denied, &query).await,
+        Err(PreparationError::Forbidden)
+    ));
+    query.limit = 0;
+    assert!(matches!(
+        store.material_stock("stock-master", &scopes, &query).await,
+        Err(PreparationError::Invalid(_))
+    ));
+    pool.close().await;
+    sqlx::query(&format!("DROP DATABASE {db}"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    admin.close().await;
+}
+
 fn consume(order: &str, code: &str, percent: &str) -> ConsumptionCreate {
     ConsumptionCreate {
         request_id: format!("consume-{order}"),

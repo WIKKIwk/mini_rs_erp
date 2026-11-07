@@ -23,6 +23,7 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/v1/mobile/werka/paddons/preview", get(crate::http::handlers::admin::werka_paddon_preview))
         .route("/v1/mobile/werka/paddons/receive", axum::routing::post(crate::http::handlers::admin::werka_paddon_receive))
         .route("/v1/mobile/preparation/snapshot", get(crate::http::handlers::preparation::snapshot))
+        .route("/v1/mobile/preparation/material-stock", get(crate::http::handlers::preparation::material_stock))
         .route("/v1/mobile/preparation/production/orders", get(crate::http::handlers::preparation::production_orders))
         .route("/v1/mobile/preparation/production/order", get(crate::http::handlers::preparation::production_order))
         .route("/v1/mobile/preparation/production/batch", get(crate::http::handlers::preparation::production_batch))

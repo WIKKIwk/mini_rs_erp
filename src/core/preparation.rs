@@ -55,6 +55,48 @@ pub enum PreparationWarehouseMaterialScope {
 pub type PreparationWarehouseMaterialScopes =
     BTreeMap<String, PreparationWarehouseMaterialScope>;
 
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MaterialStockTab {
+    #[default]
+    Available,
+    Receipts,
+    Issues,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MaterialStockQuery {
+    pub warehouse: String,
+    pub item_code: String,
+    #[serde(default)]
+    pub tab: MaterialStockTab,
+    #[serde(default)]
+    pub offset: usize,
+    #[serde(default = "material_stock_page_size")]
+    pub limit: usize,
+}
+
+fn material_stock_page_size() -> usize {
+    50
+}
+
+impl MaterialStockQuery {
+    pub fn validate(&self) -> Result<(), PreparationError> {
+        if self.warehouse.trim().is_empty()
+            || self.warehouse.len() > 512
+            || self.item_code.trim().is_empty()
+            || self.item_code.len() > 512
+            || self.offset > 1_000_000
+            || !(1..=100).contains(&self.limit)
+        {
+            return Err(PreparationError::Invalid(
+                "Homashyo ro‘yxati filtri noto‘g‘ri",
+            ));
+        }
+        Ok(())
+    }
+}
+
 pub fn decimal(value: &str) -> Result<i64, PreparationError> {
     let value = value.trim();
     let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
