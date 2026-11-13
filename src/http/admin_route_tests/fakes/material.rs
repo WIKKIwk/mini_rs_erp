@@ -61,6 +61,7 @@ fn raw_material_stock_entry(
     qty: f64,
 ) -> RawMaterialStockEntry {
     RawMaterialStockEntry {
+        is_metalayzer: false,
         id: format!("raw:{barcode}"),
         item_code: item_code.to_string(),
         item_name: item_name.to_string(),

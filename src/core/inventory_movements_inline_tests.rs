@@ -47,6 +47,7 @@ mod tests {
         store
             .seed_assets(vec![
                 InventoryAsset {
+                    is_metalayzer: false,
                     kind: InventoryAssetKind::RawMaterial,
                     asset_ref: "raw:state".to_string(),
                     custody_warehouse_id: warehouse.warehouse_id.clone(),
@@ -62,6 +63,7 @@ mod tests {
                     placement_version: 2,
                 },
                 InventoryAsset {
+                    is_metalayzer: false,
                     kind: InventoryAssetKind::RawMaterial,
                     asset_ref: "raw:warehouse".to_string(),
                     custody_warehouse_id: warehouse.warehouse_id.clone(),
@@ -125,6 +127,7 @@ mod tests {
             .await;
         store
             .seed_assets(vec![InventoryAsset {
+                is_metalayzer: false,
                 kind: InventoryAssetKind::RawMaterial,
                 asset_ref: "raw:1".to_string(),
                 custody_warehouse_id: source.warehouse_id.clone(),
@@ -279,6 +282,7 @@ mod tests {
         store
             .seed_assets(vec![
                 InventoryAsset {
+                    is_metalayzer: false,
                     kind: InventoryAssetKind::RawMaterial,
                     asset_ref: "raw:1".to_string(),
                     custody_warehouse_id: source.warehouse_id.clone(),
@@ -294,6 +298,7 @@ mod tests {
                     placement_version: 1,
                 },
                 InventoryAsset {
+                    is_metalayzer: false,
                     kind: InventoryAssetKind::RawMaterial,
                     asset_ref: "raw:2".to_string(),
                     custody_warehouse_id: source.warehouse_id.clone(),
@@ -382,6 +387,7 @@ mod tests {
         store
             .seed_assets(vec![
                 InventoryAsset {
+                    is_metalayzer: false,
                     kind: InventoryAssetKind::RawMaterial,
                     asset_ref: "raw:a".to_string(),
                     custody_warehouse_id: warehouse_a.warehouse_id.clone(),
@@ -397,6 +403,7 @@ mod tests {
                     placement_version: 2,
                 },
                 InventoryAsset {
+                    is_metalayzer: false,
                     kind: InventoryAssetKind::RawMaterial,
                     asset_ref: "raw:b".to_string(),
                     custody_warehouse_id: warehouse_b.warehouse_id.clone(),
@@ -458,6 +465,7 @@ mod tests {
             .await;
         store
             .seed_assets(vec![InventoryAsset {
+                is_metalayzer: false,
                 kind: InventoryAssetKind::RawMaterial,
                 asset_ref: "raw:1".to_string(),
                 custody_warehouse_id: source.warehouse_id.clone(),
@@ -507,6 +515,7 @@ mod tests {
             .await;
         store
             .seed_assets(vec![InventoryAsset {
+                is_metalayzer: false,
                 kind: InventoryAssetKind::Qolip,
                 asset_ref: "qolip:1".to_string(),
                 custody_warehouse_id: source.warehouse_id.clone(),
@@ -620,6 +629,7 @@ mod tests {
         store
             .seed_assets(vec![
                 InventoryAsset {
+                    is_metalayzer: false,
                     kind: InventoryAssetKind::RawMaterial,
                     asset_ref: "raw:1".to_string(),
                     custody_warehouse_id: source.warehouse_id.clone(),
@@ -635,6 +645,7 @@ mod tests {
                     placement_version: 1,
                 },
                 InventoryAsset {
+                    is_metalayzer: false,
                     kind: InventoryAssetKind::RawMaterial,
                     asset_ref: "raw:2".to_string(),
                     custody_warehouse_id: source.warehouse_id.clone(),
@@ -688,6 +699,7 @@ mod tests {
 
         store
             .seed_assets(vec![InventoryAsset {
+                is_metalayzer: false,
                 kind: InventoryAssetKind::RawMaterial,
                 asset_ref: "raw:2".to_string(),
                 custody_warehouse_id: source.warehouse_id.clone(),
@@ -759,6 +771,7 @@ mod tests {
             .await;
         store
             .seed_assets(vec![InventoryAsset {
+                is_metalayzer: false,
                 kind: InventoryAssetKind::RawMaterial,
                 asset_ref: "raw:1".to_string(),
                 custody_warehouse_id: source.warehouse_id.clone(),
@@ -841,6 +854,7 @@ mod tests {
             .await;
         store
             .seed_assets(vec![InventoryAsset {
+                is_metalayzer: false,
                 kind: InventoryAssetKind::FinishedGoods,
                 asset_ref: "finished:1".to_string(),
                 custody_warehouse_id: source.warehouse_id.clone(),

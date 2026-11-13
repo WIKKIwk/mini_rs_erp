@@ -45,6 +45,7 @@ pub fn system_role_definitions() -> Vec<RoleDefinition> {
         ),
         (PrincipalRole::Brigader, "brigader", "Brigader"),
         (PrincipalRole::RezkaMaster, "rezka_master", "Rezka master"),
+        (PrincipalRole::Metalayzer, "metalayzer", "Metalayzer"),
         (
             PrincipalRole::SalesManager,
             "sales_manager",

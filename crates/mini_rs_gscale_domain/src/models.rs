@@ -152,6 +152,7 @@ pub struct MaterialReceiptDraft {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct RawMaterialStockEntry {
+    pub is_metalayzer: bool,
     pub id: String,
     pub warehouse: String,
     pub item_code: String,

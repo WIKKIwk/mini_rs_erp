@@ -129,6 +129,7 @@ fn required_system_role(value: Option<&str>) -> Result<PrincipalRole, AdminError
         "sales_manager" => Ok(PrincipalRole::SalesManager),
         "brigader" => Ok(PrincipalRole::Brigader),
         "rezka_master" => Ok(PrincipalRole::RezkaMaster),
+        "metalayzer" => Ok(PrincipalRole::Metalayzer),
         _ => Err(bad_request("system user role is invalid")),
     }
 }
@@ -142,6 +143,7 @@ fn system_role_key(role: &PrincipalRole) -> &'static str {
         PrincipalRole::SalesManager => "sales_manager",
         PrincipalRole::Brigader => "brigader",
         PrincipalRole::RezkaMaster => "rezka_master",
+        PrincipalRole::Metalayzer => "metalayzer",
         _ => "system_user",
     }
 }

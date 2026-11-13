@@ -96,6 +96,7 @@ fn role_label(role: &PrincipalRole) -> &'static str {
         PrincipalRole::SalesManager => "Sotuv manageri",
         PrincipalRole::Brigader => "Brigader",
         PrincipalRole::RezkaMaster => "Rezka master",
+        PrincipalRole::Metalayzer => "Metalayzer",
         PrincipalRole::MaterialTaminotchi => "Material taminotchisi",
         PrincipalRole::Admin => "Admin",
     }

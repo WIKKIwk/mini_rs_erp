@@ -139,6 +139,8 @@ impl From<&InventoryLocation> for InventoryLocationRef {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InventoryAsset {
+    #[serde(default)]
+    pub is_metalayzer: bool,
     pub kind: InventoryAssetKind,
     pub asset_ref: String,
     pub custody_warehouse_id: String,

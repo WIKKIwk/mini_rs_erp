@@ -514,6 +514,7 @@ async fn optional_rulon_policy_requires_scan_once_material_is_assigned() {
             ["30R765", "30R785", "30R1530"]
                 .into_iter()
                 .map(|barcode| InventoryAsset {
+                    is_metalayzer: false,
                     kind: InventoryAssetKind::RawMaterial,
                     asset_ref: format!("raw:{barcode}"),
                     custody_warehouse_id: "warehouse:kalidor".to_string(),

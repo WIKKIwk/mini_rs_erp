@@ -138,6 +138,7 @@ fn principal_role_key(role: &PrincipalRole) -> &'static str {
         PrincipalRole::SalesManager => "sales_manager",
         PrincipalRole::Brigader => "brigader",
         PrincipalRole::RezkaMaster => "rezka_master",
+        PrincipalRole::Metalayzer => "metalayzer",
         PrincipalRole::MaterialTaminotchi => "material_taminotchi",
         PrincipalRole::Admin => "admin",
     }
@@ -177,6 +178,8 @@ fn canonical_role_key(value: &str) -> Option<&'static str> {
         Some("material_taminotchi")
     } else if value.eq_ignore_ascii_case("brigader") {
         Some("brigader")
+    } else if value.eq_ignore_ascii_case("metalayzer") {
+        Some("metalayzer")
     } else if value.eq_ignore_ascii_case("rezka_master") {
         Some("rezka_master")
     } else if value.eq_ignore_ascii_case("sales_manager") {

@@ -565,6 +565,7 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
             ["30AA", "30CC", "30DD"]
                 .into_iter()
                 .map(|barcode| InventoryAsset {
+                    is_metalayzer: false,
                     kind: InventoryAssetKind::RawMaterial,
                     asset_ref: format!("raw:{barcode}"),
                     custody_warehouse_id: "warehouse:kalidor".to_string(),

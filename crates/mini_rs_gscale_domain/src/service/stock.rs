@@ -37,6 +37,18 @@ impl GscaleService {
             .map_err(|error| GscaleServiceError::StoreWrite(error.to_string()))
     }
 
+    pub async fn mark_raw_material_metalayzer(
+        &self,
+        barcode: &str,
+        warehouses: &[String],
+    ) -> Result<RawMaterialStockEntry, GscaleServiceError> {
+        let barcode = required_barcode(barcode)?;
+        self.receipt_store()?
+            .mark_raw_material_metalayzer(barcode, warehouses)
+            .await
+            .map_err(map_receipt_store_error)
+    }
+
     pub async fn raw_material_stock(
         &self,
         warehouse: &str,

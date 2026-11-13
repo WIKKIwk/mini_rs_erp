@@ -10,6 +10,7 @@ const RULON_WIDTH_EXTRA_TOLERANCE_MM: f64 = 10.0;
 
 #[derive(serde::Serialize)]
 pub(super) struct RawMaterialLookupResponse {
+    is_metalayzer: bool,
     barcode: String,
     warehouse: String,
     item_code: String,
@@ -457,6 +458,7 @@ pub(super) async fn lookup_raw_material_detail(
         require_material_warehouse_scope(state, principal, &stock.warehouse).await?;
     }
     Ok(RawMaterialLookupResponse {
+        is_metalayzer: stock.is_metalayzer,
         barcode: stock.barcode.trim().to_string(),
         warehouse: stock.warehouse.trim().to_string(),
         item_code: stock.item_code.trim().to_string(),

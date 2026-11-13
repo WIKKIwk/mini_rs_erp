@@ -122,6 +122,7 @@ fn location(warehouse_id: &str, name: &str) -> InventoryLocation {
 
 fn asset(id: &str, name: &str, location: &InventoryLocation) -> InventoryAsset {
     InventoryAsset {
+        is_metalayzer: false,
         kind: InventoryAssetKind::RawMaterial,
         asset_ref: id.into(),
         custody_warehouse_id: location.warehouse_id.clone(),

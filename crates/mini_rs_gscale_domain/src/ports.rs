@@ -27,6 +27,17 @@ pub trait MaterialReceiptStorePort: Send + Sync {
         Ok(None)
     }
 
+    /// Mark a roll without changing its quantity, reservation or stock status.
+    async fn mark_raw_material_metalayzer(
+        &self,
+        _barcode: &str,
+        _warehouses: &[String],
+    ) -> Result<RawMaterialStockEntry, GscalePortError> {
+        Err(GscalePortError::NotConfigured(
+            "metalayzer is not configured".to_string(),
+        ))
+    }
+
     async fn raw_material_stock(
         &self,
         _warehouse: &str,

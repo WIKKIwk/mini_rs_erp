@@ -279,6 +279,7 @@ pub fn inventory_role_code(role: &PrincipalRole) -> &'static str {
         PrincipalRole::SalesManager => "sales_manager",
         PrincipalRole::Brigader => "brigader",
         PrincipalRole::RezkaMaster => "rezka_master",
+        PrincipalRole::Metalayzer => "metalayzer",
         PrincipalRole::MaterialTaminotchi => "material_taminotchi",
         PrincipalRole::Admin => "admin",
     }

@@ -9,6 +9,7 @@ pub enum Capability {
     SalesAccess,
     BrigaderAccess,
     RezkaMasterAccess,
+    MetalayzerAccess,
     ProductionMapRead,
     ProductionOrderCreate,
     ProductionOrderEdit,

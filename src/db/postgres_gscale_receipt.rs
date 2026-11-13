@@ -42,6 +42,7 @@ struct MaterialReceiptRow {
 
 #[derive(Clone, sqlx::FromRow)]
 struct RawMaterialStockRow {
+    is_metalayzer: bool,
     id: String,
     warehouse: String,
     item_code: String,
@@ -220,7 +221,7 @@ async fn raw_material_stock_rows_for_update_tx(
         "SELECT id, warehouse, item_code, item_name, barcode,
                 qty::float8 AS qty, width_mm::float8 AS width_mm,
                 micron::float8 AS micron, length_m::float8 AS length_m, uom,
-                status, reserved_order_id, source_receipt_id
+                status, reserved_order_id, source_receipt_id, is_metalayzer
          FROM mini_raw_material_stock
          WHERE lower(barcode) = ANY($1)
          FOR UPDATE",
@@ -306,6 +307,7 @@ fn row_to_draft(row: MaterialReceiptRow) -> MaterialReceiptDraft {
 
 fn row_to_stock(row: RawMaterialStockRow) -> RawMaterialStockEntry {
     RawMaterialStockEntry {
+        is_metalayzer: row.is_metalayzer,
         id: row.id,
         warehouse: row.warehouse,
         item_code: row.item_code,

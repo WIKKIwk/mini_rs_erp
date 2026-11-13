@@ -29,6 +29,7 @@ async fn preparation_inventory_is_warehouse_scoped_and_transfers_raw_materials()
     };
     store.seed_locations(vec![source.clone(), destination.clone(), state_location.clone()]).await;
     let asset = InventoryAsset {
+        is_metalayzer: false,
         kind: InventoryAssetKind::RawMaterial,
         asset_ref: "raw:prep".into(),
         custody_warehouse_id: source.warehouse_id.clone(),
@@ -102,6 +103,7 @@ async fn assigned_warehouse_users_complete_bilateral_inventory_transfer() {
         .await;
     store
         .seed_assets(vec![InventoryAsset {
+            is_metalayzer: false,
             kind: InventoryAssetKind::RawMaterial,
             asset_ref: "raw:qr-001".to_string(),
             custody_warehouse_id: source.warehouse_id.clone(),
@@ -227,6 +229,7 @@ async fn state_relocation_preserves_custody_and_quantity() {
         .await;
     store
         .seed_assets(vec![InventoryAsset {
+            is_metalayzer: false,
             kind: InventoryAssetKind::FinishedGoods,
             asset_ref: "fg:1".to_string(),
             custody_warehouse_id: warehouse.warehouse_id.clone(),

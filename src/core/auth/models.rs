@@ -19,6 +19,7 @@ pub enum PrincipalRole {
     SalesManager,
     Brigader,
     RezkaMaster,
+    Metalayzer,
 }
 
 impl PrincipalRole {

@@ -18,6 +18,7 @@ include!("../postgres_inventory_movements_trait_impl.rs");
 const ASSET_LIST_SQL: &str = r#"
 WITH assets AS (
     SELECT
+        stock.is_metalayzer,
         'raw_material'::text AS asset_kind,
         stock.id AS asset_ref,
         stock.warehouse,
@@ -40,6 +41,7 @@ WITH assets AS (
     UNION ALL
 
     SELECT
+        false AS is_metalayzer,
         'finished_goods'::text,
         stock.id,
         stock.warehouse,
@@ -62,6 +64,7 @@ WITH assets AS (
     UNION ALL
 
     SELECT
+        false AS is_metalayzer,
         'qolip'::text,
         stock.id,
         stock.warehouse,
@@ -82,6 +85,7 @@ WITH assets AS (
       AND public.mini_qolip_storage_state(stock.qolip_code) = ''
 )
 SELECT
+    assets.is_metalayzer,
     assets.asset_kind,
     assets.asset_ref,
     warehouse.id AS custody_warehouse_id,
@@ -160,6 +164,7 @@ struct RawMaterialStatePlacementRow {
 
 #[derive(sqlx::FromRow)]
 struct InventoryAssetRow {
+    is_metalayzer: bool,
     asset_kind: String,
     asset_ref: String,
     custody_warehouse_id: String,
@@ -271,6 +276,7 @@ fn location_from_row(
 
 fn asset_from_row(row: InventoryAssetRow) -> Result<InventoryAsset, InventoryMovementError> {
     Ok(InventoryAsset {
+        is_metalayzer: row.is_metalayzer,
         kind: InventoryAssetKind::parse(&row.asset_kind)?,
         asset_ref: row.asset_ref,
         custody_warehouse_id: row.custody_warehouse_id,

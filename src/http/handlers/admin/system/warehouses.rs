@@ -378,7 +378,8 @@ async fn validate_warehouse_assignee(
         | PrincipalRole::MaterialTaminotchi
         | PrincipalRole::Qolipchi
         | PrincipalRole::TayyorlovMasteri
-        | PrincipalRole::HomashyoRezkachi => Ok(()),
+        | PrincipalRole::HomashyoRezkachi
+        | PrincipalRole::Metalayzer => Ok(()),
         PrincipalRole::Aparatchi => {
             let workers = state
                 .workers

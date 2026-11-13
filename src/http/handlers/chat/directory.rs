@@ -112,7 +112,8 @@ pub(super) async fn resolve_target(
         | PrincipalRole::HomashyoRezkachi
         | PrincipalRole::SalesManager
         | PrincipalRole::Brigader
-        | PrincipalRole::RezkaMaster => {
+        | PrincipalRole::RezkaMaster
+        | PrincipalRole::Metalayzer => {
             let user = state
                 .system_users
                 .users_by_ids(&[ref_.to_string()])
@@ -264,6 +265,7 @@ async fn load_directory_entries(
         PrincipalRole::Boyoqchi,
         PrincipalRole::TayyorlovMasteri,
         PrincipalRole::HomashyoRezkachi,
+        PrincipalRole::Metalayzer,
         PrincipalRole::SalesManager,
         PrincipalRole::Brigader,
     ] {

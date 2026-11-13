@@ -3,7 +3,7 @@ const DEFAULT_MAX_CONNECTIONS: u32 = 16;
 const DEFAULT_ACQUIRE_TIMEOUT_MS: u64 = 500;
 const MIGRATION_LOCK_KEY: i64 = 6_514_811_918_052_026_001;
 
-const POSTGRES_MIGRATIONS: [(&str, &str); 195] = [
+const POSTGRES_MIGRATIONS: [(&str, &str); 197] = [
     (
         "0001_mini_erp_foundation",
         include_str!("../../../migrations/postgres/0001_mini_erp_foundation.sql"),
@@ -793,6 +793,14 @@ const POSTGRES_MIGRATIONS: [(&str, &str); 195] = [
     (
         "0195_backfill_order_print_side",
         include_str!("../../../migrations/postgres/0195_backfill_order_print_side.sql"),
+    ),
+    (
+        "0196_metalayzer_role",
+        include_str!("../../../migrations/postgres/0196_metalayzer_role.sql"),
+    ),
+    (
+        "0197_raw_material_metalayzer",
+        include_str!("../../../migrations/postgres/0197_raw_material_metalayzer.sql"),
     ),
 ];
 

@@ -122,7 +122,10 @@ impl AdminService {
         // through a custom role assignment.
         if matches!(
             principal.role,
-            PrincipalRole::SalesManager | PrincipalRole::Brigader | PrincipalRole::RezkaMaster
+            PrincipalRole::SalesManager
+                | PrincipalRole::Brigader
+                | PrincipalRole::RezkaMaster
+                | PrincipalRole::Metalayzer
         ) && !has_capability(principal, capability)
         {
             return false;
@@ -153,7 +156,10 @@ impl AdminService {
             Ok(Some(role))
                 if matches!(
                     principal.role,
-                    PrincipalRole::SalesManager | PrincipalRole::Brigader | PrincipalRole::RezkaMaster
+                    PrincipalRole::SalesManager
+                        | PrincipalRole::Brigader
+                        | PrincipalRole::RezkaMaster
+                        | PrincipalRole::Metalayzer
                 ) =>
             {
                 let allowed = capability_codes_for_role(principal.role);

@@ -134,6 +134,7 @@ fn encode_role(role: &PrincipalRole) -> u8 {
         PrincipalRole::SalesManager => 11,
         PrincipalRole::Brigader => 12,
         PrincipalRole::RezkaMaster => 13,
+        PrincipalRole::Metalayzer => 14,
     }
 }
 
@@ -152,8 +153,18 @@ fn decode_role(role: u8) -> Result<PrincipalRole, BoxedError> {
         11 => Ok(PrincipalRole::SalesManager),
         12 => Ok(PrincipalRole::Brigader),
         13 => Ok(PrincipalRole::RezkaMaster),
+        14 => Ok(PrincipalRole::Metalayzer),
         _ => Err("invalid stored session principal role".into()),
     }
+}
+
+#[cfg(test)]
+#[test]
+fn metalayzer_session_codec_appends_a_new_role_byte() {
+    assert_eq!(encode_role(&PrincipalRole::Metalayzer), 14);
+    assert_eq!(decode_role(14).unwrap(), PrincipalRole::Metalayzer);
+    assert_eq!(encode_role(&PrincipalRole::RezkaMaster), 13);
+    assert_eq!(decode_role(13).unwrap(), PrincipalRole::RezkaMaster);
 }
 
 #[cfg(test)]

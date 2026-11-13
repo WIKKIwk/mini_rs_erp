@@ -189,7 +189,7 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
             "SELECT id, warehouse, item_code, item_name, barcode,
                     qty::float8 AS qty, width_mm::float8 AS width_mm,
                     micron::float8 AS micron, length_m::float8 AS length_m, uom,
-                    status, reserved_order_id, source_receipt_id
+                    status, reserved_order_id, source_receipt_id, is_metalayzer
              FROM mini_raw_material_stock
              WHERE lower(barcode) = lower($1)
                AND status <> 'deleted'
@@ -203,6 +203,42 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
         .map_err(|error| GscalePortError::StoreWrite(error.to_string()))
     }
 
+    async fn mark_raw_material_metalayzer(
+        &self,
+        barcode: &str,
+        warehouses: &[String],
+    ) -> Result<RawMaterialStockEntry, GscalePortError> {
+        let mut tx = self.pool.begin().await
+            .map_err(|error| GscalePortError::StoreWrite(error.to_string()))?;
+        let mut row = sqlx::query_as::<_, RawMaterialStockRow>(
+            "SELECT id, warehouse, item_code, item_name, barcode,
+                    qty::float8 AS qty, width_mm::float8 AS width_mm,
+                    micron::float8 AS micron, length_m::float8 AS length_m, uom,
+                    status, reserved_order_id, source_receipt_id, is_metalayzer
+             FROM mini_raw_material_stock WHERE lower(barcode) = lower($1) FOR UPDATE"
+        ).bind(barcode.trim()).fetch_optional(&mut *tx).await
+            .map_err(|error| GscalePortError::StoreWrite(error.to_string()))?
+            .ok_or_else(|| GscalePortError::InvalidInput("raw_material_stock_not_found".into()))?;
+        if !warehouses.iter().any(|warehouse| warehouse.trim().eq_ignore_ascii_case(row.warehouse.trim())) {
+            return Err(GscalePortError::InvalidInput("metalayzer_warehouse_forbidden".into()));
+        }
+        if row.status == "deleted" {
+            return Err(GscalePortError::InvalidInput("raw_material_stock_not_found".into()));
+        }
+        if row.status == "consumed" || row.qty <= 0.0 {
+            return Err(GscalePortError::InvalidInput("metalayzer_material_unavailable".into()));
+        }
+        // A repeated request succeeds without rewriting the row or emitting live changes.
+        if !row.is_metalayzer {
+            sqlx::query("UPDATE mini_raw_material_stock SET is_metalayzer = true, updated_at = now() WHERE id = $1")
+                .bind(&row.id).execute(&mut *tx).await
+                .map_err(|error| GscalePortError::StoreWrite(error.to_string()))?;
+            row.is_metalayzer = true;
+        }
+        tx.commit().await.map_err(|error| GscalePortError::StoreWrite(error.to_string()))?;
+        Ok(row_to_stock(row))
+    }
+
     async fn raw_material_stock(
         &self,
         warehouse: &str,
@@ -213,7 +249,7 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
             "SELECT id, warehouse, item_code, item_name, barcode,
                     qty::float8 AS qty, width_mm::float8 AS width_mm,
                     micron::float8 AS micron, length_m::float8 AS length_m, uom,
-                    status, reserved_order_id, source_receipt_id
+                    status, reserved_order_id, source_receipt_id, is_metalayzer
              FROM mini_raw_material_stock
              WHERE status <> 'deleted'
                AND ($1 = '' OR lower(warehouse) = $1)
@@ -253,7 +289,7 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
             "SELECT id, warehouse, item_code, item_name, barcode,
                     qty::float8 AS qty, width_mm::float8 AS width_mm,
                     micron::float8 AS micron, length_m::float8 AS length_m, uom,
-                    status, reserved_order_id, source_receipt_id
+                    status, reserved_order_id, source_receipt_id, is_metalayzer
              FROM mini_raw_material_stock
              WHERE lower(barcode) = lower($1)
              FOR UPDATE",
@@ -303,7 +339,7 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
              RETURNING id, warehouse, item_code, item_name, barcode,
                        qty::float8 AS qty, width_mm::float8 AS width_mm,
                        micron::float8 AS micron, length_m::float8 AS length_m, uom,
-                       status, reserved_order_id, source_receipt_id",
+                       status, reserved_order_id, source_receipt_id, is_metalayzer",
         )
         .bind(barcode)
         .bind(item_code)
@@ -378,7 +414,7 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
             "SELECT id, warehouse, item_code, item_name, barcode,
                     qty::float8 AS qty, width_mm::float8 AS width_mm,
                     micron::float8 AS micron, length_m::float8 AS length_m, uom,
-                    status, reserved_order_id, source_receipt_id
+                    status, reserved_order_id, source_receipt_id, is_metalayzer
              FROM mini_raw_material_stock
              WHERE lower(barcode) = lower($1)
              FOR UPDATE",
@@ -458,7 +494,7 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
              RETURNING id, warehouse, item_code, item_name, barcode,
                        qty::float8 AS qty, width_mm::float8 AS width_mm,
                        micron::float8 AS micron, length_m::float8 AS length_m, uom,
-                       status, reserved_order_id, source_receipt_id",
+                       status, reserved_order_id, source_receipt_id, is_metalayzer",
         )
         .bind(&previous.id)
         .bind(input.actor_role.trim())
@@ -534,7 +570,7 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
              RETURNING id, warehouse, item_code, item_name, barcode,
                        qty::float8 AS qty, width_mm::float8 AS width_mm,
                        micron::float8 AS micron, length_m::float8 AS length_m, uom,
-                       status, reserved_order_id, source_receipt_id",
+                       status, reserved_order_id, source_receipt_id, is_metalayzer",
         )
         .bind(&barcodes)
         .bind(order_id)
@@ -600,7 +636,7 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
              RETURNING id, warehouse, item_code, item_name, barcode,
                        qty::float8 AS qty, width_mm::float8 AS width_mm,
                        micron::float8 AS micron, length_m::float8 AS length_m, uom,
-                       status, reserved_order_id, source_receipt_id",
+                       status, reserved_order_id, source_receipt_id, is_metalayzer",
         )
         .bind(&barcodes)
         .bind(order_id)

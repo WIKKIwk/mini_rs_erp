@@ -70,6 +70,7 @@ async fn fixture() -> (AppState, String, Arc<MemoryInventoryMovementStore>) {
         .await;
     store
         .seed_assets(vec![InventoryAsset {
+            is_metalayzer: false,
             kind: InventoryAssetKind::RawMaterial,
             asset_ref: "raw:30AA".into(),
             custody_warehouse_id: warehouse.warehouse_id.clone(),
@@ -177,6 +178,7 @@ async fn active_material_receipt_lists_unstaged_roll_and_records_delivery_before
     );
     store
         .seed_assets(vec![InventoryAsset {
+            is_metalayzer: false,
             kind: InventoryAssetKind::RawMaterial,
             asset_ref: "raw:30CC".into(),
             custody_warehouse_id: "warehouse:kalidor".into(),
