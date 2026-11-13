@@ -115,6 +115,67 @@ fn response(stock: RawMaterialStockEntry) -> Response {
         .into_response()
 }
 
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct MaterialsQuery {
+    #[serde(default)]
+    cursor: String,
+    limit: Option<usize>,
+}
+
+pub async fn materials(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(input): Query<MaterialsQuery>,
+) -> Result<Response, ApiError> {
+    let actor = authorize(&state, &headers).await?;
+    let allowed = warehouses(&state, &actor).await?;
+    let limit = input.limit.unwrap_or(50).clamp(1, 100);
+    let mut stocks = state
+        .gscale
+        .metalayzer_materials(&allowed, &input.cursor, limit + 1)
+        .await
+        .map_err(|err| match err {
+            GscaleServiceError::NotConfigured(_) => stock_error(err),
+            other => {
+                tracing::error!(%other, "metalayzer list failed");
+                error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "metalayzer_list_failed",
+                    "Ro‘yxatni yuklab bo‘lmadi",
+                )
+            }
+        })?;
+    let next_cursor = if stocks.len() > limit {
+        stocks.truncate(limit);
+        stocks.last().map(|stock| stock.id.clone())
+    } else {
+        None
+    };
+    let items: Vec<_> = stocks
+        .into_iter()
+        .map(|stock| {
+            json!({
+                "barcode": stock.barcode,
+                "item_code": stock.item_code,
+                "item_name": stock.item_name,
+                "warehouse": stock.warehouse,
+                "qty": stock.qty,
+                "uom": stock.uom,
+                "is_metalayzer": stock.is_metalayzer,
+            })
+        })
+        .collect();
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(json!({
+            "items": items,
+            "next_cursor": next_cursor,
+        })),
+    )
+        .into_response())
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MaterialInput {

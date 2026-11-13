@@ -49,6 +49,18 @@ impl GscaleService {
             .map_err(map_receipt_store_error)
     }
 
+    pub async fn metalayzer_materials(
+        &self,
+        warehouses: &[String],
+        after_id: &str,
+        limit: usize,
+    ) -> Result<Vec<RawMaterialStockEntry>, GscaleServiceError> {
+        self.receipt_store()?
+            .metalayzer_materials(warehouses, after_id, limit)
+            .await
+            .map_err(map_receipt_store_error)
+    }
+
     pub async fn raw_material_stock(
         &self,
         warehouse: &str,

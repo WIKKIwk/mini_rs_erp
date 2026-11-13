@@ -264,6 +264,41 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
         .map_err(|error| GscalePortError::StoreWrite(error.to_string()))
     }
 
+    async fn metalayzer_materials(
+        &self,
+        warehouses: &[String],
+        after_id: &str,
+        limit: usize,
+    ) -> Result<Vec<RawMaterialStockEntry>, GscalePortError> {
+        let warehouses: Vec<String> = warehouses
+            .iter()
+            .map(|name| name.trim().to_lowercase())
+            .filter(|name| !name.is_empty())
+            .collect();
+        if warehouses.is_empty() {
+            return Ok(Vec::new());
+        }
+        sqlx::query_as::<_, RawMaterialStockRow>(
+            "SELECT id, warehouse, item_code, item_name, barcode,
+                    qty::float8 AS qty, width_mm::float8 AS width_mm,
+                    micron::float8 AS micron, length_m::float8 AS length_m, uom,
+                    status, reserved_order_id, source_receipt_id, is_metalayzer
+             FROM mini_raw_material_stock
+             WHERE is_metalayzer = true AND status <> 'deleted'
+               AND lower(btrim(warehouse)) = ANY($1::text[])
+               AND id COLLATE \"C\" > $2 COLLATE \"C\"
+             ORDER BY id COLLATE \"C\"
+             LIMIT $3",
+        )
+        .bind(&warehouses)
+        .bind(after_id)
+        .bind(limit.clamp(1, 101) as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map(|rows| rows.into_iter().map(row_to_stock).collect())
+        .map_err(|error| GscalePortError::StoreWrite(error.to_string()))
+    }
+
     async fn update_raw_material_stock(
         &self,
         input: RawMaterialStockUpdateInput,

@@ -20,6 +20,8 @@ use std::{path::Path, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
 use tower::ServiceExt;
 
+static APP_STATE_LOCK: Mutex<()> = Mutex::const_new(());
+
 struct Stocks(Mutex<Vec<RawMaterialStockEntry>>);
 #[async_trait::async_trait]
 impl MaterialReceiptStorePort for Stocks {
@@ -72,6 +74,31 @@ impl MaterialReceiptStorePort for Stocks {
         }
         row.is_metalayzer = true;
         Ok(row.clone())
+    }
+    async fn metalayzer_materials(
+        &self,
+        warehouses: &[String],
+        after_id: &str,
+        limit: usize,
+    ) -> Result<Vec<RawMaterialStockEntry>, GscalePortError> {
+        let mut rows: Vec<_> = self
+            .0
+            .lock()
+            .await
+            .iter()
+            .filter(|stock| {
+                stock.is_metalayzer
+                    && stock.status != "deleted"
+                    && stock.id.as_str() > after_id
+                    && warehouses
+                        .iter()
+                        .any(|name| name.trim().eq_ignore_ascii_case(stock.warehouse.trim()))
+            })
+            .cloned()
+            .collect();
+        rows.sort_by(|a, b| a.id.cmp(&b.id));
+        rows.truncate(limit);
+        Ok(rows)
     }
 }
 
@@ -152,8 +179,100 @@ async fn request(
     )
 }
 
+async fn list_request(router: &Router, token: &str, query: &str) -> (StatusCode, Value) {
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/mobile/metalayzer/materials{query}"))
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+#[tokio::test]
+async fn marked_material_list_is_scoped_paginated_and_includes_consumed_stock() {
+    let _guard = APP_STATE_LOCK.lock().await;
+    let directory = tempfile::tempdir().unwrap();
+    let mut state = AppState::verification(config(directory.path()));
+    state.sessions = SessionManager::memory(Some(3600));
+    state
+        .warehouses
+        .upsert_warehouse(WarehouseUpsert {
+            warehouse: "Raw W".into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    state
+        .warehouses
+        .assign_warehouse(WarehouseAssignmentUpsert {
+            assignment_kind: "warehouse".into(),
+            warehouse: "Raw W".into(),
+            warehouse_name: Some("Raw W".into()),
+            apparatus_id: None,
+            principal_role: PrincipalRole::Metalayzer,
+            principal_ref: "metal".into(),
+            display_name: "Metal".into(),
+        })
+        .await
+        .unwrap();
+    let entry = |id: &str, warehouse: &str, status: &str, flag| RawMaterialStockEntry {
+        id: id.into(),
+        barcode: id.into(),
+        warehouse: warehouse.into(),
+        item_code: "FILM".into(),
+        item_name: "Film".into(),
+        qty: 10.0,
+        uom: "kg".into(),
+        status: status.into(),
+        is_metalayzer: flag,
+        ..Default::default()
+    };
+    state.gscale = GscaleService::new().with_receipt_store(Arc::new(Stocks(Mutex::new(vec![
+        entry("a", "Raw W", "available", true),
+        entry("b", "Raw W", "consumed", true),
+        entry("c", "Other W", "available", true),
+        entry("d", "Raw W", "available", false),
+        entry("e", "Raw W", "deleted", true),
+    ]))));
+    let token = session(&state, PrincipalRole::Metalayzer, "metal").await;
+    let admin = session(&state, PrincipalRole::Admin, "admin").await;
+    let no_warehouse = session(&state, PrincipalRole::Metalayzer, "no-warehouse").await;
+    let router = build_router(state);
+    assert_eq!(
+        list_request(&router, "missing", "").await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        list_request(&router, &admin, "").await.0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        list_request(&router, &no_warehouse, "").await.0,
+        StatusCode::FORBIDDEN
+    );
+    let (status, first) = list_request(&router, &token, "?limit=1").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(first["items"][0]["barcode"], "a");
+    assert_eq!(first["next_cursor"], "a");
+    let (_, second) = list_request(&router, &token, "?limit=1&cursor=a").await;
+    assert_eq!(second["items"][0]["barcode"], "b");
+    assert_eq!(second["next_cursor"], Value::Null);
+}
+
 #[tokio::test]
 async fn scan_mark_rescan_is_role_scoped_and_does_not_change_stock() {
+    let _guard = APP_STATE_LOCK.lock().await;
     let directory = tempfile::tempdir().unwrap();
     let mut state = AppState::verification(config(directory.path()));
     state.sessions = SessionManager::memory(Some(3600));
@@ -359,6 +478,34 @@ async fn postgres_mark_is_atomic_scoped_idempotent_and_retains_other_fields() {
             .unwrap()
             .unwrap()
             .is_metalayzer
+    );
+    sqlx::raw_sql("INSERT INTO mini_raw_material_stock (id, barcode, warehouse, item_code, item_name, qty, uom, status, reserved_order_id, source_receipt_id, is_metalayzer) VALUES
+        ('raw:other', 'OTHER', 'Other W', 'FILM', 'Film', 10, 'kg', 'available', '', '', true),
+        ('raw:consumed', 'CONSUMED', ' Raw W ', 'FILM', 'Film', 10, 'kg', 'consumed', '', '', true),
+        ('raw:deleted', 'DELETED', 'Raw W', 'FILM', 'Film', 10, 'kg', 'deleted', '', '', true)")
+        .execute(&pool).await.unwrap();
+    let rows = store
+        .metalayzer_materials(&["raw w".into()], "", 1)
+        .await
+        .unwrap();
+    assert_eq!(
+        rows.iter().map(|r| r.barcode.as_str()).collect::<Vec<_>>(),
+        vec!["CONSUMED"]
+    );
+    let rows = store
+        .metalayzer_materials(&[" RAW W ".into()], &rows[0].id, 2)
+        .await
+        .unwrap();
+    assert_eq!(
+        rows.iter().map(|r| r.barcode.as_str()).collect::<Vec<_>>(),
+        vec!["ROLL"]
+    );
+    assert!(
+        store
+            .metalayzer_materials(&[], "", 10)
+            .await
+            .unwrap()
+            .is_empty()
     );
     pool.close().await;
     sqlx::query(&format!("DROP DATABASE {name}"))

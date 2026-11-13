@@ -12,6 +12,7 @@ use crate::http::handlers::{
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
         .route("/v1/mobile/metalayzer/material", get(crate::http::handlers::metalayzer::material))
+        .route("/v1/mobile/metalayzer/materials", get(crate::http::handlers::metalayzer::materials))
         .route("/v1/mobile/metalayzer/complete", post(crate::http::handlers::metalayzer::complete))
         .route("/v1/mobile/production-tasks/window", get(crate::http::handlers::admin::production_tasks_window))
         .route("/v1/mobile/production-tasks/live", get(crate::http::handlers::admin::production_tasks_live))

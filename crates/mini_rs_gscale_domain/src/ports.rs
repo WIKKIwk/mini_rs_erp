@@ -38,6 +38,18 @@ pub trait MaterialReceiptStorePort: Send + Sync {
         ))
     }
 
+    /// List marked stock only within the principal's assigned warehouses.
+    async fn metalayzer_materials(
+        &self,
+        _warehouses: &[String],
+        _after_id: &str,
+        _limit: usize,
+    ) -> Result<Vec<RawMaterialStockEntry>, GscalePortError> {
+        Err(GscalePortError::NotConfigured(
+            "metalayzer is not configured".to_string(),
+        ))
+    }
+
     async fn raw_material_stock(
         &self,
         _warehouse: &str,
