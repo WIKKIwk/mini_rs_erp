@@ -110,3 +110,16 @@ fn not_found() -> ApiError {
         ),
     )
 }
+
+pub async fn update_production_note(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<PreparationProductionNoteUpdate>,
+) -> Result<Json<Value>, ApiError> {
+    let actor = authorize(&state, &headers).await?;
+    input.validate().map_err(error)?;
+    let note = store(&state)?.update_production_order_note(&actor, &input)
+        .await.map_err(error)?.ok_or_else(not_found)?;
+    state.warehouse_events.invalidate_inventory();
+    Ok(Json(json!({"preparation_note":note})))
+}

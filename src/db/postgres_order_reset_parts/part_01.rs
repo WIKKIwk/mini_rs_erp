@@ -29,6 +29,7 @@ pub struct OrderResetReport {
     pub qolip_locations_restored: u64,
     pub qolip_checkouts_deleted: u64,
     pub qolip_order_notes_deleted: u64,
+    pub preparation_order_notes_deleted: u64,
     pub returned_paint_requests_deleted: u64,
     pub returned_paint_images_deleted: u64,
     pub apparatus_transfers_deleted: u64,
@@ -180,6 +181,11 @@ impl PostgresOrderResetStore {
              WHERE lower(order_id) IN (SELECT lower(id) FROM reset_order_ids)",
         )
         .await?;
+        report.preparation_order_notes_deleted = delete_rows(
+            &mut tx,
+            "DELETE FROM mini_preparation_production_order_notes
+             WHERE lower(order_id) IN (SELECT lower(id) FROM reset_order_ids)",
+        ).await?;
         report.qolip_checkouts_deleted = delete_rows(
             &mut tx,
             "DELETE FROM mini_qolip_checkouts
@@ -378,6 +384,8 @@ impl PostgresOrderResetStore {
                + (SELECT COUNT(*) FROM mini_raw_material_events
                   WHERE lower(order_id) IN (SELECT lower(id) FROM reset_order_ids))
                + (SELECT COUNT(*) FROM mini_qolip_order_notes
+                  WHERE lower(order_id) IN (SELECT lower(id) FROM reset_order_ids))
+               + (SELECT COUNT(*) FROM mini_preparation_production_order_notes
                   WHERE lower(order_id) IN (SELECT lower(id) FROM reset_order_ids))
                + (SELECT COUNT(*) FROM mini_returned_paint_requests
                   WHERE lower(order_id) IN (SELECT lower(id) FROM reset_order_ids))

@@ -73,6 +73,12 @@ pub(super) async fn inventory_asset_rows(
         .into_iter()
         .map(|assignment| (assignment.barcode.trim().to_ascii_uppercase(), assignment))
         .collect::<std::collections::BTreeMap<_, _>>();
+    let mut production_notes = if let Some(store) = state.preparation.as_ref() {
+        store.production_notes_for_receipts(&barcodes).await
+            .map_err(|_| server_error("preparation_note_read_failed"))?
+    } else {
+        std::collections::BTreeMap::new()
+    };
     let rows = assets
         .into_iter()
         .map(|asset| {
@@ -81,7 +87,10 @@ pub(super) async fn inventory_asset_rows(
             } else {
                 None
             };
-            InventoryAssetListRow { asset, order_assignment }
+            let preparation_note = if asset.kind == InventoryAssetKind::RawMaterial {
+                production_notes.remove(&asset.identifier.trim().to_ascii_uppercase())
+            } else { None };
+            InventoryAssetListRow { asset, order_assignment, preparation_note }
         })
         .collect::<Vec<_>>();
     Ok(InventoryAssetRows::WithAssignments(rows))
@@ -99,6 +108,8 @@ pub(super) struct InventoryAssetListRow {
     #[serde(flatten)]
     asset: crate::core::inventory_movements::InventoryAsset,
     order_assignment: Option<crate::core::inventory_movements::InventoryOrderAssignment>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preparation_note: Option<serde_json::Value>,
 }
 
 pub async fn inventory_relocations(

@@ -436,3 +436,23 @@ async fn preparation_system_role_create_login_list_scope_and_fail_closed() {
         .unwrap();
     assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
 }
+
+
+#[tokio::test]
+async fn preparation_production_note_requires_master_and_valid_payload() {
+    let state = test_state();
+    let master = session(&state, PrincipalRole::TayyorlovMasteri).await;
+    let admin = session(&state, PrincipalRole::Admin).await;
+    let router = build_router(state);
+    let path = "/v1/mobile/preparation/production/order/note";
+    let body = r#"{"order_id":"order-a","text":"Note","expected_revision":0}"#;
+    for (token, expected) in [("", StatusCode::UNAUTHORIZED), (admin.as_str(), StatusCode::FORBIDDEN), (master.as_str(), StatusCode::SERVICE_UNAVAILABLE)] {
+        let response = router.clone().oneshot(request_with_body("PATCH", path, token, body)).await.unwrap();
+        assert_eq!(response.status(), expected);
+    }
+    for (id, text, revision) in [("", "", 0), ("a", "", -1), ("a", "bad\0", 0), ("a", &"x".repeat(2001), 0)] {
+        let body = serde_json::json!({"order_id":id,"text":text,"expected_revision":revision}).to_string();
+        let response = router.clone().oneshot(request_with_body("PATCH", path, &master, &body)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+}

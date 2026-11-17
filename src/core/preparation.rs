@@ -4,7 +4,31 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const SCALE: i64 = 1_000_000;
+pub const MAX_PRODUCTION_NOTE_CHARS: usize = 2000;
 const MAX: i64 = 999_999_999_999_999_999;
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreparationProductionNoteUpdate {
+    pub order_id: String,
+    pub text: String,
+    pub expected_revision: i64,
+}
+
+impl PreparationProductionNoteUpdate {
+    pub fn validate(&self) -> Result<(), PreparationError> {
+        if self.order_id.trim().is_empty() || self.order_id.len() > 512 || self.order_id.contains('\0') {
+            return Err(PreparationError::Invalid("Buyurtma tanlanmagan"));
+        }
+        if self.expected_revision < 0 {
+            return Err(PreparationError::Invalid("Eslatma versiyasi noto‘g‘ri"));
+        }
+        if self.text.trim().chars().count() > MAX_PRODUCTION_NOTE_CHARS || self.text.contains('\0') {
+            return Err(PreparationError::Invalid("Eslatma 2000 belgidan oshmasligi kerak"));
+        }
+        Ok(())
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum PreparationError {

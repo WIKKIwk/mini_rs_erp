@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use mini_rs_erp::core::auth::models::{Principal, PrincipalRole};
+use mini_rs_erp::core::preparation::{PreparationError, PreparationProductionNoteUpdate};
 use mini_rs_erp::core::rps_batch::models::{RpsBatchPrintEntry, RpsBatchSession};
 use mini_rs_erp::core::rps_batch::ports::RpsBatchStorePort;
 use mini_rs_erp::db::postgres::{
@@ -217,6 +219,206 @@ async fn run_checks(pool: PgPool) {
             .await
             .unwrap()["orders"][0]["roll_count"],
         1
+    );
+    check_production_notes(&pool, &journal, &recipe).await;
+}
+
+async fn check_production_notes(pool: &PgPool, journal: &PostgresPreparationStore, recipe: &Value) {
+    let actor = |owner: &str| Principal {
+        role: PrincipalRole::TayyorlovMasteri,
+        ref_: owner.into(),
+        display_name: "Master".into(),
+        legal_name: String::new(),
+        phone: String::new(),
+        avatar_url: String::new(),
+    };
+    let update = |order: &str, text: &str, revision| PreparationProductionNoteUpdate {
+        order_id: order.into(),
+        text: text.into(),
+        expected_revision: revision,
+    };
+    assert_eq!(
+        journal
+            .production_journal_order("master-1", "order-a", 0, 30)
+            .await
+            .unwrap()
+            .unwrap()["order"]["preparation_note"]["revision"],
+        0
+    );
+    assert!(
+        journal
+            .update_production_order_note(&actor("master-3"), &update("order-a", "denied", 0))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let saved = journal
+        .update_production_order_note(
+            &actor("master-1"),
+            &update("order-a", "  Sovuq joyda saqlansin\nO‘zbekcha 🫖  ", 0),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved["text"], "Sovuq joyda saqlansin\nO‘zbekcha 🫖");
+    assert_eq!(saved["revision"], 1);
+    assert_eq!(saved["updated_by_ref"], "master-1");
+    assert!(saved["updated_at"].is_string());
+    // A new store and a second producer see the same persisted order-level note.
+    let fresh = PostgresPreparationStore::new(pool.clone());
+    let detail = fresh
+        .production_journal_order("master-2", "order-a", 0, 30)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(detail["order"]["preparation_note"], saved);
+    assert!(
+        detail["batches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|batch| batch["preparation_note"] == saved)
+    );
+    let batch = fresh
+        .production_journal_batch("master-1", "batch:batch-a", 0, 50)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(batch["batch"]["preparation_note"], saved);
+    assert!(
+        batch["rolls"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|roll| roll["preparation_note"] == saved)
+    );
+    assert_eq!(batch["rolls"][0]["preparation_formula"], *recipe);
+    let legacy = fresh
+        .production_journal_batch("master-1", "receipt:EPC3", 0, 50)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(legacy["rolls"][0]["preparation_note"], saved);
+    assert_eq!(
+        fresh
+            .production_journal_order("master-1", "order-b", 0, 30)
+            .await
+            .unwrap()
+            .unwrap()["order"]["preparation_note"]["text"],
+        ""
+    );
+
+    // The immutable production event wins over a later receipt/order correction.
+    sqlx::raw_sql("INSERT INTO mini_raw_material_stock(id,warehouse,item_code,item_name,barcode,qty,uom,status,source_receipt_id)
+        VALUES ('note-stock','Own W','PE PR','PE PR','EPC1',10,'kg','available','receipt-EPC1');
+        UPDATE mini_gscale_receipts SET payload_json=jsonb_set(payload_json,'{order_assignment,order_id}','\"order-b\"') WHERE name='receipt-EPC1';
+        INSERT INTO mini_gscale_receipts(name,status,item_code,warehouse,qty,barcode,payload_json)
+        VALUES('receipt-FUTURE','submitted','PE PR','Own W',1,'FUTURE',
+            '{\"actor_role\":\"tayyorlov_masteri\",\"actor_ref\":\"master-1\",\"order_assignment\":{\"order_id\":\"order-a\"}}');")
+        .execute(pool).await.unwrap();
+    let notes = fresh
+        .production_notes_for_receipts(&["EPC1".into(), "MISSING".into()])
+        .await
+        .unwrap();
+    assert_eq!(notes.len(), 1);
+    assert_eq!(notes["EPC1"], saved);
+    assert_eq!(
+        fresh
+            .production_journal_batch("master-1", "receipt:FUTURE", 0, 50)
+            .await
+            .unwrap()
+            .unwrap()["rolls"][0]["preparation_note"],
+        saved
+    );
+
+    let input = update("order-a", "Concurrent", 1);
+    let a = actor("master-1");
+    let b = actor("master-2");
+    let (left, right) = tokio::join!(
+        journal.update_production_order_note(&a, &input),
+        fresh.update_production_order_note(&b, &input)
+    );
+    assert!(matches!(
+        (&left, &right),
+        (Ok(_), Err(PreparationError::Conflict(_))) | (Err(PreparationError::Conflict(_)), Ok(_))
+    ));
+    let cleared = fresh
+        .update_production_order_note(&a, &update("order-a", "   ", 2))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(cleared["text"], "");
+    assert_eq!(cleared["revision"], 3);
+    let long = "🫖".repeat(2000);
+    assert!(
+        fresh
+            .update_production_order_note(&a, &update("order-a", &long, 3))
+            .await
+            .is_ok()
+    );
+    assert!(matches!(
+        fresh
+            .update_production_order_note(&a, &update("order-a", &"a".repeat(2001), 4))
+            .await,
+        Err(PreparationError::Invalid(_))
+    ));
+    let cleared = fresh
+        .update_production_order_note(&a, &update("order-a", "", 4))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        fresh
+            .production_notes_for_receipts(&["epc1".into()])
+            .await
+            .unwrap()["EPC1"],
+        cleared
+    );
+
+    let database: String = sqlx::query_scalar("SELECT current_database()")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    let url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL").unwrap();
+    let runtime = sqlx::postgres::PgPoolOptions::new()
+        .after_connect(|connection, _| {
+            Box::pin(async move {
+                sqlx::query("SET ROLE mini_rs_erp")
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect_with(url.parse::<PgConnectOptions>().unwrap().database(&database))
+        .await
+        .unwrap();
+    let restricted = PostgresPreparationStore::new(runtime.clone());
+    let granted = restricted
+        .update_production_order_note(&a, &update("order-a", "Runtime note", 5))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        restricted
+            .production_notes_for_receipts(&["EPC1".into()])
+            .await
+            .unwrap()["EPC1"],
+        granted
+    );
+    runtime.close().await;
+    let reset = mini_rs_erp::db::postgres_order_reset::PostgresOrderResetStore::new(pool.clone())
+        .reset_all_orders()
+        .await
+        .unwrap();
+    assert_eq!(reset.preparation_order_notes_deleted, 1);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM mini_preparation_production_order_notes"
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap(),
+        0
     );
 }
 

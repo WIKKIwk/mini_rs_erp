@@ -1,4 +1,5 @@
 use super::*;
+use super::production_notes::note_json_sql;
 
 const BASE: &str = include_str!("production_journal.sql");
 const ORDER_JSON: &str = "jsonb_build_object('order_id',o.order_id,'order_code',o.order_code,
@@ -38,11 +39,13 @@ impl PostgresPreparationStore {
         limit: usize,
     ) -> Result<Value, PreparationError> {
         let limit = limit.clamp(1, 100);
+        let note = note_json_sql("o.order_id");
         let rows: Vec<Value> = sqlx::query_scalar(&format!(
-            "{BASE} SELECT {ORDER_JSON} FROM journal_orders o
+            "{BASE} SELECT {ORDER_JSON} || jsonb_build_object('preparation_note',{note}) FROM journal_orders o
+             LEFT JOIN mini_preparation_production_order_notes note ON note.order_id=o.order_id
              WHERE ($2='' OR position(lower($2) IN lower(concat_ws(' ',order_code,order_title,customer_name,materials_search)))>0)
              AND ($3='all' OR ($3='active' AND active_batch_count>0) OR ($3='completed' AND active_batch_count=0))
-             ORDER BY last_activity_at DESC,order_id LIMIT $4 OFFSET $5"
+             ORDER BY last_activity_at DESC,o.order_id LIMIT $4 OFFSET $5"
         )).bind(owner).bind(search.trim()).bind(status).bind((limit+1) as i64).bind(offset as i64)
             .fetch_all(&self.pool).await?;
         Ok(page("orders", rows, offset, limit))
@@ -60,16 +63,20 @@ impl PostgresPreparationStore {
         sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
             .execute(&mut *tx)
             .await?;
+        let note = note_json_sql("o.order_id");
         let order: Option<Value> = sqlx::query_scalar(&format!(
-            "{BASE} SELECT {ORDER_JSON} FROM journal_orders o WHERE order_id=$2"
+            "{BASE} SELECT {ORDER_JSON} || jsonb_build_object('preparation_note',{note}) FROM journal_orders o
+             LEFT JOIN mini_preparation_production_order_notes note ON note.order_id=o.order_id WHERE o.order_id=$2"
         ))
         .bind(owner)
         .bind(order_id)
         .fetch_optional(&mut *tx)
         .await?;
         let Some(order) = order else { return Ok(None) };
+        let note = note_json_sql("b.order_id");
         let batches: Vec<Value> = sqlx::query_scalar(&format!(
-            "{BASE} SELECT {BATCH_JSON} FROM journal_batches b WHERE order_id=$2
+            "{BASE} SELECT {BATCH_JSON} || jsonb_build_object('preparation_note',{note}) FROM journal_batches b
+             LEFT JOIN mini_preparation_production_order_notes note ON note.order_id=b.order_id WHERE b.order_id=$2
              ORDER BY last_activity_at DESC,batch_id LIMIT $3 OFFSET $4"
         ))
         .bind(owner)
@@ -96,21 +103,25 @@ impl PostgresPreparationStore {
         sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
             .execute(&mut *tx)
             .await?;
+        let note = note_json_sql("b.order_id");
         let batch: Option<Value> = sqlx::query_scalar(&format!(
-            "{BASE} SELECT {BATCH_JSON} FROM journal_batches b WHERE batch_id=$2"
+            "{BASE} SELECT {BATCH_JSON} || jsonb_build_object('preparation_note',{note}) FROM journal_batches b
+             LEFT JOIN mini_preparation_production_order_notes note ON note.order_id=b.order_id WHERE b.batch_id=$2"
         ))
         .bind(owner)
         .bind(batch_id)
         .fetch_optional(&mut *tx)
         .await?;
         let Some(batch) = batch else { return Ok(None) };
+        let note = note_json_sql("r.order_id");
         let rolls: Vec<Value> = sqlx::query_scalar(&format!(
             "{BASE} SELECT jsonb_build_object('epc',epc,'receipt_name',receipt_name,
                 'item_code',item_code,'item_name',item_name,'warehouse',warehouse,
                 'net_kg',net_kg::text,'gross_kg',gross_kg::text,'length_m',length_m::text,
                 'width_mm',width_mm::text,'micron',micron::text,'printed_at',printed_at,
-                'preparation_formula',preparation_formula)
-             FROM rolls WHERE batch_id=$2 ORDER BY printed_at DESC,epc LIMIT $3 OFFSET $4"
+                'preparation_formula',preparation_formula,'preparation_note',{note})
+             FROM rolls r LEFT JOIN mini_preparation_production_order_notes note ON note.order_id=r.order_id
+             WHERE r.batch_id=$2 ORDER BY printed_at DESC,epc LIMIT $3 OFFSET $4"
         ))
         .bind(owner)
         .bind(batch_id)
