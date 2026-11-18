@@ -160,11 +160,13 @@ impl RezkaOutputReport {
         }
         let reference = super::rezka_reference_frame_index(&session.payload_json)
             .or_else(|| saved.iter().filter(|slot| slot.input.issue_note.trim().is_empty()
-                && slot.input.peremotka_reason.is_empty())
+                && slot.input.peremotka_reason.trim().is_empty())
                 .map(|slot| slot.frame_index).min());
         session.payload_json["rezka_output_cycle"] = serde_json::json!(self.cycle_id);
         if let Some(index) = reference {
             session.payload_json["rezka_reference_frame_index"] = serde_json::json!(index);
+        } else if let Some(payload) = session.payload_json.as_object_mut() {
+            payload.remove("rezka_reference_frame_index");
         }
         session.payload_json["rezka_recorded_kadr_counts"] = serde_json::json!(self.kadr_counts);
         session.payload_json["rezka_output_report"] =

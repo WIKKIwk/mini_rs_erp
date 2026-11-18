@@ -15,6 +15,10 @@ pub(crate) fn rezka_reference_frame_index(payload: &serde_json::Value) -> Option
                     .pointer("/input/issue_note")
                     .and_then(serde_json::Value::as_str)
                     .is_none_or(|note| note.trim().is_empty())
+                && slot
+                    .pointer("/input/peremotka_reason")
+                    .and_then(serde_json::Value::as_str)
+                    .is_none_or(|reason| reason.trim().is_empty())
         })
         .filter_map(|slot| {
             slot.get("frame_index")?
@@ -295,6 +299,24 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("rezka_reference_frame_index");
+        assert_eq!(rezka_reference_frame_index(&value), Some(3));
+    }
+
+    #[test]
+    fn reference_ignores_peremotka_even_when_previously_saved() {
+        let mut value = json!({
+            "rezka_reference_frame_index": 2,
+            "rezka_output_report": [
+                {"frame_index": 1, "batch_id": "", "input": {"issue_note": "qomadi"}},
+                {"frame_index": 2, "batch_id": "held-roll", "input": {"peremotka_reason": "notekis"}}
+            ]
+        });
+        assert_eq!(rezka_reference_frame_index(&value), None);
+        value["rezka_output_report"].as_array_mut().unwrap().push(json!({
+            "frame_index": 3, "batch_id": "good-roll", "input": {"peremotka_reason": "  "}
+        }));
+        assert_eq!(rezka_reference_frame_index(&value), Some(3));
+        value["rezka_reference_frame_index"] = json!(3);
         assert_eq!(rezka_reference_frame_index(&value), Some(3));
     }
 }
