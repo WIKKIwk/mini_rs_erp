@@ -147,6 +147,60 @@ fn calculates_alternative_material_variants() {
 }
 
 #[test]
+fn alternate_microns_produce_distinct_lengths_and_keep_the_selected_plan_first() {
+    let mut request = CalculateRequest {
+        kg: Some(100.0),
+        frame_product_size_mm: Some(985.0),
+        frame_count: Some(1.0),
+        layers: vec![LayerInput {
+            alternative_microns: vec![18],
+            ..LayerInput::with_material_id("builtin-opp", "OPP", "12")
+        }],
+        ..CalculateRequest::default()
+    };
+    let catalog = default_calculate_materials();
+    let result = calculate_with_material_catalog(request.clone(), &catalog).unwrap();
+    assert_eq!(result.results.len(), 2);
+    assert_eq!(result.results[0].rounded_length, 10_000.0);
+    assert!(result.results[0].micron_overrides.is_empty());
+    assert_eq!(result.results[1].rounded_length, 6_500.0);
+    assert_eq!(result.results[1].micron_overrides[0].layer_index, 0);
+    assert_eq!(result.results[1].micron_overrides[0].micron, 18);
+
+    request.layers[0].planned_micron = Some(18);
+    let result = calculate_with_material_catalog(request.clone(), &catalog).unwrap();
+    assert_eq!(result.results[0].rounded_length, 6_500.0);
+    assert_eq!(result.results[1].rounded_length, 10_000.0);
+    assert_eq!(result.layers[0].micron, "12");
+
+    request.layers[0].planned_micron = Some(30);
+    assert!(calculate_with_material_catalog(request, &catalog).is_err());
+}
+
+#[test]
+fn alternatives_on_different_layers_keep_the_correct_layer_and_adhesive() {
+    let request = CalculateRequest {
+        kg: Some(100.0),
+        frame_product_size_mm: Some(985.0),
+        frame_count: Some(1.0),
+        layers: vec![
+            LayerInput { alternative_microns: vec![18], ..LayerInput::new("OPP", "12") },
+            LayerInput { alternative_microns: vec![20], ..LayerInput::new("PET", "12") },
+        ],
+        ..CalculateRequest::default()
+    };
+    let results = calculate_with_material_catalog(request, &default_calculate_materials()).unwrap().results;
+    assert_eq!(results.len(), 4);
+    assert!(results.iter().all(|result| result.adhesive_gsm == 2.5));
+    let combined = results.iter().find(|result| result.micron_overrides.len() == 2).unwrap();
+    assert_eq!(combined.micron_overrides[0].layer_index, 0);
+    assert_eq!(combined.micron_overrides[0].micron, 18);
+    assert_eq!(combined.micron_overrides[1].layer_index, 1);
+    assert_eq!(combined.micron_overrides[1].micron, 20);
+    assert!((combined.total_gsm - (16.29 + 28.0 + 2.5)).abs() < 0.001);
+}
+
+#[test]
 fn parses_material_display_when_layers_are_empty() {
     let result = calculate(CalculateRequest {
         kg: Some(3000.0),

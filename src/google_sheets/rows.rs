@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use serde_json::Value;
 
 use crate::core::calculate_orders::CalculateOrderTemplate;
-use crate::core::formula::{CalculateRequest, LayerInput, calculate};
+use crate::core::formula::{CalculateRequest, LayerInput, calculate, rubber_size};
 use crate::core::production_map::{ProductionMapDefinition, ProductionMapNodeKind};
 
 pub fn is_sheet_order_map(map: &ProductionMapDefinition) -> bool {
@@ -21,32 +21,45 @@ pub(super) fn order_sheet_row(
     if !is_sheet_order_map(map) || template.kg <= 0.0 {
         return None;
     }
-    let calculation = calculate(CalculateRequest {
-        products: template.products.clone(),
-        order_number: Some(map.order_number.trim().to_string()),
-        product: Some(template.product.trim().to_string()),
-        kg: Some(template.kg),
-        frame_product_size_mm: Some(template.frame_product_size_mm),
-        frame_count: Some(template.frame_count),
-        edge_allowance_mm: Some(template.edge_allowance_mm),
-        waste_percent: Some(template.waste_percent),
-        roll_count: template.roll_count,
-        first_layer: LayerInput::new(
-            template.first_layer_material.trim(),
-            template.first_layer_micron.trim(),
-        ),
-        second_layer: LayerInput::new(
-            template.second_layer_material.trim(),
-            template.second_layer_micron.trim(),
-        ),
-        third_layer: LayerInput::new(
-            template.third_layer_material.trim(),
-            template.third_layer_micron.trim(),
-        ),
-        ..CalculateRequest::default()
-    })
-    .ok()?;
-    let first_result = calculation.results.first()?;
+    let layers = template.effective_layers();
+    let has_micron_options = layers.iter().any(|layer| !layer.alternative_microns.is_empty());
+    let (planned_length, rubber_size_mm) = if has_micron_options {
+        (map.base_length?, rubber_size(map.width_mm?))
+    } else {
+        let calculation = calculate(CalculateRequest {
+            products: template.products.clone(),
+            order_number: Some(map.order_number.trim().to_string()),
+            product: Some(template.product.trim().to_string()),
+            kg: Some(template.kg),
+            frame_product_size_mm: Some(template.frame_product_size_mm),
+            frame_count: Some(template.frame_count),
+            edge_allowance_mm: Some(template.edge_allowance_mm),
+            waste_percent: Some(template.waste_percent),
+            roll_count: template.roll_count,
+            first_layer: LayerInput::new(
+                template.first_layer_material.trim(),
+                template.first_layer_micron.trim(),
+            ),
+            second_layer: LayerInput::new(
+                template.second_layer_material.trim(),
+                template.second_layer_micron.trim(),
+            ),
+            third_layer: LayerInput::new(
+                template.third_layer_material.trim(),
+                template.third_layer_micron.trim(),
+            ),
+            ..CalculateRequest::default()
+        })
+        .ok()?;
+        (calculation.results.first()?.rounded_length, calculation.rubber_size_mm)
+    };
+    let planned_micron = |index: usize, legacy: &str| {
+        if has_micron_options {
+            layers.get(index).map(|layer| layer.planned_micron_text().into_owned()).unwrap_or_default()
+        } else {
+            legacy.trim().to_string()
+        }
+    };
     let now = time::OffsetDateTime::now_utc()
         .to_offset(time::UtcOffset::from_hms(5, 0, 0).expect("valid tashkent offset"));
     Some(vec![
@@ -64,15 +77,15 @@ pub(super) fn order_sheet_row(
         Value::String(template.second_layer_material.trim().to_string()),
         Value::String(template.third_layer_material.trim().to_string()),
         json_number(template.width_mm),
-        Value::String(template.first_layer_micron.trim().to_string()),
-        Value::String(template.second_layer_micron.trim().to_string()),
-        Value::String(template.third_layer_micron.trim().to_string()),
-        json_number(first_result.rounded_length),
+        Value::String(planned_micron(0, &template.first_layer_micron)),
+        Value::String(planned_micron(1, &template.second_layer_micron)),
+        Value::String(planned_micron(2, &template.third_layer_micron)),
+        json_number(planned_length),
         template
             .roll_count
             .map(Value::from)
             .unwrap_or_else(|| Value::String(String::new())),
-        json_number(f64::from(calculation.rubber_size_mm)),
+        json_number(f64::from(rubber_size_mm)),
     ])
 }
 

@@ -74,8 +74,10 @@ fn calculate_variants(
     material_catalog: &[CalculateMaterial],
 ) -> Result<Vec<CalcResult>, String> {
     let mut results = Vec::new();
-    for variant in request_variants(request) {
-        results.push(calculate_single(&variant, material_catalog)?);
+    for (variant, micron_overrides) in request_variants(request)? {
+        let mut result = calculate_single(&variant, material_catalog)?;
+        result.micron_overrides = micron_overrides;
+        results.push(result);
     }
     if results.is_empty() {
         return Err("hisob varianti topilmadi".to_string());
@@ -137,6 +139,7 @@ fn calculate_single(
     let rounded_length = round_up(production_length, 500.0);
 
     Ok(CalcResult {
+        micron_overrides: Vec::new(),
         film_gsm,
         adhesive_gsm,
         total_gsm,
@@ -272,7 +275,7 @@ fn clean_option(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn rubber_size(width_mm: f64) -> u32 {
+pub(crate) fn rubber_size(width_mm: f64) -> u32 {
     ((width_mm / 50.0).ceil() as u32 * 50).clamp(50, 1300)
 }
 

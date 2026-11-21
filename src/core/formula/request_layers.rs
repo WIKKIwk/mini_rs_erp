@@ -1,4 +1,6 @@
-use super::{CalculateRequest, LayerInput, parse_micron_parts, split_parts};
+use super::{CalculateRequest, LayerInput, MicronOverride, parse_micron_parts, split_parts};
+
+const MAX_MICRON_CALCULATIONS: usize = 64;
 
 pub(super) fn hydrate_layers_from_material_display(request: &mut CalculateRequest) {
     if request
@@ -26,25 +28,88 @@ pub(super) fn hydrate_layers_from_material_display(request: &mut CalculateReques
     }
 }
 
-pub(super) fn request_variants(request: &CalculateRequest) -> Vec<CalculateRequest> {
-    let layers = request.effective_layers();
-    let mut variants = vec![request.clone()];
+pub(crate) fn validate_micron_options(layers: &[LayerInput]) -> Result<(), String> {
+    let mut count = 1usize;
     for (index, layer) in layers.iter().enumerate() {
-        let materials = alternatives(&layer.material, &layer.micron);
-        let mut expanded = Vec::with_capacity(variants.len() * materials.len());
-        for variant in variants {
+        let options = micron_options(layer).map_err(|error| format!("{}-qavat: {error}", index + 1))?;
+        count = count.saturating_mul(options.len().max(1));
+        if count > MAX_MICRON_CALCULATIONS {
+            return Err(format!("Hisob variantlari {MAX_MICRON_CALCULATIONS} tadan oshmasligi kerak"));
+        }
+    }
+    Ok(())
+}
+
+// The selected production plan comes first so order creation and edits use
+// that result. The other results still describe the full approved choices.
+pub(super) fn request_variants(
+    request: &CalculateRequest,
+) -> Result<Vec<(CalculateRequest, Vec<MicronOverride>)>, String> {
+    let layers = request.effective_layers();
+    validate_micron_options(&layers)?;
+    let has_micron_options = layers.iter().any(|layer| !layer.alternative_microns.is_empty());
+    let mut initial = request.clone();
+    initial.layers = layers.clone();
+    let mut variants = vec![(initial, Vec::new())];
+    for (index, layer) in layers.iter().enumerate() {
+        let options = micron_options(layer)?;
+        let materials = if options.is_empty() {
+            alternatives(&layer.material, &layer.micron)
+        } else {
+            vec![layer.material.clone()]
+        };
+        let count = variants.len().saturating_mul(materials.len()).saturating_mul(options.len().max(1));
+        if has_micron_options && count > MAX_MICRON_CALCULATIONS {
+            return Err(format!("Hisob variantlari {MAX_MICRON_CALCULATIONS} tadan oshmasligi kerak"));
+        }
+        let mut expanded = Vec::with_capacity(count);
+        for (variant, overrides) in variants {
             for material in &materials {
-                let mut next = variant.clone();
-                if next.layers.is_empty() {
-                    next.layers = layers.clone();
+                if options.is_empty() {
+                    let mut next = variant.clone();
+                    next.layers[index].material.clone_from(material);
+                    expanded.push((next, overrides.clone()));
+                    continue;
                 }
-                next.layers[index].material = material.clone();
-                expanded.push(next);
+                let primary = layer.micron.trim().parse::<u32>().ok();
+                for &micron in &options {
+                    let mut next = variant.clone();
+                    let mut next_overrides = overrides.clone();
+                    next.layers[index].micron = micron.to_string();
+                    if Some(micron) != primary {
+                        next_overrides.push(MicronOverride { layer_index: index, micron });
+                    }
+                    expanded.push((next, next_overrides));
+                }
             }
         }
         variants = expanded;
     }
-    variants
+    Ok(variants)
+}
+
+fn micron_options(layer: &LayerInput) -> Result<Vec<u32>, String> {
+    if layer.alternative_microns.is_empty() && layer.planned_micron.is_none() {
+        return Ok(Vec::new());
+    }
+    if layer.alternative_microns.len() >= MAX_MICRON_CALCULATIONS {
+        return Err(format!("Hisob variantlari {MAX_MICRON_CALCULATIONS} tadan oshmasligi kerak"));
+    }
+    let primary = layer.micron.trim().parse::<u32>().ok().filter(|micron| *micron > 0)
+        .ok_or("Asosiy mikron musbat butun son bo‘lishi kerak")?;
+    let mut options = vec![primary];
+    for &micron in &layer.alternative_microns {
+        if micron == 0 || options.contains(&micron) {
+            return Err("Muqobil mikronlar musbat va takrorlanmas bo‘lishi kerak".into());
+        }
+        options.push(micron);
+    }
+    if let Some(planned) = layer.planned_micron {
+        let position = options.iter().position(|&micron| micron == planned)
+            .ok_or("Reja uchun tanlangan mikron qavat variantlarida yo‘q")?;
+        options[..=position].rotate_right(1);
+    }
+    Ok(options)
 }
 
 pub(super) fn visible_layers(request: &CalculateRequest) -> Vec<LayerInput> {

@@ -308,6 +308,8 @@ pub fn validate_template(template: &CalculateOrderTemplate) -> Result<(), Calcul
     for (index, layer) in layers.iter().enumerate() {
         validate_layer(layer, index + 1)?;
     }
+    crate::core::formula::validate_micron_options(&layers)
+        .map_err(CalculateOrderError::InvalidInput)?;
     Ok(())
 }
 
@@ -344,6 +346,7 @@ pub fn hydrate_template_layers(mut template: CalculateOrderTemplate) -> Calculat
             material_id: layer.material_id.trim().to_string(),
             material: layer.material.trim().to_string(),
             micron: layer.micron.trim().to_string(),
+            ..layer
         })
         .filter(|layer| !layer.is_empty())
         .collect();

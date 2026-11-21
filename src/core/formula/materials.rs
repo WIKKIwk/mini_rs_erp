@@ -43,7 +43,8 @@ pub fn planned_material_kg(
         if !matches {
             continue;
         }
-        let microns = parse_micron_parts(&layer.micron)?;
+        let micron_text = layer.planned_micron_text();
+        let microns = parse_micron_parts(&micron_text)?;
         let [micron] = microns.as_slice() else {
             return Err("Qavatning mikroni aniq tanlanmagan".into());
         };
@@ -53,7 +54,7 @@ pub fn planned_material_kg(
         gsm += gsm_cell_with_catalog(
             &material.name,
             &material.id,
-            &layer.micron,
+            &micron_text,
             *micron,
             catalog,
         )?;

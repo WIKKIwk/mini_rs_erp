@@ -73,6 +73,30 @@ mod template_identity_tests {
     use super::*;
 
     #[test]
+    fn order_map_uses_the_confirmed_thickness_plan() {
+        let mut template: CalculateOrderTemplate = serde_json::from_value(serde_json::json!({
+            "name": "Order", "product": "Product", "kg": 100,
+            "frame_product_size_mm": 985, "frame_count": 1,
+            "layers": [{"material_id": "builtin-opp", "material": "OPP", "micron": "12",
+                        "alternative_microns": [18]}]
+        })).unwrap();
+        let mut map: ProductionMapDefinition = serde_json::from_value(serde_json::json!({
+            "id": "zakaz-0001", "product_code": "PRODUCT", "title": "Order", "base_length": 123
+        })).unwrap();
+        let catalog = crate::core::calculate_materials::default_calculate_materials();
+        apply_authoritative_calculation(&mut map, &template, &catalog).unwrap();
+        assert_eq!(map.base_length, Some(10_000.0));
+
+        template.layers[0].planned_micron = Some(18);
+        let template = crate::core::calculate_orders::hydrate_template_layers(template);
+        apply_authoritative_calculation(&mut map, &template, &catalog).unwrap();
+        assert_eq!(map.base_length, Some(6_500.0));
+        assert_eq!(template.layers[0].alternative_microns, [18]);
+        assert_eq!(template.layers[0].planned_micron, Some(18));
+        assert_eq!(template.first_layer_micron, "12");
+    }
+
+    #[test]
     fn template_map_identity_is_independent_of_reused_order_numbers() {
         let map: ProductionMapDefinition = serde_json::from_value(serde_json::json!({
             "id": "zakaz-0001", "code": "0001", "order_number": "0001",

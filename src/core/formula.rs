@@ -7,7 +7,9 @@ mod materials;
 mod request_layers;
 
 pub use self::calculation::{calculate, calculate_with_material_catalog, derive_width_mm};
+pub(crate) use self::calculation::rubber_size;
 pub use self::materials::planned_material_kg;
+pub(crate) use self::request_layers::validate_micron_options;
 use self::calculation::{close, normalize, parse_micron_parts, split_parts};
 
 pub const DEFAULT_EDGE_ALLOWANCE_MM: f64 = 15.0;
@@ -64,14 +66,18 @@ pub struct LayerInput {
     pub material: String,
     #[serde(default)]
     pub micron: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alternative_microns: Vec<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub planned_micron: Option<u32>,
 }
 
 impl LayerInput {
     pub fn new(material: impl Into<String>, micron: impl Into<String>) -> Self {
         Self {
-            material_id: String::new(),
             material: material.into(),
             micron: micron.into(),
+            ..Self::default()
         }
     }
 
@@ -84,11 +90,22 @@ impl LayerInput {
             material_id: material_id.into(),
             material: material.into(),
             micron: micron.into(),
+            ..Self::default()
         }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.material.trim().is_empty() && self.micron.trim().is_empty()
+        self.material.trim().is_empty()
+            && self.micron.trim().is_empty()
+            && self.alternative_microns.is_empty()
+            && self.planned_micron.is_none()
+    }
+
+    pub(crate) fn planned_micron_text(&self) -> std::borrow::Cow<'_, str> {
+        self.planned_micron.map_or_else(
+            || std::borrow::Cow::Borrowed(self.micron.trim()),
+            |micron| std::borrow::Cow::Owned(micron.to_string()),
+        )
     }
 }
 
@@ -136,6 +153,8 @@ pub struct CalculateResponse {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CalcResult {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub micron_overrides: Vec<MicronOverride>,
     pub film_gsm: f64,
     pub adhesive_gsm: f64,
     pub total_gsm: f64,
@@ -146,6 +165,12 @@ pub struct CalcResult {
     pub base_length: f64,
     pub waste_length: f64,
     pub rounded_length: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MicronOverride {
+    pub layer_index: usize,
+    pub micron: u32,
 }
 
 fn default_edge_allowance_option() -> Option<f64> {

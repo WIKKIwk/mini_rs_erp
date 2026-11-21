@@ -255,11 +255,16 @@ impl MiniOrderSink for PostgresMiniOrderSink {
                 WHERE product.order_id = $1
              )
              SELECT item.code, item.name, item.uom, item.item_group,
-                    array_agg(DISTINCT COALESCE(btrim(layers.value->>'micron'), ''))
+                    array_agg(DISTINCT options.micron)
              FROM layers
              JOIN mini_items item
                ON lower(btrim(item.code)) = lower(layers.material_name)
                OR lower(btrim(item.name)) = lower(layers.material_name)
+             CROSS JOIN LATERAL (
+                SELECT COALESCE(btrim(layers.value->>'micron'), '') AS micron
+                UNION ALL
+                SELECT jsonb_array_elements_text(layers.value->'alternative_microns')
+             ) options
              GROUP BY item.code, item.name, item.uom, item.item_group
              ORDER BY lower(item.code), item.code",
         )

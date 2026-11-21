@@ -92,6 +92,18 @@ fn order_edit_unassigned_layer_can_change_but_linked_fields_cannot() {
 }
 
 #[test]
+fn linked_layer_allows_plan_selection_within_its_approved_microns() {
+    let mut source = source(&["OPP"], &[&["OPP 1000/18"]]);
+    source.template.layers[0].alternative_microns = vec![18];
+    let mut edited = source.template.clone();
+    edited.layers[0].planned_micron = Some(18);
+    assert!(validate_material_edit(&source, &edited).is_ok());
+
+    edited.layers[0].alternative_microns.push(25);
+    assert!(validate_material_edit(&source, &edited).is_err());
+}
+
+#[test]
 fn order_edit_material_ids_and_legacy_layer_fields_are_protected() {
     let mut source = source(&["Custom film", "PE"], &[&["material-123"]]);
     source.template.layers[0].material_id = "material-123".into();

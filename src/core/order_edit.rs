@@ -99,7 +99,13 @@ pub(crate) fn validate_material_edit(
         ));
     }
     for &index in &restrictions.locked_layer_indices {
-        if before.get(index).is_none() || before.get(index) != after.get(index) {
+        let same_material_spec = before.get(index).zip(after.get(index)).is_some_and(|(before, after)| {
+            before.material_id == after.material_id
+                && before.material == after.material
+                && before.micron == after.micron
+                && before.alternative_microns == after.alternative_microns
+        });
+        if !same_material_spec {
             return Err(OrderEditError::Invalid(format!(
                 "{}-qatlamga xomashyo ulangan yoki bog‘lanishini aniq ajratib bo‘lmadi. Bu qatlamning material turi, mikroni va o‘rnini o‘zgartirib bo‘lmaydi. Buyurtmani qayta ochib joriy cheklovlarni tekshiring",
                 index + 1,
