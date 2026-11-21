@@ -1,4 +1,5 @@
 use super::*;
+use super::output_notes::output_note_json;
 use super::production_notes::note_json_sql;
 
 const BASE: &str = include_str!("production_journal.sql");
@@ -7,10 +8,28 @@ const ORDER_JSON: &str = "jsonb_build_object('order_id',o.order_id,'order_code',
     'batch_count',o.batch_count,'roll_count',o.roll_count,'total_net_kg',o.total_net_kg::text,
     'total_length_m',o.total_length_m::text,'last_activity_at',o.last_activity_at)";
 const BATCH_JSON: &str = "jsonb_build_object('batch_id',b.batch_id,'order_id',b.order_id,
+    'batch_code',b.batch_code,'order_code',COALESCE(o.order_code,''),'order_title',COALESCE(o.order_title,''),
     'item_code',b.item_code,'item_name',b.item_name,'warehouse',b.warehouse,'active',b.active,
     'started_at',b.started_at,'ended_at',b.ended_at,'last_activity_at',b.last_activity_at,
     'roll_count',b.roll_count,'total_net_kg',b.total_net_kg::text,'total_length_m',b.total_length_m::text,
     'preparation_formula',b.preparation_formula)";
+
+const BATCH_NOTE_JOIN: &str = "LEFT JOIN mini_preparation_output_notes bn ON bn.owner_ref=$1
+    AND bn.target_kind='batch' AND bn.target_id=b.batch_id";
+const ROLL_NOTE_JOINS: &str = "LEFT JOIN mini_preparation_output_notes bn ON bn.owner_ref=$1
+    AND bn.target_kind='batch' AND bn.target_id=r.recorded_batch_id
+    LEFT JOIN mini_preparation_output_notes rn ON rn.owner_ref=$1
+    AND rn.target_kind='roll' AND rn.target_id=r.receipt_name";
+
+fn roll_json() -> String {
+    format!("jsonb_build_object('epc',r.epc,'receipt_name',r.receipt_name,
+        'batch_id',r.batch_id,'order_id',r.order_id,'order_code',COALESCE(o.order_code,''),
+        'order_title',COALESCE(o.order_title,''),'item_code',r.item_code,'item_name',r.item_name,'warehouse',r.warehouse,
+        'net_kg',r.net_kg::text,'gross_kg',r.gross_kg::text,'length_m',r.length_m::text,
+        'width_mm',r.width_mm::text,'micron',r.micron::text,'printed_at',r.printed_at,
+        'preparation_formula',r.preparation_formula,
+        'batch_note',{},'roll_note',{})", output_note_json("bn"), output_note_json("rn"))
+}
 
 impl PostgresPreparationStore {
     pub async fn owns_submitted_production_receipt(
@@ -43,12 +62,50 @@ impl PostgresPreparationStore {
         let rows: Vec<Value> = sqlx::query_scalar(&format!(
             "{BASE} SELECT {ORDER_JSON} || jsonb_build_object('preparation_note',{note}) FROM journal_orders o
              LEFT JOIN mini_preparation_production_order_notes note ON note.order_id=o.order_id
-             WHERE ($2='' OR position(lower($2) IN lower(concat_ws(' ',order_code,order_title,customer_name,materials_search)))>0)
+             WHERE ($2='' OR position(lower($2) IN lower(concat_ws(' ',o.order_id,order_code,order_title,customer_name,materials_search)))>0
+                OR EXISTS (SELECT 1 FROM rolls r WHERE r.order_id=o.order_id AND position(lower($2) IN lower(r.epc))>0))
              AND ($3='all' OR ($3='active' AND active_batch_count>0) OR ($3='completed' AND active_batch_count=0))
              ORDER BY last_activity_at DESC,o.order_id LIMIT $4 OFFSET $5"
         )).bind(owner).bind(search.trim()).bind(status).bind((limit+1) as i64).bind(offset as i64)
             .fetch_all(&self.pool).await?;
         Ok(page("orders", rows, offset, limit))
+    }
+
+    pub async fn production_journal_batches(
+        &self, owner: &str, search: &str, status: &str, offset: usize, limit: usize,
+    ) -> Result<Value, PreparationError> {
+        let limit = limit.clamp(1, 100);
+        let note = output_note_json("bn");
+        let rows: Vec<Value> = sqlx::query_scalar(&format!(
+            "{BASE} SELECT {BATCH_JSON} || jsonb_build_object('batch_note',{note})
+             FROM production_batches b LEFT JOIN journal_orders o ON o.order_id=b.order_id
+             {BATCH_NOTE_JOIN}
+             WHERE starts_with(b.batch_id,'batch:')
+             AND ($2='' OR position(lower($2) IN lower(concat_ws(' ',b.batch_code,b.item_code,b.item_name,
+                 b.order_id,o.order_code,o.order_title,o.customer_name,b.preparation_formula->>'variant_name')))>0
+                 OR EXISTS (SELECT 1 FROM rolls r WHERE r.batch_id=b.batch_id AND position(lower($2) IN lower(r.epc))>0))
+             AND ($3='all' OR ($3='active' AND b.active) OR ($3='completed' AND NOT b.active))
+             ORDER BY b.last_activity_at DESC,b.batch_id LIMIT $4 OFFSET $5"
+        )).bind(owner).bind(search.trim()).bind(status).bind((limit+1) as i64).bind(offset as i64)
+            .fetch_all(&self.pool).await?;
+        Ok(page("batches", rows, offset, limit))
+    }
+
+    pub async fn production_journal_rolls(
+        &self, owner: &str, search: &str, status: &str, offset: usize, limit: usize,
+    ) -> Result<Value, PreparationError> {
+        let limit = limit.clamp(1, 100);
+        let roll = roll_json();
+        let rows: Vec<Value> = sqlx::query_scalar(&format!(
+            "{BASE} SELECT {roll} FROM rolls r LEFT JOIN journal_orders o ON o.order_id=r.order_id
+             LEFT JOIN batches b ON b.batch_id=r.recorded_batch_id {ROLL_NOTE_JOINS}
+             WHERE ($2='' OR position(lower($2) IN lower(concat_ws(' ',r.epc,r.item_code,r.item_name,r.order_id,
+                    o.order_code,o.order_title,o.customer_name,r.preparation_formula->>'variant_name',b.batch_code)))>0)
+             AND ($3='all' OR ($3='active' AND b.active) OR ($3='completed' AND NOT COALESCE(b.active,false)))
+             ORDER BY r.printed_at DESC,r.epc LIMIT $4 OFFSET $5"
+        )).bind(owner).bind(search.trim()).bind(status).bind((limit+1) as i64).bind(offset as i64)
+            .fetch_all(&self.pool).await?;
+        Ok(page("rolls", rows, offset, limit))
     }
 
     pub async fn production_journal_order(
@@ -74,10 +131,12 @@ impl PostgresPreparationStore {
         .await?;
         let Some(order) = order else { return Ok(None) };
         let note = note_json_sql("b.order_id");
+        let batch_note = output_note_json("bn");
         let batches: Vec<Value> = sqlx::query_scalar(&format!(
-            "{BASE} SELECT {BATCH_JSON} || jsonb_build_object('preparation_note',{note}) FROM journal_batches b
-             LEFT JOIN mini_preparation_production_order_notes note ON note.order_id=b.order_id WHERE b.order_id=$2
-             ORDER BY last_activity_at DESC,batch_id LIMIT $3 OFFSET $4"
+            "{BASE} SELECT {BATCH_JSON} || jsonb_build_object('preparation_note',{note},'batch_note',{batch_note})
+             FROM journal_batches b LEFT JOIN journal_orders o ON o.order_id=b.order_id
+             LEFT JOIN mini_preparation_production_order_notes note ON note.order_id=b.order_id {BATCH_NOTE_JOIN}
+             WHERE b.order_id=$2 ORDER BY b.last_activity_at DESC,b.batch_id LIMIT $3 OFFSET $4"
         ))
         .bind(owner)
         .bind(order_id)
@@ -104,9 +163,12 @@ impl PostgresPreparationStore {
             .execute(&mut *tx)
             .await?;
         let note = note_json_sql("b.order_id");
+        let batch_note = output_note_json("bn");
         let batch: Option<Value> = sqlx::query_scalar(&format!(
-            "{BASE} SELECT {BATCH_JSON} || jsonb_build_object('preparation_note',{note}) FROM journal_batches b
-             LEFT JOIN mini_preparation_production_order_notes note ON note.order_id=b.order_id WHERE b.batch_id=$2"
+            "{BASE} SELECT {BATCH_JSON} || jsonb_build_object('preparation_note',CASE WHEN b.order_id<>'' THEN {note} END,
+                'batch_note',{batch_note}) FROM production_batches b LEFT JOIN journal_orders o ON o.order_id=b.order_id
+             LEFT JOIN mini_preparation_production_order_notes note ON note.order_id=b.order_id {BATCH_NOTE_JOIN}
+             WHERE b.batch_id=$2"
         ))
         .bind(owner)
         .bind(batch_id)
@@ -114,14 +176,12 @@ impl PostgresPreparationStore {
         .await?;
         let Some(batch) = batch else { return Ok(None) };
         let note = note_json_sql("r.order_id");
+        let roll = roll_json();
         let rolls: Vec<Value> = sqlx::query_scalar(&format!(
-            "{BASE} SELECT jsonb_build_object('epc',epc,'receipt_name',receipt_name,
-                'item_code',item_code,'item_name',item_name,'warehouse',warehouse,
-                'net_kg',net_kg::text,'gross_kg',gross_kg::text,'length_m',length_m::text,
-                'width_mm',width_mm::text,'micron',micron::text,'printed_at',printed_at,
-                'preparation_formula',preparation_formula,'preparation_note',{note})
-             FROM rolls r LEFT JOIN mini_preparation_production_order_notes note ON note.order_id=r.order_id
-             WHERE r.batch_id=$2 ORDER BY printed_at DESC,epc LIMIT $3 OFFSET $4"
+            "{BASE} SELECT {roll} || jsonb_build_object('preparation_note',CASE WHEN r.order_id<>'' THEN {note} END)
+             FROM rolls r LEFT JOIN journal_orders o ON o.order_id=r.order_id
+             LEFT JOIN mini_preparation_production_order_notes note ON note.order_id=r.order_id {ROLL_NOTE_JOINS}
+             WHERE r.batch_id=$2 OR r.order_batch_id=$2 ORDER BY r.printed_at DESC,r.epc LIMIT $3 OFFSET $4"
         ))
         .bind(owner)
         .bind(batch_id)

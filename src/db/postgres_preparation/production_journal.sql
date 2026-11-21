@@ -7,6 +7,7 @@ WITH raw_batches AS (
 ), batches AS MATERIALIZED (
     SELECT DISTINCT ON (batch_id) batch_id, payload_json,
         COALESCE(payload_json#>>'{order_assignment,order_id}','') AS order_id,
+        COALESCE(payload_json->>'batch_code','') AS batch_code,
         COALESCE((payload_json->>'active')::boolean,false) AS active,
         COALESCE(NULLIF(payload_json->>'created_at','')::timestamptz,recorded_at) AS started_at,
         COALESCE(NULLIF(payload_json->>'updated_at','')::timestamptz,recorded_at) AS updated_at
@@ -48,18 +49,22 @@ WITH raw_batches AS (
     WHERE r.status='submitted' AND r.payload_json->>'actor_role'='tayyorlov_masteri'
         AND r.payload_json->>'actor_ref'=$1
 ), rolls AS MATERIALIZED (
-    SELECT *,CASE WHEN recorded_batch_id IS NOT NULL AND batch_order_id=order_id
-        THEN recorded_batch_id ELSE 'receipt:'||epc END AS batch_id
-    FROM confirmed WHERE order_id<>''
+    SELECT *,COALESCE(recorded_batch_id,'receipt:'||epc) AS batch_id,
+        CASE WHEN recorded_batch_id IS NOT NULL AND batch_order_id=order_id
+            THEN recorded_batch_id ELSE 'receipt:'||epc END AS order_batch_id
+    FROM confirmed
+), batch_rolls AS (
+    SELECT r.*, bucket.order_view,bucket.id AS display_batch_id
+    FROM rolls r CROSS JOIN LATERAL (VALUES (false,r.batch_id),(true,r.order_batch_id)) bucket(order_view,id)
 ), roll_stats AS (
-    SELECT batch_id,count(*) AS roll_count,sum(net_kg) AS total_net_kg,
+    SELECT order_view,display_batch_id,count(*) AS roll_count,sum(net_kg) AS total_net_kg,
         COALESCE(sum(length_m),0) AS total_length_m,max(printed_at) AS last_activity_at,
         string_agg(DISTINCT item_code,', ' ORDER BY item_code) AS item_code,
         string_agg(DISTINCT item_name,', ' ORDER BY item_name) AS item_name,
         string_agg(DISTINCT warehouse,', ' ORDER BY warehouse) AS warehouse
-    FROM rolls GROUP BY batch_id
-), journal_batches AS MATERIALIZED (
-    SELECT b.batch_id,b.order_id,COALESCE(s.item_code,b.payload_json->>'item_code','') AS item_code,
+    FROM batch_rolls GROUP BY order_view,display_batch_id
+), batch_views AS (
+    SELECT mode.order_view,b.batch_id,b.order_id,b.batch_code,COALESCE(s.item_code,b.payload_json->>'item_code','') AS item_code,
         COALESCE(s.item_name,NULLIF(b.payload_json->>'item_name',''),b.payload_json->>'item_code','') AS item_name,
         COALESCE(s.warehouse,b.payload_json->>'warehouse','') AS warehouse,b.active,b.started_at,
         CASE WHEN b.active THEN NULL ELSE b.updated_at END AS ended_at,
@@ -67,11 +72,19 @@ WITH raw_batches AS (
         COALESCE(s.roll_count,0) AS roll_count,COALESCE(s.total_net_kg,0) AS total_net_kg,
         COALESCE(s.total_length_m,0) AS total_length_m,
         NULLIF(b.payload_json#>'{order_assignment,preparation_formula}','null'::jsonb) AS preparation_formula
-    FROM batches b LEFT JOIN roll_stats s ON s.batch_id=b.batch_id WHERE b.order_id<>''
+    FROM batches b CROSS JOIN (VALUES (false),(true)) mode(order_view)
+    LEFT JOIN roll_stats s ON s.display_batch_id=b.batch_id AND s.order_view=mode.order_view
     UNION ALL
-    SELECT r.batch_id,r.order_id,r.item_code,r.item_name,r.warehouse,false,r.printed_at,r.printed_at,
+    SELECT r.order_view,r.display_batch_id,r.order_id,'',r.item_code,r.item_name,r.warehouse,false,r.printed_at,r.printed_at,
         r.printed_at,1,r.net_kg,COALESCE(r.length_m,0),r.preparation_formula
-    FROM rolls r WHERE r.batch_id='receipt:'||r.epc
+    FROM batch_rolls r WHERE r.display_batch_id='receipt:'||r.epc
+), journal_batches AS MATERIALIZED (
+    SELECT * FROM batch_views WHERE order_view AND order_id<>''
+), production_batches AS (
+    SELECT * FROM batch_views WHERE NOT order_view
+    UNION ALL
+    SELECT * FROM journal_batches j WHERE starts_with(j.batch_id,'receipt:')
+        AND EXISTS (SELECT 1 FROM rolls r WHERE r.order_batch_id=j.batch_id AND r.batch_id<>j.batch_id)
 ), order_stats AS (
     SELECT b.order_id,count(*) AS batch_count,count(*) FILTER (WHERE active) AS active_batch_count,
         sum(roll_count) AS roll_count,sum(total_net_kg) AS total_net_kg,

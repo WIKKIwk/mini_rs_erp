@@ -73,11 +73,18 @@ pub(super) async fn inventory_asset_rows(
         .into_iter()
         .map(|assignment| (assignment.barcode.trim().to_ascii_uppercase(), assignment))
         .collect::<std::collections::BTreeMap<_, _>>();
-    let mut production_notes = if let Some(store) = state.preparation.as_ref() {
-        store.production_notes_for_receipts(&barcodes).await
+    let (mut production_notes, mut output_notes) = if let Some(store) = state.preparation.as_ref() {
+        let output_notes = async {
+            if actor.principal.role == PrincipalRole::TayyorlovMasteri {
+                store.output_notes_for_inventory(&barcodes).await
+            } else {
+                Ok(Default::default())
+            }
+        };
+        tokio::try_join!(store.production_notes_for_receipts(&barcodes), output_notes)
             .map_err(|_| server_error("preparation_note_read_failed"))?
     } else {
-        std::collections::BTreeMap::new()
+        Default::default()
     };
     let rows = assets
         .into_iter()
@@ -87,10 +94,11 @@ pub(super) async fn inventory_asset_rows(
             } else {
                 None
             };
-            let preparation_note = if asset.kind == InventoryAssetKind::RawMaterial {
-                production_notes.remove(&asset.identifier.trim().to_ascii_uppercase())
-            } else { None };
-            InventoryAssetListRow { asset, order_assignment, preparation_note }
+            let (preparation_note, (batch_note, roll_note)) = if asset.kind == InventoryAssetKind::RawMaterial {
+                let code = asset.identifier.trim().to_ascii_uppercase();
+                (production_notes.remove(&code), output_notes.remove(&code).unwrap_or_default())
+            } else { Default::default() };
+            InventoryAssetListRow { asset, order_assignment, preparation_note, batch_note, roll_note }
         })
         .collect::<Vec<_>>();
     Ok(InventoryAssetRows::WithAssignments(rows))
@@ -110,6 +118,10 @@ pub(super) struct InventoryAssetListRow {
     order_assignment: Option<crate::core::inventory_movements::InventoryOrderAssignment>,
     #[serde(skip_serializing_if = "Option::is_none")]
     preparation_note: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    batch_note: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    roll_note: Option<serde_json::Value>,
 }
 
 pub async fn inventory_relocations(

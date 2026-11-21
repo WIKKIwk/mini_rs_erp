@@ -16,6 +16,10 @@ pub struct ProductionJournalQuery {
 }
 
 impl ProductionJournalQuery {
+    fn status(&self) -> &str {
+        if self.status.is_empty() { "all" } else { &self.status }
+    }
+
     fn validate(&self) -> Result<(), ApiError> {
         if self.q.chars().count() > 200
             || self.order_id.len() > 512
@@ -41,17 +45,37 @@ pub async fn production_orders(
         .production_journal_orders(
             &actor.ref_,
             &query.q,
-            if query.status.is_empty() {
-                "all"
-            } else {
-                &query.status
-            },
+            query.status(),
             query.offset,
             query.limit.unwrap_or(50),
         )
         .await
         .map(Json)
         .map_err(error)
+}
+
+pub async fn production_batches(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ProductionJournalQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let actor = authorize(&state, &headers).await?;
+    query.validate()?;
+    store(&state)?.production_journal_batches(
+        &actor.ref_, &query.q, query.status(), query.offset, query.limit.unwrap_or(50),
+    ).await.map(Json).map_err(error)
+}
+
+pub async fn production_rolls(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ProductionJournalQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let actor = authorize(&state, &headers).await?;
+    query.validate()?;
+    store(&state)?.production_journal_rolls(
+        &actor.ref_, &query.q, query.status(), query.offset, query.limit.unwrap_or(50),
+    ).await.map(Json).map_err(error)
 }
 
 pub async fn production_order(
@@ -122,4 +146,16 @@ pub async fn update_production_note(
         .await.map_err(error)?.ok_or_else(not_found)?;
     state.warehouse_events.invalidate_inventory();
     Ok(Json(json!({"preparation_note":note})))
+}
+
+pub async fn update_output_notes(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<PreparationOutputNoteUpdate>,
+) -> Result<Json<Value>, ApiError> {
+    let actor = authorize(&state, &headers).await?;
+    let notes = store(&state)?.update_output_notes(&actor, &input)
+        .await.map_err(error)?.ok_or_else(not_found)?;
+    state.warehouse_events.invalidate_inventory();
+    Ok(Json(json!({"notes":notes})))
 }

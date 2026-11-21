@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use mini_rs_erp::core::auth::models::{Principal, PrincipalRole};
-use mini_rs_erp::core::preparation::{PreparationError, PreparationProductionNoteUpdate};
+use mini_rs_erp::core::preparation::{PreparationError, PreparationOutputNoteUpdate, PreparationProductionNoteUpdate};
 use mini_rs_erp::core::rps_batch::models::{RpsBatchPrintEntry, RpsBatchSession};
 use mini_rs_erp::core::rps_batch::ports::RpsBatchStorePort;
 use mini_rs_erp::db::postgres::{
@@ -405,6 +405,7 @@ async fn check_production_notes(pool: &PgPool, journal: &PostgresPreparationStor
             .unwrap()["EPC1"],
         granted
     );
+    check_output_workspace(pool, &restricted, &a, &b).await;
     runtime.close().await;
     let reset = mini_rs_erp::db::postgres_order_reset::PostgresOrderResetStore::new(pool.clone())
         .reset_all_orders()
@@ -420,6 +421,74 @@ async fn check_production_notes(pool: &PgPool, journal: &PostgresPreparationStor
         .unwrap(),
         0
     );
+}
+
+async fn check_output_workspace(pool: &PgPool, journal: &PostgresPreparationStore, owner: &Principal, other: &Principal) {
+    let batches = journal.production_journal_batches(&owner.ref_, "EPC2", "completed", 0, 1).await.unwrap();
+    assert_eq!(batches["batches"][0]["batch_id"], "batch:batch-a");
+    assert_eq!(batches["batches"][0]["order_code"], "0317");
+    assert_eq!(batches["has_more"], false);
+    let page = journal.production_journal_rolls(&owner.ref_, "0317", "all", 0, 1).await.unwrap();
+    assert_eq!(page["has_more"], true);
+    let next = journal.production_journal_rolls(&owner.ref_, "0317", "all", 1, 1).await.unwrap();
+    assert_ne!(page["rolls"][0]["receipt_name"], next["rolls"][0]["receipt_name"]);
+
+    let batch = |id, text, revision| serde_json::from_value::<PreparationOutputNoteUpdate>(json!({
+        "scope":"batch","batch_id":id,"text":text,"expected_revision":revision
+    })).unwrap();
+    let selected = |rolls, text| serde_json::from_value::<PreparationOutputNoteUpdate>(json!({
+        "scope":"rolls","rolls":rolls,"text":text
+    })).unwrap();
+    let roll = |id, revision| json!({"receipt_name":id,"expected_revision":revision});
+    assert!(journal.update_output_notes(other, &batch("batch:batch-a", "denied", 0)).await.unwrap().is_none());
+    assert!(journal.update_output_notes(owner, &batch("receipt:EPC3", "denied", 0)).await.is_err());
+    let all = journal.update_output_notes(owner, &batch("batch:batch-a", " Har bir rulonga ", 0)).await.unwrap().unwrap();
+    assert_eq!(all["batch:batch-a"]["text"], "Har bir rulonga");
+    let two = journal.update_output_notes(owner, &selected(vec![roll("receipt-EPC1", 0), roll("receipt-EPC2", 0)], "Faqat tanlanganlar"))
+        .await.unwrap().unwrap();
+    assert_eq!(two.len(), 2);
+    assert!(journal.update_output_notes(owner, &selected(vec![roll("receipt-EPC3", 0), roll("receipt-OTHER", 0)], "Ruxsat yo‘q"))
+        .await.unwrap().is_none());
+    assert!(journal.update_output_notes(owner, &selected(vec![roll("receipt-DRAFT", 0)], "Tasdiqlanmagan"))
+        .await.unwrap().is_none());
+    assert!(matches!(journal.update_output_notes(owner, &selected(vec![roll("receipt-EPC3", 0), roll("receipt-EPC2", 0)], "Eski versiya")).await,
+        Err(PreparationError::Conflict(_))));
+
+    let standalone = journal.production_journal_batch(&owner.ref_, "receipt:EPC3", 0, 50).await.unwrap().unwrap();
+    assert!(standalone["rolls"][0]["roll_note"].is_null());
+    assert!(standalone["rolls"][0]["batch_note"].is_null());
+    let detail = journal.production_journal_batch(&owner.ref_, "batch:batch-a", 0, 50).await.unwrap().unwrap();
+    assert_eq!(detail["batch"]["batch_note"], all["batch:batch-a"]);
+    for row in detail["rolls"].as_array().unwrap() {
+        assert_eq!(row["batch_note"], all["batch:batch-a"]);
+        assert_eq!(row["roll_note"], two[row["receipt_name"].as_str().unwrap()]);
+    }
+    let inventory = journal.output_notes_for_inventory(&["epc1".into()]).await.unwrap();
+    assert_eq!(inventory["EPC1"].0.as_ref().unwrap(), &all["batch:batch-a"]);
+    assert_eq!(inventory["EPC1"].1.as_ref().unwrap(), &two["receipt-EPC1"]);
+    assert!(journal.output_notes_for_inventory(&["EPC3".into()]).await.unwrap().is_empty());
+
+    let store = PostgresRpsBatchStore::new(pool.clone());
+    let mut unassigned = RpsBatchSession {
+        id: "unassigned".into(), owner_key: format!("tayyorlov_masteri:{}", owner.ref_),
+        owner_role: "tayyorlov_masteri".into(), owner_ref: owner.ref_.clone(),
+        item_code: "PE".into(), item_name: "Buyurtmasiz PE".into(), warehouse: "Own W".into(),
+        active: true, created_at: "2026-10-30T05:00:00Z".into(), updated_at: "2026-10-30T05:00:00Z".into(),
+        ..Default::default()
+    };
+    store.put(&unassigned).await.unwrap();
+    let later = journal.update_output_notes(owner, &batch("batch:unassigned", "Keyingi rulonlarga ham", 0)).await.unwrap().unwrap();
+    unassigned.prints.push(print("NO-ORDER"));
+    store.complete(&RpsBatchSession { active: false, ..unassigned }).await.unwrap();
+    sqlx::raw_sql("INSERT INTO mini_gscale_receipts(name,status,item_code,warehouse,qty,barcode,payload_json)
+        VALUES('receipt-NO-ORDER','submitted','PE','Own W',1,'NO-ORDER',
+          '{\"actor_role\":\"tayyorlov_masteri\",\"actor_ref\":\"master-1\",\"item_name\":\"Buyurtmasiz PE\"}');")
+        .execute(pool).await.unwrap();
+    let batch = journal.production_journal_batch(&owner.ref_, "batch:unassigned", 0, 50).await.unwrap().unwrap();
+    assert_eq!(batch["batch"]["order_id"], "");
+    assert_eq!(batch["rolls"][0]["batch_note"], later["batch:unassigned"]);
+    let plain = journal.production_journal_rolls(&owner.ref_, "NO-ORDER", "completed", 0, 50).await.unwrap();
+    assert_eq!(plain["rolls"][0]["epc"], "NO-ORDER");
 }
 
 fn print(epc: &str) -> RpsBatchPrintEntry {

@@ -23,7 +23,7 @@ mod orders;
 mod production_journal;
 mod material_stock;
 pub use material_stock::material_stock;
-pub use production_journal::{production_orders, production_order, production_batch, update_production_note};
+pub use production_journal::{production_orders, production_order, production_batch, production_batches, production_rolls, update_output_notes, update_production_note};
 pub use orders::{order_detail, order_list, order_list_live};
 
 async fn authorize(state: &AppState, headers: &HeaderMap) -> Result<Principal, ApiError> {

@@ -5,7 +5,51 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub const SCALE: i64 = 1_000_000;
 pub const MAX_PRODUCTION_NOTE_CHARS: usize = 2000;
+pub const MAX_PRODUCTION_NOTE_ROLLS: usize = 100;
 const MAX: i64 = 999_999_999_999_999_999;
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreparationRollNoteTarget {
+    pub receipt_name: String,
+    pub expected_revision: i64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "scope", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PreparationOutputNoteUpdate {
+    Batch { batch_id: String, expected_revision: i64, text: String },
+    Rolls { rolls: Vec<PreparationRollNoteTarget>, text: String },
+}
+
+impl PreparationOutputNoteUpdate {
+    pub fn targets(&self) -> Result<(&'static str, &str, BTreeMap<&str, i64>), PreparationError> {
+        let (kind, text, targets) = match self {
+            Self::Batch { batch_id, expected_revision, text } => {
+                let id = batch_id.trim();
+                if id.strip_prefix("batch:").is_none_or(|id| id.trim().is_empty()) {
+                    return Err(PreparationError::Invalid("Batch tanlanmagan"));
+                }
+                ("batch", text, BTreeMap::from([(id, *expected_revision)]))
+            }
+            Self::Rolls { rolls, text } => {
+                let selected: BTreeMap<_, _> = rolls.iter()
+                    .map(|roll| (roll.receipt_name.trim(), roll.expected_revision)).collect();
+                if selected.is_empty() || selected.len() != rolls.len() || selected.len() > MAX_PRODUCTION_NOTE_ROLLS {
+                    return Err(PreparationError::Invalid("1 dan 100 tagacha turli rulon tanlang"));
+                }
+                ("roll", text, selected)
+            }
+        };
+        if targets.iter().any(|(id, rev)| id.is_empty() || id.len() > 1024 || id.contains('\0') || !(0..9_007_199_254_740_991).contains(rev)) {
+            return Err(PreparationError::Invalid("Eslatma yozuvi yoki versiyasi noto‘g‘ri"));
+        }
+        if text.trim().chars().count() > MAX_PRODUCTION_NOTE_CHARS || text.contains('\0') {
+            return Err(PreparationError::Invalid("Eslatma 2000 belgidan oshmasligi kerak"));
+        }
+        Ok((kind, text.trim(), targets))
+    }
+}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
