@@ -21,6 +21,7 @@ mod formula_print_snapshot;
 mod production_journal;
 mod production_notes;
 mod output_notes;
+pub mod paddons;
 pub(crate) mod orders;
 mod order_customers;
 

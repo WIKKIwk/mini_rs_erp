@@ -22,7 +22,9 @@ mod order_estimates;
 mod orders;
 mod production_journal;
 mod material_stock;
+mod paddons;
 pub use material_stock::material_stock;
+pub use paddons::{raw_material_paddons, receive_raw_material_paddon};
 pub use production_journal::{production_orders, production_order, production_batch, production_batches, production_rolls, update_output_notes, update_production_note};
 pub use orders::{order_detail, order_list, order_list_live};
 
