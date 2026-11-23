@@ -1,5 +1,5 @@
 WITH scoped AS (
-    SELECT p.id, p.code, p.created_at, w.name AS warehouse
+    SELECT p.id, p.code, p.name, p.created_at, w.name AS warehouse
     FROM mini_raw_material_paddons p
     JOIN mini_warehouses w ON w.id = p.warehouse_id
     WHERE p.owner_role = $1 AND p.owner_ref = $2 AND NOT w.is_group
@@ -34,11 +34,11 @@ WITH scoped AS (
     FROM lines GROUP BY id
 )
 SELECT jsonb_build_object(
-    'paddon_id', p.id, 'paddon_code', p.code, 'warehouse', p.warehouse,
+    'paddon_id', p.id, 'paddon_code', p.code, 'name', p.name, 'warehouse', p.warehouse,
     'remaining_kg', t.remaining_kg::text, 'contents', t.contents
 )
 FROM scoped p JOIN totals t ON t.id = p.id
-WHERE ($3 = '' OR strpos(lower(p.code), $3) > 0 OR t.matches)
+WHERE ($3 = '' OR strpos(lower(p.code), $3) > 0 OR strpos(lower(p.name), $3) > 0 OR t.matches)
   AND ($4 = 'all' OR ($4 = 'available' AND t.remaining_kg > 0)
                  OR ($4 = 'empty' AND t.remaining_kg = 0))
 ORDER BY p.created_at DESC, p.id DESC

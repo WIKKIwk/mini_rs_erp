@@ -72,7 +72,7 @@ async fn verify(pool: &PgPool, options: PgConnectOptions) {
         .bootstrap_factory_defaults()
         .await
         .unwrap();
-    apply_postgres_migrations_through_version(pool, "0200")
+    apply_postgres_migrations_through_version(pool, "0201")
         .await
         .unwrap();
     sqlx::raw_sql(
@@ -130,9 +130,14 @@ async fn verify(pool: &PgPool, options: PgConnectOptions) {
         Err(PreparationError::Forbidden)
     ));
 
+    let named_receipt = |name: &str| -> PaddonCreate {
+        let mut payload = serde_json::to_value(receipt("Own", item, "master-1")).unwrap();
+        payload["name"] = json!(name);
+        serde_json::from_value(payload).unwrap()
+    };
     let (first, retry) = tokio::join!(
-        store.receive_raw_material_paddon(&master, receipt("Own", item, "master-1"), &[]),
-        store.receive_raw_material_paddon(&master, receipt("Own", item, "master-1"), &[]),
+        store.receive_raw_material_paddon(&master, named_receipt("  Oq zaxira  "), &[]),
+        store.receive_raw_material_paddon(&master, named_receipt("Oq zaxira"), &[]),
     );
     let first = first.unwrap();
     assert_eq!(first, retry.unwrap());
@@ -158,8 +163,14 @@ async fn verify(pool: &PgPool, options: PgConnectOptions) {
     let master_rows = master_list["paddons"].as_array().unwrap();
     assert_eq!(master_rows.len(), 1);
     assert_eq!(master_rows[0]["paddon_code"], first["paddon_code"]);
+    assert_eq!(master_rows[0]["name"], "Oq zaxira");
     assert_eq!(master_rows[0]["contents"][0]["remaining_count"], 3);
     assert_eq!(master_rows[0]["remaining_kg"], "75.000000");
+    let by_name = store
+        .raw_material_paddons(&master, filter("available", " zAxIrA "))
+        .await
+        .unwrap();
+    assert_eq!(by_name, master_list);
     let supplier_list: Value = store
         .raw_material_paddons(&supplier, filter("all", ""))
         .await
@@ -168,6 +179,7 @@ async fn verify(pool: &PgPool, options: PgConnectOptions) {
         supplier_list["paddons"][0]["paddon_code"],
         second["paddon_code"]
     );
+    assert_eq!(supplier_list["paddons"][0]["name"], "");
     assert_eq!(supplier_list["paddons"].as_array().unwrap().len(), 1);
 
     sqlx::query("UPDATE mini_raw_material_stock SET status = 'consumed' WHERE warehouse = 'Own'")

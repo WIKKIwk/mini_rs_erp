@@ -41,11 +41,18 @@ struct PaddonLine {
 pub struct PaddonCreate {
     pub request_id: String,
     pub warehouse: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    name: String,
     contents: Vec<PaddonLine>,
 }
 
 impl PaddonCreate {
     fn validate(&self) -> Result<(), PreparationError> {
+        if self.name.chars().count() > 80 || self.name.chars().any(char::is_control) {
+            return Err(PreparationError::Invalid(
+                "Paddon nomini bir qatorda 80 belgigacha kiriting",
+            ));
+        }
         if !(8..=128).contains(&self.request_id.len())
             || !self
                 .request_id
@@ -153,10 +160,11 @@ impl PostgresPreparationStore {
     pub async fn receive_raw_material_paddon(
         &self,
         actor: &Principal,
-        input: PaddonCreate,
+        mut input: PaddonCreate,
         material_groups: &[String],
     ) -> Result<Value, PreparationError> {
         let role = role_code(actor)?;
+        input.name = input.name.trim().to_owned();
         input.validate()?;
         let mut tx = self.pool.begin().await?;
         // Serialize retries for this owner's command before checking for a receipt.
@@ -205,8 +213,8 @@ impl PostgresPreparationStore {
         let code = format!("XP-{}", id[..16].to_ascii_uppercase());
         sqlx::query(
             "INSERT INTO mini_raw_material_paddons
-             (id, code, owner_role, owner_ref, warehouse_id, request_id, request_json)
-             VALUES ($1,$2,$3,$4,$5,$6,$7)",
+             (id, code, owner_role, owner_ref, warehouse_id, request_id, request_json, name)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
         )
         .bind(&id)
         .bind(&code)
@@ -215,6 +223,7 @@ impl PostgresPreparationStore {
         .bind(&warehouse_id)
         .bind(&input.request_id)
         .bind(&request)
+        .bind(&input.name)
         .execute(&mut *tx)
         .await?;
         for (index, line) in input.contents.iter().enumerate() {
