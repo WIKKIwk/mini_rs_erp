@@ -129,8 +129,19 @@ impl PostgresInventoryMovementStore {
             return Ok(transfer);
         }
 
-        let source = warehouse_by_id_tx(&mut tx, &input.source_warehouse_id).await?;
-        let destination = warehouse_by_id_tx(&mut tx, &input.destination_warehouse_id).await?;
+        Self::create_transfer_assets_tx(&mut tx, actor, transfer_id, input).await?;
+        tx.commit().await.map_err(store_error)?;
+        load_transfer(&self.pool, transfer_id).await
+    }
+
+    pub(super) async fn create_transfer_assets_tx(
+        tx: &mut Transaction<'_, Postgres>,
+        actor: &InventoryActor,
+        transfer_id: &str,
+        input: &InventoryTransferCreate,
+    ) -> Result<InventoryTransferStatus, InventoryMovementError> {
+        let source = warehouse_by_id_tx(tx, &input.source_warehouse_id).await?;
+        let destination = warehouse_by_id_tx(tx, &input.destination_warehouse_id).await?;
         ensure_transfer_warehouse(&source)?;
         ensure_transfer_warehouse(&destination)?;
         if source.id == destination.id {
@@ -143,7 +154,7 @@ impl PostgresInventoryMovementStore {
             return Err(InventoryMovementError::DestinationWarehouseUnassigned);
         }
         let internal_transfer = actor.manages_transfer_internally(&source.name, &destination.name);
-        let source_location_id = warehouse_location_id_tx(&mut tx, &source.id).await?;
+        let source_location_id = warehouse_location_id_tx(tx, &source.id).await?;
 
         sqlx::query(
             r#"
@@ -167,7 +178,7 @@ impl PostgresInventoryMovementStore {
         .bind(inventory_role_code(&actor.principal.role))
         .bind(actor.principal.ref_.trim())
         .bind(actor.principal.display_name.trim())
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await
         .map_err(store_error)?;
 
@@ -180,7 +191,7 @@ impl PostgresInventoryMovementStore {
             })
         });
         for selector in selectors {
-            let asset = lock_asset_tx(&mut tx, selector.asset_kind, &selector.asset_ref).await?;
+            let asset = lock_asset_tx(tx, selector.asset_kind, &selector.asset_ref).await?;
             ensure_asset_available(&asset)?;
             let asset_kind = InventoryAssetKind::parse(&asset.asset_kind)?;
             if asset.warehouse_id != source.id {
@@ -191,14 +202,14 @@ impl PostgresInventoryMovementStore {
             }
             if asset_kind == InventoryAssetKind::RawMaterial {
                 ensure_raw_material_destination_scope_tx(
-                    &mut tx,
+                    tx,
                     &asset.item_code,
                     &destination.id,
                     &destination.name,
                 )
                 .await?;
             }
-            reserve_asset_tx(&mut tx, &asset, transfer_id).await?;
+            reserve_asset_tx(tx, &asset, transfer_id).await?;
             sqlx::query(
                 r#"
                 INSERT INTO mini_inventory_transfer_lines (
@@ -221,11 +232,11 @@ impl PostgresInventoryMovementStore {
             .bind(asset.qty_units)
             .bind(&asset.uom)
             .bind(&asset.physical_location_id)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await
             .map_err(store_error)?;
             insert_movement_event_tx(
-                &mut tx,
+                tx,
                 MovementEventDraft {
                     idempotency_key: format!(
                         "{}:{}:{}",
@@ -250,16 +261,16 @@ impl PostgresInventoryMovementStore {
             .await?;
         }
         if internal_transfer {
-            let transfer = transfer_for_update_tx(&mut tx, transfer_id).await?;
-            let lines = transfer_lines_tx(&mut tx, transfer_id).await?;
-            update_transfer_actor_tx(&mut tx, transfer_id, "approved", "approved", actor).await?;
-            dispatch_transfer_assets_tx(&mut tx, transfer_id, &lines).await?;
-            update_transfer_actor_tx(&mut tx, transfer_id, "dispatched", "in_transit", actor)
+            let transfer = transfer_for_update_tx(tx, transfer_id).await?;
+            let lines = transfer_lines_tx(tx, transfer_id).await?;
+            update_transfer_actor_tx(tx, transfer_id, "approved", "approved", actor).await?;
+            dispatch_transfer_assets_tx(tx, transfer_id, &lines).await?;
+            update_transfer_actor_tx(tx, transfer_id, "dispatched", "in_transit", actor)
                 .await?;
-            receive_transfer_assets_tx(&mut tx, &transfer, &lines, actor).await?;
-            update_transfer_actor_tx(&mut tx, transfer_id, "received", "received", actor).await?;
+            receive_transfer_assets_tx(tx, &transfer, &lines, actor).await?;
+            update_transfer_actor_tx(tx, transfer_id, "received", "received", actor).await?;
             insert_transfer_stage_events_tx(
-                &mut tx,
+                tx,
                 &transfer,
                 &lines,
                 actor,
@@ -270,7 +281,7 @@ impl PostgresInventoryMovementStore {
             )
             .await?;
             insert_transfer_stage_events_tx(
-                &mut tx,
+                tx,
                 &transfer,
                 &lines,
                 actor,
@@ -281,7 +292,7 @@ impl PostgresInventoryMovementStore {
             )
             .await?;
             insert_transfer_stage_events_tx(
-                &mut tx,
+                tx,
                 &transfer,
                 &lines,
                 actor,
@@ -292,11 +303,14 @@ impl PostgresInventoryMovementStore {
             )
             .await?;
         } else {
-            enqueue_transfer_chat_events_tx(&mut tx, transfer_id, "requested", &destination.name)
+            enqueue_transfer_chat_events_tx(tx, transfer_id, "requested", &destination.name)
                 .await?;
         }
-        tx.commit().await.map_err(store_error)?;
-        load_transfer(&self.pool, transfer_id).await
+        Ok(if internal_transfer {
+            InventoryTransferStatus::Received
+        } else {
+            InventoryTransferStatus::Requested
+        })
     }
 
     async fn transfers(

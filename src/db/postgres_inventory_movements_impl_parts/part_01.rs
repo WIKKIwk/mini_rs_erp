@@ -328,14 +328,30 @@ impl PostgresInventoryMovementStore {
             return Ok(saved);
         }
 
+        Self::relocate_batch_assets_tx(&mut tx, actor, input).await?;
+        tx.commit().await.map_err(store_error)?;
+
+        let mut saved = Vec::with_capacity(input.assets.len());
+        for selector in &input.assets {
+            saved.push(fetch_asset(&self.pool, selector.asset_kind, &selector.asset_ref).await?);
+        }
+        Ok(saved)
+    }
+
+    pub(super) async fn relocate_batch_assets_tx(
+        tx: &mut Transaction<'_, Postgres>,
+        actor: &InventoryActor,
+        input: &InventoryRelocationBatchCreate,
+    ) -> Result<(), InventoryMovementError> {
+        let event_key = |index: usize| format!("{}:batch:{index}", input.idempotency_key);
         let location =
-            inventory_location_for_update_tx(&mut tx, &input.physical_location_id).await?;
+            inventory_location_for_update_tx(tx, &input.physical_location_id).await?;
         if !location.active {
             return Err(InventoryMovementError::LocationInactive);
         }
         let location_kind = InventoryLocationKind::parse(&location.kind)?;
         for (index, selector) in input.assets.iter().enumerate() {
-            let asset = lock_asset_tx(&mut tx, selector.asset_kind, &selector.asset_ref).await?;
+            let asset = lock_asset_tx(tx, selector.asset_kind, &selector.asset_ref).await?;
             ensure_asset_available(&asset)?;
             if !actor.can_manage_warehouse(&asset.warehouse) {
                 return Err(InventoryMovementError::WarehouseForbidden);
@@ -367,12 +383,12 @@ impl PostgresInventoryMovementStore {
             .bind(inventory_role_code(&actor.principal.role))
             .bind(actor.principal.ref_.trim())
             .bind(actor.principal.display_name.trim())
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await
             .map_err(store_error)?;
             let key = event_key(index);
             insert_movement_event_tx(
-                &mut tx,
+                tx,
                 MovementEventDraft {
                     idempotency_key: key,
                     event_type: "relocated",
@@ -391,12 +407,6 @@ impl PostgresInventoryMovementStore {
             )
             .await?;
         }
-        tx.commit().await.map_err(store_error)?;
-
-        let mut saved = Vec::with_capacity(input.assets.len());
-        for selector in &input.assets {
-            saved.push(fetch_asset(&self.pool, selector.asset_kind, &selector.asset_ref).await?);
-        }
-        Ok(saved)
+        Ok(())
     }
 }

@@ -1,5 +1,8 @@
 use super::*;
-use crate::db::postgres_preparation::paddons::{PaddonCreate, PaddonQuery};
+use crate::core::inventory_movements::InventoryActor;
+use crate::db::postgres_preparation::paddons::{
+    PaddonCreate, PaddonIdentity, PaddonIssueCreate, PaddonQuery,
+};
 
 async fn paddon_actor(
     state: &AppState,
@@ -68,5 +71,62 @@ pub async fn receive_raw_material_paddon(
             .warehouse_events
             .notify_updated(warehouse, "raw_material_paddon");
     }
+    Ok(Json(result))
+}
+
+pub async fn raw_material_paddon_issues(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<PaddonIdentity>,
+) -> Result<([(axum::http::HeaderName, &'static str); 1], Json<Value>), ApiError> {
+    let actor = paddon_actor(&state, &headers, false).await?;
+    let issues = store(&state)?
+        .raw_material_paddon_issues(&actor, &query.code)
+        .await
+        .map_err(error)?;
+    Ok((
+        [(axum::http::header::CACHE_CONTROL, "private, no-store")],
+        Json(json!({"issues": issues})),
+    ))
+}
+
+pub async fn issue_raw_material_paddon(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<PaddonIssueCreate>,
+) -> Result<Json<Value>, ApiError> {
+    let actor = paddon_actor(&state, &headers, true).await?;
+    if input.moves_stock()
+        && actor.role == PrincipalRole::MaterialTaminotchi
+        && !state
+            .admin
+            .principal_has_capability(&actor, Capability::InventoryMovementManage)
+            .await
+    {
+        return Err(error(PreparationError::Forbidden));
+    }
+    let warehouses = state
+        .warehouses
+        .assigned_warehouse_names(&actor)
+        .await
+        .map_err(|_| error(PreparationError::StoreFailed))?;
+    let actor = InventoryActor::new(actor, false, warehouses);
+    let result = store(&state)?
+        .issue_raw_material_paddon(&actor, input)
+        .await
+        .map_err(error)?;
+    if let Some(warehouse) = result["warehouse"].as_str() {
+        state
+            .warehouse_events
+            .notify_updated(warehouse, "raw_material_paddon");
+    }
+    if result["transfer_status"].is_string()
+        && let Some(warehouse) = result["destination"].as_str()
+    {
+        state
+            .warehouse_events
+            .notify_updated(warehouse, "raw_material_paddon");
+    }
+    state.production_maps.notify_live();
     Ok(Json(result))
 }

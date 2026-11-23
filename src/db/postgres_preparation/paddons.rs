@@ -5,6 +5,9 @@ use crate::db::postgres_raw_material_events::{
 };
 use serde::{Deserialize, Serialize};
 
+mod issues;
+pub use issues::{PaddonIdentity, PaddonIssueCreate};
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum UnitKind {
@@ -29,7 +32,8 @@ struct PaddonLine {
     lot_number: String,
     kind: UnitKind,
     count: i32,
-    unit_kg: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    unit_kg: Option<String>,
     #[serde(default)]
     width_mm: Option<String>,
     #[serde(default)]
@@ -78,7 +82,9 @@ impl PaddonCreate {
             {
                 return Err(PreparationError::Invalid("Paddon tarkibi noto‘g‘ri"));
             }
-            decimal(&line.unit_kg)?;
+            if let Some(ref kg) = line.unit_kg {
+                decimal(kg)?;
+            }
             if matches!(line.kind, UnitKind::Roll) {
                 decimal(line.width_mm.as_deref().unwrap_or_default())?;
                 decimal(line.micron.as_deref().unwrap_or_default())?;
@@ -94,6 +100,7 @@ impl PaddonCreate {
 #[serde(default, deny_unknown_fields)]
 pub struct PaddonQuery {
     q: String,
+    code: Option<String>,
     status: BalanceFilter,
     offset: u32,
     limit: Option<u32>,
@@ -133,6 +140,7 @@ impl PostgresPreparationStore {
         let search = search
             .strip_prefix("raw-material-paddon:")
             .unwrap_or(&search);
+        let code = query.code.as_deref().map(paddon_code).transpose()?;
         let status = match query.status {
             BalanceFilter::All => "all",
             BalanceFilter::Available => "available",
@@ -146,6 +154,7 @@ impl PostgresPreparationStore {
             .bind(status)
             .bind(i64::from(limit) + 1)
             .bind(i64::from(query.offset))
+            .bind(code)
             .fetch_all(&self.pool)
             .await?;
         let has_more = paddons.len() > limit as usize;
@@ -229,102 +238,42 @@ impl PostgresPreparationStore {
         for (index, line) in input.contents.iter().enumerate() {
             let (item_code, item_name) =
                 paddon_material(&mut tx, actor, &warehouse, line, material_groups).await?;
-            let unit_kg = decimal(&line.unit_kg)?;
+            let unit_kg = line.unit_kg.as_deref().map(decimal).transpose()?;
+            let material = PaddonMaterial {
+                item_code,
+                item_name,
+                lot_number: line.lot_number.trim().into(),
+                width_mm: line.width_mm.clone(),
+                micron: line.micron.clone(),
+            };
             for unit in 1..=line.count {
-                let receipt_id = new_id();
-                let stock_id = format!("raw:paddon:{receipt_id}");
-                let barcode = format!("PREP-PADDON-{receipt_id}");
-                sqlx::query(
-                    "INSERT INTO mini_raw_material_stock
-                     (id, warehouse, item_code, item_name, barcode, qty, source_receipt_id,
-                      width_mm, micron, payload_json)
-                     VALUES ($1,$2,$3,$4,$5,$6::text::numeric,$7,$8::text::numeric,
-                             $9::text::numeric,$10)",
-                )
-                .bind(&stock_id)
-                .bind(&warehouse)
-                .bind(&item_code)
-                .bind(&item_name)
-                .bind(&barcode)
-                .bind(decimal_text(unit_kg))
-                .bind(&receipt_id)
-                .bind(line.width_mm.as_deref().map(str::trim))
-                .bind(line.micron.as_deref().map(str::trim))
-                .bind(json!({"source":"raw_material_paddon","paddon_id":id,"owner_ref":actor.ref_}))
-                .execute(&mut *tx)
-                .await?;
+                let stock_id = if let Some(kg) = unit_kg {
+                    let stock =
+                        receive_paddon_unit(&mut tx, actor, &id, &warehouse, &material, kg).await?;
+                    Some(stock.id)
+                } else {
+                    None
+                };
+                let unweighed = stock_id.is_none();
                 sqlx::query(
                     "INSERT INTO mini_raw_material_paddon_units
-                     (paddon_id, line_no, unit_no, stock_id, kind, lot_number, unit_kg)
-                     VALUES ($1,$2,$3,$4,$5,$6,$7::text::numeric)",
+                     (paddon_id, line_no, unit_no, stock_id, kind, unit_kg, lot_number,
+                      item_code, item_name, width_mm, micron, unweighed_warehouse_id)
+                     VALUES ($1,$2,$3,$4,$5,$6::text::numeric,$7,$8,$9,$10::text::numeric,$11::text::numeric,$12)",
                 )
                 .bind(&id)
                 .bind(index as i32 + 1)
                 .bind(unit)
-                .bind(&stock_id)
+                .bind(stock_id)
                 .bind(line.kind.code())
-                .bind(line.lot_number.trim())
-                .bind(decimal_text(unit_kg))
+                .bind(unit_kg.map(decimal_text))
+                .bind(&material.lot_number)
+                .bind(unweighed.then_some(&material.item_code))
+                .bind(&material.item_name)
+                .bind(material.width_mm.as_deref().map(str::trim))
+                .bind(material.micron.as_deref().map(str::trim))
+                .bind(unweighed.then_some(&warehouse_id))
                 .execute(&mut *tx)
-                .await?;
-                if actor.role == PrincipalRole::TayyorlovMasteri {
-                    let output = json!({
-                        "id": receipt_id, "paddon_id": id, "kind": "receipt", "warehouse": warehouse,
-                        "item_code": item_code, "name": item_name, "kg": decimal_text(unit_kg),
-                        "qr_printed": false,
-                    });
-                    record(
-                        &mut tx,
-                        &receipt_id,
-                        &actor.ref_,
-                        &format!("paddon-unit-{receipt_id}"),
-                        "receipt",
-                        None,
-                        json!({"kind": "paddon_unit", "paddon_id": id}),
-                        &output,
-                    )
-                    .await?;
-                    sqlx::query(
-                        "INSERT INTO mini_preparation_receipts
-                         (id, stock_id, item_code, owner_ref, initial_kg)
-                         VALUES ($1,$2,$3,$4,$5::text::numeric)",
-                    )
-                    .bind(&receipt_id)
-                    .bind(&stock_id)
-                    .bind(&item_code)
-                    .bind(&actor.ref_)
-                    .bind(decimal_text(unit_kg))
-                    .execute(&mut *tx)
-                    .await?;
-                }
-                insert_raw_material_event_tx(
-                    &mut tx,
-                    RawMaterialEventDraft {
-                        idempotency_key: format!("paddon-receipt:{receipt_id}"),
-                        event_type: "receipt_posted".into(),
-                        warehouse: warehouse.clone(),
-                        barcode,
-                        item_code: item_code.clone(),
-                        item_name: item_name.clone(),
-                        qty_delta: unit_kg as f64 / SCALE as f64,
-                        uom: "kg".into(),
-                        stock_status_before: None,
-                        stock_status_after: Some("available".into()),
-                        order_id: None,
-                        apparatus: None,
-                        actor_role: role.into(),
-                        actor_ref: actor.ref_.clone(),
-                        actor_display_name: actor.display_name.clone(),
-                        owner_role: role.into(),
-                        owner_ref: actor.ref_.clone(),
-                        owner_display_name: actor.display_name.clone(),
-                        source_type: "system".into(),
-                        source_id: receipt_id,
-                        source_line_ref: None,
-                        correlation_id: Some(id.clone()),
-                        payload_json: json!({"source":"raw_material_paddon", "paddon_id":id}),
-                    },
-                )
                 .await?;
             }
         }
@@ -361,4 +310,166 @@ async fn paddon_material(
     .fetch_optional(&mut **tx)
     .await?
     .ok_or(PreparationError::Forbidden)
+}
+
+fn paddon_code(raw: &str) -> Result<String, PreparationError> {
+    let normalized = raw.trim().to_ascii_uppercase();
+    let code = normalized
+        .strip_prefix("RAW-MATERIAL-PADDON:")
+        .unwrap_or(&normalized);
+    if !code
+        .strip_prefix("XP-")
+        .is_some_and(|id| id.len() == 16 && id.bytes().all(|c| c.is_ascii_hexdigit()))
+    {
+        return Err(PreparationError::Invalid(
+            "Xomashyo paddonining QR kodini skanerlang",
+        ));
+    }
+    Ok(code.to_owned())
+}
+
+#[derive(sqlx::FromRow)]
+struct PaddonMaterial {
+    item_code: String,
+    item_name: String,
+    lot_number: String,
+    width_mm: Option<String>,
+    micron: Option<String>,
+}
+
+struct PaddonStock {
+    id: String,
+    barcode: String,
+}
+
+async fn receive_paddon_unit(
+    tx: &mut Transaction<'_, Postgres>,
+    actor: &Principal,
+    paddon_id: &str,
+    warehouse: &str,
+    material: &PaddonMaterial,
+    kg: i64,
+) -> Result<PaddonStock, PreparationError> {
+    use crate::core::gscale::{epc::GscaleEpcGenerator, ports::EpcSource};
+    let receipt_id = new_id();
+    let barcode = GscaleEpcGenerator::new().next_epc();
+    let stock_id = format!("raw:{}", barcode.to_ascii_lowercase());
+    let kg_text = decimal_text(kg);
+    sqlx::query(
+        "INSERT INTO mini_raw_material_stock
+         (id, warehouse, item_code, item_name, barcode, qty, source_receipt_id, width_mm, micron, payload_json)
+         VALUES ($1,$2,$3,$4,$5,$6::text::numeric,$7,$8::text::numeric,$9::text::numeric,$10)",
+    )
+    .bind(&stock_id)
+    .bind(warehouse)
+    .bind(&material.item_code)
+    .bind(&material.item_name)
+    .bind(&barcode)
+    .bind(&kg_text)
+    .bind(&receipt_id)
+    .bind(material.width_mm.as_deref().map(str::trim))
+    .bind(material.micron.as_deref().map(str::trim))
+    .bind(json!({"source":"raw_material_paddon","paddon_id":paddon_id,"owner_ref":actor.ref_,
+                 "lot_number":material.lot_number}))
+    .execute(&mut **tx)
+    .await?;
+    if actor.role == PrincipalRole::TayyorlovMasteri {
+        let output = json!({
+            "id": receipt_id, "paddon_id": paddon_id, "kind": "receipt", "warehouse": warehouse,
+            "item_code": material.item_code, "name": material.item_name, "kg": kg_text,
+            "qr_printed": false,
+        });
+        record(
+            tx,
+            &receipt_id,
+            &actor.ref_,
+            &format!("paddon-unit-{receipt_id}"),
+            "receipt",
+            None,
+            json!({"kind": "paddon_unit", "paddon_id": paddon_id}),
+            &output,
+        )
+        .await?;
+        sqlx::query(
+            "INSERT INTO mini_preparation_receipts (id, stock_id, item_code, owner_ref, initial_kg)
+             VALUES ($1,$2,$3,$4,$5::text::numeric)",
+        )
+        .bind(&receipt_id)
+        .bind(&stock_id)
+        .bind(&material.item_code)
+        .bind(&actor.ref_)
+        .bind(&kg_text)
+        .execute(&mut **tx)
+        .await?;
+    }
+    record_paddon_weight(
+        tx,
+        actor,
+        warehouse,
+        material,
+        &barcode,
+        kg,
+        None,
+        &receipt_id,
+        paddon_id,
+    )
+    .await?;
+    Ok(PaddonStock {
+        id: stock_id,
+        barcode,
+    })
+}
+
+async fn record_paddon_weight(
+    tx: &mut Transaction<'_, Postgres>,
+    actor: &Principal,
+    warehouse: &str,
+    material: &PaddonMaterial,
+    barcode: &str,
+    difference: i64,
+    previous_kg: Option<i64>,
+    source_id: &str,
+    paddon_id: &str,
+) -> Result<(), PreparationError> {
+    if difference == 0 {
+        return Ok(());
+    }
+    let role = role_code(actor)?;
+    let event_type = match previous_kg {
+        None => "receipt_posted",
+        Some(_) if difference > 0 => "adjustment_increase",
+        Some(_) => "adjustment_decrease",
+    };
+    insert_raw_material_event_tx(
+        tx,
+        RawMaterialEventDraft {
+            idempotency_key: format!("paddon-weight:{source_id}:{barcode}"),
+            event_type: event_type.into(),
+            warehouse: warehouse.into(),
+            barcode: barcode.into(),
+            item_code: material.item_code.clone(),
+            item_name: material.item_name.clone(),
+            qty_delta: difference as f64 / SCALE as f64,
+            uom: "kg".into(),
+            stock_status_before: previous_kg.map(|_| "available".into()),
+            stock_status_after: Some("available".into()),
+            order_id: None,
+            apparatus: None,
+            actor_role: role.into(),
+            actor_ref: actor.ref_.clone(),
+            actor_display_name: actor.display_name.clone(),
+            owner_role: role.into(),
+            owner_ref: actor.ref_.clone(),
+            owner_display_name: actor.display_name.clone(),
+            source_type: "system".into(),
+            source_id: source_id.into(),
+            source_line_ref: None,
+            correlation_id: Some(paddon_id.into()),
+            payload_json: json!({"source":"raw_material_paddon","paddon_id":paddon_id,
+                                 "lot_number":material.lot_number,
+                                 "previous_kg":previous_kg.map(decimal_text)}),
+        },
+    )
+    .await?;
+    Ok(())
 }
