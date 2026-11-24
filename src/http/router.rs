@@ -27,7 +27,12 @@ pub fn build_router(state: AppState) -> Router {
         .layer(CompressionLayer::new()
             .quality(CompressionLevel::Precise(gzip_level))
             .compress_when(DefaultPredicate::new().and(compress_json)))
-        .layer(middleware::from_fn(cors::cors_headers))
+        .layer(middleware::from_fn_with_state(
+            cors::AllowedOrigins::from_config(
+                &std::env::var("MINI_ERP_CORS_ALLOWED_ORIGINS").unwrap_or_default(),
+            ),
+            cors::cors_headers,
+        ))
 }
 
 fn compress_json(_: StatusCode, _: Version, headers: &HeaderMap, extensions: &Extensions) -> bool {
