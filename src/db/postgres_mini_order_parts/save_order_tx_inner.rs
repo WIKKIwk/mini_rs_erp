@@ -1,0 +1,213 @@
+async fn save_order_tx_inner(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    map: &ProductionMapDefinition,
+    template: &CalculateOrderTemplate,
+    capture_snapshot: bool,
+) -> Result<(), MiniOrderError> {
+    let order_id = order_id(map);
+    super::postgres_production_map::lock_order_for_edit_tx(tx, &order_id)
+        .await
+        .map_err(|_| MiniOrderError::StoreFailed)?;
+    // Reconciliation must never replace an opened order's private calculation
+    // with a later edit to its reusable quick-order template.
+    let snapshot = sqlx::query_scalar::<_, Option<serde_json::Value>>(
+        "SELECT calculation_json FROM mini_orders WHERE id = $1 FOR UPDATE",
+    )
+    .bind(&order_id)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(|_| MiniOrderError::StoreFailed)?
+    .flatten();
+    let snapshot: Option<CalculateOrderTemplate> = snapshot
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|_| MiniOrderError::StoreFailed)?;
+    let mut initial_snapshot = template.clone();
+    initial_snapshot.kg = map.order_kg.unwrap_or(template.kg);
+    initial_snapshot.source_map_id = map.id.clone();
+    initial_snapshot.order_number = map.order_number.clone();
+    initial_snapshot.code = map.code.clone();
+    let template = snapshot.as_ref().unwrap_or(&initial_snapshot);
+    let order_code = first_non_empty([&template.code, &map.code, &map.order_number, &map.id]);
+    let product_name = first_non_empty([&template.product, &template.name, &map.title]);
+    let kg = positive_erp_quantity(template.kg).unwrap_or(0.0);
+    let width_mm = positive_erp_quantity(template.width_mm)
+        .or_else(|| map.width_mm.and_then(positive_erp_quantity));
+    let roll_count = template
+        .roll_count
+        .or(map.roll_count)
+        .filter(|value| *value > 0);
+    let layers = template.effective_layers();
+    let layer = |index: usize| layers.get(index).cloned().unwrap_or_default();
+    let first_layer = layer(0);
+    let second_layer = layer(1);
+    let third_layer = layer(2);
+    let layers_json = serde_json::to_value(&layers).map_err(|_| MiniOrderError::StoreFailed)?;
+
+    sqlx::query(
+        "INSERT INTO mini_orders
+                (id, code, order_number, customer_ref, customer_name, product_code,
+                 product_name, product_form, status, kg, width_mm, roll_count, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'draft',
+                     ($9::double precision)::numeric(18,6),
+                     ($10::double precision)::numeric(18,6),
+                     $11::bigint, now())
+             ON CONFLICT (id) DO UPDATE SET
+                code = excluded.code,
+                order_number = excluded.order_number,
+                customer_ref = excluded.customer_ref,
+                customer_name = excluded.customer_name,
+                product_code = excluded.product_code,
+                product_name = excluded.product_name,
+                product_form = excluded.product_form,
+                kg = excluded.kg,
+                width_mm = excluded.width_mm,
+                roll_count = excluded.roll_count,
+                updated_at = excluded.updated_at
+             WHERE (mini_orders.code, mini_orders.order_number,
+                    mini_orders.customer_ref, mini_orders.customer_name,
+                    mini_orders.product_code, mini_orders.product_name,
+                    mini_orders.product_form, mini_orders.kg,
+                    mini_orders.width_mm, mini_orders.roll_count)
+                   IS DISTINCT FROM
+                   (excluded.code, excluded.order_number,
+                    excluded.customer_ref, excluded.customer_name,
+                    excluded.product_code, excluded.product_name,
+                    excluded.product_form, excluded.kg,
+                    excluded.width_mm, excluded.roll_count)",
+    )
+    .bind(&order_id)
+    .bind(order_code)
+    .bind(first_non_empty([&template.order_number, &map.order_number]))
+    .bind(template.customer_ref.trim())
+    .bind(template.customer.trim())
+    .bind(first_non_empty([&template.item_code, &map.product_code]))
+    .bind(product_name)
+    .bind(template.status.trim())
+    .bind(kg)
+    .bind(width_mm)
+    .bind(roll_count)
+    .execute(&mut **tx)
+    .await
+    .map_err(|_| MiniOrderError::StoreFailed)?;
+
+    // Only the actual order-creation path owns the original input. A periodic
+    // reconciliation's product-code match is not evidence of that input.
+    if capture_snapshot {
+        let inserted = sqlx::query("UPDATE mini_orders SET calculation_json = $2 WHERE id = $1 AND calculation_json IS NULL")
+            .bind(&order_id)
+            .bind(serde_json::to_value(template).map_err(|_| MiniOrderError::StoreFailed)?)
+            .execute(&mut **tx).await.map_err(|_| MiniOrderError::StoreFailed)?;
+        if inserted.rows_affected() == 1 && let Some(standard) = map.standard_print_side {
+            remember_print_side(tx, template, standard).await.map_err(|_| MiniOrderError::StoreFailed)?;
+        }
+    }
+
+    let products: Vec<(String, String, String)> = if template.products.is_empty() {
+        vec![(format!("{order_id}:product"), template.item_code.clone(), product_name.to_string())]
+    } else {
+        template.products.iter().map(|p| (
+            format!("{order_id}:product:{}", p.id), p.item_code.clone(), p.product.clone()
+        )).collect()
+    };
+    let product_ids = products.iter().map(|p| p.0.clone()).collect::<Vec<_>>();
+    sqlx::query("DELETE FROM mini_order_products WHERE order_id = $1 AND NOT (id = ANY($2))")
+        .bind(&order_id)
+        .bind(&product_ids)
+        .execute(&mut **tx)
+        .await
+        .map_err(|_| MiniOrderError::StoreFailed)?;
+
+    for (product_id, item_code, product_name) in products {
+    sqlx::query(
+        "INSERT INTO mini_order_products
+                (id, order_id, item_code, product_name, material_display, color,
+                 first_layer_material, first_layer_micron, second_layer_material,
+                 second_layer_micron, third_layer_material, third_layer_micron,
+                 layers_json, note)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+             ON CONFLICT (id) DO UPDATE SET
+                order_id = excluded.order_id,
+                item_code = excluded.item_code,
+                product_name = excluded.product_name,
+                material_display = excluded.material_display,
+                color = excluded.color,
+                first_layer_material = excluded.first_layer_material,
+                first_layer_micron = excluded.first_layer_micron,
+                second_layer_material = excluded.second_layer_material,
+                second_layer_micron = excluded.second_layer_micron,
+                third_layer_material = excluded.third_layer_material,
+                third_layer_micron = excluded.third_layer_micron,
+                layers_json = excluded.layers_json,
+                note = excluded.note
+             WHERE (mini_order_products.order_id, mini_order_products.item_code,
+                    mini_order_products.product_name, mini_order_products.material_display,
+                    mini_order_products.color, mini_order_products.first_layer_material,
+                    mini_order_products.first_layer_micron,
+                    mini_order_products.second_layer_material,
+                    mini_order_products.second_layer_micron,
+                    mini_order_products.third_layer_material,
+                    mini_order_products.third_layer_micron,
+                    mini_order_products.layers_json,
+                    mini_order_products.note)
+                   IS DISTINCT FROM
+                   (excluded.order_id, excluded.item_code,
+                    excluded.product_name, excluded.material_display,
+                    excluded.color, excluded.first_layer_material,
+                    excluded.first_layer_micron,
+                    excluded.second_layer_material,
+                    excluded.second_layer_micron,
+                    excluded.third_layer_material,
+                    excluded.third_layer_micron,
+                    excluded.layers_json,
+                    excluded.note)",
+    )
+    .bind(product_id)
+    .bind(&order_id)
+    .bind(item_code.trim())
+    .bind(product_name)
+    .bind(template.material_display.trim())
+    .bind(template.color.trim())
+    .bind(&first_layer.material)
+    .bind(&first_layer.micron)
+    .bind(&second_layer.material)
+    .bind(&second_layer.micron)
+    .bind(&third_layer.material)
+    .bind(&third_layer.micron)
+    .bind(&layers_json)
+    .bind(template.note.trim())
+    .execute(&mut **tx)
+    .await
+    .map_err(|_| MiniOrderError::StoreFailed)?;
+
+    }
+
+    sqlx::query(
+        "UPDATE mini_production_maps
+             SET order_id = $1, updated_at = now()
+             WHERE id = $1 AND order_id IS DISTINCT FROM $1",
+    )
+    .bind(&order_id)
+    .execute(&mut **tx)
+    .await
+    .map_err(|_| MiniOrderError::StoreFailed)?;
+
+    Ok(())
+}
+
+fn order_id(map: &ProductionMapDefinition) -> String {
+    let id = map.id.trim();
+    if id.is_empty() {
+        "order:unknown".to_string()
+    } else {
+        id.to_string()
+    }
+}
+
+fn first_non_empty<const N: usize>(values: [&str; N]) -> &str {
+    values
+        .into_iter()
+        .map(str::trim)
+        .find(|value| !value.is_empty())
+        .unwrap_or("")
+}

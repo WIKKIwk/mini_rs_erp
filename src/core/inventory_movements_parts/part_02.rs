@@ -286,64 +286,8 @@ pub fn inventory_role_code(role: &PrincipalRole) -> &'static str {
 }
 
 #[cfg(test)]
-mod inventory_list_metadata_tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn inventory_list_metadata_denies_other_roles_and_unknown_repository_state() {
-        let service = InventoryMovementService::new(Arc::new(MemoryInventoryMovementStore::new()));
-        let actor = |role| {
-            InventoryActor::new(
-                Principal {
-                    role,
-                    display_name: String::new(),
-                    legal_name: String::new(),
-                    ref_: "material".into(),
-                    phone: String::new(),
-                    avatar_url: String::new(),
-                },
-                false,
-                ["warehouse".into()],
-            )
-        };
-        let barcodes = vec!["RM-1".into()];
-        let apparatus = vec!["apparatus:catalog:pechat-001".into()];
-        assert_eq!(
-            service
-                .list_order_assignments(&actor(PrincipalRole::Werka), &barcodes, &apparatus)
-                .await
-                .unwrap_err(),
-            InventoryMovementError::WarehouseForbidden
-        );
-        assert!(
-            service
-                .list_order_assignments(&actor(PrincipalRole::MaterialTaminotchi), &barcodes, &[])
-                .await
-                .unwrap()
-                .is_empty()
-        );
-        assert_eq!(
-            service
-                .list_order_assignments(
-                    &actor(PrincipalRole::MaterialTaminotchi),
-                    &barcodes,
-                    &apparatus
-                )
-                .await
-                .unwrap_err(),
-            InventoryMovementError::StoreFailed
-        );
-    }
-
-    #[test]
-    fn inventory_list_metadata_is_opt_in() {
-        let query: InventoryAssetQuery = serde_json::from_str("{}").unwrap();
-        assert!(!query.include_order_assignment);
-        let query: InventoryAssetQuery =
-            serde_json::from_str("{\"include_order_assignment\":true}").unwrap();
-        assert!(query.include_order_assignment);
-    }
-}
+#[path = "inventory_list_metadata_tests.rs"]
+mod inventory_list_metadata_tests;
 
 fn movement_id(prefix: &str) -> String {
     format!("{prefix}_{}", HEXLOWER.encode(&rand::random::<[u8; 16]>()))
@@ -511,50 +455,4 @@ fn ensure_memory_transfer_assets(
     Ok(())
 }
 
-fn complete_memory_transfer(
-    state: &mut MemoryInventoryState,
-    transfer: &mut InventoryTransfer,
-    actor: &InventoryActor,
-    now: i64,
-) -> Result<(), InventoryMovementError> {
-    ensure_memory_transfer_assets(state, transfer)?;
-    let destination = warehouse_location(state, &transfer.destination_warehouse_id)?;
-    for line in &transfer.lines {
-        let asset = state
-            .assets
-            .get_mut(&(line.asset_kind, line.asset_ref.to_ascii_lowercase()))
-            .ok_or(InventoryMovementError::AssetNotFound)?;
-        if asset.transfer_id != transfer.id {
-            return Err(InventoryMovementError::AssetUnavailable);
-        }
-        asset.custody_warehouse_id = transfer.destination_warehouse_id.clone();
-        asset.custody_warehouse = transfer.destination_warehouse.clone();
-        asset.physical_location = InventoryLocationRef::from(&destination);
-        asset.transfer_id.clear();
-        asset.status = "available".to_string();
-        asset.placement_version += 1;
-    }
-    let actor_name = actor.principal.display_name.clone();
-    if transfer.approved_at_unix.is_none() {
-        transfer.approved_by_name = actor_name.clone();
-        transfer.approved_at_unix = Some(now);
-    }
-    if transfer.dispatched_at_unix.is_none() {
-        transfer.dispatched_by_name = actor_name.clone();
-        transfer.dispatched_at_unix = Some(now);
-    }
-    transfer.status = InventoryTransferStatus::Received;
-    transfer.received_by_name = actor_name;
-    transfer.received_at_unix = Some(now);
-    Ok(())
-}
-
-fn location_kind_rank(kind: InventoryLocationKind) -> u8 {
-    match kind {
-        InventoryLocationKind::State => 0,
-        InventoryLocationKind::Warehouse => 1,
-        InventoryLocationKind::Transit => 2,
-    }
-}
-
-include!("../inventory_movements_inline_tests.rs");
+include!("complete_memory_transfer.rs");

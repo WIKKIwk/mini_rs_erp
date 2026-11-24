@@ -1,0 +1,489 @@
+impl TelegramStore {
+    pub fn new(path: PathBuf) -> Self {
+        let data = read_data(&path).unwrap_or_else(|error| {
+            tracing::warn!(%error, path = %path.display(), "telegram store unavailable; using empty state");
+            TelegramStoreData::default()
+        });
+        // Sessiya kaliti data fayl yonida alohida 0600 faylda yashaydi
+        // (mobile_telegram.json -> mobile_telegram.key). Operator hech narsa
+        // kiritmaydi: fayl bo'lmasa birinchi talabda avtomatik yaratiladi.
+        let key_path = path.with_extension("key");
+        Self {
+            path,
+            key_path,
+            data: Mutex::new(data),
+        }
+    }
+
+    fn session_key(&self) -> Result<[u8; 32], TelegramStoreError> {
+        if let Ok(value) = std::env::var("TELEGRAM_USER_SESSION_KEY") {
+            let value = value.trim().to_string();
+            if !value.is_empty() {
+                return Ok(derive_key(&value));
+            }
+        }
+        load_or_create_key_file(&self.key_path)
+    }
+
+    pub async fn bot_settings(&self) -> Result<(String, String), TelegramStoreError> {
+        let data = self.data.lock().await;
+        Ok((data.bot_username.clone(), data.bot_token.clone()))
+    }
+
+    pub async fn user_api_credentials(
+        &self,
+    ) -> Result<Option<(i32, String)>, TelegramStoreError> {
+        let (stored_api_id, stored_api_hash) = {
+            let data = self.data.lock().await;
+            (data.user_api_id, data.user_api_hash.clone())
+        };
+        if let (Some(api_id), Some(encrypted_hash)) = (stored_api_id, stored_api_hash) {
+            let api_hash = decrypt_session(&encrypted_hash, &self.session_key()?)?;
+            if api_id > 0 && !api_hash.trim().is_empty() {
+                return Ok(Some((api_id, api_hash)));
+            }
+        }
+
+        Ok(env_user_api_credentials())
+    }
+
+    pub async fn set_user_api_credentials(
+        &self,
+        api_id: i32,
+        api_hash: String,
+    ) -> Result<(), TelegramStoreError> {
+        let encrypted_hash = encrypt_session(api_hash.trim(), &self.session_key()?)?;
+        let mut data = self.data.lock().await;
+        data.user_api_id = Some(api_id);
+        data.user_api_hash = Some(encrypted_hash);
+        self.persist(&data).await
+    }
+
+    pub async fn users(&self) -> Result<Vec<TelegramUserAccount>, TelegramStoreError> {
+        let data = self.data.lock().await;
+        Ok(data.users.values().cloned().collect())
+    }
+
+    pub async fn user_by_telegram_id(
+        &self,
+        telegram_user_id: &str,
+    ) -> Result<Option<TelegramUserAccount>, TelegramStoreError> {
+        let data = self.data.lock().await;
+        Ok(data.users.get(telegram_user_id).cloned())
+    }
+
+    pub async fn delete_user_account(
+        &self,
+        telegram_user_id: &str,
+    ) -> Result<TelegramUserAccount, TelegramStoreError> {
+        let mut data = self.data.lock().await;
+        let mut updated = data.clone();
+        let user = updated
+            .users
+            .remove(telegram_user_id)
+            .ok_or(TelegramStoreError::UserNotFound)?;
+        updated.user_sessions.remove(telegram_user_id);
+        updated.order_drafts.remove(telegram_user_id);
+        if updated.alert_settings.sender_user_id.as_deref() == Some(telegram_user_id) {
+            updated.alert_settings = Default::default();
+        }
+        updated.alert_jobs.retain(|_, job| job.sender_user_id != telegram_user_id);
+        self.persist(&updated).await?;
+        *data = updated;
+        Ok(user)
+    }
+
+    pub async fn user_by_phone(
+        &self,
+        phone_number: &str,
+    ) -> Result<Option<TelegramUserAccount>, TelegramStoreError> {
+        let normalized_phone = normalize_phone(phone_number);
+        if normalized_phone.is_empty() {
+            return Ok(None);
+        }
+        let data = self.data.lock().await;
+        Ok(data
+            .users
+            .values()
+            .find(|user| normalize_phone(&user.phone_number) == normalized_phone)
+            .cloned())
+    }
+
+    pub async fn chats(&self) -> Result<Vec<TelegramChat>, TelegramStoreError> {
+        let data = self.data.lock().await;
+        Ok(data.chats.values().cloned().collect())
+    }
+
+    pub(crate) async fn polling_state(&self) -> (String, i64) {
+        let data = self.data.lock().await;
+        (data.bot_token.clone(), data.update_offset)
+    }
+
+    pub(crate) async fn set_update_offset(
+        &self,
+        token: &str,
+        update_offset: i64,
+    ) -> Result<(), TelegramStoreError> {
+        let mut data = self.data.lock().await;
+        // An in-flight response from the previous bot must not advance the new bot.
+        if token != data.bot_token || update_offset <= data.update_offset {
+            return Ok(());
+        }
+        data.update_offset = update_offset;
+        self.persist(&data).await
+    }
+
+    pub async fn set_bot_settings(
+        &self,
+        bot_username: String,
+        bot_token: Option<String>,
+    ) -> Result<(), TelegramStoreError> {
+        let mut data = self.data.lock().await;
+        data.bot_username = bot_username;
+        if let Some(bot_token) = bot_token {
+            if bot_token != data.bot_token {
+                data.update_offset = 0;
+            }
+            data.bot_token = bot_token;
+        }
+        self.persist(&data).await
+    }
+
+    pub async fn set_delivery_mode(
+        &self,
+        telegram_user_id: &str,
+        delivery_mode: TelegramDeliveryMode,
+    ) -> Result<TelegramUserAccount, TelegramStoreError> {
+        let mut data = self.data.lock().await;
+        let user = data
+            .users
+            .get_mut(telegram_user_id)
+            .ok_or(TelegramStoreError::UserNotFound)?;
+        user.delivery_mode = delivery_mode;
+        let user = user.clone();
+        self.persist(&data).await?;
+        Ok(user)
+    }
+
+    /// Only the authenticated MTProto identity may create a QR user. Never
+    /// overwrite an existing user's role/session when another QR is scanned.
+    pub(crate) async fn register_qr_user(
+        &self,
+        user: TelegramUserAccount,
+        session: String,
+    ) -> Result<Option<TelegramUserAccount>, TelegramStoreError> {
+        let mut data = self.data.lock().await;
+        if data.users.contains_key(&user.telegram_user_id) {
+            return Ok(None);
+        }
+        let encrypted = encrypt_session(&session, &self.session_key()?)?;
+        let mut updated = data.clone();
+        updated
+            .user_sessions
+            .insert(user.telegram_user_id.clone(), encrypted);
+        updated
+            .users
+            .insert(user.telegram_user_id.clone(), user.clone());
+        alerts::activate_alert_sender(&mut updated, &user);
+        self.persist(&updated).await?;
+        *data = updated;
+        Ok(Some(user))
+    }
+
+    pub(crate) async fn recognize_start(
+        &self,
+        id: &str,
+        chat_id: &str,
+    ) -> Result<Option<TelegramUserAccount>, TelegramStoreError> {
+        let mut data = self.data.lock().await;
+        let mut updated = data.clone();
+        let Some(user) = updated.users.get_mut(id) else {
+            return Ok(None);
+        };
+        user.telegram_chat_id = chat_id.to_string();
+        let user = user.clone();
+        self.persist(&updated).await?;
+        *data = updated;
+        Ok(Some(user))
+    }
+
+    pub async fn complete_user_profile_login(
+        &self,
+        telegram_user_id: &str,
+        phone_number: String,
+        session_string: String,
+    ) -> Result<TelegramUserAccount, TelegramStoreError> {
+        // New logins always use the dedicated session key (auto-created key
+        // file, or TELEGRAM_USER_SESSION_KEY override). Legacy keys are
+        // read-only fallbacks for previously stored sessions (see user_session).
+        let key = self.session_key()?;
+        let mut data = self.data.lock().await;
+        let mut updated = data.clone();
+        let user = {
+            let user = updated
+                .users
+                .get_mut(telegram_user_id)
+                .ok_or(TelegramStoreError::UserNotFound)?;
+            user.phone_number = phone_number;
+            user.user_profile_connected = true;
+            if user.role == TelegramAccountRole::AlertSender {
+                user.delivery_mode = TelegramDeliveryMode::UserProfile;
+            }
+            user.clone()
+        };
+        let encrypted_session = encrypt_session(&session_string, &key)?;
+        updated.user_sessions
+            .insert(telegram_user_id.to_string(), encrypted_session);
+        alerts::activate_alert_sender(&mut updated, &user);
+        self.persist(&updated).await?;
+        *data = updated;
+        Ok(user)
+    }
+
+    pub async fn user_session(
+        &self,
+        telegram_user_id: &str,
+    ) -> Result<Option<String>, TelegramStoreError> {
+        let (session, legacy_keys) = {
+            let data = self.data.lock().await;
+            let session = data.user_sessions.get(telegram_user_id).cloned();
+            let legacy_keys = legacy_session_keys(&data);
+            (session, legacy_keys)
+        };
+        let Some(session) = session else {
+            return Ok(None);
+        };
+        if !session.starts_with("v1:") {
+            return Ok(Some(session));
+        }
+        // Preferred path: dedicated key (auto-created file or env override).
+        // load_or_create_key_file essentially never fails here (it creates the
+        // file on demand); the branch below is only a last-resort compat path.
+        if let Ok(key) = self.session_key() {
+            match decrypt_session(&session, &key) {
+                Ok(plain) => return Ok(Some(plain)),
+                Err(_) => {
+                    // Fall through to legacy keys below (migration path).
+                }
+            }
+            for legacy_key in &legacy_keys {
+                if let Ok(plain) = decrypt_session(&session, legacy_key) {
+                    tracing::warn!(
+                        telegram_user_id = %telegram_user_id,
+                        "telegram user session decrypted with legacy key; re-encrypting with dedicated session key"
+                    );
+                    let migrated = encrypt_session(&plain, &key)?;
+                    let mut data = self.data.lock().await;
+                    data.user_sessions
+                        .insert(telegram_user_id.to_string(), migrated);
+                    self.persist(&data).await?;
+                    return Ok(Some(plain));
+                }
+            }
+            return Err(TelegramStoreError::SessionCrypto);
+        }
+        // Last-resort compat path (key file unwritable and no env override):
+        // old sessions keep working read-only so the userbot does not die.
+        tracing::warn!(
+            "telegram session key unavailable; trying legacy telegram session keys read-only"
+        );
+        for legacy_key in &legacy_keys {
+            if let Ok(plain) = decrypt_session(&session, legacy_key) {
+                return Ok(Some(plain));
+            }
+        }
+        Err(TelegramStoreError::SessionCrypto)
+    }
+
+    pub async fn set_selected_user_group(
+        &self,
+        telegram_user_id: &str,
+        group: TelegramUserGroup,
+    ) -> Result<TelegramUserAccount, TelegramStoreError> {
+        let mut data = self.data.lock().await;
+        let user = data
+            .users
+            .get_mut(telegram_user_id)
+            .ok_or(TelegramStoreError::UserNotFound)?;
+        user.selected_chat_id = Some(group.chat_id);
+        user.selected_chat_title = Some(group.title);
+        user.selected_chat_type = Some(group.chat_type);
+        user.delivery_mode = TelegramDeliveryMode::UserProfile;
+        let user = user.clone();
+        self.persist(&data).await?;
+        Ok(user)
+    }
+
+    pub async fn order_draft(
+        &self,
+        telegram_user_id: &str,
+    ) -> Result<Option<TelegramOrderDraft>, TelegramStoreError> {
+        let data = self.data.lock().await;
+        Ok(data.order_drafts.get(telegram_user_id).cloned())
+    }
+
+    pub async fn save_order_draft(
+        &self,
+        telegram_user_id: &str,
+        draft: TelegramOrderDraft,
+    ) -> Result<(), TelegramStoreError> {
+        let mut data = self.data.lock().await;
+        data.order_drafts
+            .insert(telegram_user_id.to_string(), draft);
+        self.persist(&data).await
+    }
+
+    pub async fn clear_order_draft(
+        &self,
+        telegram_user_id: &str,
+    ) -> Result<(), TelegramStoreError> {
+        let mut data = self.data.lock().await;
+        data.order_drafts.remove(telegram_user_id);
+        self.persist(&data).await
+    }
+
+    pub async fn create_invite(
+        &self,
+        token: String,
+        role: TelegramAccountRole,
+        now_unix: i64,
+    ) -> Result<(), TelegramStoreError> {
+        let mut data = self.data.lock().await;
+        purge_expired_invites(&mut data, now_unix);
+        data.invites.insert(
+            token,
+            TelegramInviteRecord {
+                role,
+                created_at_unix: now_unix,
+                expires_at_unix: now_unix + INVITE_TTL_SECONDS,
+                claimed_by: None,
+            },
+        );
+        self.persist(&data).await
+    }
+
+    pub async fn claim_invite(
+        &self,
+        token: &str,
+        telegram_user_id: String,
+        telegram_chat_id: String,
+        username: String,
+        display_name: String,
+        now_unix: i64,
+    ) -> Result<TelegramUserAccount, TelegramStoreError> {
+        let mut data = self.data.lock().await;
+        purge_expired_invites(&mut data, now_unix);
+        let invite = data
+            .invites
+            .get(token)
+            .ok_or(TelegramStoreError::InviteNotFound)?;
+        if invite.expires_at_unix > 0 && now_unix > invite.expires_at_unix {
+            return Err(TelegramStoreError::InviteExpired);
+        }
+        if let Some(claimed_by) = invite.claimed_by.as_deref()
+            && claimed_by != telegram_user_id
+        {
+            return Err(TelegramStoreError::InviteAlreadyUsed);
+        }
+        let role = invite.role;
+        let existing = data.users.get(&telegram_user_id).cloned();
+        let joined_at_unix = existing
+            .as_ref()
+            .map(|existing| existing.joined_at_unix)
+            .unwrap_or(now_unix);
+
+        let user = TelegramUserAccount {
+            telegram_user_id: telegram_user_id.clone(),
+            telegram_chat_id,
+            username,
+            display_name,
+            role,
+            invite_token: token.to_string(),
+            joined_at_unix,
+            phone_number: existing
+                .as_ref()
+                .map(|existing| existing.phone_number.clone())
+                .unwrap_or_default(),
+            delivery_mode: if role == TelegramAccountRole::AlertSender {
+                TelegramDeliveryMode::UserProfile
+            } else {
+                existing.as_ref().map(|existing| existing.delivery_mode).unwrap_or_default()
+            },
+            user_profile_connected: existing
+                .as_ref()
+                .is_some_and(|existing| existing.user_profile_connected),
+            selected_chat_id: existing
+                .as_ref()
+                .and_then(|existing| existing.selected_chat_id.clone()),
+            selected_chat_title: existing
+                .as_ref()
+                .and_then(|existing| existing.selected_chat_title.clone()),
+            selected_chat_type: existing
+                .as_ref()
+                .and_then(|existing| existing.selected_chat_type.clone()),
+        };
+        data.invites
+            .get_mut(token)
+            .ok_or(TelegramStoreError::InviteNotFound)?
+            .claimed_by = Some(telegram_user_id.clone());
+        data.users.insert(telegram_user_id, user.clone());
+        alerts::activate_alert_sender(&mut data, &user);
+        self.persist(&data).await?;
+        Ok(user)
+    }
+
+    pub async fn upsert_chat(&self, chat: TelegramChat) -> Result<(), TelegramStoreError> {
+        let mut data = self.data.lock().await;
+        let chat_id = chat.chat_id.clone();
+        let connected_at_unix = data
+            .chats
+            .get(&chat_id)
+            .map(|existing| existing.connected_at_unix)
+            .unwrap_or(chat.connected_at_unix);
+        data.chats.insert(
+            chat_id,
+            TelegramChat {
+                connected_at_unix,
+                ..chat
+            },
+        );
+        self.persist(&data).await
+    }
+
+    async fn persist(&self, data: &TelegramStoreData) -> Result<(), TelegramStoreError> {
+        let parent = self.path.parent().ok_or(TelegramStoreError::Write)?;
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|_| TelegramStoreError::Write)?;
+        let raw = serde_json::to_vec_pretty(data).map_err(|_| TelegramStoreError::Write)?;
+        let tmp_path = self.path.with_extension("json.tmp");
+        tokio::fs::write(&tmp_path, raw)
+            .await
+            .map_err(|_| TelegramStoreError::Write)?;
+        restrict_file_permissions(&tmp_path).await;
+        tokio::fs::rename(tmp_path, &self.path)
+            .await
+            .map_err(|_| TelegramStoreError::Write)?;
+        restrict_file_permissions(&self.path).await;
+        Ok(())
+    }
+}
+
+fn normalize_phone(value: &str) -> String {
+    value.chars().filter(char::is_ascii_digit).collect()
+}
+
+fn env_user_api_credentials() -> Option<(i32, String)> {
+    let api_id = std::env::var("TELEGRAM_API_ID")
+        .ok()
+        .and_then(|value| value.trim().parse::<i32>().ok())
+        .filter(|value| *value > 0)?;
+    let api_hash = std::env::var("TELEGRAM_API_HASH")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())?;
+    Some((api_id, api_hash))
+}
+
+type SessionEncryptor = cbc::Encryptor<Aes256>;
+type SessionDecryptor = cbc::Decryptor<Aes256>;
