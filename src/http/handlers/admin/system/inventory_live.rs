@@ -1,7 +1,7 @@
 //! Session-scoped, bounded list projections. Reads are driven by committed
 //! invalidations, never a periodic list poll. The server diffs canonical windows
 //! so inserts/removals correctly backfill the sorted limit/offset boundary.
-use super::inventory_movements::{inventory_actor_for_principal, inventory_asset_rows};
+use super::inventory_movements::{inventory_actor_for_principal, inventory_asset_rows, require_inventory_access};
 use super::*;
 use crate::core::inventory_movements::{
     InventoryActor, InventoryAssetQuery, InventoryTransferQuery,
@@ -85,6 +85,12 @@ pub async fn inventory_live(
     axum::Extension(session): axum::Extension<crate::http::router::LiveSession>,
     ws: WebSocketUpgrade,
 ) -> Result<Response, AdminError> {
+    const RESET: &str = r#"{"event":"inventory.reset","message":"inventory_scope_changed"}"#;
+    let ws = session.protect(ws, &state, |state, actor| async move {
+        require_inventory_access(&state, &actor).await.is_ok()
+    }).with_denial_notices(
+        Some(RESET), Some(RESET),
+    );
     inventory_actor_for_principal(&state, session.principal).await?;
     if query.subscriptions.len() > MAX_MESSAGE_BYTES {
         return Err(bad_request("inventory_live_subscriptions_invalid"));

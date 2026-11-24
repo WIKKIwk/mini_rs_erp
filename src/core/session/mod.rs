@@ -4,3 +4,6 @@ pub mod manager;
 pub(crate) use store::session_key as session_digest;
 pub mod models;
 mod store;
+
+#[cfg(test)]
+pub(crate) use store::{JsonSessionStore, SessionStore};

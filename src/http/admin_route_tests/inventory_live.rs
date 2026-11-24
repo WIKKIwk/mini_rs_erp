@@ -66,7 +66,7 @@ impl Drop for InventoryLiveServer {
     }
 }
 
-async fn message(socket: &mut reqwest::Upgraded) -> Value {
+pub(super) async fn message(socket: &mut reqwest::Upgraded) -> Value {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let opcode = socket.read_u8().await.unwrap() & 0x0f;

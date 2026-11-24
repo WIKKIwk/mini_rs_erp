@@ -150,18 +150,26 @@ mod tests {
     async fn persistent_avatar_tickets_honor_revocation_across_managers() {
         let directory = tempfile::tempdir().unwrap();
         let scope = TicketScope::Avatar { profile: None, version: "avatar.jpg" };
-        for use_lmdb in [false, true] {
-            let make_manager = || {
-                if use_lmdb {
-                    SessionManager::lmdb(directory.path().join("sessions.lmdb"), 1024 * 1024, Some(600)).unwrap()
-                } else {
-                    SessionManager::persistent(directory.path().join("sessions.json"), Some(600))
-                }
-            };
-            let issuer = make_manager();
+        let json = directory.path().join("sessions.json");
+        let lmdb = std::sync::Arc::new(
+            crate::core::session::store::LmdbSessionStore::open(
+                directory.path().join("sessions.lmdb"), 1024 * 1024,
+            ).unwrap(),
+        );
+        // LMDB requires a single open environment per process. Each manager
+        // still has an independent session cache and operation lock.
+        for (issuer, reader) in [
+            (
+                SessionManager::persistent(json.clone(), Some(600)),
+                SessionManager::persistent(json, Some(600)),
+            ),
+            (
+                SessionManager::with_store(lmdb.clone(), Some(600)),
+                SessionManager::with_store(lmdb, Some(600)),
+            ),
+        ] {
             let token = issuer.create(person()).await.unwrap();
             let ticket = issue_ticket(&token, scope);
-            let reader = make_manager();
             assert!(reader.get(&token).await.is_ok());
             let (digest, viewer) = reader.resolve_ticket(&ticket, scope).await.unwrap();
             assert_eq!(viewer, person());

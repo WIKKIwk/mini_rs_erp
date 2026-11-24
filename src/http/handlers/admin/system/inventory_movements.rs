@@ -286,14 +286,21 @@ pub(super) async fn inventory_actor(
     inventory_actor_for_principal(state, principal).await
 }
 
+pub(super) async fn require_inventory_access(
+    state: &AppState, principal: &Principal,
+) -> Result<(), AdminError> {
+    let capability = if principal.role == PrincipalRole::TayyorlovMasteri {
+        Capability::PreparationAccess
+    } else {
+        Capability::InventoryMovementManage
+    };
+    require_capability(state, principal, capability).await
+}
+
 pub(super) async fn inventory_actor_for_principal(
     state: &AppState, principal: Principal,
 ) -> Result<InventoryActor, AdminError> {
-    if principal.role == PrincipalRole::TayyorlovMasteri {
-        require_capability(state, &principal, Capability::PreparationAccess).await?;
-    } else {
-        require_capability(state, &principal, Capability::InventoryMovementManage).await?;
-    }
+    require_inventory_access(state, &principal).await?;
     let is_admin = principal.role != PrincipalRole::TayyorlovMasteri && state
         .admin
         .principal_has_admin_workspace_access(&principal)

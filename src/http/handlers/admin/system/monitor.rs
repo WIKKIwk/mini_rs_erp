@@ -33,6 +33,9 @@ pub async fn system_monitor_live(
     axum::Extension(session): axum::Extension<crate::http::router::LiveSession>,
     ws: WebSocketUpgrade,
 ) -> Result<Response, AdminError> {
+    let ws = session.protect(ws, &state, |state, actor| async move {
+        state.admin.principal_has_capability(&actor, Capability::AdminAccess).await
+    });
     let principal = session.principal;
     if !state.admin.principal_has_capability(&principal, Capability::AdminAccess).await {
         return Err(forbidden());

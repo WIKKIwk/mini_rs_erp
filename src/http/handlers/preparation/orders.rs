@@ -757,6 +757,12 @@ pub async fn order_list_live(
     ws: WebSocketUpgrade,
 ) -> Result<Response, ApiError> {
     let query = query.normalized()?;
+    let ws = session.protect(ws, &state, |state, actor| async move {
+        require_preparation_access(&state, actor).await.is_ok()
+    }).with_denial_notices(
+        Some(r#"{"type":"error","status":401,"error":{"error":"unauthorized"}}"#),
+        Some(r#"{"type":"error","status":403,"error":{"error":"forbidden"}}"#),
+    );
     let principal = require_preparation_access(&state, session.principal).await?;
     read_scope(&state, &principal, &query).await?;
     Ok(ws

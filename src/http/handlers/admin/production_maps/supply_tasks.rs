@@ -128,16 +128,20 @@ fn digest(value: impl Serialize) -> String {
     )
 }
 
+fn task_capability(kind: &str, role: PrincipalRole) -> Result<Capability, AdminError> {
+    match (kind, role) {
+        ("qolip", PrincipalRole::Qolipchi) => Ok(Capability::QolipManage),
+        ("material", PrincipalRole::MaterialTaminotchi) => Ok(Capability::RawMaterialAssign),
+        _ => Err(forbidden()),
+    }
+}
+
 async fn read_scope(
     state: &AppState,
     principal: &Principal,
     query: &TasksQuery,
 ) -> Result<ReadScope, AdminError> {
-    let capability = match (query.kind.as_str(), &principal.role) {
-        ("qolip", PrincipalRole::Qolipchi) => Capability::QolipManage,
-        ("material", PrincipalRole::MaterialTaminotchi) => Capability::RawMaterialAssign,
-        _ => return Err(forbidden()),
-    };
+    let capability = task_capability(&query.kind, principal.role)?;
     if !state
         .admin
         .principal_is_active(principal)
@@ -472,6 +476,13 @@ pub async fn production_tasks_live(
     ws: WebSocketUpgrade,
 ) -> Result<Response, AdminError> {
     let query = query.normalized()?;
+    let capability = task_capability(&query.kind, session.principal.role)?;
+    let ws = session.protect(ws, &state, move |state, actor| async move {
+        state.admin.principal_has_capability(&actor, capability).await
+    }).with_denial_notices(
+        Some(r#"{"ok":false,"type":"tasks_error","error":"unauthorized","status":401,"resync":false}"#),
+        Some(r#"{"ok":false,"type":"tasks_error","error":"forbidden","status":403,"resync":false}"#),
+    );
     let principal = session.principal;
     read_scope(&state, &principal, &query).await?;
     Ok(ws

@@ -4,6 +4,8 @@
 use std::fmt;
 use std::future::Future;
 use std::ops::Deref;
+use std::pin::Pin;
+use std::time::Duration;
 use std::sync::OnceLock;
 
 use axum::extract::FromRequestParts;
@@ -88,6 +90,8 @@ impl From<Message> for sockudo_ws::Message {
 pub enum WebSocketError {
     #[error(transparent)]
     Protocol(#[from] sockudo_ws::Error),
+    #[error("WebSocket session access has ended")]
+    SessionEnded,
     #[error("invalid UTF-8 WebSocket text")]
     InvalidText(#[from] std::str::Utf8Error),
 }
@@ -109,28 +113,100 @@ impl TryFrom<sockudo_ws::Message> for Message {
     }
 }
 
-pub struct WebSocket {
-    inner: sockudo_ws::axum_integration::WebSocket,
+#[derive(Clone, Copy)]
+pub(crate) enum AccessDenial {
+    Unauthorized,
+    Forbidden,
 }
 
+type AuthorizationCheck =
+    Box<dyn Fn() -> Pin<Box<dyn Future<Output = Result<(), AccessDenial>> + Send>> + Send + Sync>;
+
+#[derive(Default)]
+struct DenialNotices {
+    unauthorized: Option<&'static str>,
+    forbidden: Option<&'static str>,
+}
+
+pub struct WebSocket {
+    inner: Option<sockudo_ws::axum_integration::WebSocket>,
+    authorization: Option<AuthorizationCheck>,
+    denial_notices: DenialNotices,
+    next_check: tokio::time::Instant,
+}
+
+const AUTH_CHECK_INTERVAL: Duration = Duration::from_secs(20);
+
 impl WebSocket {
+    fn deny(&mut self, reason: AccessDenial) {
+        let Some(mut inner) = self.inner.take() else { return };
+        let notice = match reason {
+            AccessDenial::Unauthorized => self.denial_notices.unauthorized,
+            AccessDenial::Forbidden => self.denial_notices.forbidden,
+        };
+        // recv() can be cancelled by a route's select!. Finish the terminal
+        // handshake independently after permanently detaching the data channel.
+        tokio::spawn(async move {
+            let _ = tokio::time::timeout(Duration::from_secs(5), async {
+                if let Some(notice) = notice {
+                    let _ = inner.send(sockudo_ws::Message::Text(Bytes::from_static(notice.as_bytes()))).await;
+                }
+                let _ = inner.send(sockudo_ws::Message::Close(None)).await;
+            }).await;
+        });
+    }
+
     pub async fn send(&mut self, message: Message) -> Result<(), WebSocketError> {
-        self.inner.send(message.into()).await.map_err(Into::into)
+        if self.inner.is_none() {
+            return Err(WebSocketError::SessionEnded);
+        }
+        if let Some(check) = &self.authorization
+            && !matches!(message, Message::Close(_))
+            && let Err(reason) = check().await
+        {
+            self.deny(reason);
+            return Err(WebSocketError::SessionEnded);
+        }
+        self.inner.as_mut().ok_or(WebSocketError::SessionEnded)?
+            .send(message.into()).await.map_err(Into::into)
     }
 
     pub async fn recv(&mut self) -> Option<Result<Message, WebSocketError>> {
-        self.inner
-            .recv()
-            .await
-            .map(|message| message.map_err(Into::into).and_then(Message::try_from))
+        let inner = self.inner.as_mut()?;
+        let message = if let Some(check) = &self.authorization {
+            loop {
+                // Keep an absolute deadline across cancelled recv() futures.
+                tokio::select! {
+                    biased;
+                    _ = tokio::time::sleep_until(self.next_check) => {
+                        if let Err(reason) = check().await {
+                            self.deny(reason);
+                            return None;
+                        }
+                        self.next_check = tokio::time::Instant::now() + AUTH_CHECK_INTERVAL;
+                    }
+                    message = inner.recv() => break message,
+                }
+            }
+        } else {
+            inner.recv().await
+        };
+        message.map(|message| message.map_err(Into::into).and_then(Message::try_from))
     }
 
     pub async fn close(self, code: u16, reason: &str) -> Result<(), WebSocketError> {
-        self.inner.close(code, reason).await.map_err(Into::into)
+        if let Some(inner) = self.inner {
+            inner.close(code, reason).await?;
+        }
+        Ok(())
     }
 }
 
-pub struct WebSocketUpgrade(sockudo_ws::axum_integration::WebSocketUpgrade);
+pub struct WebSocketUpgrade {
+    inner: sockudo_ws::axum_integration::WebSocketUpgrade,
+    authorization: Option<AuthorizationCheck>,
+    denial_notices: DenialNotices,
+}
 
 #[derive(Debug)]
 pub enum WebSocketUpgradeRejection {
@@ -166,14 +242,36 @@ impl<S: Send + Sync> FromRequestParts<S> for WebSocketUpgrade {
             sockudo_ws::axum_integration::WebSocketUpgrade::from_request_parts(parts, state)
                 .await
                 .map_err(WebSocketUpgradeRejection::Protocol)?;
-        Ok(Self(upgrade.config(config.clone())))
+        Ok(Self {
+            inner: upgrade.config(config.clone()),
+            authorization: None,
+            denial_notices: DenialNotices::default(),
+        })
     }
 }
 
 impl WebSocketUpgrade {
     /// Explicit configuration is useful for controlled transport comparisons.
     pub fn config(mut self, config: Config) -> Self {
-        self.0 = self.0.config(config);
+        self.inner = self.inner.config(config);
+        self
+    }
+
+    pub(crate) fn with_authorization<F, Fut>(mut self, check: F) -> Self
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<(), AccessDenial>> + Send + 'static,
+    {
+        self.authorization = Some(Box::new(move || Box::pin(check())));
+        self
+    }
+
+    pub(crate) fn with_denial_notices(
+        mut self,
+        unauthorized: Option<&'static str>,
+        forbidden: Option<&'static str>,
+    ) -> Self {
+        self.denial_notices = DenialNotices { unauthorized, forbidden };
         self
     }
 
@@ -185,7 +283,12 @@ impl WebSocketUpgrade {
         F: FnOnce(WebSocket) -> Fut + Send + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
-        self.0.on_upgrade(move |inner| handler(WebSocket { inner }))
+        self.inner.on_upgrade(move |inner| handler(WebSocket {
+            inner: Some(inner),
+            authorization: self.authorization,
+            denial_notices: self.denial_notices,
+            next_check: tokio::time::Instant::now() + AUTH_CHECK_INTERVAL,
+        }))
     }
 }
 

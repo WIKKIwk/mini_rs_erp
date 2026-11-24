@@ -4,6 +4,7 @@ use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::authz::Capability;
 use crate::core::session::scoped_ticket::{issue_ticket, TicketScope};
 use crate::http::handlers::auth::bearer_token;
+use crate::http::ws::AccessDenial;
 use axum::{
     extract::{Query, Request, State},
     http::{header, HeaderMap, Method, StatusCode},
@@ -17,6 +18,44 @@ use serde::Deserialize;
 pub struct LiveSession {
     pub(crate) principal: Principal,
     pub(crate) digest: [u8; 32],
+}
+
+impl LiveSession {
+    /// Revalidate the exact issuing session and route privilege before data
+    /// leaves this connection and while the connection is idle.
+    pub(crate) fn protect<F, Fut>(
+        &self,
+        ws: crate::http::ws::WebSocketUpgrade,
+        state: &AppState,
+        check: F,
+    ) -> crate::http::ws::WebSocketUpgrade
+    where
+        F: Fn(std::sync::Arc<AppState>, Principal) -> Fut + Clone + Send + Sync + 'static,
+        Fut: std::future::Future<Output = bool> + Send + 'static,
+    {
+        let state = std::sync::Arc::new(state.clone());
+        let role = self.principal.role;
+        let principal_ref: std::sync::Arc<str> = self.principal.ref_.as_str().into();
+        let digest = self.digest;
+        ws.with_authorization(move || {
+            let state = state.clone();
+            let principal_ref = principal_ref.clone();
+            let check = check.clone();
+            async move {
+                let actor = state.sessions.get_by_digest(&digest).await
+                    .map_err(|_| AccessDenial::Unauthorized)?;
+                if actor.role != role || actor.ref_ != principal_ref.as_ref() {
+                    return Err(AccessDenial::Unauthorized);
+                }
+                if actor.role == PrincipalRole::RezkaMaster
+                    && !state.admin.principal_has_capability(&actor, Capability::RezkaMasterAccess).await
+                {
+                    return Err(AccessDenial::Forbidden);
+                }
+                if check(state, actor).await { Ok(()) } else { Err(AccessDenial::Forbidden) }
+            }
+        })
+    }
 }
 
 #[derive(Deserialize)]

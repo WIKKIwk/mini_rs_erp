@@ -13,6 +13,8 @@ use super::auth::authorize;
 use super::{ChatHttpError, http_error};
 use crate::app::AppState;
 use crate::core::auth::models::Principal;
+use crate::core::session::scoped_ticket::{issue_ticket, TicketScope};
+use crate::http::router::LiveSession;
 
 const CHAT_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(20);
 const CHAT_SEND_TIMEOUT: Duration = Duration::from_secs(5);
@@ -64,14 +66,18 @@ pub async fn socket_ticket(
             "method_not_allowed",
         ));
     }
-    let (_, principal) = authorize(&state, &headers).await?;
+    let (session_token, principal) = authorize(&state, &headers).await?;
     let (ticket, expires_at_unix) = state
         .chat
         .issue_socket_ticket(principal)
         .await
         .map_err(super::map_chat_error)?;
+    // Bind the existing single-use database ticket to the issuing ERP
+    // session. The public live-ticket issuer accepts only exact route paths.
+    let purpose = format!("chat-socket/{ticket}");
+    let proof = issue_ticket(&session_token, TicketScope::Live { path: &purpose });
     Ok(Json(serde_json::json!({
-        "ticket": ticket,
+        "ticket": format!("{ticket}.{proof}"),
         "expires_in_seconds": 30,
         "expires_at_unix": expires_at_unix,
     })))
@@ -89,26 +95,33 @@ pub async fn live(
             "method_not_allowed",
         ));
     }
-    let principal = state
-        .chat
-        .consume_socket_ticket(&query.ticket)
-        .await
-        .map_err(|_| http_error(axum::http::StatusCode::UNAUTHORIZED, "chat_ticket_invalid"))?;
-    if !matches!(state.admin.principal_is_active(&principal).await, Ok(true)) {
-        return Err(http_error(
-            axum::http::StatusCode::UNAUTHORIZED,
-            "chat_ticket_invalid",
-        ));
+    let invalid = || http_error(axum::http::StatusCode::UNAUTHORIZED, "chat_ticket_invalid");
+    let (ticket, proof) = query.ticket.split_once('.').ok_or_else(invalid)?;
+    // Short, URL-safe, random tickets are generated from exactly 24 bytes.
+    if ticket.len() != 32 {
+        return Err(invalid());
     }
+    let purpose = format!("chat-socket/{ticket}");
+    let (digest, principal) = state.sessions.resolve_ticket(proof, TicketScope::Live { path: &purpose })
+        .await.map_err(|_| invalid())?;
+    let bound = state.chat.consume_socket_ticket(ticket).await.map_err(|_| invalid())?;
+    if bound.role != principal.role || bound.ref_ != principal.ref_
+        || !matches!(state.admin.principal_is_active(&principal).await, Ok(true))
+    {
+        return Err(invalid());
+    }
+    let session = LiveSession { digest, principal };
+    let ws = session.protect(ws, &state, |state, actor| async move {
+        crate::core::chat::can_participate_in_chat(&actor.role)
+            && matches!(state.admin.principal_is_active(&actor).await, Ok(true))
+    });
+    let principal = session.principal;
     Ok(ws
         .on_upgrade(move |socket| chat_socket(state, socket, principal))
         .into_response())
 }
 
 async fn chat_socket(state: AppState, mut socket: WebSocket, principal: Principal) {
-    if !matches!(state.admin.principal_is_active(&principal).await, Ok(true)) {
-        return;
-    }
     let mut receiver = state.chat.hub().subscribe(&principal).await;
     if !send_json(&mut socket, serde_json::json!({"event": "chat.ready"})).await {
         return;
@@ -129,9 +142,6 @@ async fn chat_socket(state: AppState, mut socket: WebSocket, principal: Principa
                 }
             }
             event = receiver.recv() => {
-                if !matches!(state.admin.principal_is_active(&principal).await, Ok(true)) {
-                    break;
-                }
                 match event {
                     Ok(event) => {
                         let Ok(value) = serde_json::to_value(event) else { continue; };
@@ -147,9 +157,7 @@ async fn chat_socket(state: AppState, mut socket: WebSocket, principal: Principa
                 }
             }
             _ = heartbeat.tick() => {
-                if last_inbound.elapsed() > CHAT_HEARTBEAT_INTERVAL * 3
-                    || !matches!(state.admin.principal_is_active(&principal).await, Ok(true))
-                {
+                if last_inbound.elapsed() > CHAT_HEARTBEAT_INTERVAL * 3 {
                     break;
                 }
             }

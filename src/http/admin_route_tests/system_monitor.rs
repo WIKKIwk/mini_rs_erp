@@ -592,3 +592,115 @@ printf '%s\n' "$MINI_ERP_RESTORE_DUMP" >> "$backup_root/restore-calls.log"
         snapshot.source == "pre_restore" && snapshot.status == "ready" && snapshot.verified
     }));
 }
+
+fn live_upgrade(request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    request.header("Connection", "Upgrade")
+        .header("Upgrade", "websocket")
+        .header("Sec-WebSocket-Version", "13")
+        .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+}
+
+async fn open_live(request: reqwest::RequestBuilder) -> reqwest::Upgraded {
+    let response = live_upgrade(request).send().await.unwrap();
+    assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+    response.upgrade().await.unwrap()
+}
+
+async fn assert_live_ended(socket: &mut reqwest::Upgraded) {
+    use tokio::io::AsyncReadExt;
+    match tokio::time::timeout(Duration::from_secs(3), socket.read_u8())
+        .await.expect("revoked socket should close before another payload") {
+        Ok(first) => assert_eq!(first & 0x0f, 8, "expected a WebSocket close frame"),
+        Err(error) => assert!(matches!(error.kind(),
+            std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::ConnectionReset)),
+    }
+}
+
+#[tokio::test]
+async fn monitor_and_chat_streams_stop_after_the_issuing_session_is_revoked() {
+    use crate::core::session::{JsonSessionStore, SessionStore};
+    let mut state = test_state();
+    let sessions = Arc::new(JsonSessionStore::memory());
+    state.sessions = SessionManager::with_store(sessions.clone(), Some(3600));
+    state.chat = crate::core::chat::ChatService::unavailable();
+    assert!(state.system_monitor_hub.mark_started());
+    state.system_monitor_hub.publish(Default::default());
+    let token = session(&state, PrincipalRole::Admin).await;
+    let other_token = session(&state, PrincipalRole::Admin).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}/v1/mobile", listener.local_addr().unwrap());
+    let service = build_router(state.clone());
+    let server = tokio::spawn(async move { axum::serve(listener, service).await.unwrap() });
+    let client = reqwest::Client::new();
+    let monitor = format!("{base}/admin/system/monitor/live");
+    let mut first_monitor = open_live(client.get(&monitor).bearer_auth(&token)).await;
+    let mut other_monitor = open_live(client.get(&monitor).bearer_auth(&other_token)).await;
+    assert_eq!(super::inventory_live::message(&mut first_monitor).await["ok"], true);
+    assert_eq!(super::inventory_live::message(&mut other_monitor).await["ok"], true);
+
+    let issue_chat = || async {
+        let ticket = client.post(format!("{base}/chat/socket-ticket")).bearer_auth(&token)
+            .send().await.unwrap().error_for_status().unwrap().json::<serde_json::Value>().await.unwrap();
+        ticket["ticket"].as_str().unwrap().to_owned()
+    };
+    let live_chat = |ticket: &str| client.get(format!("{base}/chat/live")).query(&[("ticket", ticket)]);
+    let used = issue_chat().await;
+    let outstanding = issue_chat().await;
+    let mut chat = open_live(live_chat(&used)).await;
+    assert_eq!(super::inventory_live::message(&mut chat).await["event"], "chat.ready");
+    assert_eq!(live_upgrade(live_chat(&used)).send().await.unwrap().status(), StatusCode::UNAUTHORIZED);
+
+    state.sessions.delete(&token).await.unwrap();
+    state.system_monitor_hub.publish(Default::default());
+    let event = serde_json::from_value(serde_json::json!({
+        "event_id": "event", "event": "chat.message.created", "conversation_id": "room", "sequence": 1,
+        "message": {"message_id":"message","conversation_id":"room","sender_principal_id":"sender",
+            "sender_role":"admin","sender_ref":"admin","sender_display_name":"Admin","client_message_id":"client",
+            "sequence":1,"type":"text","body":"private","created_at_unix":1}
+    })).unwrap();
+    state.chat.hub().publish(event, &["admin:admin".to_string()]).await;
+    assert_live_ended(&mut first_monitor).await;
+    assert_live_ended(&mut chat).await;
+    assert_eq!(super::inventory_live::message(&mut other_monitor).await["ok"], true);
+    assert_eq!(live_upgrade(live_chat(&outstanding)).send().await.unwrap().status(), StatusCode::UNAUTHORIZED);
+
+    // Expire the still-open connection's backing record without changing its
+    // process-local cache or removing the principal's account.
+    let mut record = sessions.get(&other_token).await.unwrap().unwrap();
+    record.expires_at = Some(time::OffsetDateTime::UNIX_EPOCH);
+    sessions.put(&other_token, &record).await.unwrap();
+    state.system_monitor_hub.publish(Default::default());
+    assert_live_ended(&mut other_monitor).await;
+    server.abort();
+}
+
+#[tokio::test]
+async fn monitor_with_valid_session_stops_when_admin_access_is_removed() {
+    let mut state = test_state();
+    assert!(state.system_monitor_hub.mark_started());
+    state.system_monitor_hub.publish(Default::default());
+    let roles = Arc::new(MemoryRoleDefinitionStore::new());
+    let mut role = RoleDefinition {
+        id: "monitor-reader".into(), label: "Monitor reader".into(),
+        base_role: None, system: false, capability_codes: vec!["admin.access".into()],
+    };
+    roles.put_role_definition(role.clone()).await.unwrap();
+    roles.put_role_assignment(RoleAssignment {
+        principal_role: PrincipalRole::Supplier, principal_ref: "SUP-001".into(),
+        role_id: role.id.clone(), assigned_apparatus: vec![], assigned_item_groups: vec![],
+    }).await.unwrap();
+    state.admin = state.admin.clone().with_role_store(roles.clone());
+    let token = session_for(&state, PrincipalRole::Supplier, "SUP-001").await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let uri = format!("http://{}/v1/mobile/admin/system/monitor/live", listener.local_addr().unwrap());
+    let service = build_router(state.clone());
+    let server = tokio::spawn(async move { axum::serve(listener, service).await.unwrap() });
+    let mut socket = open_live(reqwest::Client::new().get(uri).bearer_auth(&token)).await;
+    assert_eq!(super::inventory_live::message(&mut socket).await["ok"], true);
+    role.capability_codes.clear();
+    roles.put_role_definition(role).await.unwrap();
+    state.system_monitor_hub.publish(Default::default());
+    assert_live_ended(&mut socket).await;
+    assert!(state.sessions.get(&token).await.is_ok());
+    server.abort();
+}

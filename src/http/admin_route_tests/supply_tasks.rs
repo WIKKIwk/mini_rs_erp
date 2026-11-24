@@ -533,9 +533,14 @@ async fn supply_tasks_live_reports_revoked_session_before_closing() {
     state.sessions.delete(&token).await.unwrap();
     state.production_maps.notify_live();
     let denied = live_json(&mut stream).await;
-    assert_eq!(denied["ok"], false);
-    assert_eq!(denied["error"], "unauthorized");
-    assert_eq!(denied["status"], 401);
+    assert_eq!(denied, serde_json::json!({
+        "ok":false,"type":"tasks_error","error":"unauthorized","status":401,"resync":false
+    }));
+    let next = tokio::time::timeout(
+        Duration::from_secs(5),
+        tokio::io::AsyncReadExt::read_u8(&mut stream),
+    ).await.expect("socket closes after the terminal notice").unwrap();
+    assert_eq!(next & 0x0f, 8, "no data follows a revoked session");
     server.abort();
 }
 

@@ -29,6 +29,16 @@ pub async fn production_map_live(
     if method != Method::GET {
         return Err(method_not_allowed());
     }
+    let paged_access = query.paged || query.protocol.as_deref() == Some("page_delta_v1");
+    let ws = session.protect(ws, &state, move |state, actor| async move {
+        if paged_access {
+            require_paged_live_capability(&state, &actor).await.is_ok()
+        } else {
+            require_any_live_capability(&state, &actor).await.is_ok()
+        }
+    }).with_denial_notices(
+        None, Some(r#"{"ok":false,"error":"forbidden"}"#),
+    );
     let principal = session.principal;
     require_any_live_capability(&state, &principal).await?;
     if principal.role == PrincipalRole::RezkaMaster

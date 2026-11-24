@@ -6,20 +6,21 @@ pub async fn warehouse_live(
     axum::Extension(session): axum::Extension<crate::http::router::LiveSession>,
     ws: WebSocketUpgrade,
 ) -> Result<Response, AdminError> {
+    let ws = session.protect(ws, &state, |state, actor| async move {
+        require_capability(&state, &actor, Capability::CatalogItemRead).await.is_ok()
+    });
     let principal = session.principal;
     require_capability(&state, &principal, Capability::CatalogItemRead).await?;
     Ok(ws
-        .on_upgrade(move |socket| warehouse_live_socket(state, socket, principal))
+        .on_upgrade(move |socket| warehouse_live_socket(state, socket))
         .into_response())
 }
 
 async fn warehouse_live_socket(
     state: AppState,
     mut socket: WebSocket,
-    principal: crate::core::auth::models::Principal,
 ) {
     let mut rx = state.warehouse_events.subscribe();
-    let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(20));
     loop {
         tokio::select! {
             inbound = socket.recv() => {
@@ -29,9 +30,6 @@ async fn warehouse_live_socket(
                 }
             }
             received = rx.recv() => {
-                if require_capability(&state, &principal, Capability::CatalogItemRead).await.is_err() {
-                    break;
-                }
                 match received {
                     Ok(event) => match serde_json::to_string(&event) {
                         Ok(payload) => {
@@ -45,11 +43,6 @@ async fn warehouse_live_socket(
                     },
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                }
-            }
-            _ = heartbeat.tick() => {
-                if require_capability(&state, &principal, Capability::CatalogItemRead).await.is_err() {
-                    break;
                 }
             }
         }
