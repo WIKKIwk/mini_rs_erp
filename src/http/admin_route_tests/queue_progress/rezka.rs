@@ -1941,7 +1941,8 @@ async fn grouped_rezka_wip_survives_lamination_and_reenters_same_final_rezka() {
 #[tokio::test]
 async fn rezka_astatka_http_captures_session_and_replays_request() {
     let state = test_state();
-    let token = session(&state, PrincipalRole::Admin).await;
+    let admin = session(&state, PrincipalRole::Admin).await;
+    let token = session_for(&state, PrincipalRole::RezkaMaster, "receipt-master").await;
     let router = build_router(state);
     let station = "apparatus:default:asset-010";
     let order = "zakaz-rezka-astatka-http";
@@ -1950,19 +1951,19 @@ async fn rezka_astatka_http_captures_session_and_replays_request() {
         .oneshot(request_with_body(
             "PUT",
             "/v1/mobile/admin/production-maps",
-            &token,
+            &admin,
             &pechat_order_map_json(order, "Cut receipts", "ASTHTTP", station),
         ))
         .await
         .unwrap();
     assert_eq!(saved.status(), StatusCode::OK);
-    let (status, _) = queue_action_json(
+    let (status, start) = queue_action_json(
         &router,
         &token,
         serde_json::json!({"apparatus":station,"order_id":order,"action":"start"}),
     )
     .await;
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(status, StatusCode::OK, "{start}");
     let endpoint = "/v1/mobile/admin/production-maps/rezka-astatka";
     let query = format!("{endpoint}?apparatus={station}&order_id={order}");
     let snapshot = router
@@ -1977,6 +1978,7 @@ async fn rezka_astatka_http_captures_session_and_replays_request() {
             .as_str()
             .is_some_and(|id| !id.is_empty())
     );
+    assert_eq!(snapshot["session_id"], start["session"]["session_id"]);
     let mut body = serde_json::json!({"apparatus":station,"order_id":order,
         "stage_node_id":snapshot["stage_node_id"], "total_waste":2.5,
         "rezka_bosma_waste":0.0,"rezka_lamination_waste":0.0,"rezka_edge_waste":0.0});
