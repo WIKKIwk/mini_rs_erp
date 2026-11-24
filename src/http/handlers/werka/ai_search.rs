@@ -62,11 +62,11 @@ pub async fn ai_search_suggestion(
     match state
         .werka
         .ai_search_suggestion(WerkaAiSearchImage {
-            bytes: upload.bytes,
+            bytes: upload.bytes.to_vec(),
             mime_type: detect_image_mime_type(
                 upload.filename.as_deref().unwrap_or(""),
                 upload.content_type.as_deref().unwrap_or(""),
-                &upload.bytes_for_mime,
+                upload.bytes,
             ),
         })
         .await
@@ -96,7 +96,7 @@ async fn authorize(
         .map_err(|_| error(StatusCode::UNAUTHORIZED, "unauthorized"))
 }
 
-fn parse_image_upload(headers: &HeaderMap, body: &[u8]) -> Result<ImageUpload, ImageUploadError> {
+fn parse_image_upload<'a>(headers: &HeaderMap, body: &'a [u8]) -> Result<ImageUpload<'a>, ImageUploadError> {
     if body.len() > MAX_UPLOAD_SIZE {
         return Err(ImageUploadError::InvalidUpload);
     }
@@ -122,7 +122,7 @@ fn multipart_boundary(content_type: &str) -> Option<String> {
         .filter(|boundary| !boundary.is_empty())
 }
 
-fn find_multipart_field(body: &[u8], boundary: &str, field: &str) -> Option<ImageUpload> {
+fn find_multipart_field<'a>(body: &'a [u8], boundary: &str, field: &str) -> Option<ImageUpload<'a>> {
     let marker = format!("--{boundary}").into_bytes();
     let mut search_from = 0;
     while let Some(relative) = find_bytes(&body[search_from..], &marker) {
@@ -154,7 +154,7 @@ fn find_multipart_field(body: &[u8], boundary: &str, field: &str) -> Option<Imag
     None
 }
 
-fn parse_part(part: &[u8], field: &str) -> Option<ImageUpload> {
+fn parse_part<'a>(part: &'a [u8], field: &str) -> Option<ImageUpload<'a>> {
     let header_end = find_bytes(part, b"\r\n\r\n")
         .map(|index| (index, 4))
         .or_else(|| find_bytes(part, b"\n\n").map(|index| (index, 2)))?;
@@ -171,10 +171,8 @@ fn parse_part(part: &[u8], field: &str) -> Option<ImageUpload> {
         .find_map(|line| line.split_once(':'))
         .filter(|(key, _)| key.trim().eq_ignore_ascii_case("content-type"))
         .map(|(_, value)| value.trim().to_string());
-    let bytes = part[header_end.0 + header_end.1..].to_vec();
     Some(ImageUpload {
-        bytes_for_mime: bytes.clone(),
-        bytes,
+        bytes: &part[header_end.0 + header_end.1..],
         filename,
         content_type,
     })
@@ -248,9 +246,8 @@ fn error_with_code(status: StatusCode, message: &str, code: &str) -> (StatusCode
     (status, Json(json!({ "error": message, "code": code })))
 }
 
-struct ImageUpload {
-    bytes: Vec<u8>,
-    bytes_for_mime: Vec<u8>,
+struct ImageUpload<'a> {
+    bytes: &'a [u8],
     filename: Option<String>,
     content_type: Option<String>,
 }
@@ -269,6 +266,17 @@ mod tests {
         assert_eq!(detect_image_mime_type("a.jpg", "", b""), "image/jpeg");
         assert_eq!(detect_image_mime_type("a.png", "", b""), "image/png");
         assert_eq!(detect_image_mime_type("", "image/jpg", b""), "image/jpeg");
+    }
+
+    #[test]
+    fn parsed_upload_borrows_the_original_multipart_image_for_mime_detection() {
+        let body = b"--abc\r\nContent-Disposition: form-data; name=\"image\"\r\n\r\n\x89PNG\r\n\x1a\n\r\n--abc--\r\n";
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(axum::http::header::CONTENT_TYPE, "multipart/form-data; boundary=abc".parse().unwrap());
+        let upload = super::parse_image_upload(&headers, body).ok().unwrap();
+        let start = body.iter().position(|&byte| byte == 0x89).unwrap();
+        assert_eq!(upload.bytes.as_ptr(), body[start..].as_ptr());
+        assert_eq!(detect_image_mime_type("", "", upload.bytes), "image/png");
     }
 
     #[test]
