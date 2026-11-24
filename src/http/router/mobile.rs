@@ -14,7 +14,9 @@ pub(super) fn routes(state: AppState) -> Router {
         .merge(core::routes())
         .merge(admin::routes())
         .merge(rezka_master::routes())
-        .layer(TraceLayer::new_for_http())
+        .layer(TraceLayer::new_for_http().make_span_with(|request: &axum::extract::Request| {
+            tracing::debug_span!("http.request", method = %request.method(), path = request.uri().path())
+        }))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             sales::enforce_scope,

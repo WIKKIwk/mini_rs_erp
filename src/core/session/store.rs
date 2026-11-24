@@ -14,14 +14,19 @@ pub use lmdb::LmdbSessionStore;
 
 #[cfg(test)]
 use heed::{BytesDecode, BytesEncode};
-#[cfg(test)]
-use lmdb::session_key;
+pub(crate) use lmdb::session_key;
 #[cfg(test)]
 use lmdb_codec::SessionRecordCodec;
 
 #[async_trait]
 pub trait SessionStore: Send + Sync {
     async fn get(&self, token: &str) -> Result<Option<SessionRecord>, AppError>;
+    /// Resolve a server-private digest without trusting a process-local session cache.
+    async fn get_by_digest(&self, digest: &[u8; 32]) -> Result<Option<SessionRecord>, AppError>;
+    async fn ticket_session(
+        &self,
+        locator: &[u8; 16],
+    ) -> Result<Option<([u8; 32], SessionRecord)>, AppError>;
     async fn put(&self, token: &str, record: &SessionRecord) -> Result<(), AppError>;
     async fn delete(&self, token: &str) -> Result<(), AppError>;
     async fn delete_for_principal(

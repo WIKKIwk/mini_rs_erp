@@ -79,6 +79,27 @@ impl SessionStore for LmdbSessionStore {
         Ok(None)
     }
 
+    async fn get_by_digest(&self, digest: &[u8; 32]) -> Result<Option<SessionRecord>, AppError> {
+        let txn = self.env.read_txn().map_err(lmdb_error)?;
+        self.db.get(&txn, digest).map_err(lmdb_error)
+    }
+
+    async fn ticket_session(
+        &self,
+        locator: &[u8; 16],
+    ) -> Result<Option<([u8; 32], SessionRecord)>, AppError> {
+        let txn = self.env.read_txn().map_err(lmdb_error)?;
+        let mut matches = self.db.prefix_iter(&txn, locator).map_err(lmdb_error)?;
+        let Some((key, record)) = matches.next().transpose().map_err(lmdb_error)? else {
+            return Ok(None);
+        };
+        // Fail closed for an ambiguous prefix.
+        if matches.next().transpose().map_err(lmdb_error)?.is_some() {
+            return Ok(None);
+        }
+        Ok(<[u8; 32]>::try_from(key).ok().map(|key| (key, record)))
+    }
+
     async fn put(&self, token: &str, record: &SessionRecord) -> Result<(), AppError> {
         let key = session_key(token);
         let _guard = self.write_lock.lock().await;
@@ -222,7 +243,7 @@ impl LmdbSessionStore {
     }
 }
 
-pub(super) fn session_key(token: &str) -> [u8; 32] {
+pub(crate) fn session_key(token: &str) -> [u8; 32] {
     Sha256::digest(token.as_bytes()).into()
 }
 

@@ -55,6 +55,26 @@ impl JsonSessionStore {
         Ok(())
     }
 
+    async fn find_by_digest(
+        &self,
+        prefix: &[u8],
+    ) -> Result<Option<([u8; 32], SessionRecord)>, AppError> {
+        let find = |sessions: &BTreeMap<String, SessionRecord>| {
+            let mut matches = sessions.iter().filter_map(|(token, record)| {
+                let digest = super::session_key(token);
+                digest.starts_with(prefix).then_some((digest, record))
+            });
+            let (digest, record) = matches.next()?;
+            matches.next().is_none().then(|| (digest, record.clone()))
+        };
+        // Other ERP processes can revoke a session in the persisted snapshot.
+        if let Some(path) = &self.path {
+            let sessions = json_file::read_map(path).await?;
+            return Ok(find(&sessions));
+        }
+        Ok(find(&self.state.lock().await.sessions))
+    }
+
     async fn save(&self, state: &JsonSessionState) -> Result<(), AppError> {
         if let Some(path) = &self.path {
             json_file::write_pretty(path, &state.sessions).await?;
@@ -69,6 +89,17 @@ impl SessionStore for JsonSessionStore {
         let mut state = self.state.lock().await;
         self.load_if_needed(&mut state).await?;
         Ok(state.sessions.get(token).cloned())
+    }
+
+    async fn get_by_digest(&self, digest: &[u8; 32]) -> Result<Option<SessionRecord>, AppError> {
+        Ok(self.find_by_digest(digest).await?.map(|(_, record)| record))
+    }
+
+    async fn ticket_session(
+        &self,
+        locator: &[u8; 16],
+    ) -> Result<Option<([u8; 32], SessionRecord)>, AppError> {
+        self.find_by_digest(locator).await
     }
 
     async fn put(&self, token: &str, record: &SessionRecord) -> Result<(), AppError> {

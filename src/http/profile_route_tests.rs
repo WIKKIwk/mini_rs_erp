@@ -90,17 +90,15 @@ async fn profile_avatar_upload_persists_worker_avatar_without_r2() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let value = json_body(response).await;
-    assert!(
-        value["avatar_url"]
-            .as_str()
-            .unwrap_or_default()
-            .starts_with("https://mobile.test/v1/mobile/profile/avatar/view?token=")
-    );
+    let avatar_url = value["avatar_url"].as_str().unwrap();
+    assert!(avatar_url.starts_with("https://mobile.test/v1/mobile/profile/avatar/view?ticket="));
+    assert!(!avatar_url.contains(&token));
+    let avatar_uri: axum::http::Uri = avatar_url.parse().unwrap();
 
     let view = app
         .oneshot(
             Request::builder()
-                .uri(format!("/v1/mobile/profile/avatar/view?token={token}"))
+                .uri(avatar_uri.path_and_query().unwrap().as_str())
                 .body(Body::empty())
                 .expect("request"),
         )
@@ -160,9 +158,8 @@ async fn authenticated_user_can_view_another_profile_avatar_by_vault_identity() 
     let response = build_router(state)
         .oneshot(
             Request::builder()
-                .uri(format!(
-                    "/v1/mobile/profile/avatar/view?role=worker&ref=worker_001&token={viewer_token}"
-                ))
+                .uri("/v1/mobile/profile/avatar/view?role=worker&ref=worker_001")
+                .header(header::AUTHORIZATION, format!("Bearer {viewer_token}"))
                 .body(Body::empty())
                 .expect("request"),
         )
@@ -353,10 +350,11 @@ async fn profile_avatar_upload_returns_proxied_supplier_avatar_like_go() {
         .expect("response");
 
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(
-        json_body(response).await["avatar_url"],
-        format!("https://mobile.test/v1/mobile/profile/avatar/view?token={token}&v=uploaded.png")
-    );
+    let payload = json_body(response).await;
+    let url = payload["avatar_url"].as_str().unwrap();
+    assert!(url.starts_with("https://mobile.test/v1/mobile/profile/avatar/view?ticket="));
+    assert!(url.ends_with("&v=uploaded.png"));
+    assert!(!url.contains(&token));
 }
 
 #[tokio::test]
@@ -404,46 +402,18 @@ async fn profile_avatar_upload_returns_worker_storage_avatar() {
 }
 
 #[tokio::test]
-async fn avatar_view_accepts_token_query_with_any_method_like_go() {
-    let mut state = test_state();
-    state.profiles = ProfileService::new("http://files.test".to_string())
-        .with_profile_lookup(Arc::new(FakeLookup));
-    let token = state
-        .sessions
-        .create(Principal {
-            role: PrincipalRole::Supplier,
-            display_name: "Supplier".to_string(),
-            legal_name: "Supplier".to_string(),
-            ref_: "SUP-001".to_string(),
-            phone: "+998901234567".to_string(),
-            avatar_url: "http://files.test/files/uploaded.png".to_string(),
-        })
-        .await
-        .expect("session");
-
-    let response = build_router(state)
-        .oneshot(
+async fn avatar_routes_reject_full_account_tokens_in_query_strings() {
+    let state = test_state();
+    let token = supplier_session(&state).await;
+    let app = build_router(state);
+    for path in ["/v1/mobile/profile/avatar/view", "/v1/mobile/admin/profile/avatar/view"] {
+        let response = app.clone().oneshot(
             Request::builder()
-                .method("POST")
-                .uri(format!("/v1/mobile/profile/avatar/view?token={token}"))
-                .body(Body::empty())
-                .expect("request"),
-        )
-        .await
-        .expect("response");
-
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(
-        response
-            .headers()
-            .get(header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok()),
-        Some("image/png")
-    );
-    let bytes = to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("body");
-    assert_eq!(&bytes[..], b"png");
+                .uri(format!("{path}?token={token}"))
+                .body(Body::empty()).unwrap(),
+        ).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
 }
 
 async fn supplier_session(state: &AppState) -> String {

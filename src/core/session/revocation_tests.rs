@@ -25,6 +25,14 @@ impl SessionStore for PausedReadStore {
         Ok(record)
     }
 
+    async fn get_by_digest(&self, digest: &[u8; 32]) -> Result<Option<SessionRecord>, AppError> {
+        self.inner.get_by_digest(digest).await
+    }
+
+    async fn ticket_session(&self, locator: &[u8; 16]) -> Result<Option<([u8; 32], SessionRecord)>, AppError> {
+        self.inner.ticket_session(locator).await
+    }
+
     async fn put(&self, token: &str, record: &SessionRecord) -> Result<(), AppError> {
         self.inner.put(token, record).await
     }

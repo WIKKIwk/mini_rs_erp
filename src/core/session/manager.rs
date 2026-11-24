@@ -108,6 +108,33 @@ impl SessionManager {
         Ok(principal)
     }
 
+    pub async fn get_by_digest(&self, digest: &[u8; 32]) -> Result<Principal, AppError> {
+        let _operation = self.operations.read().await;
+        let record = self.store.get_by_digest(digest).await?.ok_or(AppError::Unauthorized)?;
+        self.active_session_principal(record).await
+    }
+
+    pub(crate) async fn resolve_ticket(
+        &self,
+        ticket: &str,
+        scope: super::scoped_ticket::TicketScope<'_>,
+    ) -> Result<([u8; 32], Principal), AppError> {
+        let ticket = super::scoped_ticket::ScopedTicket::parse(ticket)?;
+        let _operation = self.operations.read().await;
+        let (digest, record) = self.store.ticket_session(ticket.locator()).await?
+            .ok_or(AppError::Unauthorized)?;
+        ticket.verify(&digest, scope)?;
+        Ok((digest, self.active_session_principal(record).await?))
+    }
+
+    async fn active_session_principal(&self, record: SessionRecord) -> Result<Principal, AppError> {
+        if record.is_expired(time::OffsetDateTime::now_utc()) {
+            return Err(AppError::Unauthorized);
+        }
+        self.require_active(&record.principal).await?;
+        Ok(record.principal)
+    }
+
     pub async fn delete(&self, token: &str) -> Result<(), AppError> {
         let _operation = self.operations.write().await;
         self.delete_record(token).await
@@ -199,6 +226,14 @@ mod tests {
     impl SessionStore for FailingSessionStore {
         async fn get(&self, _token: &str) -> Result<Option<SessionRecord>, AppError> {
             Err(AppError::Storage("session get failed".to_string()))
+        }
+
+        async fn get_by_digest(&self, _: &[u8; 32]) -> Result<Option<SessionRecord>, AppError> {
+            Err(AppError::Storage("session lookup failed".into()))
+        }
+
+        async fn ticket_session(&self, _: &[u8; 16]) -> Result<Option<([u8; 32], SessionRecord)>, AppError> {
+            Err(AppError::Storage("session lookup failed".into()))
         }
 
         async fn put(&self, _token: &str, _record: &SessionRecord) -> Result<(), AppError> {

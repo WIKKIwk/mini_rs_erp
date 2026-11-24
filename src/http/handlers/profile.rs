@@ -19,6 +19,8 @@ const AVATAR_BODY_LIMIT: usize = 5 * 1024 * 1024;
 #[derive(Debug, Deserialize)]
 pub struct AvatarViewQuery {
     token: Option<String>,
+    ticket: Option<String>,
+    v: Option<String>,
     role: Option<String>,
     #[serde(rename = "ref")]
     ref_: Option<String>,
@@ -203,27 +205,9 @@ pub async fn avatar_view(
     headers: HeaderMap,
     Query(query): Query<AvatarViewQuery>,
 ) -> Response {
-    let token = match query
-        .token
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        Some(token) => token.to_string(),
-        None => match bearer_token(&headers) {
-            Some(token) => token,
-            None => return unauthorized().into_response(),
-        },
-    };
-
-    let principal = match state.sessions.get(&token).await {
-        Ok(principal) => principal,
-        Err(AppError::Unauthorized) => return unauthorized().into_response(),
-        Err(error) => {
-            tracing::error!(%error, "session lookup failed while viewing avatar");
-            return internal_error("session store failed").into_response();
-        }
-    };
+    if query.token.is_some() {
+        return unauthorized().into_response();
+    }
     let requested_role = query
         .role
         .as_deref()
@@ -243,6 +227,33 @@ pub async fn avatar_view(
         )
             .into_response();
     }
+    let header_token = bearer_token(&headers);
+    let principal = if let Some(ticket) = query.ticket.as_deref() {
+        let scope = crate::core::session::scoped_ticket::TicketScope::Avatar {
+            profile: requested_role.zip(requested_ref),
+            version: query.v.as_deref().unwrap_or_default(),
+        };
+        state.sessions.resolve_ticket(ticket, scope).await.and_then(|(digest, principal)| {
+            if header_token.as_deref().is_some_and(|token| {
+                crate::core::session::session_digest(token) != digest
+            }) {
+                return Err(AppError::Unauthorized);
+            }
+            Ok(principal)
+        })
+    } else if let Some(token) = header_token {
+        state.sessions.get(&token).await
+    } else {
+        Err(AppError::Unauthorized)
+    };
+    let principal = match principal {
+        Ok(principal) => principal,
+        Err(AppError::Unauthorized) => return unauthorized().into_response(),
+        Err(error) => {
+            tracing::error!(%error, "session lookup failed while viewing avatar");
+            return internal_error("session store failed").into_response();
+        }
+    };
     let file = match (requested_role, requested_ref) {
         (Some(role), Some(ref_)) => state.profiles.download_avatar_for_profile(role, ref_).await,
         _ => state.profiles.download_avatar(principal).await,
@@ -250,6 +261,7 @@ pub async fn avatar_view(
     match file {
         Ok(Some(file)) => {
             let mut response = Body::from(file.body).into_response();
+            response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
             if !file.content_type.trim().is_empty() {
                 response.headers_mut().insert(
                     header::CONTENT_TYPE,

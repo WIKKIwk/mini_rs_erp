@@ -241,14 +241,10 @@ pub async fn admin_profile_avatar_view(
     if method != Method::GET {
         return method_not_allowed().into_response();
     }
-    let token = query
-        .token
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .or_else(|| bearer_token(&headers));
-    let Some(token) = token else {
+    if query.token.is_some() {
+        return unauthorized().into_response();
+    }
+    let Some(token) = bearer_token(&headers) else {
         return unauthorized().into_response();
     };
     let Ok(principal) = state.sessions.get(&token).await else {

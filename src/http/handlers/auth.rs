@@ -11,6 +11,7 @@ use crate::core::auth::models::{LoginRequest, LoginResponse, Principal, Principa
 use crate::core::auth::service::AuthError;
 use crate::core::authz::Capability;
 use crate::error::AppError;
+use crate::core::session::scoped_ticket::{TicketScope, issue_ticket};
 
 pub async fn login(
     State(state): State<AppState>,
@@ -227,12 +228,11 @@ pub(crate) fn with_avatar_proxy(
         return principal;
     };
 
+    let version = avatar_version(&principal.avatar_url);
+    let ticket = issue_ticket(token, TicketScope::Avatar { profile: None, version });
     principal.avatar_url = format!(
-        "{}://{}/v1/mobile/profile/avatar/view?token={}&v={}",
-        request_scheme(headers),
-        host,
-        urlencoding::encode(token.trim()),
-        urlencoding::encode(avatar_version(&principal.avatar_url))
+        "{}://{}/v1/mobile/profile/avatar/view?ticket={ticket}&v={}",
+        request_scheme(headers), host, urlencoding::encode(version)
     );
     principal
 }
@@ -256,14 +256,16 @@ pub(crate) fn profile_avatar_proxy_url(
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
         .filter(|value| !value.is_empty())?;
+    let version = avatar_version(avatar_url);
+    let scope = TicketScope::Avatar { profile: Some((role_key, principal_ref)), version };
+    let ticket = issue_ticket(token, scope);
     Some(format!(
-        "{}://{}/v1/mobile/profile/avatar/view?role={}&ref={}&token={}&v={}",
+        "{}://{}/v1/mobile/profile/avatar/view?role={}&ref={}&ticket={ticket}&v={}",
         request_scheme(headers),
         host,
         urlencoding::encode(role_key.trim()),
         urlencoding::encode(principal_ref.trim()),
-        urlencoding::encode(token.trim()),
-        urlencoding::encode(avatar_version(avatar_url))
+        urlencoding::encode(version)
     ))
 }
 
@@ -412,7 +414,7 @@ mod tests {
     use crate::core::auth::models::{Principal, PrincipalRole};
 
     #[test]
-    fn supplier_avatar_uses_token_proxy_url() {
+    fn supplier_avatar_uses_scoped_ticket_url() {
         let mut headers = HeaderMap::new();
         headers.insert("host", HeaderValue::from_static("mobile.test"));
 
@@ -429,10 +431,9 @@ mod tests {
             "abc token",
         );
 
-        assert_eq!(
-            principal.avatar_url,
-            "https://mobile.test/v1/mobile/profile/avatar/view?token=abc%20token&v=avatar.png"
-        );
+        assert!(principal.avatar_url.starts_with("https://mobile.test/v1/mobile/profile/avatar/view?ticket="));
+        assert!(principal.avatar_url.ends_with("&v=avatar.png"));
+        assert!(!principal.avatar_url.contains("token="));
     }
 
     #[test]
@@ -453,10 +454,9 @@ mod tests {
             "token",
         );
 
-        assert_eq!(
-            principal.avatar_url,
-            "http://127.0.0.1:18081/v1/mobile/profile/avatar/view?token=token&v=avatar.jpg"
-        );
+        assert!(principal.avatar_url.starts_with("http://127.0.0.1:18081/v1/mobile/profile/avatar/view?ticket="));
+        assert!(principal.avatar_url.ends_with("&v=avatar.jpg"));
+        assert!(!principal.avatar_url.contains("token="));
     }
 
     #[test]
@@ -473,10 +473,9 @@ mod tests {
         )
         .expect("proxy url");
 
-        assert_eq!(
-            url,
-            "https://mobile.test/v1/mobile/profile/avatar/view?role=aparatchi&ref=worker_1&token=viewer%20token&v=abc123.jpg"
-        );
+        assert!(url.starts_with("https://mobile.test/v1/mobile/profile/avatar/view?role=aparatchi&ref=worker_1&ticket="));
+        assert!(url.ends_with("&v=abc123.jpg"));
+        assert!(!url.contains("token="));
     }
 
     #[test]
