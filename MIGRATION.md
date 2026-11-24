@@ -30,7 +30,7 @@ Chat qayta ulanishda o‘zining bir martalik ticketini oladi. Android yangilanis
 
 ## Eski mijozlarni kuzatish
 
-Server muvaffaqiyatli eski upgrade uchun INFO darajasida bitta `legacy_ws_query_connected` hodisasini yozadi. `route` va `role` har doim bor. Mijoz `X-App-Version` yuborsa, xavfsiz versiya qiymati `app_version` maydonida chiqadi. Oddiy Bearer yoki ticket ulanishlari bu hisobga kirmaydi. Bir mijoz qayta ulansa, yana bitta hodisa yoziladi.
+Server muvaffaqiyatli eski upgrade uchun INFO darajasida bitta `legacy_ws_query_connected` hodisasini yozadi. `route` va `role` har doim bor. Mijoz `X-App-Version` yuborsa, versiya `app_version` maydonida chiqadi. Sarlavha sessiya tokenini yoki query parametrlarini takrorlasa, server uning o‘rniga `[redacted]` yozadi. Oddiy Bearer yoki ticket ulanishlari bu hisobga kirmaydi. Bir mijoz qayta ulansa, yana bitta hodisa yoziladi.
 
 Systemd ishlatiladigan serverda quyidagi buyruqlar oqimni ko‘rsatadi va oxirgi 24 soatdagi ulanishlarni sanaydi.
 

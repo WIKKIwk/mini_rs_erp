@@ -154,9 +154,17 @@ async fn legacy_ws_enforces_scope_and_session_and_redacts_all_request_logs() {
         .await
         .unwrap();
     assert_ne!(bad_filter.status(), StatusCode::SWITCHING_PROTOCOLS);
+    let mirrored_version = server
+        .upgrade(WAREHOUSE, &admin)
+        .header("x-app-version", admin.as_str())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(mirrored_version.status(), StatusCode::SWITCHING_PROTOCOLS);
+    drop(mirrored_version);
     let response = server
         .upgrade(WAREHOUSE, &admin)
-        .header("x-app-version", "2.4.1+13")
+        .header("x-app-version", "2.4.1 (build 13)")
         .query(&[("filter", "private-filter")])
         .send()
         .await
@@ -189,8 +197,8 @@ async fn legacy_ws_enforces_scope_and_session_and_redacts_all_request_logs() {
     assert_eq!(opcode, 8, "revoked socket must close before sending data");
 
     let logs = std::fs::read_to_string(log.path()).unwrap();
-    assert_eq!(logs.matches("legacy_ws_query_connected").count(), 1);
-    for safe in ["http.request", WAREHOUSE, "role=Admin", "2.4.1+13"] {
+    assert_eq!(logs.matches("legacy_ws_query_connected").count(), 2);
+    for safe in ["http.request", WAREHOUSE, "role=Admin", "2.4.1 (build 13)", "[redacted]"] {
         assert!(logs.contains(safe), "missing field {safe}");
     }
     for secret in [

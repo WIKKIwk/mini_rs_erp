@@ -139,11 +139,13 @@ pub(super) async fn authenticate(
         return StatusCode::FORBIDDEN.into_response();
     }
     let migration = legacy.then(|| {
-        let version = req.headers().get("x-app-version").and_then(|v| v.to_str().ok())
-            .filter(|v| v.len() <= 64 && !v.is_empty()
-                && v.bytes().all(|b| b.is_ascii_alphanumeric() || b".-+_".contains(&b))
-                && !token.as_deref().is_some_and(|secret| v.contains(secret)));
-        (path.to_owned(), session.principal.role, version.map(str::to_owned))
+        let version = req.headers().get("x-app-version").map(|header| {
+            header.to_str().ok().filter(|v| !v.is_empty() && v.len() <= 128
+                && !v.bytes().any(|b| b.is_ascii_control() || b"?&=".contains(&b))
+                && !token.as_deref().is_some_and(|secret| v.contains(secret)))
+                .unwrap_or("[redacted]").to_owned()
+        });
+        (path.to_owned(), session.principal.role, version)
     });
     req.extensions_mut().insert(session);
     let response = next.run(req).await;
