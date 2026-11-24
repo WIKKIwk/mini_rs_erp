@@ -93,13 +93,30 @@ impl ProfileStorePort for FailingBatchProfileStore {
 
 struct CountingAdminStatePort {
     states: BTreeMap<String, AdminState>,
-    calls: AtomicUsize,
+    snapshot_reads: AtomicUsize,
+    actor_reads: AtomicUsize,
+}
+
+impl CountingAdminStatePort {
+    fn assert_list_reads(&self) {
+        assert_eq!(self.snapshot_reads.load(Ordering::Relaxed), 1);
+        assert!(self.actor_reads.load(Ordering::Relaxed) > 0);
+    }
 }
 
 #[async_trait]
 impl AdminStatePort for CountingAdminStatePort {
+    async fn state(&self, principal_ref: &str) -> Result<AdminState, AdminPortError> {
+        assert_eq!(
+            principal_ref, "admin",
+            "listed users must come from the page snapshot"
+        );
+        self.actor_reads.fetch_add(1, Ordering::Relaxed);
+        Ok(self.states.get(principal_ref).cloned().unwrap_or_default())
+    }
+
     async fn states(&self) -> Result<BTreeMap<String, AdminState>, AdminPortError> {
-        self.calls.fetch_add(1, Ordering::Relaxed);
+        self.snapshot_reads.fetch_add(1, Ordering::Relaxed);
         Ok(self.states.clone())
     }
 
@@ -223,7 +240,8 @@ async fn admin_worker_user_list_uses_one_state_snapshot_and_batch_profiles() {
     }
     let states = Arc::new(CountingAdminStatePort {
         states: BTreeMap::new(),
-        calls: AtomicUsize::new(0),
+        snapshot_reads: AtomicUsize::new(0),
+        actor_reads: AtomicUsize::new(0),
     });
     let profiles = Arc::new(BatchTrackingProfileStore::with_prefs([
         (
@@ -261,7 +279,7 @@ async fn admin_worker_user_list_uses_one_state_snapshot_and_batch_profiles() {
         value["items"][1]["avatar_url"],
         "https://cdn.test/worker-2.jpg"
     );
-    assert_eq!(states.calls.load(Ordering::Relaxed), 1);
+    states.assert_list_reads();
     assert_eq!(profiles.get_many_calls.load(Ordering::Relaxed), 1);
     assert_eq!(profiles.get_calls.load(Ordering::Relaxed), 0);
     assert_eq!(profiles.put_many_calls.load(Ordering::Relaxed), 1);
@@ -363,7 +381,8 @@ async fn admin_system_user_list_preserves_blocked_state_with_one_snapshot() {
                 ..AdminState::default()
             },
         )]),
-        calls: AtomicUsize::new(0),
+        snapshot_reads: AtomicUsize::new(0),
+        actor_reads: AtomicUsize::new(0),
     });
     let profiles = Arc::new(BatchTrackingProfileStore::with_prefs([
         (
@@ -399,7 +418,7 @@ async fn admin_system_user_list_preserves_blocked_state_with_one_snapshot() {
         value["items"][1]["avatar_url"],
         "https://cdn.test/qolipchi-2.jpg"
     );
-    assert_eq!(states.calls.load(Ordering::Relaxed), 1);
+    states.assert_list_reads();
     assert_eq!(profiles.get_many_calls.load(Ordering::Relaxed), 1);
     assert_eq!(profiles.get_calls.load(Ordering::Relaxed), 0);
 }
