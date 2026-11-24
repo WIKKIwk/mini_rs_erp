@@ -4,6 +4,14 @@ pub mod json_research;
 pub mod router;
 pub mod ws;
 
+/// Axum's rejection trace includes the input in its response body. Keep the
+/// path-only request span and status instead, even when RUST_LOG enables trace.
+pub fn safe_request_log_levels() -> tracing_subscriber::filter::Targets {
+    use tracing_subscriber::filter::{LevelFilter, Targets};
+    Targets::new().with_default(LevelFilter::TRACE)
+        .with_target("axum::rejection", LevelFilter::DEBUG)
+}
+
 #[cfg(test)]
 mod admin_route_tests;
 #[cfg(test)]

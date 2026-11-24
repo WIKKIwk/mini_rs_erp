@@ -82,3 +82,10 @@ fn gateway_config_allows_disabling_metrics() {
     let config = GatewayConfig::from_pairs([("MINI_RS_GATEWAY_METRICS_ADDR", "")]).unwrap();
     assert!(config.metrics_addr.is_none());
 }
+
+#[test]
+fn gateway_request_summary_omits_the_whole_query() {
+    let req = pingora_http::RequestHeader::build("GET", b"/live?token=secret&filter=private", None)
+        .unwrap();
+    assert_eq!(super::safe_request_summary(&req), "GET /live");
+}

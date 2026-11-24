@@ -8,6 +8,10 @@ use pingora_core::services::listening::Service;
 use pingora_core::upstreams::peer::HttpPeer;
 use pingora_http::ResponseHeader;
 use pingora_proxy::{ProxyHttp, Session};
+use tracing_subscriber::{
+    filter::{LevelFilter, Targets},
+    prelude::*,
+};
 
 mod config;
 #[cfg(test)]
@@ -39,6 +43,10 @@ impl ProxyHttp for MiniRsGateway {
     type CTX = ();
 
     fn new_ctx(&self) -> Self::CTX {}
+
+    fn request_summary(&self, session: &Session, _ctx: &Self::CTX) -> String {
+        safe_request_summary(session.req_header())
+    }
 
     async fn request_filter(&self, session: &mut Session, _ctx: &mut Self::CTX) -> Result<bool> {
         if session.req_header().uri.path() == self.config.health_path {
@@ -86,13 +94,23 @@ impl ProxyHttp for MiniRsGateway {
     }
 }
 
+fn safe_request_summary(request: &pingora_http::RequestHeader) -> String {
+    format!("{} {}", request.method, request.uri.path())
+}
+
 fn main() {
     dotenvy::dotenv().ok();
-    tracing_subscriber::fmt()
-        .with_env_filter(
+    // Pingora's wire-level debug/trace events include complete request headers.
+    let safe_levels = Targets::new()
+        .with_default(LevelFilter::TRACE)
+        .with_target("pingora", LevelFilter::INFO)
+        .with_target("h2", LevelFilter::INFO);
+    tracing_subscriber::registry()
+        .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
+        .with(tracing_subscriber::fmt::layer().with_filter(safe_levels))
         .init();
 
     let config = GatewayConfig::from_env().expect("valid gateway config");

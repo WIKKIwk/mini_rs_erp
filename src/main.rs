@@ -14,16 +14,18 @@ use std::num::NonZeroUsize;
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::time::sleep;
+use tracing_subscriber::prelude::*;
 
 #[tokio::main]
 async fn main() -> Result<(), error::AppError> {
     dotenvy::dotenv().ok();
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
+    tracing_subscriber::registry()
+        .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
+        .with(tracing_subscriber::fmt::layer().with_filter(http::safe_request_log_levels()))
         .init();
 
     let mut config = AppConfig::from_env()?;
@@ -136,7 +138,7 @@ async fn serve_listener(
 
             if let Err(error) = builder.serve_connection(io, service).with_upgrades().await {
                 tracing::warn!(
-                    error = ?error,
+                    error = %error,
                     %peer_addr,
                     worker,
                     connection_ms = opened_at.elapsed().as_millis(),
