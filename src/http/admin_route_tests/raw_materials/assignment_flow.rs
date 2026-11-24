@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::mini_orders::OrderMaterial;
 
 #[tokio::test]
 async fn raw_material_assignment_orders_only_return_active_orders() {
@@ -58,9 +59,41 @@ async fn raw_material_assignment_orders_only_return_active_orders() {
     assert_eq!(body[0]["map"]["id"], "zakaz-raw-orders");
 }
 
+struct RpsOrderLayer {
+    order_id: &'static str,
+    material: OrderMaterial,
+}
+
+#[async_trait]
+impl MiniOrderSink for RpsOrderLayer {
+    async fn order_materials(&self, order_id: &str) -> Result<Vec<OrderMaterial>, MiniOrderError> {
+        Ok(if order_id == self.order_id {
+            vec![self.material.clone()]
+        } else {
+            Vec::new()
+        })
+    }
+
+    async fn save_order(
+        &self,
+        map: &crate::core::production_map::ProductionMapDefinition,
+        template: &CalculateOrderTemplate,
+    ) -> Result<(), MiniOrderError> {
+        NoopMiniOrderSink.save_order(map, template).await
+    }
+}
+
 #[tokio::test]
 async fn material_taminotchi_rps_batch_can_link_active_order() {
-    let state = test_state();
+    const ORDER_ID: &str = "zakaz-material-rps-order";
+    let mut state = test_state();
+    state.production_orders = Arc::new(RpsOrderLayer {
+        order_id: ORDER_ID,
+        material: OrderMaterial {
+            item: item("ROLL-1000"),
+            microns: vec![35.0],
+        },
+    });
     state
         .admin
         .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
@@ -68,7 +101,7 @@ async fn material_taminotchi_rps_batch_can_link_active_order() {
             principal_ref: "material-rps-order".to_string(),
             role_id: "material_taminotchi".to_string(),
             assigned_apparatus: vec!["apparatus:default:bosma_7".to_string()],
-            assigned_item_groups: vec!["Kraska".to_string()],
+            assigned_item_groups: vec!["Rulon".to_string()],
         })
         .await
         .expect("material assignment");
@@ -94,11 +127,13 @@ async fn material_taminotchi_rps_batch_can_link_active_order() {
             "PUT",
             "/v1/mobile/admin/production-maps",
             &admin_token,
-            &pechat_order_map_json(
-                "zakaz-material-rps-order",
+            &pechat_order_map_json_with_dims(
+                ORDER_ID,
                 "Material RPS order",
                 "8816",
                 "apparatus:default:bosma_7",
+                7,
+                1000.0,
             ),
         ))
         .await
@@ -114,7 +149,7 @@ async fn material_taminotchi_rps_batch_can_link_active_order() {
             &canonical_requirement_set_material_policy_body(
                 "apparatus:default:bosma_7",
                 1,
-                &["Kraska"],
+                &["Rulon"],
                 true,
             ),
         ))
@@ -130,7 +165,9 @@ async fn material_taminotchi_rps_batch_can_link_active_order() {
             r#"{
                 "client_batch_id":"material-rps-order-batch",
                 "driver_url":"http://127.0.0.1:39117",
-                "item_code":"INK-BLACK",
+                "item_code":"ROLL-1000",
+                "width_mm":1000,
+                "micron":35,
                 "item_name":"client supplied name",
                 "warehouse":"Stores - A",
                 "printer":"godex",
@@ -148,7 +185,10 @@ async fn material_taminotchi_rps_batch_can_link_active_order() {
     let body = json_body(started).await;
 
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["batch"]["order_assignment"]["order_id"], "zakaz-material-rps-order");
+    assert_eq!(body["batch"]["order_assignment"]["order_id"], ORDER_ID);
+    assert_eq!(body["batch"]["order_assignment"]["item_code"], "ROLL-1000");
+    assert_eq!(body["batch"]["item_name"], "CPP 1000/35");
+    assert_eq!(body["batch"]["micron"], 35.0);
     assert_eq!(
         body["batch"]["order_assignment"]["apparatus"],
         "apparatus:default:bosma_7"
