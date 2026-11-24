@@ -15,7 +15,7 @@ use crate::core::push::ports::{PushSendError, PushSenderPort, PushTokenStorePort
 
 use self::auth::{ServiceAccount, ServiceAccountTokenProvider};
 use self::payload::FcmPayload;
-use self::token_cleanup::{should_drop_push_token, truncate_token};
+use self::token_cleanup::{should_drop_push_token, token_log_id};
 
 fn discover_service_account_path() -> Option<PathBuf> {
     if let Ok(env) = std::env::var("FCM_SERVICE_ACCOUNT_PATH") {
@@ -129,7 +129,7 @@ impl PushSenderPort for FcmPushSender {
                     tracing::warn!(
                         %error,
                         %key,
-                        token = %truncate_token(&token.token),
+                        token = %token_log_id(&token.token),
                         "push sender request failed"
                     );
                     last_error = Some(PushSendError::SendFailed);
@@ -145,7 +145,7 @@ impl PushSenderPort for FcmPushSender {
             if !status.is_success() {
                 tracing::warn!(
                     %key,
-                    token = %truncate_token(&token.token),
+                    token = %token_log_id(&token.token),
                     status = status.as_u16(),
                     body = %body.trim(),
                     "push sender token failed"
@@ -155,13 +155,13 @@ impl PushSenderPort for FcmPushSender {
                         tracing::warn!(
                             ?error,
                             %key,
-                            token = %truncate_token(&token.token),
+                            token = %token_log_id(&token.token),
                             "push sender failed to drop stale token"
                         );
                     } else {
                         tracing::info!(
                             %key,
-                            token = %truncate_token(&token.token),
+                            token = %token_log_id(&token.token),
                             "push sender dropped stale token"
                         );
                     }
@@ -172,7 +172,7 @@ impl PushSenderPort for FcmPushSender {
             sent_any = true;
             tracing::info!(
                 %key,
-                token = %truncate_token(&token.token),
+                token = %token_log_id(&token.token),
                 "push sender delivered"
             );
         }

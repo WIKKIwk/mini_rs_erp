@@ -93,6 +93,10 @@ async fn require_push_role(
 fn register_error(error: PushServiceError) -> (StatusCode, Json<ErrorResponse>) {
     match error {
         PushServiceError::TokenRequired => token_required(),
+        PushServiceError::InvalidToken => (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse { error: "invalid push token" }),
+        ),
         PushServiceError::StoreFailed => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
@@ -105,6 +109,10 @@ fn register_error(error: PushServiceError) -> (StatusCode, Json<ErrorResponse>) 
 fn delete_error(error: PushServiceError) -> (StatusCode, Json<ErrorResponse>) {
     match error {
         PushServiceError::TokenRequired => token_required(),
+        PushServiceError::InvalidToken => (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse { error: "invalid push token" }),
+        ),
         PushServiceError::StoreFailed => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {

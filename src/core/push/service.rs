@@ -39,6 +39,10 @@ impl PushService {
         if token.trim().is_empty() {
             return Err(PushServiceError::TokenRequired);
         }
+        let token = token.trim();
+        if token.len() > 4096 || !token.bytes().all(|byte| byte.is_ascii_graphic()) {
+            return Err(PushServiceError::InvalidToken);
+        }
         self.store
             .move_token_to_key(&push_token_key(principal), token, platform)
             .await?;

@@ -56,6 +56,9 @@ fn device_error(error: PushServiceError) -> ChatHttpError {
         PushServiceError::TokenRequired => {
             http_error(StatusCode::BAD_REQUEST, "chat_device_token_required")
         }
+        PushServiceError::InvalidToken => {
+            http_error(StatusCode::BAD_REQUEST, "chat_device_token_invalid")
+        }
         PushServiceError::StoreFailed => http_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "chat_device_store_failed",

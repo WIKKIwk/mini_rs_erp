@@ -59,6 +59,23 @@ async fn move_token_to_key_removes_previous_owner_only_like_go() {
     assert_eq!(werka[0].platform, "android");
 }
 
+#[tokio::test]
+async fn registration_rejects_malformed_tokens_before_storage() {
+    use crate::core::push::ports::{PushServiceError, PushTokenStorePort};
+
+    let store = Arc::new(PushTokenStore::new(unique_path()));
+    let service = PushService::new(store.clone());
+    let owner = principal(PrincipalRole::Werka, "werka");
+    let oversized = "a".repeat(4097);
+    for token in ["abcd🙂abcdef🙂", "device token", "a\nb", &oversized] {
+        assert!(matches!(
+            service.register(&owner, token, "ios").await,
+            Err(PushServiceError::InvalidToken)
+        ));
+    }
+    assert!(store.list(&push_token_key(&owner)).await.unwrap().is_empty());
+}
+
 fn principal(role: PrincipalRole, ref_: &str) -> Principal {
     Principal {
         role,

@@ -69,6 +69,8 @@ impl From<PushStoreError> for PushSendError {
 pub enum PushServiceError {
     #[error("token is required")]
     TokenRequired,
+    #[error("invalid push token")]
+    InvalidToken,
     #[error("store failed")]
     StoreFailed,
 }
