@@ -60,6 +60,28 @@ async fn postgres_gscale_receipt_preserves_precision_and_supports_stock_correcti
         .await
         .expect("submit receipt");
 
+    // Historical barcodes differing only by case remain valid. Confirmations
+    // must choose the newest matching draft even with the expression index.
+    sqlx::query(
+        "INSERT INTO mini_gscale_receipts
+             (name, status, item_code, warehouse, qty, uom, barcode, payload_json, updated_at)
+         SELECT 'OLDER-CASE-RECEIPT', status, item_code, warehouse, qty, uom,
+                lower(barcode), payload_json, updated_at - interval '1 day'
+         FROM mini_gscale_receipts WHERE barcode = 'PRECISION-0001'",
+    ).execute(&pool).await.expect("insert older historical case variant");
+    let found = store.material_receipt_by_barcode("Precision-0001").await
+        .expect("case-insensitive receipt lookup").expect("matching receipt");
+    assert_eq!(found.name, draft.name);
+
+    let mut plan_tx = pool.begin().await.expect("plan transaction");
+    sqlx::query("SET LOCAL enable_seqscan = off").execute(&mut *plan_tx).await.unwrap();
+    let plan: Vec<String> = sqlx::query_scalar(
+        "EXPLAIN (COSTS OFF) SELECT name FROM mini_gscale_receipts
+         WHERE lower(barcode) = lower($1) ORDER BY updated_at DESC LIMIT 1",
+    ).bind("Precision-0001").fetch_all(&mut *plan_tx).await.expect("receipt lookup plan");
+    assert!(plan.iter().any(|line| line.contains("idx_gscale_receipts_folded_barcode_updated")), "{plan:?}");
+    plan_tx.rollback().await.unwrap();
+
     let receipt_qty: String = sqlx::query_scalar(
         "SELECT qty::text FROM mini_gscale_receipts WHERE barcode = 'PRECISION-0001'",
     )

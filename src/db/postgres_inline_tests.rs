@@ -145,6 +145,15 @@ mod tests {
     }
 
     #[test]
+    fn receipt_lookup_migration_indexes_folded_barcode_and_latest_timestamp_without_uniqueness() {
+        let (_, sql) = POSTGRES_MIGRATIONS.iter()
+            .find(|(version, _)| *version == "0205_gscale_receipt_barcode_lookup")
+            .expect("registered receipt barcode lookup migration");
+        let sql = sql.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert_eq!(sql, "CREATE INDEX idx_gscale_receipts_folded_barcode_updated ON public.mini_gscale_receipts (lower(barcode), updated_at DESC);");
+    }
+
+    #[test]
     fn postgres_migration_runner_splits_foundation_sql() {
         let statements = split_sql_statements(foundation_migration_sql());
 
