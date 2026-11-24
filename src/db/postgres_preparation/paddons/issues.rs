@@ -24,6 +24,12 @@ pub struct PaddonIssueCreate {
     code: String,
     line_no: i32,
     weights: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    open_unit_no: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    expected_open_kg: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    remainder_kg: Option<String>,
     #[serde(default)]
     destination: Option<Destination>,
 }
@@ -51,6 +57,15 @@ impl PaddonIssueCreate {
                 return Err(PreparationError::Invalid("Manzilni tanlang"));
             }
         }
+        if self.open_unit_no.is_some() != self.expected_open_kg.is_some()
+            || self.open_unit_no.is_some_and(|n| n <= 0)
+            || ((self.open_unit_no.is_some() || self.remainder_kg.is_some())
+                && self.weights.len() != 1)
+        {
+            return Err(PreparationError::Invalid(
+                "Qisman chiqim uchun bitta birlikni tanlang",
+            ));
+        }
         self.weights.iter().map(|kg| decimal(kg)).collect()
     }
 }
@@ -71,8 +86,8 @@ impl PostgresPreparationStore {
     ) -> Result<Vec<Value>, PreparationError> {
         let code = paddon_code(raw)?;
         Ok(sqlx::query_scalar(
-            "SELECT i.response_json
-             FROM mini_raw_material_paddon_issues i
+            "SELECT i.result
+             FROM mini_raw_material_paddon_issue_history i
              JOIN mini_raw_material_paddons p ON p.id = i.paddon_id
              JOIN mini_warehouses w ON w.id = p.warehouse_id
              WHERE p.code = $1 AND p.owner_role = $2 AND p.owner_ref = $3 AND NOT w.is_group
@@ -98,6 +113,8 @@ impl PostgresPreparationStore {
         let actor = &inventory_actor.principal;
         let role = role_code(actor)?;
         let weights = input.quantities()?;
+        let remainder = input.remainder_kg.as_deref().map(decimal).transpose()?;
+        let expected = input.expected_open_kg.as_deref().map(decimal).transpose()?;
         input.code = paddon_code(&input.code)?;
         let request = json!(&input);
         let mut tx = self.pool.begin().await?;
@@ -122,7 +139,7 @@ impl PostgresPreparationStore {
         .await?
         .ok_or(PreparationError::Forbidden)?;
         if let Some((saved, response)) = sqlx::query_as::<_, (Value, Value)>(
-            "SELECT request_json, response_json FROM mini_raw_material_paddon_issues
+            "SELECT request_json, result FROM mini_raw_material_paddon_issue_history
              WHERE paddon_id = $1 AND request_id = $2",
         )
         .bind(&paddon_id)
@@ -169,13 +186,15 @@ impl PostgresPreparationStore {
              FROM mini_raw_material_paddon_units u
              LEFT JOIN mini_raw_material_stock s ON s.id = u.stock_id
              WHERE u.paddon_id = $1 AND u.line_no = $2 AND u.issue_id IS NULL
-               AND (s.id IS NULL OR (lower(s.warehouse) = lower($3) AND s.qty > 0 AND {AVAILABLE_STOCK}))
+               AND (($5::integer IS NULL AND NOT u.opened) OR (u.opened AND u.unit_no=$5))
+               AND (s.id IS NULL OR (lower(s.warehouse) = lower($3) AND s.qty > 0 AND {PADDON_STOCK}))
              ORDER BY u.unit_no LIMIT $4",
         ))
         .bind(&paddon_id)
         .bind(input.line_no)
         .bind(&warehouse)
         .bind(weights.len() as i64)
+        .bind(input.open_unit_no)
         .fetch_all(&mut *tx)
         .await?;
         if candidates.len() != weights.len() {
@@ -187,22 +206,71 @@ impl PostgresPreparationStore {
         let mut assets = Vec::with_capacity(weights.len());
         for (unit, kg) in candidates.iter().zip(weights) {
             let material = &unit.material;
-            let stock = match &unit.stock_id {
-                None => {
-                    receive_paddon_unit(&mut tx, actor, &paddon_id, &warehouse, material, kg)
-                        .await?
-                }
-                Some(stock_id) => {
-                    weigh_paddon_unit(
-                        &mut tx, actor, &warehouse, &paddon_id, &issue_id, stock_id, material, kg,
+            let total = kg + remainder.unwrap_or(0);
+            // Enforce the NUMERIC(18,6) limit on the combined measured weight.
+            decimal(&decimal_text(total))?;
+            if expected.is_some_and(|prior| prior != total) {
+                return Err(PreparationError::Conflict(
+                    "Ochilgan birlikning olingan va qolgan vazni qoldiqqa teng bo‘lishi kerak",
+                ));
+            }
+            let source = match &unit.stock_id {
+                Some(id) => Some(id.clone()),
+                None if remainder.is_some() => Some(
+                    receive_paddon_unit(
+                        &mut tx,
+                        actor,
+                        &paddon_id,
+                        &warehouse,
+                        material,
+                        total,
+                        PaddonEntry::Packed,
                     )
                     .await?
+                    .id,
+                ),
+                None => None,
+            };
+            let stock = if let Some(id) = source {
+                let existing = weigh_paddon_unit(
+                    &mut tx, actor, &warehouse, &paddon_id, &issue_id, &id, material, kg,
+                    remainder, expected,
+                )
+                .await?;
+                if remainder.is_some() {
+                    sqlx::query("UPDATE mini_raw_material_paddon_units SET opened=true,stock_id=$4,
+                        item_code=NULL,unweighed_warehouse_id=NULL WHERE paddon_id=$1 AND line_no=$2 AND unit_no=$3")
+                        .bind(&paddon_id).bind(input.line_no).bind(unit.unit_no).bind(&id)
+                        .execute(&mut *tx).await?;
+                    receive_paddon_unit(
+                        &mut tx,
+                        actor,
+                        &paddon_id,
+                        &warehouse,
+                        material,
+                        kg,
+                        PaddonEntry::Portion(&issue_id),
+                    )
+                    .await?
+                } else {
+                    existing
                 }
+            } else {
+                receive_paddon_unit(
+                    &mut tx,
+                    actor,
+                    &paddon_id,
+                    &warehouse,
+                    material,
+                    kg,
+                    PaddonEntry::Whole(&issue_id),
+                )
+                .await?
             };
             labels.push(json!({
                 "barcode": stock.barcode, "item_code": material.item_code,
                 "item_name": material.item_name, "lot_number": material.lot_number,
-                "kg": decimal_text(kg),
+                "kg": decimal_text(kg), "unit_no":unit.unit_no, "width_mm":material.width_mm, "micron":material.micron,
             }));
             assets.push(InventoryAssetSelector {
                 asset_kind: InventoryAssetKind::RawMaterial,
@@ -210,6 +278,10 @@ impl PostgresPreparationStore {
             });
         }
 
+        let destination_kind = match &input.destination {
+            Some(Destination::State(_)) => "state",
+            _ => "warehouse",
+        };
         let transfer_status = match input.destination {
             Some(Destination::Warehouse(id)) if id != warehouse_id => Some(
                 PostgresInventoryMovementStore::create_transfer_assets_tx(
@@ -252,9 +324,9 @@ impl PostgresPreparationStore {
         };
         let result = json!({
             "issue_id": issue_id, "paddon_code": input.code, "warehouse": warehouse,
-            "destination": destination_name, "label_warehouse": label_warehouse,
+            "destination": destination_name, "destination_kind": destination_kind, "label_warehouse": label_warehouse,
             "transfer_status": transfer_status.map(InventoryTransferStatus::as_str),
-            "labels": labels,
+            "labels": labels, "remainder_kg": remainder.map(decimal_text), "print_tracking": true,
         });
         sqlx::query(
             "INSERT INTO mini_raw_material_paddon_issues
@@ -267,19 +339,21 @@ impl PostgresPreparationStore {
         .bind(&result)
         .execute(&mut *tx)
         .await?;
-        for (unit, asset) in candidates.iter().zip(assets) {
-            sqlx::query(
-                "UPDATE mini_raw_material_paddon_units
+        if remainder.is_none() {
+            for (unit, asset) in candidates.iter().zip(assets) {
+                sqlx::query(
+                    "UPDATE mini_raw_material_paddon_units
                  SET issue_id=$4, stock_id=$5, item_code=NULL, unweighed_warehouse_id=NULL
                  WHERE paddon_id=$1 AND line_no=$2 AND unit_no=$3",
-            )
-            .bind(&paddon_id)
-            .bind(input.line_no)
-            .bind(unit.unit_no)
-            .bind(&issue_id)
-            .bind(asset.asset_ref)
-            .execute(&mut *tx)
-            .await?;
+                )
+                .bind(&paddon_id)
+                .bind(input.line_no)
+                .bind(unit.unit_no)
+                .bind(&issue_id)
+                .bind(asset.asset_ref)
+                .execute(&mut *tx)
+                .await?;
+            }
         }
         tx.commit().await?;
         Ok(result)
@@ -295,6 +369,8 @@ async fn weigh_paddon_unit(
     stock_id: &str,
     material: &PaddonMaterial,
     kg: i64,
+    remainder: Option<i64>,
+    expected: Option<i64>,
 ) -> Result<PaddonStock, PreparationError> {
     let (barcode, available): (String, String) = sqlx::query_as(
         "SELECT barcode, qty::text FROM mini_raw_material_stock WHERE id=$1 FOR UPDATE",
@@ -305,7 +381,7 @@ async fn weigh_paddon_unit(
     // Recheck warehouse, assignments and transfers after taking the stock lock.
     if !sqlx::query_scalar::<_, bool>(&format!(
         "SELECT EXISTS (SELECT 1 FROM mini_raw_material_stock s
-         WHERE s.id=$1 AND lower(s.warehouse)=lower($2) AND s.qty>0 AND {AVAILABLE_STOCK})"
+         WHERE s.id=$1 AND lower(s.warehouse)=lower($2) AND s.qty>0 AND {PADDON_STOCK})"
     ))
     .bind(stock_id)
     .bind(warehouse)
@@ -315,29 +391,52 @@ async fn weigh_paddon_unit(
         return Err(PreparationError::Insufficient);
     }
     let previous_kg = decimal(&available)?;
+    if expected.is_some_and(|value| value != previous_kg) {
+        return Err(PreparationError::Conflict(
+            "Qoldiq o‘zgargan. Paddondagi ma’lumotni yangilang",
+        ));
+    }
     sqlx::query(
-        "UPDATE mini_raw_material_stock SET qty=$2::text::numeric, updated_at=now(),
+        "UPDATE mini_raw_material_stock SET qty=$2::text::numeric, updated_at=now(), status=$5,
          payload_json=payload_json || jsonb_build_object('paddon_issue_id',$3::text,'lot_number',$4::text)
          WHERE id=$1",
     )
     .bind(stock_id)
-    .bind(decimal_text(kg))
+    .bind(decimal_text(remainder.unwrap_or(kg)))
     .bind(issue_id)
     .bind(&material.lot_number)
+    .bind(if remainder.is_some() { "on_paddon" } else { "available" })
     .execute(&mut **tx)
     .await?;
-    record_paddon_weight(
+    record_paddon_event(
         tx,
         actor,
         warehouse,
         material,
         &barcode,
-        kg - previous_kg,
-        Some(previous_kg),
+        kg + remainder.unwrap_or(0) - previous_kg,
+        PaddonEvent::Weighed {
+            previous: previous_kg,
+            packed: remainder.is_some(),
+        },
         issue_id,
         paddon_id,
     )
     .await?;
+    if remainder.is_some() {
+        record_paddon_event(
+            tx,
+            actor,
+            warehouse,
+            material,
+            &barcode,
+            -kg,
+            PaddonEvent::SplitOut,
+            issue_id,
+            paddon_id,
+        )
+        .await?;
+    }
     Ok(PaddonStock {
         id: stock_id.into(),
         barcode,

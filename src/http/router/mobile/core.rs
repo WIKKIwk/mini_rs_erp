@@ -31,6 +31,7 @@ pub(super) fn routes() -> Router<AppState> {
             get(crate::http::handlers::preparation::raw_material_paddon_issues)
                 .post(crate::http::handlers::preparation::issue_raw_material_paddon),
         )
+        .route("/v1/mobile/raw-material-paddons/issues/print", post(crate::http::handlers::preparation::track_paddon_print))
         .route("/v1/mobile/werka/qr/preview", get(crate::http::handlers::admin::werka_qr_preview))
         .route("/v1/mobile/werka/wip/receive", axum::routing::post(crate::http::handlers::admin::werka_wip_receive))
         .route("/v1/mobile/werka/paddons/preview", get(crate::http::handlers::admin::werka_paddon_preview))

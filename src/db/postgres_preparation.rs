@@ -34,7 +34,8 @@ impl From<sqlx::Error> for PreparationError {
 
 // Reuse the shared stock and physical-location authority. A lot can be
 // accounted to this warehouse but physically at an apparatus or in transit.
-const AVAILABLE_STOCK: &str = "s.status = 'available' AND s.reserved_order_id = ''
+macro_rules! free_in_warehouse {
+    () => { "s.reserved_order_id = ''
     AND btrim(COALESCE(s.payload_json->>'inventory_transfer_id', '')) = ''
     AND NOT EXISTS (SELECT 1 FROM mini_raw_material_assignments a WHERE lower(a.barcode) = lower(s.barcode))
     AND NOT EXISTS (
@@ -42,7 +43,11 @@ const AVAILABLE_STOCK: &str = "s.status = 'available' AND s.reserved_order_id = 
         JOIN mini_inventory_locations l ON l.id = p.physical_location_id
         LEFT JOIN mini_warehouses w ON w.id = l.warehouse_id
         WHERE p.asset_kind = 'raw_material' AND lower(p.asset_ref) = lower(s.id)
-          AND (l.kind <> 'warehouse' OR w.name IS NULL OR lower(w.name) <> lower(s.warehouse)))";
+          AND (l.kind <> 'warehouse' OR w.name IS NULL OR lower(w.name) <> lower(s.warehouse)))" };
+}
+
+const AVAILABLE_STOCK: &str = concat!("s.status = 'available' AND ", free_in_warehouse!());
+const PADDON_STOCK: &str = concat!("s.status = 'on_paddon' AND ", free_in_warehouse!());
 
 const PREPARATION_ITEM_GROUP: &str = "Homashyo";
 const PREPARATION_MATERIAL_CHILD_GROUP: &str = "seriyo";
@@ -414,6 +419,7 @@ impl PostgresPreparationStore {
                             WHERE receipt.id = operation.id
                               AND receipt.owner_ref = $1
                               AND stock.status = 'available'
+                              AND stock.payload_json->>'paddon_issue_id' IS NULL
                               AND stock.reserved_order_id = ''
                               AND round(stock.qty::numeric, 6) = receipt.initial_kg
                               AND btrim(COALESCE(stock.payload_json->>'inventory_transfer_id', '')) = ''
@@ -467,6 +473,7 @@ impl PostgresPreparationStore {
                     ) ELSE '{}'::jsonb END
              FROM mini_preparation_operations operation
              WHERE operation.owner_ref = $1 AND operation.kind <> 'material'
+               AND operation.request_json->>'kind' IS DISTINCT FROM 'paddon_portion'
              ORDER BY operation.created_at DESC, operation.id DESC LIMIT 100",
         )
         .bind(owner)
@@ -795,7 +802,7 @@ impl PostgresPreparationStore {
                         FROM mini_raw_material_events event
                         WHERE lower(event.barcode) = lower(stock.barcode)
                           AND event.event_type <> 'receipt_posted'
-                    ) AS downstream_event_exists,
+                    ) OR stock.payload_json->>'paddon_issue_id' IS NOT NULL AS downstream_event_exists,
                     EXISTS (
                         SELECT 1
                         FROM mini_preparation_receipt_reversals reversal
@@ -997,10 +1004,16 @@ impl PostgresPreparationStore {
             let name = material_name_in_warehouse(&mut tx, &actor.ref_, &code, &warehouse).await?;
             let lots = sqlx::query(&format!(
                 "SELECT r.id AS receipt_id, s.id, s.barcode, s.qty::text AS kg
-                FROM mini_preparation_receipts r JOIN mini_raw_material_stock s ON s.id = r.stock_id
-                WHERE r.owner_ref=$1 AND r.item_code=$2 AND s.warehouse=$3
+                FROM mini_raw_material_stock s LEFT JOIN mini_preparation_receipts r ON s.id=r.stock_id
+                WHERE s.item_code=$2 AND s.warehouse=$3 AND (r.owner_ref=$1 OR (
+                    s.payload_json->>'source'='raw_material_paddon' AND EXISTS (
+                       SELECT 1 FROM mini_inventory_transfer_lines tl
+                       JOIN mini_inventory_transfers t ON t.id=tl.transfer_id
+                       JOIN mini_warehouses w ON w.id=t.destination_warehouse_id
+                       WHERE tl.asset_kind='raw_material' AND tl.asset_ref=s.id
+                         AND t.status='received' AND lower(w.name)=lower(s.warehouse))))
                   AND {AVAILABLE_STOCK}
-                ORDER BY r.created_at, r.id FOR UPDATE OF s"
+                ORDER BY coalesce(r.created_at,s.created_at), coalesce(r.id,s.id) FOR UPDATE OF s"
             ))
             .bind(&actor.ref_)
             .bind(&code)
@@ -1017,7 +1030,7 @@ impl PostgresPreparationStore {
                 let remaining = available - used;
                 let stock_id: String = lot.try_get("id")?;
                 let barcode: String = lot.try_get("barcode")?;
-                let receipt_id: String = lot.try_get("receipt_id")?;
+                let receipt_id: Option<String> = lot.try_get("receipt_id")?;
                 // READ COMMITTED takes a fresh snapshot here after any lock
                 // wait. Assigning a barcode can insert a link without changing
                 // the stock row; the pre-lock NOT EXISTS alone is insufficient.
@@ -1026,6 +1039,11 @@ impl PostgresPreparationStore {
                 if !eligible {
                     continue;
                 }
+                let receipt_id = match receipt_id {
+                    Some(id) => id,
+                    None => paddons::received_preparation_lot(&mut tx, actor, &stock_id, &warehouse)
+                        .await?.ok_or(PreparationError::Insufficient)?,
+                };
                 let after = if remaining == 0 {
                     "consumed"
                 } else {

@@ -1,7 +1,7 @@
 use super::*;
 use crate::core::inventory_movements::InventoryActor;
 use crate::db::postgres_preparation::paddons::{
-    PaddonCreate, PaddonIdentity, PaddonIssueCreate, PaddonQuery,
+    PaddonCreate, PaddonIdentity, PaddonIssueCreate, PaddonLabelPrint, PaddonQuery,
 };
 
 async fn paddon_actor(
@@ -129,4 +129,11 @@ pub async fn issue_raw_material_paddon(
     }
     state.production_maps.notify_live();
     Ok(Json(result))
+}
+
+pub async fn track_paddon_print(
+    State(state): State<AppState>, headers: HeaderMap, Json(input): Json<PaddonLabelPrint>,
+) -> Result<Json<Value>, ApiError> {
+    let actor = paddon_actor(&state, &headers, true).await?;
+    Ok(Json(store(&state)?.track_paddon_print(&actor, input).await.map_err(error)?))
 }

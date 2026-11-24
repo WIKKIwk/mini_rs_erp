@@ -351,6 +351,11 @@ async fn receive_transfer_assets_tx(
         .map_err(store_error)?;
         if kind == InventoryAssetKind::RawMaterial {
             insert_raw_material_transfer_events_tx(tx, transfer, line, actor).await?;
+            if actor.principal.role == crate::core::auth::models::PrincipalRole::TayyorlovMasteri {
+                crate::db::postgres_preparation::paddons::received_preparation_lot(
+                    tx, &actor.principal, &line.asset_ref, &transfer.destination_warehouse,
+                ).await.map_err(|_| InventoryMovementError::StoreFailed)?;
+            }
         }
     }
     Ok(())

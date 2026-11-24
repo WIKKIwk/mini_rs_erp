@@ -36,7 +36,7 @@ WITH assets AS (
     FROM mini_raw_material_stock stock
     LEFT JOIN mini_inventory_transfers transfer
       ON transfer.id = stock.payload_json->>'inventory_transfer_id'
-    WHERE stock.qty > 0 AND stock.status NOT IN ('consumed', 'deleted')
+    WHERE stock.qty > 0 AND stock.status NOT IN ('consumed', 'deleted', 'on_paddon')
 
     UNION ALL
 

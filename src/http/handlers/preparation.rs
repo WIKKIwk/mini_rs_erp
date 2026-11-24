@@ -26,7 +26,7 @@ mod paddons;
 pub use material_stock::material_stock;
 pub use paddons::{
     issue_raw_material_paddon, raw_material_paddon_issues, raw_material_paddons,
-    receive_raw_material_paddon,
+    receive_raw_material_paddon, track_paddon_print,
 };
 pub use production_journal::{
     production_batch, production_batches, production_order, production_orders, production_rolls,

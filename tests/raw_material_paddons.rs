@@ -56,7 +56,11 @@ async fn both_roles_receive_only_their_paddons_and_read_live_stock() {
     let options = url.parse::<PgConnectOptions>().unwrap().database(&name);
     let pool = PgPool::connect_with(options.clone()).await.unwrap();
     let checks = pool.clone();
-    let result = tokio::spawn(async move { verify(&checks, options).await }).await;
+    let result = tokio::task::LocalSet::new()
+        .run_until(async move {
+            tokio::task::spawn_local(async move { verify(&checks, options).await }).await
+        })
+        .await;
     pool.close().await;
     sqlx::query(&format!("DROP DATABASE {name} WITH (FORCE)"))
         .execute(&admin)
@@ -73,7 +77,11 @@ async fn verify(pool: &PgPool, options: PgConnectOptions) {
         .bootstrap_factory_defaults()
         .await
         .unwrap();
-    apply_postgres_migrations_through_version(pool, "0202")
+    apply_postgres_migrations_through_version(pool, "0203")
+        .await
+        .unwrap();
+    verify_paddon_upgrade(pool).await;
+    apply_postgres_migrations_through_version(pool, "0204")
         .await
         .unwrap();
     sqlx::raw_sql(
@@ -297,6 +305,20 @@ async fn verify(pool: &PgPool, options: PgConnectOptions) {
     .fetch_one(pool)
     .await
     .unwrap();
+    assert!(matches!(
+        store
+            .issue_raw_material_paddon(
+                &master_inventory,
+                issue(
+                    code,
+                    "master-state-denied",
+                    &["12"],
+                    json!({"kind":"state","id":state})
+                )
+            )
+            .await,
+        Err(PreparationError::Forbidden)
+    ));
     let supply_code = second["paddon_code"].as_str().unwrap();
     let failed = issue(
         supply_code,
@@ -330,6 +352,8 @@ async fn verify(pool: &PgPool, options: PgConnectOptions) {
         .await
         .unwrap();
     assert_eq!(stated["destination"], "Paddon Floor");
+    assert_eq!(stated["destination_kind"], "state");
+    assert_eq!(stated["label_warehouse"], "Supply");
     let barcode = stated["labels"][0]["barcode"].as_str().unwrap();
     let (position, weight, correction): (String, String, String) = sqlx::query_as(
         "SELECT p.physical_location_id, s.qty::text, e.qty_delta::text
@@ -355,6 +379,7 @@ async fn verify(pool: &PgPool, options: PgConnectOptions) {
         .await
         .unwrap();
     assert_eq!(transferred["transfer_status"], "requested");
+    assert_eq!(transferred["destination_kind"], "warehouse");
     let linked_units: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM mini_inventory_transfer_lines WHERE transfer_id=$1",
     )
@@ -369,5 +394,324 @@ async fn verify(pool: &PgPool, options: PgConnectOptions) {
         .unwrap();
     assert_eq!(supplier_after["paddons"][0]["remaining_kg"], "25.000000");
     assert_eq!(supplier_after["paddons"][0]["remaining_count"], 1);
+    verify_partial_and_transfer(pool, &store, &master_inventory, &supply_inventory, &runtime).await;
     runtime.close().await;
+}
+
+async fn verify_partial_and_transfer(
+    pool: &PgPool,
+    store: &PostgresPreparationStore,
+    master: &InventoryActor,
+    supplier: &InventoryActor,
+    runtime: &PgPool,
+) {
+    use mini_rs_erp::core::inventory_movements::{
+        InventoryAssetKind, InventoryAssetSelector, InventoryMovementError,
+        InventoryMovementStorePort, InventoryTransferAction, InventoryTransferActionKind,
+        InventoryTransferCreate,
+    };
+    use mini_rs_erp::core::preparation::{
+        ConsumptionCreate, ConsumptionLine, MaterialResponsibilityAssign,
+    };
+    use mini_rs_erp::db::postgres_inventory_movements::PostgresInventoryMovementStore;
+
+    let material = store
+        .create_material(
+            &master.principal,
+            MaterialCreate {
+                request_id: "packed-granula".into(),
+                warehouse: "Own".into(),
+                name: "TF430".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let item = material["item_code"].as_str().unwrap();
+    let groups = [material["item_group"].as_str().unwrap().to_lowercase()];
+    let paddon = store.receive_raw_material_paddon(&supplier.principal, serde_json::from_value(json!({
+        "request_id":"mixed-pallet","warehouse":"Supply","contents":[
+            {"item_code":item,"lot_number":"PB260139","kind":"bag","count":1,"unit_kg":"25"},
+            {"item_code":item,"lot_number":"PB260139","kind":"roll","count":1},
+            {"item_code":item,"lot_number":"PB260139","kind":"roll","count":1,"width_mm":"500","micron":"40"}
+        ]})).unwrap(),&groups).await.unwrap();
+    let code = paddon["paddon_code"].as_str().unwrap();
+    let list = || store.raw_material_paddons(&supplier.principal, filter("all", code));
+    let before = list().await.unwrap();
+    assert_eq!(before["paddons"][0]["contents"][1]["micron"], Value::Null);
+    assert_eq!(
+        before["paddons"][0]["contents"][2]["width_mm"],
+        "500.000000"
+    );
+    let move_store = PostgresInventoryMovementStore::new(runtime.clone());
+    let id: String = sqlx::query_scalar(
+        "SELECT stock_id FROM mini_raw_material_paddon_units WHERE paddon_id=$1 AND line_no=1",
+    )
+    .bind(paddon["paddon_id"].as_str().unwrap())
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let ordinary = InventoryTransferCreate {
+        source_warehouse_id: "supply".into(),
+        destination_warehouse_id: "own".into(),
+        assets: vec![InventoryAssetSelector {
+            asset_kind: InventoryAssetKind::RawMaterial,
+            asset_ref: id.clone(),
+        }],
+        note: String::new(),
+        idempotency_key: "ordinary-transfer".into(),
+    };
+    assert!(matches!(
+        InventoryMovementStorePort::create_transfer(
+            &move_store,
+            supplier,
+            "ordinary-transfer",
+            &ordinary
+        )
+        .await,
+        Err(InventoryMovementError::AssetUnavailable)
+    ));
+    assert_eq!(list().await.unwrap()["paddons"][0]["remaining_count"], 3);
+
+    let take = |key: &str, line: i32, kg: &str, extra: Value| -> PaddonIssueCreate {
+        let mut v = json!({"request_id":key,"code":code,"line_no":line,"weights":[kg]});
+        v.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        serde_json::from_value(v).unwrap()
+    };
+    let first = || {
+        take(
+            "ten-to-master",
+            1,
+            "10",
+            json!({"remainder_kg":"15","destination":{"kind":"warehouse","id":"own"}}),
+        )
+    };
+    let (a, b) = tokio::join!(
+        store.issue_raw_material_paddon(supplier, first()),
+        store.issue_raw_material_paddon(supplier, first())
+    );
+    let issued = a.unwrap();
+    assert_eq!(issued, b.unwrap());
+    let label = issued["labels"][0]["barcode"].as_str().unwrap();
+    assert_eq!(issued["labels"][0]["kg"], "10.000000");
+    let after = list().await.unwrap();
+    assert_eq!(after["paddons"][0]["remaining_kg"], "15.000000");
+    assert_eq!(after["paddons"][0]["remaining_count"], 3);
+    assert_eq!(after["paddons"][0]["contents"][0]["open_unit_no"], 1);
+    let event_total: (String, i64) = sqlx::query_as(
+        "SELECT sum(qty_delta)::text,count(*) FILTER (WHERE event_type LIKE 'adjustment%')
+        FROM mini_raw_material_events WHERE item_code=$1",
+    )
+    .bind(item)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(event_total.0.parse::<f64>().unwrap(), 25.0);
+    assert_eq!(event_total.1, 0);
+
+    let issue_id = issued["issue_id"].as_str().unwrap();
+    let track = |action: &str, attempt: &str, previous: Option<&str>| {
+        serde_json::from_value(json!({
+        "issue_id":issue_id,"barcode":label,"action":action,"attempt":attempt,"previous_attempt":previous
+    })).unwrap()
+    };
+    assert!(matches!(
+        store
+            .track_paddon_print(&master.principal, track("start", "attempt-one", None))
+            .await,
+        Err(PreparationError::Forbidden)
+    ));
+    store
+        .track_paddon_print(&supplier.principal, track("start", "attempt-one", None))
+        .await
+        .unwrap();
+    let history = || store.raw_material_paddon_issues(&supplier.principal, code);
+    assert_eq!(
+        history().await.unwrap()[0]["print_states"][label]["printed"],
+        false
+    );
+    assert!(matches!(
+        store
+            .track_paddon_print(&supplier.principal, track("start", "other-device", None))
+            .await,
+        Err(PreparationError::Conflict(_))
+    ));
+    store
+        .track_paddon_print(&supplier.principal, track("confirm", "attempt-one", None))
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .issue_raw_material_paddon(supplier, first())
+            .await
+            .unwrap()["print_states"][label]["printed"],
+        true
+    );
+    store
+        .track_paddon_print(
+            &supplier.principal,
+            track("start", "attempt-two", Some("attempt-one")),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        store
+            .track_paddon_print(&supplier.principal, track("confirm", "attempt-one", None))
+            .await,
+        Err(PreparationError::Conflict(_))
+    ));
+
+    let open = |key: &str| {
+        take(
+            key,
+            1,
+            "5",
+            json!({"open_unit_no":1,"expected_open_kg":"15","remainder_kg":"10"}),
+        )
+    };
+    let (one, two) = tokio::join!(
+        store.issue_raw_material_paddon(supplier, open("open-again-1")),
+        store.issue_raw_material_paddon(supplier, open("open-again-2"))
+    );
+    assert_ne!(one.is_ok(), two.is_ok());
+    let remaining = list().await.unwrap();
+    assert_eq!(remaining["paddons"][0]["remaining_kg"], "10.000000");
+    let last = store
+        .issue_raw_material_paddon(
+            supplier,
+            take(
+                "last-open-bag",
+                1,
+                "10",
+                json!({"open_unit_no":1,"expected_open_kg":"10"}),
+            ),
+        )
+        .await
+        .unwrap();
+    assert_ne!(issued["labels"][0]["barcode"], last["labels"][0]["barcode"]);
+    assert_eq!(list().await.unwrap()["paddons"][0]["remaining_count"], 2);
+    let loose = store
+        .issue_raw_material_paddon(
+            supplier,
+            take("unknown-split", 2, "3", json!({"remainder_kg":"4.5"})),
+        )
+        .await
+        .unwrap();
+    assert_eq!(loose["remainder_kg"], "4.500000");
+    assert_eq!(
+        list().await.unwrap()["paddons"][0]["remaining_kg"],
+        "4.500000"
+    );
+
+    sqlx::raw_sql(r#"INSERT INTO mini_calculate_materials(id,lower_name,payload_json)
+        VALUES ('paddon-input','paddon','{"id":"paddon-input","name":"Paddon","active":true}');
+        INSERT INTO mini_production_maps(id,product_code,title,code,map_json,lifecycle_status)
+        VALUES ('paddon-order','P','P','paddon-order','{"order_kg":10}','released');
+        INSERT INTO mini_orders(id,code,order_number,product_name) VALUES ('paddon-order','paddon-order','paddon-order','P');
+        INSERT INTO mini_order_products(id,order_id,product_name,layers_json)
+        VALUES ('paddon-product','paddon-order','P','[{"material_id":"paddon-input","material":"Paddon","micron":"12"}]');"#)
+        .execute(pool).await.unwrap();
+    store
+        .assign_responsibility(MaterialResponsibilityAssign {
+            principal_ref: master.principal.ref_.clone(),
+            material_id: "paddon-input".into(),
+        })
+        .await
+        .unwrap();
+    let consume = || ConsumptionCreate {
+        request_id: "use-paddon-stock".into(),
+        warehouse: "Own".into(),
+        order_id: "paddon-order".into(),
+        expected_order_kg: "10".into(),
+        lines: vec![ConsumptionLine {
+            item_code: item.into(),
+            percent: "100".into(),
+        }],
+    };
+    assert!(matches!(
+        store.consume(&master.principal, consume()).await,
+        Err(PreparationError::Insufficient)
+    ));
+    for (action, actor, key) in [
+        (
+            InventoryTransferActionKind::Approve,
+            master,
+            "approve-paddon",
+        ),
+        (
+            InventoryTransferActionKind::Dispatch,
+            supplier,
+            "dispatch-paddon",
+        ),
+        (
+            InventoryTransferActionKind::Receive,
+            master,
+            "receive-paddon",
+        ),
+    ] {
+        InventoryMovementStorePort::transfer_action(
+            &move_store,
+            actor,
+            issue_id,
+            action,
+            &InventoryTransferAction {
+                note: String::new(),
+                idempotency_key: key.into(),
+            },
+        )
+        .await
+        .unwrap();
+    }
+    let consumed = store.consume(&master.principal, consume()).await.unwrap();
+    assert_eq!(consumed["lines"][0]["kg"], "10.000000");
+    let count:i64=sqlx::query_scalar("SELECT count(*) FROM mini_preparation_allocations a
+        JOIN mini_preparation_receipts r ON a.receipt_id=r.id JOIN mini_raw_material_stock s ON s.id=r.stock_id
+        WHERE s.barcode=$1 AND s.status='consumed' AND r.owner_ref=$2 AND a.kg=10")
+        .bind(label).bind(&master.principal.ref_).fetch_one(pool).await.unwrap();
+    assert_eq!(count, 1);
+}
+
+async fn verify_paddon_upgrade(pool: &PgPool) {
+    // Exercise the upgrade with previous-format records and roll back the fixture.
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::raw_sql(r#"
+        INSERT INTO mini_warehouses (id,name) VALUES ('pre-upgrade','Pre-upgrade');
+        INSERT INTO mini_raw_material_paddons (id,code,owner_role,owner_ref,warehouse_id,request_id,request_json)
+            VALUES ('prior-pallet','XP-000000000000000F','material_taminotchi','previous-user','pre-upgrade','prior-pallet','{}');
+        INSERT INTO mini_raw_material_paddon_issues(id,paddon_id,request_id,request_json,response_json) VALUES
+            ('prior-issue','prior-pallet','prior-issue','{"destination":{"kind":"state","id":"floor"}}','{"labels":[{"barcode":"OLD-4"}]}');
+        INSERT INTO mini_raw_material_stock(id,warehouse,item_code,item_name,barcode,qty,status,reserved_order_id,payload_json)
+        SELECT 'prior-'||n,'Pre-upgrade','P','P','OLD-'||n,25,CASE n WHEN 2 THEN 'reserved' WHEN 3 THEN 'consumed' ELSE 'available' END,
+            CASE n WHEN 2 THEN 'old-order' ELSE '' END,'{"source":"raw_material_paddon"}'::jsonb
+            FROM generate_series(1,4) n;
+        INSERT INTO mini_raw_material_paddon_units(paddon_id,line_no,unit_no,stock_id,kind,lot_number,unit_kg,issue_id)
+        SELECT 'prior-pallet',1,n,'prior-'||n,'bag','L',25,CASE WHEN n=4 THEN 'prior-issue' END FROM generate_series(1,4) n;
+    "#).execute(&mut *tx).await.unwrap();
+    sqlx::raw_sql(include_str!(
+        "../migrations/postgres/0204_raw_material_paddon_custody.sql"
+    ))
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    let states: Vec<String> = sqlx::query_scalar(
+        "SELECT status FROM mini_raw_material_stock WHERE id LIKE 'prior-%' ORDER BY id",
+    )
+    .fetch_all(&mut *tx)
+    .await
+    .unwrap();
+    assert_eq!(states, ["on_paddon", "reserved", "consumed", "available"]);
+    let old: Value = sqlx::query_scalar(
+        "SELECT result FROM mini_raw_material_paddon_issue_history WHERE id='prior-issue'",
+    )
+    .fetch_one(&mut *tx)
+    .await
+    .unwrap();
+    assert_eq!(old["legacy_print"], true);
+    assert_eq!(old["destination_kind"], "state");
+    assert_eq!(old["labels"][0]["barcode"], "OLD-4");
+    let cancelled:String=sqlx::query_scalar("UPDATE mini_raw_material_stock SET status='available',reserved_order_id='' WHERE id='prior-2' RETURNING status")
+        .fetch_one(&mut *tx).await.unwrap();
+    assert_eq!(cancelled, "on_paddon");
+    tx.rollback().await.unwrap();
 }

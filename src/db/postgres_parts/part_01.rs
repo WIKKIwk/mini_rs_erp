@@ -3,7 +3,7 @@ const DEFAULT_MAX_CONNECTIONS: u32 = 16;
 const DEFAULT_ACQUIRE_TIMEOUT_MS: u64 = 500;
 const MIGRATION_LOCK_KEY: i64 = 6_514_811_918_052_026_001;
 
-const POSTGRES_MIGRATIONS: [(&str, &str); 203] = [
+const POSTGRES_MIGRATIONS: [(&str, &str); 204] = [
     (
         "0001_mini_erp_foundation",
         include_str!("../../../migrations/postgres/0001_mini_erp_foundation.sql"),
@@ -825,6 +825,10 @@ const POSTGRES_MIGRATIONS: [(&str, &str); 203] = [
     (
         "0203_preparation_output_note_audience",
         include_str!("../../../migrations/postgres/0203_preparation_output_note_audience.sql"),
+    ),
+    (
+        "0204_raw_material_paddon_custody",
+        include_str!("../../../migrations/postgres/0204_raw_material_paddon_custody.sql"),
     ),
 ];
 

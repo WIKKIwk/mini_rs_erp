@@ -63,6 +63,8 @@ impl PostgresPreparationStore {
              ), movements AS (
                 SELECT e.* FROM mini_raw_material_events e
                 WHERE lower(e.item_code)=lower($2) AND e.qty_delta<>0
+                  AND NOT (e.event_type IN ('split_consumed','split_produced')
+                           AND e.payload_json->>'source' IS NOT DISTINCT FROM 'raw_material_paddon')
                   AND (e.warehouse_key=lower($1) OR EXISTS(
                     SELECT 1 FROM mini_preparation_warehouse_history_names link
                     JOIN mini_warehouses w ON w.id=link.warehouse_id
