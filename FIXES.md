@@ -1,6 +1,6 @@
 # Audit fixes
 
-Branch `audit-fixes` starts at `f093beb7`. The table follows the requested commit order.
+The original `audit-fixes` branch started at `f093beb7`. The table follows its commit order.
 
 | ID | Change | Regression coverage |
 | --- | --- | --- |
@@ -24,7 +24,7 @@ Set `MINI_ERP_CORS_ALLOWED_ORIGINS` to comma-separated browser origins, includin
 
 For the six private, non-chat WebSocket routes, native clients can send an `Authorization: Bearer …` header during the upgrade. Browser clients should first post `{"path":"<exact live route path>"}` to `/v1/mobile/auth/live-ticket` with their bearer header, then use the returned `ticket` as a query parameter within 30 seconds. Refresh the ticket when reconnecting. Avatar consumers can display the URL returned by the API or fetch using their existing authorization header.
 
-## Verification
+## Original audit verification
 
 All 13 requested findings have regression coverage. The suite used a disposable PostgreSQL 18.4 cluster on a private Unix socket in the Samsung checkout. Database fixtures used a separate access-code key.
 
@@ -37,7 +37,7 @@ The first workspace run exposed two regressions. The Qolip cache test now checks
 | Opt-in coverage | The normally ignored PostgreSQL credential-cutover test passed when run explicitly against a separate disposable auth database. The remaining opt-in tests kept their normal skip conditions. |
 | Clippy | `cargo clippy --workspace --all-targets` exited 101 on two existing `clippy::unused_io_amount` errors in the Wi-Fi probe test fixtures at `src/core/system_doctor/wifi/probe.rs:95` and `:145`. Both lines match the starting revision. The same all-target check passed with only this lint allowed. |
 
-## Ten remaining workspace test failures
+## Ten failures recorded during the original audit
 
 | Existing check | Observed result |
 | --- | --- |
@@ -52,4 +52,36 @@ The first workspace run exposed two regressions. The Qolip cache test now checks
 
 For the eight library runtime assertions above, a saved binary built immediately after S01 reproduced the same failures. S01's supplier-directory changes do not participate in those paths. The size check was compared directly against the starting Git tree.
 
-All requested fixes are included. The unrelated failing assertions and the two existing Clippy errors are outside the requested findings.
+The subsequent work on `main` resolved the ten failures above and both Clippy errors.
+
+
+## Pre-existing vs regression
+
+The local tag `pre-audit-baseline` points to `7213a165`, the clean `main` commit at the start of this check. It already contained the 13 fixes and the audit report. The local `audit-fixes` branch had been deleted. Its remote-tracking ref `origin/audit-fixes` pointed to the identical commit, so `git merge --ff-only origin/audit-fixes` reported “Already up to date.” The immediate baseline-to-main diff was empty.
+
+Both comparison runs used `cargo test --workspace --no-fail-fast`, Rust 1.98.1, FFmpeg 7.1.1 and a fresh disposable PostgreSQL 18.4 cluster. Each run produced 2,051 passes, 11 failures and 64 ignored tests. Ten tests failed in both. Two database tests traded outcomes because they raced to create the same cluster-wide role. The post-merge-only failure was addressed first. No code changed between these two measurements.
+
+| Test name | Failed at baseline | Failed after merge | How it was fixed |
+| --- | --- | --- | --- |
+| `postgres_live_foundation_migration_applies_to_clean_database` | No | Yes | A concurrent database bootstrap won the race to create the cluster-wide owner role. Migration 0104 now rolls back to a savepoint and retries that collision once, including the original privilege checks. |
+| `fresh_current_schema_bootstraps_factory_defaults_and_is_restart_stable` | Yes | No | The same owner-role race affected the other database on the first run. The migration runner handles both cases without changing the historical SQL or checksum. |
+| `admin_approves_zero_output_completion_request_and_closes_order_with_issue_history` | Yes | Yes | Persist the approved session before refreshing the lifecycle in both stores. An approved zero-output session closes its own work without fabricating a production report. Active peers still prevent order completion. |
+| `laminatsiya_queue_exposes_start_for_waiting_print_wip_behind_unready_queue_head` | Yes | Yes | Configure the test station for free picking, the policy that permits selecting ready work behind an unready queue head. |
+| `rezka_astatka_http_captures_session_and_replays_request` | Yes | Yes | Run the production start and report requests as the assigned cutting operator. The administrator still creates the order. |
+| `rezka_output_report_reads_only_the_active_card_and_preserves_saved_slots` | Yes | Yes | Use a valid order ID and reuse the loaded map, global control and session. Read the stage hold by its composite key. The test asserts the number of reads. |
+| `rezka_output_report_reads_one_legacy_input_for_missing_contained_kadr_count` | Yes | Yes | The corrected scoped-card path also reaches the legacy fallback. The test retains its single input-batch read assertion. |
+| `material_taminotchi_rps_batch_can_link_active_order` | Yes | Yes | Provide the saved order layer, authorized roll, width and micron in the fixture. Verify the item name and layer assigned by the server. |
+| `admin_system_user_list_preserves_blocked_state_with_one_snapshot` | Yes | Yes | The counting store implements the actor lookup separately, as the JSON and PostgreSQL stores do. It still requires exactly one bulk snapshot and preserves the blocked state. |
+| `admin_worker_user_list_uses_one_state_snapshot_and_batch_profiles` | Yes | Yes | The same fixture rejects per-worker state lookups and verifies one bulk state read and batched profile access. |
+| `service_generates_batch_code_once_and_preserves_it_through_stop` | Yes | Yes | Supply and verify the required positive roll length while retaining the batch-code assertions across start, state and stop. |
+| `rust_source_files_do_not_exceed_500_lines` | Yes | Yes | Split 89 oversized source files, extract long queue and progress operations, and move existing test modules into test files. The original 500-line rule and its exclusions are unchanged. |
+
+### Final verification on main
+
+| Check | Result |
+| --- | --- |
+| `cargo test --workspace` | **2,065 passed, 0 failed, 64 ignored**, across 72 test harnesses and doctest runs. The fresh PostgreSQL cluster recorded the same owner-role collision. Both previously affected tests passed. |
+| `cargo clippy --workspace --all-targets` | **Passed** with existing warnings. Both `clippy::unused_io_amount` errors were fixed by consuming HTTP request lines through the header terminator in the shared Wi-Fi probe fixture. |
+| Lint suppressions | The baseline-to-final comparison found 24 Rust lint allowances in the affected files both before and after. Existing allowances moved with their items. No new allowance or Clippy configuration change was introduced. |
+
+Three additional regression tests cover the owner-role retry and privilege errors, approved zero-output work with an active peer, and the effect of a hold on the current versus another cutting stage. The final run also passed the real database reset and voice-media conversion tests. All ten code fixes have individual commits on `main`.
