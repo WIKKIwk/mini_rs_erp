@@ -84,15 +84,27 @@ impl InternetProbe for HttpsInternetProbe {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-    async fn fixture(response: &'static str) -> Url {
+    async fn fixture(response: impl Into<String>) -> Url {
+        let response = response.into();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.unwrap();
-            let mut request = [0_u8; 4096];
-            stream.read(&mut request).await.unwrap();
+            let mut lines = BufReader::new(&mut stream).lines();
+            let request_line = lines.next_line().await.unwrap().expect("HTTP request line");
+            assert!(request_line.starts_with("GET "));
+            loop {
+                let line = lines
+                    .next_line()
+                    .await
+                    .unwrap()
+                    .expect("complete HTTP headers");
+                if line.is_empty() {
+                    break;
+                }
+            }
             stream.write_all(response.as_bytes()).await.unwrap();
         });
         Url::parse(&format!("http://{address}/check")).unwrap()
@@ -137,18 +149,10 @@ mod tests {
     #[tokio::test]
     async fn redirects_to_a_working_endpoint_are_not_followed() {
         let destination = fixture("HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n").await;
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let mut request = [0_u8; 4096];
-            stream.read(&mut request).await.unwrap();
-            let response = format!(
-                "HTTP/1.1 302 Found\r\nLocation: {destination}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-            );
-            stream.write_all(response.as_bytes()).await.unwrap();
-        });
-        let source = Url::parse(&format!("http://{address}/")).unwrap();
+        let source = fixture(format!(
+            "HTTP/1.1 302 Found\r\nLocation: {destination}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        ))
+        .await;
         assert!(!probe(vec![source]).has_internet().await.unwrap());
     }
 
