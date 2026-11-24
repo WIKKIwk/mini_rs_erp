@@ -36,17 +36,14 @@ impl InventoryLiveServer {
             },
             "version":version.unwrap_or_default(),
         }]);
-        // The native/web client supplies URL subscriptions and a query token.
-        // Exercise that exact path, including typed JSON limits and flags.
+        // Exercise the native header transport with URL-encoded subscriptions.
         self.client
             .get(format!(
                 "http://{}/v1/mobile/admin/inventory/live",
                 self.address
             ))
-            .query(&[
-                ("token", token),
-                ("subscriptions", &subscriptions.to_string()),
-            ])
+            .bearer_auth(token)
+            .query(&[("subscriptions", subscriptions.to_string())])
             .header("Connection", "Upgrade")
             .header("Upgrade", "websocket")
             .header("Sec-WebSocket-Version", "13")

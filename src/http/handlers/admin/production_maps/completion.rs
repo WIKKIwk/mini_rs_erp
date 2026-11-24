@@ -23,13 +23,13 @@ pub async fn production_map_live(
     State(state): State<AppState>,
     Query(query): Query<ProductionMapLiveQuery>,
     method: Method,
-    headers: HeaderMap,
+    axum::Extension(session): axum::Extension<crate::http::router::LiveSession>,
     ws: WebSocketUpgrade,
 ) -> Result<Response, AdminError> {
     if method != Method::GET {
         return Err(method_not_allowed());
     }
-    let principal = authenticated_principal_for_live(&state, &headers, &query.token).await?;
+    let principal = session.principal;
     require_any_live_capability(&state, &principal).await?;
     if principal.role == PrincipalRole::RezkaMaster
         && (query.paged || !matches!(query.protocol.as_deref(), Some("state_delta_v1" | "state_delta_v2")))
@@ -110,8 +110,6 @@ pub async fn production_map_live(
 #[derive(Default, serde::Deserialize)]
 pub struct ProductionMapLiveQuery {
     #[serde(default)]
-    token: String,
-    #[serde(default)]
     protocol: Option<String>,
     #[serde(default)]
     epoch: String,
@@ -133,20 +131,6 @@ pub struct ProductionMapLiveQuery {
     pages: String,
     #[serde(default)]
     projection: String,
-}
-
-pub(super) async fn authenticated_principal_for_live(
-    state: &AppState,
-    headers: &HeaderMap,
-    query_token: &str,
-) -> Result<Principal, AdminError> {
-    let token = query_token.trim().to_string();
-    let token = if token.is_empty() {
-        bearer_token(headers).ok_or_else(unauthorized)?
-    } else {
-        token
-    };
-    state.sessions.get(&token).await.map_err(|_| unauthorized())
 }
 
 pub(super) async fn require_any_live_capability(

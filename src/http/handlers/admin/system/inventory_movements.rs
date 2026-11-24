@@ -283,6 +283,12 @@ pub(super) async fn inventory_actor(
     let principal = authorize_any_capability(state, headers, &[
         Capability::InventoryMovementManage, Capability::PreparationAccess,
     ]).await?;
+    inventory_actor_for_principal(state, principal).await
+}
+
+pub(super) async fn inventory_actor_for_principal(
+    state: &AppState, principal: Principal,
+) -> Result<InventoryActor, AdminError> {
     if principal.role == PrincipalRole::TayyorlovMasteri {
         require_capability(state, &principal, Capability::PreparationAccess).await?;
     } else {

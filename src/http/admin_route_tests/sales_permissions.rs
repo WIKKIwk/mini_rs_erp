@@ -296,3 +296,39 @@ async fn sales_order_creation_catalog_requests_pass_authorization() {
     let status = response.status();
     assert_ne!(status, StatusCode::FORBIDDEN, "auto-open: {}", json_body(response).await);
 }
+
+#[tokio::test]
+async fn private_live_streams_enforce_the_same_scope_for_headers_and_path_tickets() {
+    const WAREHOUSE: &str = "/v1/mobile/admin/warehouses/live";
+    const ISSUE: &str = "/v1/mobile/auth/live-ticket";
+    let state = test_state();
+    let sales = session_for(&state, PrincipalRole::SalesManager, "sales-live").await;
+    let admin = session(&state, PrincipalRole::Admin).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = build_router(state.clone());
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let client = reqwest::Client::new();
+    let issue = |token: &str, path: &str| client.post(format!("http://{address}{ISSUE}"))
+        .bearer_auth(token).json(&serde_json::json!({"path": path}));
+    let connect = |path: &str| client.get(format!("http://{address}{path}"))
+        .header("Connection", "Upgrade").header("Upgrade", "websocket")
+        .header("Sec-WebSocket-Version", "13")
+        .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==");
+
+    assert_eq!(connect(WAREHOUSE).bearer_auth(&sales).send().await.unwrap().status(), StatusCode::FORBIDDEN);
+    assert_eq!(issue(&sales, WAREHOUSE).send().await.unwrap().status(), StatusCode::FORBIDDEN);
+    let minted = issue(&admin, WAREHOUSE).send().await.unwrap();
+    assert_eq!(minted.status(), StatusCode::OK);
+    let minted: serde_json::Value = minted.json().await.unwrap();
+    let ticket = urlencoding::encode(minted["ticket"].as_str().unwrap());
+    let path = format!("{WAREHOUSE}?ticket={ticket}");
+    assert_eq!(connect(&path).send().await.unwrap().status(), StatusCode::SWITCHING_PROTOCOLS);
+    assert_eq!(connect(&path).bearer_auth(&sales).send().await.unwrap().status(), StatusCode::UNAUTHORIZED);
+    let other = format!("/v1/mobile/admin/system/monitor/live?ticket={ticket}");
+    assert_eq!(connect(&other).send().await.unwrap().status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(connect(&format!("{WAREHOUSE}?token={sales}")).send().await.unwrap().status(), StatusCode::UNAUTHORIZED);
+    state.sessions.delete(&admin).await.unwrap();
+    assert_eq!(connect(&path).send().await.unwrap().status(), StatusCode::UNAUTHORIZED);
+    server.abort();
+}

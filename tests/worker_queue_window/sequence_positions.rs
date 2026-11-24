@@ -9,12 +9,12 @@ async fn connect(
 ) -> tokio::net::TcpStream {
     let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
     let uri = format!(
-        "/v1/mobile/admin/production-maps/live?token={}&protocol={protocol}&worker_scope=true&queue_limit=5&queue_positions=true&queue_search=zakaz-003&epoch={epoch}&rev={}&scope={}",
-        f.token,
+        "/v1/mobile/admin/production-maps/live?protocol={protocol}&worker_scope=true&queue_limit=5&queue_positions=true&queue_search=zakaz-003&epoch={epoch}&rev={}&scope={}",
         baseline["rev"],
         baseline["scope"].as_str().unwrap()
     );
-    socket.write_all(format!("GET {uri} HTTP/1.1\r\nHost: {address}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n").as_bytes()).await.unwrap();
+    let token = &f.token;
+    socket.write_all(format!("GET {uri} HTTP/1.1\r\nHost: {address}\r\nAuthorization: Bearer {token}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n").as_bytes()).await.unwrap();
     let mut response = Vec::new();
     while !response.ends_with(b"\r\n\r\n") {
         response.push(socket.read_u8().await.unwrap());

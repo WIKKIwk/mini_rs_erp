@@ -44,6 +44,10 @@ async fn authorize(state: &AppState, headers: &HeaderMap) -> Result<Principal, A
             Json(json!({"error":"unauthorized"})),
         )
     })?;
+    require_preparation_access(state, principal).await
+}
+
+async fn require_preparation_access(state: &AppState, principal: Principal) -> Result<Principal, ApiError> {
     if principal.role != PrincipalRole::TayyorlovMasteri
         || !state
             .admin

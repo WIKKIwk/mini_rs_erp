@@ -1,7 +1,7 @@
 //! Session-scoped, bounded list projections. Reads are driven by committed
 //! invalidations, never a periodic list poll. The server diffs canonical windows
 //! so inserts/removals correctly backfill the sorted limit/offset boundary.
-use super::inventory_movements::{inventory_actor, inventory_asset_rows};
+use super::inventory_movements::{inventory_actor_for_principal, inventory_asset_rows};
 use super::*;
 use crate::core::inventory_movements::{
     InventoryActor, InventoryAssetQuery, InventoryTransferQuery,
@@ -20,8 +20,6 @@ static NEXT_CONNECTION: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Default, Deserialize)]
 pub struct InventoryLiveQuery {
-    #[serde(default)]
-    token: String,
     /// Native/Iroh live transports are receive-only. URL subscriptions offer
     /// exactly the same bounded protocol as the optional subscribe message.
     #[serde(default)]
@@ -84,18 +82,10 @@ struct View {
 pub async fn inventory_live(
     State(state): State<AppState>,
     Query(query): Query<InventoryLiveQuery>,
-    mut headers: HeaderMap,
+    axum::Extension(session): axum::Extension<crate::http::router::LiveSession>,
     ws: WebSocketUpgrade,
 ) -> Result<Response, AdminError> {
-    if !query.token.trim().is_empty() {
-        headers.insert(
-            axum::http::header::AUTHORIZATION,
-            format!("Bearer {}", query.token.trim())
-                .parse()
-                .map_err(|_| unauthorized())?,
-        );
-    }
-    let _ = inventory_actor(&state, &headers).await?;
+    inventory_actor_for_principal(&state, session.principal).await?;
     if query.subscriptions.len() > MAX_MESSAGE_BYTES {
         return Err(bad_request("inventory_live_subscriptions_invalid"));
     }
@@ -108,7 +98,7 @@ pub async fn inventory_live(
     validate_subscriptions(&subscriptions)
         .map_err(|_| bad_request("inventory_live_subscriptions_invalid"))?;
     Ok(ws
-        .on_upgrade(move |socket| live_socket(state, socket, headers, subscriptions))
+        .on_upgrade(move |socket| live_socket(state, socket, session.digest, subscriptions))
         .into_response())
 }
 
@@ -168,18 +158,19 @@ fn validate_subscriptions(subscriptions: &[Subscription]) -> Result<(), ()> {
 
 async fn scope(
     state: &AppState,
-    headers: &HeaderMap,
+    digest: &[u8; 32],
 ) -> Result<(InventoryActor, Value), AdminError> {
-    tokio::time::timeout(Duration::from_secs(10), read_scope(state, headers))
+    tokio::time::timeout(Duration::from_secs(10), read_scope(state, digest))
         .await
         .map_err(|_| server_error("inventory live authorization timed out"))?
 }
 
 async fn read_scope(
     state: &AppState,
-    headers: &HeaderMap,
+    digest: &[u8; 32],
 ) -> Result<(InventoryActor, Value), AdminError> {
-    let actor = inventory_actor(state, headers).await?;
+    let principal = state.sessions.get_by_digest(digest).await.map_err(|_| unauthorized())?;
+    let actor = inventory_actor_for_principal(state, principal).await?;
     let mut capabilities = state
         .admin
         .principal_capability_codes(&actor.principal)
@@ -332,13 +323,13 @@ async fn reset(socket: &mut WebSocket) {
 
 async fn initial_views(
     state: &AppState,
-    headers: &HeaderMap,
+    digest: &[u8; 32],
     socket: &mut WebSocket,
     epoch: &str,
     expected_scope: &Value,
     subscriptions: Vec<Subscription>,
 ) -> Result<Vec<View>, LiveError> {
-    let (actor, current_scope) = scope(state, headers).await.map_err(LiveError::from)?;
+    let (actor, current_scope) = scope(state, digest).await.map_err(LiveError::from)?;
     if &current_scope != expected_scope {
         return Err(LiveError::Scope);
     }
@@ -356,7 +347,7 @@ async fn initial_views(
         });
     }
     // A permissions edit racing a database read must not publish old scope.
-    if scope(state, headers).await.map_err(LiveError::from)?.1 != *expected_scope {
+    if scope(state, digest).await.map_err(LiveError::from)?.1 != *expected_scope {
         return Err(LiveError::Scope);
     }
     for view in &loaded {
@@ -375,13 +366,13 @@ async fn initial_views(
 
 async fn refresh_views(
     state: &AppState,
-    headers: &HeaderMap,
+    digest: &[u8; 32],
     socket: &mut WebSocket,
     epoch: &str,
     expected_scope: &Value,
     views: &mut [View],
 ) -> Result<(), LiveError> {
-    let (actor, current_scope) = scope(state, headers).await.map_err(LiveError::from)?;
+    let (actor, current_scope) = scope(state, digest).await.map_err(LiveError::from)?;
     if &current_scope != expected_scope {
         return Err(LiveError::Scope);
     }
@@ -393,7 +384,7 @@ async fn refresh_views(
                 .map_err(LiveError::from)?,
         );
     }
-    if scope(state, headers).await.map_err(LiveError::from)?.1 != *expected_scope {
+    if scope(state, digest).await.map_err(LiveError::from)?.1 != *expected_scope {
         return Err(LiveError::Scope);
     }
     for (view, rows) in views.iter_mut().zip(loaded) {
@@ -432,7 +423,7 @@ async fn fail(socket: &mut WebSocket, error: LiveError) {
 async fn live_socket(
     state: AppState,
     mut socket: WebSocket,
-    headers: HeaderMap,
+    digest: [u8; 32],
     subscriptions: Vec<Subscription>,
 ) {
     // Subscribe before the baseline read: commits racing that read remain queued.
@@ -446,7 +437,7 @@ async fn live_socket(
             .as_nanos(),
         NEXT_CONNECTION.fetch_add(1, Ordering::Relaxed)
     );
-    let expected_scope = match scope(&state, &headers).await {
+    let expected_scope = match scope(&state, &digest).await {
         Ok((_, value)) => value,
         Err(error) => {
             fail(&mut socket, error.into()).await;
@@ -455,7 +446,7 @@ async fn live_socket(
     };
     let mut views = match initial_views(
         &state,
-        &headers,
+        &digest,
         &mut socket,
         &epoch,
         &expected_scope,
@@ -479,7 +470,7 @@ async fn live_socket(
                 // A lag is repaired by re-reading this bounded canonical window,
                 // not by trusting incomplete notifications or broadcasting rows.
                 for _ in 0..128 { if changes.try_recv().is_err() { break } }
-                if let Err(error) = refresh_views(&state, &headers, &mut socket, &epoch, &expected_scope, &mut views).await {
+                if let Err(error) = refresh_views(&state, &digest, &mut socket, &epoch, &expected_scope, &mut views).await {
                     fail(&mut socket, error).await; break
                 }
             }
@@ -489,7 +480,7 @@ async fn live_socket(
                         let message = serde_json::from_str::<SubscribeMessage>(&text);
                         let Ok(message) = message else { break };
                         if message.kind != "subscribe" || validate_subscriptions(&message.subscriptions).is_err() { break }
-                        match initial_views(&state, &headers, &mut socket, &epoch, &expected_scope, message.subscriptions).await {
+                        match initial_views(&state, &digest, &mut socket, &epoch, &expected_scope, message.subscriptions).await {
                             Ok(loaded) => views = loaded,
                             Err(error) => { fail(&mut socket, error).await; break }
                         }
@@ -500,7 +491,7 @@ async fn live_socket(
                 }
             }
             _ = heartbeat.tick() => {
-                match scope(&state, &headers).await {
+                match scope(&state, &digest).await {
                     Ok((_, value)) if value == expected_scope => {},
                     Ok(_) => { fail(&mut socket, LiveError::Scope).await; break },
                     Err(error) => { fail(&mut socket, error.into()).await; break },

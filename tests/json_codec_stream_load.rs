@@ -91,7 +91,7 @@ async fn connect(address: SocketAddr, token: &str, query: &str) -> TcpStream {
     tokio::time::timeout(Duration::from_secs(10), async {
         let mut socket = TcpStream::connect(address).await.unwrap();
         socket.set_nodelay(true).unwrap();
-        socket.write_all(format!("GET {LIVE}?token={token}&{query} HTTP/1.1\r\nHost: {address}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n").as_bytes()).await.unwrap();
+        socket.write_all(format!("GET {LIVE}?{query} HTTP/1.1\r\nHost: {address}\r\nAuthorization: Bearer {token}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n").as_bytes()).await.unwrap();
         let mut headers = Vec::new();
         while !headers.ends_with(b"\r\n\r\n") {
             headers.push(socket.read_u8().await.unwrap());

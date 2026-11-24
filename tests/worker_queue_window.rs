@@ -322,14 +322,14 @@ async fn window_is_bounded_revision_scoped_searchable_and_refills_over_websocket
     let router = f.router.clone();
     let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
     let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
+    let token = &f.token;
     let uri = format!(
-        "/v1/mobile/admin/production-maps/live?token={}&protocol=state_delta_v1&worker_scope=true&queue_limit=5&epoch={}&rev={}&scope={}",
-        f.token,
+        "/v1/mobile/admin/production-maps/live?protocol=state_delta_v1&worker_scope=true&queue_limit=5&epoch={}&rev={}&scope={}",
         five["epoch"].as_str().unwrap(),
         five["rev"],
         five["scope"].as_str().unwrap()
     );
-    socket.write_all(format!("GET {uri} HTTP/1.1\r\nHost: {address}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n").as_bytes()).await.unwrap();
+    socket.write_all(format!("GET {uri} HTTP/1.1\r\nHost: {address}\r\nAuthorization: Bearer {token}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n").as_bytes()).await.unwrap();
     let mut response = Vec::new();
     while !response.ends_with(b"\r\n\r\n") {
         response.push(socket.read_u8().await.unwrap());
@@ -345,13 +345,12 @@ async fn window_is_bounded_revision_scoped_searchable_and_refills_over_websocket
     assert_eq!(ready["resync"], false);
     let mut all_socket = tokio::net::TcpStream::connect(address).await.unwrap();
     let all_uri = format!(
-        "/v1/mobile/admin/production-maps/live?token={}&protocol=state_delta_v1&worker_scope=true&queue_limit=0&epoch={}&rev={}&scope={}",
-        f.token,
+        "/v1/mobile/admin/production-maps/live?protocol=state_delta_v1&worker_scope=true&queue_limit=0&epoch={}&rev={}&scope={}",
         all["epoch"].as_str().unwrap(),
         all["rev"],
         all["scope"].as_str().unwrap()
     );
-    all_socket.write_all(format!("GET {all_uri} HTTP/1.1\r\nHost: {address}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n").as_bytes()).await.unwrap();
+    all_socket.write_all(format!("GET {all_uri} HTTP/1.1\r\nHost: {address}\r\nAuthorization: Bearer {token}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n").as_bytes()).await.unwrap();
     let mut response = Vec::new();
     while !response.ends_with(b"\r\n\r\n") {
         response.push(all_socket.read_u8().await.unwrap());
@@ -738,12 +737,12 @@ async fn free_queue_order_is_shared_by_admin_workers_and_live_updates() {
     ] {
         let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
         let uri = format!(
-            "/v1/mobile/admin/production-maps/live?token={token}&protocol={protocol}&epoch={}&rev={}{}",
+            "/v1/mobile/admin/production-maps/live?protocol={protocol}&epoch={}&rev={}{}",
             snapshot["epoch"].as_str().unwrap(),
             snapshot["rev"],
             scope
         );
-        socket.write_all(format!("GET {uri} HTTP/1.1\r\nHost: {address}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n").as_bytes()).await.unwrap();
+        socket.write_all(format!("GET {uri} HTTP/1.1\r\nHost: {address}\r\nAuthorization: Bearer {token}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n").as_bytes()).await.unwrap();
         let mut response = Vec::new();
         while !response.ends_with(b"\r\n\r\n") {
             response.push(socket.read_u8().await.unwrap());

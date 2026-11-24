@@ -106,7 +106,6 @@ class WS:
         self.inflater = None
         self.server_no_context = False
         self.window_bits = 15
-        query = dict(query, token=token)
         path = LIVE + "?" + urlencode(query)
         extension_offer = (
             "Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits\r\n"
@@ -114,10 +113,10 @@ class WS:
         )
         handshake = (
             "GET %s HTTP/1.1\r\nHost: 127.0.0.1:%s\r\n"
-            "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+            "Upgrade: websocket\r\nConnection: Upgrade\r\nAuthorization: Bearer %s\r\n"
             "Sec-WebSocket-Key: YWNjb3JkLWJlbmNobWFyaw==\r\n"
             "Sec-WebSocket-Version: 13\r\n%s\r\n"
-        ) % (path, port, extension_offer)
+        ) % (path, port, token, extension_offer)
         self.socket.sendall(handshake.encode())
         while b"\r\n\r\n" not in self.buffer:
             self.buffer += self.socket.recv(65536)

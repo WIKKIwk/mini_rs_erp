@@ -1,6 +1,7 @@
 mod cors;
 mod health;
 mod mobile;
+pub(crate) use mobile::LiveSession;
 
 use axum::Router;
 use axum::middleware;

@@ -30,23 +30,16 @@ pub async fn system_monitor(
 
 pub async fn system_monitor_live(
     State(state): State<AppState>,
-    Query(query): Query<SystemMonitorLiveQuery>,
-    headers: HeaderMap,
+    axum::Extension(session): axum::Extension<crate::http::router::LiveSession>,
     ws: WebSocketUpgrade,
 ) -> Result<Response, AdminError> {
-    let principal = authenticated_principal_for_live(&state, &headers, &query.token).await?;
+    let principal = session.principal;
     if !state.admin.principal_has_capability(&principal, Capability::AdminAccess).await {
         return Err(forbidden());
     }
     Ok(ws
         .on_upgrade(move |socket| system_monitor_live_socket(state, socket))
         .into_response())
-}
-
-#[derive(Default, Deserialize)]
-pub struct SystemMonitorLiveQuery {
-    #[serde(default)]
-    token: String,
 }
 
 async fn system_monitor_report(state: &AppState) -> AdminServerMonitorResponse {
@@ -117,20 +110,6 @@ async fn database_monitor(state: &AppState) -> AdminServerMonitorDatabase {
             error: "mini engine store is not configured".to_string(),
         },
     }
-}
-
-async fn authenticated_principal_for_live(
-    state: &AppState,
-    headers: &HeaderMap,
-    query_token: &str,
-) -> Result<crate::core::auth::models::Principal, AdminError> {
-    let token = query_token.trim().to_string();
-    let token = if token.is_empty() {
-        bearer_token(headers).ok_or_else(unauthorized)?
-    } else {
-        token
-    };
-    state.sessions.get(&token).await.map_err(|_| unauthorized())
 }
 
 async fn system_monitor_live_socket(state: AppState, mut socket: WebSocket) {

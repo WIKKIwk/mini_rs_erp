@@ -26,8 +26,6 @@ pub struct TasksQuery {
     #[serde(default)]
     search: String,
     #[serde(default)]
-    token: String,
-    #[serde(default)]
     epoch: String,
     #[serde(default)]
     rev: Option<u64>,
@@ -234,7 +232,8 @@ pub async fn production_tasks_window(
     headers: HeaderMap,
 ) -> Result<Response, AdminError> {
     let query = query.normalized()?;
-    let principal = completion::authenticated_principal_for_live(&state, &headers, "").await?;
+    let token = bearer_token(&headers).ok_or_else(unauthorized)?;
+    let principal = state.sessions.get(&token).await.map_err(|_| unauthorized())?;
     let window = read_window(&state, &principal, &query).await?;
     let mut response = json_response(&*window);
     response.headers_mut().insert(
@@ -469,19 +468,14 @@ fn matches_search(
 pub async fn production_tasks_live(
     State(state): State<AppState>,
     Query(query): Query<TasksQuery>,
-    headers: HeaderMap,
+    axum::Extension(session): axum::Extension<crate::http::router::LiveSession>,
     ws: WebSocketUpgrade,
 ) -> Result<Response, AdminError> {
     let query = query.normalized()?;
-    let token = if query.token.trim().is_empty() {
-        bearer_token(&headers).ok_or_else(unauthorized)?
-    } else {
-        query.token.clone()
-    };
-    let principal = completion::authenticated_principal_for_live(&state, &headers, &token).await?;
+    let principal = session.principal;
     read_scope(&state, &principal, &query).await?;
     Ok(ws
-        .on_upgrade(move |socket| socket_loop(state, socket, principal, token, query))
+        .on_upgrade(move |socket| socket_loop(state, socket, principal, session.digest, query))
         .into_response())
 }
 
@@ -528,7 +522,7 @@ async fn socket_loop(
     state: AppState,
     mut socket: WebSocket,
     principal: Principal,
-    token: String,
+    digest: [u8; 32],
     query: TasksQuery,
 ) {
     // Subscribe before reading; an intervening commit remains queued.
@@ -569,7 +563,7 @@ async fn socket_loop(
             }
         };
         // A long-lived socket must not retain revoked capabilities or assignments.
-        let current_principal = match state.sessions.get(&token).await {
+        let current_principal = match state.sessions.get_by_digest(&digest).await {
             Ok(value) => value,
             Err(_) => {
                 let _ = send_error(&mut socket, &unauthorized()).await;

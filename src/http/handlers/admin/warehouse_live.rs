@@ -1,37 +1,16 @@
 use super::*;
 use crate::http::ws::{Message, WebSocket, WebSocketUpgrade};
 
-#[derive(Default, Deserialize)]
-pub struct WarehouseLiveQuery {
-    #[serde(default)]
-    token: String,
-}
-
 pub async fn warehouse_live(
     State(state): State<AppState>,
-    Query(query): Query<WarehouseLiveQuery>,
-    headers: HeaderMap,
+    axum::Extension(session): axum::Extension<crate::http::router::LiveSession>,
     ws: WebSocketUpgrade,
 ) -> Result<Response, AdminError> {
-    let principal = authenticated_principal_for_live(&state, &headers, &query.token).await?;
+    let principal = session.principal;
     require_capability(&state, &principal, Capability::CatalogItemRead).await?;
     Ok(ws
         .on_upgrade(move |socket| warehouse_live_socket(state, socket, principal))
         .into_response())
-}
-
-async fn authenticated_principal_for_live(
-    state: &AppState,
-    headers: &HeaderMap,
-    query_token: &str,
-) -> Result<crate::core::auth::models::Principal, AdminError> {
-    let token = query_token.trim().to_string();
-    let token = if token.is_empty() {
-        bearer_token(headers).ok_or_else(unauthorized)?
-    } else {
-        token
-    };
-    state.sessions.get(&token).await.map_err(|_| unauthorized())
 }
 
 async fn warehouse_live_socket(

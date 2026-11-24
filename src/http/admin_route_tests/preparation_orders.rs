@@ -649,14 +649,13 @@ async fn assert_preparation_orders_live(all_apparatus: bool) {
     });
     let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
     let path = format!(
-        "{LIST}/live?{scope_query}&limit=30&length=30&token={}&epoch={}&rev={}&scope={}&version={}",
-        urlencoding::encode(&fixture.master),
+        "{LIST}/live?{scope_query}&limit=30&length=30&epoch={}&rev={}&scope={}&version={}",
         first["epoch"].as_str().unwrap(),
         first["rev"],
         first["scope"].as_str().unwrap(),
         first["version"].as_str().unwrap()
     );
-    stream.write_all(format!("GET {path} HTTP/1.1\r\nHost: {address}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n").as_bytes()).await.unwrap();
+    stream.write_all(format!("GET {path} HTTP/1.1\r\nHost: {address}\r\nAuthorization: Bearer {}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n", fixture.master).as_bytes()).await.unwrap();
     let mut headers = Vec::new();
     tokio::time::timeout(Duration::from_secs(5), async {
         while !headers.ends_with(b"\r\n\r\n") {

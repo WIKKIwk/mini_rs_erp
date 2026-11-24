@@ -18,42 +18,32 @@ pub(super) async fn enforce_scope(
     request: Request,
     next: Next,
 ) -> Response {
-    // WebSocket clients authenticate through the query token. Checking both
-    // credentials also closes mixed-header/query requests with distinct actors.
-    let query_token = axum::extract::Query::<WorkspaceAuthQuery>::try_from_uri(request.uri())
-        .ok()
-        .and_then(|query| query.0.token);
-    for token in [bearer_token(request.headers()), query_token]
-        .into_iter()
-        .flatten()
+    if request.extensions().get::<super::LiveSession>().is_some() {
+        return next.run(request).await;
+    }
+    if let Some(token) = bearer_token(request.headers())
+        && let Ok(principal) = state.sessions.get(&token).await
     {
-        if let Ok(principal) = state.sessions.get(token.trim()).await {
-            let allowed = match principal.role {
-                PrincipalRole::Brigader => allows(request.method(), request.uri().path()),
-                PrincipalRole::RezkaMaster => {
-                    super::rezka_master::allows(request.method(), request.uri().path())
-                        && state
-                            .admin
-                            .principal_has_capability(&principal, Capability::RezkaMasterAccess)
-                            .await
-                }
-                _ => true,
-            };
-            if !allowed {
-                return (
-                    StatusCode::FORBIDDEN,
-                    Json(serde_json::json!({"error":"forbidden"})),
-                )
-                    .into_response();
+        let allowed = match principal.role {
+            PrincipalRole::Brigader => allows(request.method(), request.uri().path()),
+            PrincipalRole::RezkaMaster => {
+                super::rezka_master::allows(request.method(), request.uri().path())
+                    && state
+                        .admin
+                        .principal_has_capability(&principal, Capability::RezkaMasterAccess)
+                        .await
             }
+            _ => true,
+        };
+        if !allowed {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({"error":"forbidden"})),
+            )
+                .into_response();
         }
     }
     next.run(request).await
-}
-
-#[derive(serde::Deserialize)]
-struct WorkspaceAuthQuery {
-    token: Option<String>,
 }
 
 fn under(path: &str, root: &str) -> bool {
@@ -63,7 +53,7 @@ fn under(path: &str, root: &str) -> bool {
             .is_some_and(|tail| tail.starts_with('/'))
 }
 
-fn allows(method: &Method, path: &str) -> bool {
+pub(super) fn allows(method: &Method, path: &str) -> bool {
     if *method == Method::OPTIONS {
         return true;
     }

@@ -15,6 +15,9 @@ pub(super) async fn enforce_scope(
     request: Request,
     next: Next,
 ) -> Response {
+    if request.extensions().get::<super::LiveSession>().is_some() {
+        return next.run(request).await;
+    }
     if let Some(token) = bearer_token(request.headers()) {
         if let Ok(principal) = state.sessions.get(&token).await {
             if principal.role == PrincipalRole::SalesManager
@@ -31,7 +34,7 @@ pub(super) async fn enforce_scope(
     next.run(request).await
 }
 
-fn allows(method: &Method, path: &str) -> bool {
+pub(super) fn allows(method: &Method, path: &str) -> bool {
     // The ordinary authenticated account and messaging APIs retain their own
     // validation; this boundary controls the reused business workspaces.
     if path.starts_with("/v1/mobile/chat/")

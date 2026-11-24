@@ -268,7 +268,7 @@ async fn brigader_user_creation_assigns_staff_system_roles_and_safe_custom_roles
 }
 
 #[tokio::test]
-async fn brigader_query_token_cannot_bypass_excluded_websocket_monitor_scope() {
+async fn monitor_rejects_legacy_query_credentials_including_mixed_credentials() {
     let state = test_state();
     let brigader = session_for(&state, PrincipalRole::Brigader, "brigader-live").await;
     let admin = session(&state, PrincipalRole::Admin).await;
@@ -287,6 +287,6 @@ async fn brigader_query_token_cannot_bypass_excluded_websocket_monitor_scope() {
             ))
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 }

@@ -1,6 +1,8 @@
 mod admin;
 mod brigader;
 mod core;
+mod live_auth;
+pub(crate) use live_auth::LiveSession;
 mod sales;
 mod rezka_master;
 
@@ -11,6 +13,7 @@ use crate::app::AppState;
 
 pub(super) fn routes(state: AppState) -> Router {
     Router::new()
+        .route("/v1/mobile/auth/live-ticket", axum::routing::post(live_auth::issue))
         .merge(core::routes())
         .merge(admin::routes())
         .merge(rezka_master::routes())
@@ -24,6 +27,10 @@ pub(super) fn routes(state: AppState) -> Router {
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             brigader::enforce_scope,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            live_auth::authenticate,
         ))
         .with_state(state)
 }

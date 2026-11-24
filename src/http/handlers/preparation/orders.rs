@@ -35,8 +35,6 @@ pub struct OrderListQuery {
     #[serde(default = "default_limit")]
     limit: usize,
     #[serde(default)]
-    token: String,
-    #[serde(default)]
     epoch: String,
     #[serde(default)]
     rev: Option<u64>,
@@ -755,25 +753,14 @@ pub async fn order_detail(
 pub async fn order_list_live(
     State(state): State<AppState>,
     Query(query): Query<OrderListQuery>,
-    mut headers: HeaderMap,
+    axum::Extension(session): axum::Extension<crate::http::router::LiveSession>,
     ws: WebSocketUpgrade,
 ) -> Result<Response, ApiError> {
     let query = query.normalized()?;
-    let token = if query.token.trim().is_empty() {
-        super::super::auth::bearer_token(&headers).unwrap_or_default()
-    } else {
-        query.token.clone()
-    };
-    headers.insert(
-        axum::http::header::AUTHORIZATION,
-        format!("Bearer {token}")
-            .parse()
-            .map_err(|_| api_error(StatusCode::UNAUTHORIZED, "unauthorized"))?,
-    );
-    let principal = authorize_orders(&state, &headers).await?;
+    let principal = require_preparation_access(&state, session.principal).await?;
     read_scope(&state, &principal, &query).await?;
     Ok(ws
-        .on_upgrade(move |socket| socket_loop(state, socket, headers, principal, query))
+        .on_upgrade(move |socket| socket_loop(state, socket, session.digest, principal, query))
         .into_response())
 }
 
@@ -788,15 +775,21 @@ async fn send(socket: &mut WebSocket, value: Value) -> bool {
     .is_ok_and(|result| result.is_ok())
 }
 
+async fn authorize_live_orders(state: &AppState, digest: &[u8; 32]) -> Result<Principal, ApiError> {
+    let principal = state.sessions.get_by_digest(digest).await
+        .map_err(|_| api_error(StatusCode::UNAUTHORIZED, "unauthorized"))?;
+    require_preparation_access(state, principal).await
+}
+
 async fn socket_loop(
     state: AppState,
     mut socket: WebSocket,
-    headers: HeaderMap,
+    digest: [u8; 32],
     principal: Principal,
     query: OrderListQuery,
 ) {
     if !query.version.is_empty() {
-        optimized_socket_loop(state, socket, headers, principal, query).await;
+        optimized_socket_loop(state, socket, digest, principal, query).await;
         return;
     }
     let mut events = state.production_maps.subscribe_live();
@@ -809,7 +802,7 @@ async fn socket_loop(
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     heartbeat.tick().await;
     loop {
-        let current = match authorize_orders(&state, &headers).await {
+        let current = match authorize_live_orders(&state, &digest).await {
             Ok(value) if value.role == principal.role && value.ref_ == principal.ref_ => value,
             Ok(_) => break,
             Err((status, Json(value))) => {
@@ -927,7 +920,7 @@ fn list_live_frame(previous: Option<&Value>, mut next: Value, query: &OrderListQ
 async fn optimized_socket_loop(
     state: AppState,
     mut socket: WebSocket,
-    headers: HeaderMap,
+    digest: [u8; 32],
     principal: Principal,
     mut query: OrderListQuery,
 ) {
@@ -941,7 +934,7 @@ async fn optimized_socket_loop(
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     heartbeat.tick().await;
     loop {
-        let current = match authorize_orders(&state, &headers).await {
+        let current = match authorize_live_orders(&state, &digest).await {
             Ok(value) if value.role == principal.role && value.ref_ == principal.ref_ => value,
             Ok(_) => break,
             Err((status, Json(value))) => {
