@@ -1083,6 +1083,38 @@ async fn laminatsiya_pause_does_not_persist_leftover_or_order_waste_metrics() {
 async fn laminatsiya_queue_exposes_start_for_waiting_print_wip_behind_unready_queue_head() {
     let print_requests = Arc::new(Mutex::new(Vec::<ScaleDriverPrintRequest>::new()));
     let mut state = test_state();
+    let station = ApparatusId::new("apparatus:default:asset-007").unwrap();
+    let config = state
+        .apparatus
+        .current_configuration(&station)
+        .await
+        .unwrap()
+        .unwrap();
+    state
+        .apparatus
+        .patch(
+            station,
+            config.runtime.source_revision,
+            crate::core::apparatus_standard::CanonicalApparatusPatch {
+                policies: Some(
+                    crate::core::apparatus_standard::ApparatusOperationalPolicies {
+                        queue: crate::core::apparatus_standard::QueueDiscipline::FreePick,
+                        worker_material_assignment_allowed: config
+                            .runtime
+                            .worker_material_assignment_allowed,
+                        material: config.material.policy.clone(),
+                        tooling: config.material.tooling.clone(),
+                    },
+                ),
+                ..Default::default()
+            },
+            crate::core::apparatus_standard::CanonicalCommandMetadata::new(
+                "user:admin",
+                "lamination-free-pick",
+            ),
+        )
+        .await
+        .unwrap();
     state.gscale = GscaleService::new().with_driver(Arc::new(FakeProgressDriver {
         requests: print_requests,
         fail: false,
