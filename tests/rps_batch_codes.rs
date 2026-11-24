@@ -126,6 +126,7 @@ async fn service_generates_batch_code_once_and_preserves_it_through_stop() {
                 item_code: "ITEM-1".to_string(),
                 item_name: "Green Tea".to_string(),
                 warehouse: "Stores - A".to_string(),
+                length_m: Some(125.0),
                 ..RpsBatchStartRequest::default()
             },
         )
@@ -133,6 +134,7 @@ async fn service_generates_batch_code_once_and_preserves_it_through_stop() {
         .expect("start batch")
         .batch;
     assert!(is_valid_batch_code(&started.batch_code));
+    assert_eq!(started.length_m, Some(125.0));
 
     let current = service.state(&principal).await.expect("batch state").batch;
     assert_eq!(current.batch_code, started.batch_code);
