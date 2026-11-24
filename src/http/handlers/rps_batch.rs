@@ -38,6 +38,7 @@ pub async fn start(
         .start(&principal, request)
         .await
         .map_err(batch_error)?;
+    invalidate_preparation_journal(&state, &principal);
     Ok(Json(
         serde_json::to_value(response).unwrap_or_else(|_| serde_json::json!({"ok": false})),
     ))
@@ -83,6 +84,7 @@ pub async fn update(
         .update(&principal, request)
         .await
         .map_err(batch_error)?;
+    invalidate_preparation_journal(&state, &principal);
     Ok(Json(
         serde_json::to_value(response).unwrap_or_else(|_| serde_json::json!({"ok": false})),
     ))
@@ -125,6 +127,7 @@ pub async fn stop(
         .stop(&principal, request)
         .await
         .map_err(batch_error)?;
+    invalidate_preparation_journal(&state, &principal);
     Ok(Json(
         serde_json::to_value(response).unwrap_or_else(|_| serde_json::json!({"ok": false})),
     ))
@@ -280,7 +283,10 @@ async fn record_batch_print(
         .record_print(principal, batch_id, response)
         .await
     {
-        Ok(true) => Ok(()),
+        Ok(true) => {
+            invalidate_preparation_journal(state, principal);
+            Ok(())
+        }
         Ok(false) => Err(batch_error(RpsBatchServiceError::BatchContextConflict)),
         Err(error) => Err(batch_error(error)),
     }
@@ -297,9 +303,18 @@ async fn fail_batch_after_operation_error(
         .fail_batch(principal, batch_id, error.to_string())
         .await
     {
-        Ok(true) => Ok(()),
+        Ok(true) => {
+            invalidate_preparation_journal(state, principal);
+            Ok(())
+        }
         Ok(false) => Err(batch_error(RpsBatchServiceError::BatchContextConflict)),
         Err(error) => Err(batch_error(error)),
+    }
+}
+
+fn invalidate_preparation_journal(state: &AppState, principal: &Principal) {
+    if principal.role == PrincipalRole::TayyorlovMasteri {
+        state.warehouse_events.invalidate_preparation_journal(&principal.ref_);
     }
 }
 

@@ -51,7 +51,7 @@ pub async fn production_orders(
             query.limit.unwrap_or(50),
         )
         .await
-        .map(Json)
+        .map(|page| Json(super::production_journal_sync::with_checkpoint(page, "orders")))
         .map_err(error)
 }
 
@@ -64,7 +64,7 @@ pub async fn production_batches(
     query.validate()?;
     store(&state)?.production_journal_batches(
         &actor.ref_, &query.q, query.status(), query.offset, query.limit.unwrap_or(50),
-    ).await.map(Json).map_err(error)
+    ).await.map(|page| Json(super::production_journal_sync::with_checkpoint(page, "batches"))).map_err(error)
 }
 
 pub async fn production_rolls(
@@ -76,7 +76,7 @@ pub async fn production_rolls(
     query.validate()?;
     store(&state)?.production_journal_rolls(
         &actor.ref_, &query.q, query.status(), query.offset, query.limit.unwrap_or(50),
-    ).await.map(Json).map_err(error)
+    ).await.map(|page| Json(super::production_journal_sync::with_checkpoint(page, "rolls"))).map_err(error)
 }
 
 pub async fn production_order(

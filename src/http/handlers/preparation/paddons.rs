@@ -38,6 +38,11 @@ pub async fn raw_material_paddons(
         .raw_material_paddons(&actor, query)
         .await
         .map_err(error)?;
+    let paddons = if actor.role == PrincipalRole::TayyorlovMasteri {
+        super::production_journal_sync::with_checkpoint(paddons, "paddons")
+    } else {
+        paddons
+    };
     Ok((
         [(axum::http::header::CACHE_CONTROL, "private, no-store")],
         Json(paddons),

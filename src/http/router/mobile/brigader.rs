@@ -70,6 +70,9 @@ fn allows(method: &Method, path: &str) -> bool {
     let Some(path) = path.strip_prefix("/v1/mobile/") else {
         return path == "/v1/telegram/start";
     };
+    if path == "preparation/production/notes/scan" {
+        return *method == Method::GET;
+    }
     // Ordinary account, communication and the dependencies of the shared pages.
     if [
         "auth",

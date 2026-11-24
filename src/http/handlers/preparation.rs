@@ -21,6 +21,7 @@ type ApiError = (StatusCode, Json<Value>);
 mod order_estimates;
 mod orders;
 mod production_journal;
+mod production_journal_sync;
 mod material_stock;
 mod paddons;
 pub use material_stock::material_stock;
@@ -32,6 +33,7 @@ pub use production_journal::{
     production_batch, production_batches, production_order, production_orders, production_rolls,
     scanned_roll_notes, update_output_notes, update_production_note,
 };
+pub use production_journal_sync::sync_production_journal;
 pub use orders::{order_detail, order_list, order_list_live};
 
 async fn authorize(state: &AppState, headers: &HeaderMap) -> Result<Principal, ApiError> {

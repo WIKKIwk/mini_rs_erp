@@ -14,6 +14,7 @@ pub struct WarehouseEvent {
 pub struct WarehouseEventHub {
     tx: broadcast::Sender<WarehouseEvent>,
     inventory_tx: broadcast::Sender<()>,
+    preparation_journal_tx: broadcast::Sender<String>,
 }
 
 impl Default for WarehouseEventHub {
@@ -26,7 +27,8 @@ impl WarehouseEventHub {
     pub fn new() -> Self {
         let (tx, _) = broadcast::channel(WAREHOUSE_EVENT_CAPACITY);
         let (inventory_tx, _) = broadcast::channel(WAREHOUSE_EVENT_CAPACITY);
-        Self { tx, inventory_tx }
+        let (preparation_journal_tx, _) = broadcast::channel(WAREHOUSE_EVENT_CAPACITY);
+        Self { tx, inventory_tx, preparation_journal_tx }
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<WarehouseEvent> {
@@ -39,6 +41,14 @@ impl WarehouseEventHub {
 
     pub fn invalidate_inventory(&self) {
         let _ = self.inventory_tx.send(());
+    }
+
+    pub(crate) fn subscribe_preparation_journal(&self) -> broadcast::Receiver<String> {
+        self.preparation_journal_tx.subscribe()
+    }
+
+    pub(crate) fn invalidate_preparation_journal(&self, owner: &str) {
+        let _ = self.preparation_journal_tx.send(owner.to_owned());
     }
 
     pub fn notify_updated(&self, warehouse: &str, reason: &str) {

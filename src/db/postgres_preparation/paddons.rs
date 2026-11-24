@@ -114,7 +114,7 @@ pub struct PaddonQuery {
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "snake_case")]
-enum BalanceFilter {
+pub(crate) enum BalanceFilter {
     #[default]
     All,
     Available,
@@ -135,12 +135,35 @@ impl PostgresPreparationStore {
         actor: &Principal,
         query: PaddonQuery,
     ) -> Result<Value, PreparationError> {
-        let role = role_code(actor)?;
         let limit = query.limit.unwrap_or(50);
-        if !(1..=100).contains(&limit) || query.q.chars().count() > 200 {
+        if !(1..=100).contains(&limit) {
             return Err(PreparationError::Invalid(
                 "Paddon ro‘yxati filtri noto‘g‘ri",
             ));
+        }
+        self.read_raw_material_paddons(actor, query, limit).await
+    }
+
+    pub(crate) async fn preparation_journal_paddons(
+        &self,
+        actor: &Principal,
+        q: String,
+        status: BalanceFilter,
+        limit: u32,
+    ) -> Result<Value, PreparationError> {
+        let query = PaddonQuery { q, status, ..PaddonQuery::default() };
+        self.read_raw_material_paddons(actor, query, limit).await
+    }
+
+    async fn read_raw_material_paddons(
+        &self,
+        actor: &Principal,
+        query: PaddonQuery,
+        limit: u32,
+    ) -> Result<Value, PreparationError> {
+        let role = role_code(actor)?;
+        if query.q.chars().count() > 200 {
+            return Err(PreparationError::Invalid("Paddon ro‘yxati filtri noto‘g‘ri"));
         }
         let search = query.q.trim().to_lowercase();
         let search = search

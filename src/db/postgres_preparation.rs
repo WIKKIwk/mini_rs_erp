@@ -19,6 +19,7 @@ mod formula_variant_reuse;
 mod formula_variant_orders;
 mod formula_print_snapshot;
 mod production_journal;
+pub(crate) use production_journal::MAX_JOURNAL_WINDOW;
 mod production_notes;
 mod output_notes;
 pub mod paddons;

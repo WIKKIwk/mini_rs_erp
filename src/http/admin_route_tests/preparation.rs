@@ -124,11 +124,44 @@ async fn check_scanned_note_roles(router: &axum::Router, state: &AppState, owner
             assigned_item_groups: vec![],
         }).await.unwrap();
     }
+    const SYNC_PATH: &str = "/v1/mobile/preparation/production/sync";
+    let initial = router.clone().oneshot(request(
+        "GET", "/v1/mobile/preparation/production/rolls", owner,
+    )).await.unwrap();
+    assert_eq!(initial.status(), StatusCode::OK);
+    let initial = json_body(initial).await;
+    assert_eq!(initial["rolls"].as_array().unwrap().len(), 1);
+    assert_eq!(initial["rolls"][0]["epc"], "QR-OWN");
+    let sync = serde_json::json!({
+        "view": "rolls", "q": "", "status": "all", "length": 50,
+        "baseline": initial["journal_sync"],
+    });
+    let unchanged = router.clone().oneshot(request_with_body(
+        "POST", SYNC_PATH, owner, &sync.to_string(),
+    )).await.unwrap();
+    assert_eq!(unchanged.status(), StatusCode::OK);
+    assert_eq!(json_body(unchanged).await["type"], "unchanged");
+    let mut watch = sync;
+    watch["watch"] = serde_json::json!(true);
+    let watch = tokio::spawn(router.clone().oneshot(request_with_body(
+        "POST", SYNC_PATH, owner, &watch.to_string(),
+    )));
     let response = router.clone().oneshot(request_with_body(
         "PATCH", "/v1/mobile/preparation/production/notes", owner,
         r#"{"scope":"rolls","rolls":[{"receipt_name":"receipt-own","expected_revision":0}],"text":"Restricted note","audience":{"mode":"roles","roles":["rezka_worker","homashyo_rezkachi"]}}"#,
     )).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+    let update = tokio::time::timeout(std::time::Duration::from_secs(3), watch)
+        .await.unwrap().unwrap().unwrap();
+    assert_eq!(update.status(), StatusCode::OK);
+    let update = json_body(update).await;
+    assert_eq!(update["type"], "delta");
+    assert_eq!(update["base_version"], initial["journal_sync"]["version"]);
+    let upserts = update["upserts"].as_object().unwrap();
+    assert_eq!(upserts.len(), 1);
+    let row = upserts.values().next().unwrap();
+    assert_eq!(row["epc"], "QR-OWN");
+    assert_eq!(row["roll_note"]["text"], "Restricted note");
     for revision in [1, 2] {
         if revision == 2 {
             let response = router.clone().oneshot(request_with_body(
@@ -184,6 +217,18 @@ async fn preparation_production_journal_requires_master_capability_and_valid_pag
         let response = router.clone().oneshot(request_with_body("GET",path,&master,"")).await.unwrap();
         assert_eq!(response.status(),StatusCode::BAD_REQUEST,"{path}");
     }
+    let sync = "/v1/mobile/preparation/production/sync";
+    let valid = r#"{"view":"rolls","q":"","status":"all","length":50}"#;
+    for (token, expected) in [
+        ("", StatusCode::UNAUTHORIZED),
+        (admin.as_str(), StatusCode::FORBIDDEN),
+    ] {
+        let response = router.clone().oneshot(request_with_body("POST", sync, token, valid)).await.unwrap();
+        assert_eq!(response.status(), expected);
+    }
+    let invalid = r#"{"view":"paddons","q":"","status":"active","length":50}"#;
+    let response = router.oneshot(request_with_body("POST", sync, &master, invalid)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

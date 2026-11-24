@@ -3,6 +3,7 @@ use super::output_notes::output_note_json;
 use super::production_notes::note_json_sql;
 
 const BASE: &str = include_str!("production_journal.sql");
+pub(crate) const MAX_JOURNAL_WINDOW: usize = 10_000;
 const ORDER_JSON: &str = "jsonb_build_object('order_id',o.order_id,'order_code',o.order_code,
     'order_title',o.order_title,'customer_name',o.customer_name,'active_batch_count',o.active_batch_count,
     'batch_count',o.batch_count,'roll_count',o.roll_count,'total_net_kg',o.total_net_kg::text,
@@ -57,7 +58,7 @@ impl PostgresPreparationStore {
         offset: usize,
         limit: usize,
     ) -> Result<Value, PreparationError> {
-        let limit = limit.clamp(1, 100);
+        let limit = limit.clamp(1, MAX_JOURNAL_WINDOW);
         let note = note_json_sql("o.order_id");
         let rows: Vec<Value> = sqlx::query_scalar(&format!(
             "{BASE} SELECT {ORDER_JSON} || jsonb_build_object('preparation_note',{note}) FROM journal_orders o
@@ -74,7 +75,7 @@ impl PostgresPreparationStore {
     pub async fn production_journal_batches(
         &self, owner: &str, search: &str, status: &str, offset: usize, limit: usize,
     ) -> Result<Value, PreparationError> {
-        let limit = limit.clamp(1, 100);
+        let limit = limit.clamp(1, MAX_JOURNAL_WINDOW);
         let note = output_note_json("bn");
         let rows: Vec<Value> = sqlx::query_scalar(&format!(
             "{BASE} SELECT {BATCH_JSON} || jsonb_build_object('batch_note',{note})
@@ -94,7 +95,7 @@ impl PostgresPreparationStore {
     pub async fn production_journal_rolls(
         &self, owner: &str, search: &str, status: &str, offset: usize, limit: usize,
     ) -> Result<Value, PreparationError> {
-        let limit = limit.clamp(1, 100);
+        let limit = limit.clamp(1, MAX_JOURNAL_WINDOW);
         let roll = roll_json();
         let rows: Vec<Value> = sqlx::query_scalar(&format!(
             "{BASE} SELECT {roll} FROM rolls r LEFT JOIN journal_orders o ON o.order_id=r.order_id
