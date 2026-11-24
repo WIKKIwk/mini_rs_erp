@@ -159,6 +159,7 @@ impl MemoryQolipStore {
                     color: spec.color.clone(),
                     has_qolip_spec: true,
                     is_in_use: in_use_codes.contains(&qolip_key),
+                    unavailable_reason: String::new(),
                 };
                 if memory_product_matches(&item, &query) {
                     items.push(item);
@@ -206,6 +207,7 @@ impl MemoryQolipStore {
                     color: String::new(),
                     has_qolip_spec: true,
                     is_in_use: in_use_codes.contains(&qolip_key),
+                    unavailable_reason: String::new(),
                 };
                 if memory_product_matches(&item, &query) {
                     items.push(item);
@@ -256,6 +258,7 @@ impl MemoryQolipStore {
                     color: String::new(),
                     has_qolip_spec: true,
                     is_in_use: true,
+                    unavailable_reason: String::new(),
                 };
                 if memory_product_matches(&item, &query) {
                     items.push(item);

@@ -16,6 +16,7 @@ pub async fn blocks(
     ensure_qolip_access(&state, &principal).await?;
     match method {
         Method::GET => {
+            let storage_revision = state.qolip.storage_revision();
             let is_admin = state
                 .admin
                 .principal_has_admin_workspace_access(&principal)
@@ -33,6 +34,7 @@ pub async fn blocks(
             Ok(Json(serde_json::json!({
                 "ok": true,
                 "supports_cross_block_move": true,
+                "storage_revision": storage_revision,
                 "warehouses": warehouses,
                 "blocks": blocks,
             })))
@@ -197,27 +199,40 @@ pub async fn products(
         .admin
         .principal_has_admin_workspace_access(&principal)
         .await;
-    let products = state
-        .qolip
-        .products_for_principal(
-            &principal,
-            is_admin,
-            query.q.as_deref().unwrap_or(""),
-            query.limit.unwrap_or(50),
-            query.with_qolip.unwrap_or(false) || query.with_qolip_only.unwrap_or(false),
-        )
-        .await
-        .map_err(qolip_error)?;
-    let order_image_ids = state
-        .qolip
-        .order_image_order_ids(
-            &products
-                .iter()
-                .map(|product| product.code.clone())
-                .collect::<Vec<_>>(),
-        )
-        .await
-        .map_err(qolip_error)?;
+    let term = query.q.as_deref().unwrap_or("");
+    let limit = query.limit.unwrap_or(50);
+    let placement_filtered = query.placement_warehouse.is_some();
+    let storage_revision = placement_filtered.then(|| state.qolip.storage_revision());
+    let products = if let Some(warehouse) = &query.placement_warehouse {
+        let warehouse = accessible_qolip_warehouse(&state, &principal, warehouse).await?;
+        state.qolip.placement_products(term, limit, &warehouse).await
+    } else {
+        state
+            .qolip
+            .products_for_principal(
+                &principal,
+                is_admin,
+                term,
+                limit,
+                query.with_qolip.unwrap_or(false) || query.with_qolip_only.unwrap_or(false),
+            )
+            .await
+    }
+    .map_err(qolip_error)?;
+    let order_image_ids = if placement_filtered {
+        Vec::new()
+    } else {
+        state
+            .qolip
+            .order_image_order_ids(
+                &products
+                    .iter()
+                    .map(|product| product.code.clone())
+                    .collect::<Vec<_>>(),
+            )
+            .await
+            .map_err(qolip_error)?
+    };
     let order_image_ids = order_image_ids
         .into_iter()
         .map(|(code, order_id)| (code.trim().to_lowercase(), order_id))
@@ -232,10 +247,12 @@ pub async fn products(
             product,
         })
         .collect::<Vec<_>>();
-    let body = serde_json::to_vec(&serde_json::json!({
-        "ok": true,
-        "products": products,
-    }))
+    let mut payload = serde_json::json!({"ok": true, "products": products});
+    if let Some(storage_revision) = storage_revision {
+        payload["placement_filtered"] = serde_json::json!(true);
+        payload["storage_revision"] = serde_json::json!(storage_revision);
+    }
+    let body = serde_json::to_vec(&payload)
     .map_err(|_| qolip_error(QolipError::StoreFailed))?;
     // Revalidate only after authorization and current warehouse/lock lookup.
     // This avoids transferring and parsing an unchanged catalog on re-entry.

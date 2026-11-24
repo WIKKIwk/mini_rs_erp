@@ -62,6 +62,10 @@ pub(super) fn storage_error(error: sqlx::Error) -> QolipError {
     {
         QolipError::QolipInRework
     } else if error.as_database_error().is_some_and(|error| {
+        error.message().starts_with("qolip location is locked by inventory transfer ")
+    }) {
+        QolipError::QolipInTransfer
+    } else if error.as_database_error().is_some_and(|error| {
         error.message().contains("qolip_history_locked")
             || error.constraint() == Some("mini_qolip_mileage_identity_locked")
     }) {

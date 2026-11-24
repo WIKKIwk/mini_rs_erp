@@ -42,15 +42,16 @@ pub async fn shared_sets(
     ensure_qolip_access(&state, &principal).await?;
     match method {
         Method::GET if !query.identifier.trim().is_empty() => {
-            let snapshot = state
+            let mut snapshot = state
                 .qolip
                 .resolve_shared_set(&query.identifier)
                 .await
                 .map_err(qolip_error)?;
-            if let Some(set) = &snapshot {
+            if let Some(set) = &mut snapshot {
                 for spec in &set.members {
                     ensure_qolip_owner_access(&state, &principal, spec).await?;
                 }
+                state.qolip.mark_unavailable_sets([set]).await.map_err(qolip_error)?;
             }
             Ok(Json(serde_json::json!({"ok": true, "set": snapshot})))
         }
@@ -68,24 +69,26 @@ pub async fn shared_sets(
                     Err(error) => return Err(error),
                 }
             }
-            let rework_codes = state
+            let unavailable = state
                 .qolip
-                .active_rework_codes(
+                .unavailable_molds(
                     &products
                         .iter()
                         .map(|row| row.qolip_code.clone())
                         .collect::<Vec<_>>(),
                 )
                 .await
-                .map_err(qolip_error)?
-                .into_iter()
-                .map(|code| code.trim().to_lowercase())
-                .collect::<std::collections::BTreeSet<_>>();
+                .map_err(qolip_error)?;
             let products = products
                 .into_iter()
-                .map(|product| ProductReworkStatus {
-                    is_in_rework: rework_codes.contains(&product.qolip_code.trim().to_lowercase()),
-                    product,
+                .map(|mut product| {
+                    let key = product.qolip_code.trim().to_lowercase();
+                    product.unavailable_reason = unavailable.get(&key).cloned().unwrap_or_default();
+                    product.is_in_use = product.unavailable_reason == "qolip_in_use";
+                    ProductReworkStatus {
+                        is_in_rework: product.unavailable_reason == "qolip_in_rework",
+                        product,
+                    }
                 })
                 .collect::<Vec<_>>();
             Ok(Json(serde_json::json!({"ok": true, "products": products})))

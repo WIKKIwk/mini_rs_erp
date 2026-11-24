@@ -1,6 +1,10 @@
 impl QolipService {
     pub fn new(store: Arc<dyn QolipStorePort>) -> Self {
-        Self { store }
+        Self {
+            store,
+            storage_epoch: rand::random(),
+            storage_revision: tokio::sync::watch::channel(0).0,
+        }
     }
 
     pub async fn assigned_blocks(

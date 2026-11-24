@@ -17,6 +17,7 @@ mod tests {
             color: String::new(),
             has_qolip_spec: false,
             is_in_use: false,
+            unavailable_reason: String::new(),
         }
     }
 

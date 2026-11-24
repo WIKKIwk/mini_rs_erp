@@ -253,6 +253,12 @@ async fn qolip_catalog_postgres_pages_match_visible_inventory_and_details_are_un
         include_str!("../migrations/postgres/0137_qolip_set_integrity.sql"),
         include_str!("../migrations/postgres/0147_qolip_shared_sets.sql"),
         include_str!("../migrations/postgres/0148_qolip_product_overrides.sql"),
+        include_str!("../migrations/postgres/0152_qolip_set_management.sql"),
+        include_str!("../migrations/postgres/0165_qolip_reworks.sql"),
+        include_str!("../migrations/postgres/0166_qolip_mileage.sql"),
+        include_str!("../migrations/postgres/0167_qolip_set_names.sql"),
+        include_str!("../migrations/postgres/0173_qolip_paddons.sql"),
+        include_str!("../migrations/postgres/0174_qolip_storage_guards.sql"),
     ] {
         sqlx::raw_sql(migration).execute(&pool).await.unwrap();
     }
@@ -388,12 +394,113 @@ async fn qolip_catalog_postgres_pages_match_visible_inventory_and_details_are_un
             .all(|mold| !mold.is_in_use)
     );
     verify_http_catalog(&pool).await;
+    verify_archive_availability(&pool).await;
     pool.close().await;
     sqlx::query(&format!("DROP DATABASE \"{database}\" WITH (FORCE)"))
         .execute(&admin)
         .await
         .unwrap();
     admin.close().await;
+}
+
+async fn verify_archive_availability(pool: &sqlx::PgPool) {
+    use mini_rs_erp::db::postgres_qolip::PostgresQolipStore;
+    use serde_json::json;
+    sqlx::raw_sql(r#"
+        INSERT INTO mini_warehouse_assignments
+            (warehouse, warehouse_name, assignment_kind, principal_role, principal_ref)
+        VALUES ('Molds A', 'Molds A', 'warehouse', 'qolipchi', 'owner-a');
+        INSERT INTO mini_items (code, name, item_group)
+        SELECT 'ARCH-ITEM-' || n, 'Archive test ' || n, 'Tayyor mahsulot'
+        FROM generate_series(1, 6) n;
+        INSERT INTO mini_qolip_product_specs
+            (item_code, item_name, item_group, qolip_code, size, payload_json)
+        SELECT 'ARCH-ITEM-' || n, 'Archive test ' || n, 'Tayyor mahsulot',
+            'ARCH-MOLD-' || n, 40,
+            jsonb_build_object('warehouse', 'Molds A', 'qolip_set_id', 'archive-set-' || n)
+        FROM generate_series(1, 6) n;
+        INSERT INTO mini_qolip_locations
+            (id, block, warehouse, item_code, item_name, qolip_code, size, quantity,
+             row_letter, column_number, created_by_role, created_by_ref)
+        SELECT 'archive-test-location-' || n, 'A', 'Molds A', 'ARCH-ITEM-' || n,
+            'Archive test ' || n, 'ARCH-MOLD-' || n, 40, 1, 'A', n, 'qolipchi', 'owner-a'
+        FROM generate_series(5, 6) n;
+        UPDATE mini_qolip_locations SET inventory_transfer_id = 'archive-test-transit'
+        WHERE id = 'archive-test-location-5';
+        INSERT INTO mini_qolip_paddons
+            (code, warehouse, created_by_role, created_by_ref, created_by_name, archived_at)
+        VALUES ('QP-00011', 'Molds A', 'qolipchi', 'owner-a', 'Test', now()),
+               ('QP-00012', 'Molds A', 'qolipchi', 'owner-a', 'Test', NULL);
+        INSERT INTO mini_qolip_paddon_members
+            (id, paddon_code, qolip_code, added_by_ref, added_by_name)
+        VALUES ('archived-member', 'QP-00011', 'ARCH-MOLD-2', 'owner-a', 'Test'),
+               ('packed-member', 'QP-00012', 'ARCH-MOLD-3', 'owner-a', 'Test');
+        INSERT INTO mini_qolip_reworks
+            (id, qolip_code, qolip_set_id, warehouse, item_code, item_name, color,
+             size, sent_at, created_by_role, created_by_ref)
+        VALUES ('archive-test-rework', 'ARCH-MOLD-4', 'archive-set-4', 'Molds A', 'ARCH-ITEM-4',
+            'Archive test 4', '', 40, now(), 'qolipchi', 'owner-a');
+    "#).execute(pool).await.unwrap();
+
+    let (mut state, _files) = test_state();
+    state.qolip = QolipService::new(Arc::new(PostgresQolipStore::new(pool.clone())));
+    let token = session_for(&state, PrincipalRole::Qolipchi, "owner-a").await;
+    let app = build_router(state);
+    let placement = "/v1/mobile/qolip/products?placement_warehouse=Molds%20A&q=ARCH-MOLD";
+    let read = |path: &str| app.clone().oneshot(request("GET", path, &token));
+    let archive = |body: serde_json::Value| {
+        app.clone().oneshot(Request::post("/v1/mobile/qolip/archive/action")
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string())).unwrap())
+    };
+    let before = json_body(read(placement).await.unwrap()).await;
+    assert_eq!(before["placement_filtered"], true);
+    let products = before["products"].as_array().unwrap();
+    assert_eq!(products.len(), 1);
+    assert_eq!(products[0]["qolip_code"], "ARCH-MOLD-1");
+    let revision = before["storage_revision"].as_str().unwrap();
+    let watch = tokio::spawn(read(&format!("/v1/mobile/qolip/storage/revision?after={revision}")));
+    let response = archive(json!({
+        "action": "archive", "request_id": "archive-test", "qolip_codes": ["ARCH-MOLD-1"]
+    })).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let archived = json_body(response).await;
+    let entry_id = archived["entries"][0]["id"].as_str().unwrap();
+    let watched = tokio::time::timeout(std::time::Duration::from_secs(2), watch)
+        .await.unwrap().unwrap().unwrap();
+    assert_ne!(json_body(watched).await["storage_revision"], revision);
+    assert_eq!(json_body(read(placement).await.unwrap()).await["products"], json!([]));
+
+    for (number, reason) in [
+        (1, "qolip_archived"), (2, "qolip_archived"), (3, "qolip_in_paddon"),
+        (4, "qolip_in_rework"), (5, "qolip_in_transfer"),
+    ] {
+        let response = read(&format!("/v1/mobile/qolip/scan?qr=ARCH-MOLD-{number}"))
+            .await.unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_eq!(json_body(response).await["error"], reason);
+        let composition = json_body(read(&format!(
+            "/v1/mobile/qolip/shared-sets?item_code=ARCH-ITEM-{number}"
+        )).await.unwrap()).await;
+        assert_eq!(composition["products"][0]["unavailable_reason"], reason);
+    }
+    let attach_picker = json_body(read("/v1/mobile/qolip/products?q=ARCH-ITEM-1").await.unwrap()).await;
+    assert_eq!(attach_picker["products"][0]["code"], "ARCH-ITEM-1");
+    assert_eq!(attach_picker["products"][0]["has_qolip_spec"], false);
+    let sets = json_body(read("/v1/mobile/qolip/sets").await.unwrap()).await;
+    assert_eq!(sets["ok"], true, "{sets}");
+    assert!(sets["sets"].as_array().unwrap().iter().any(|set|
+        set["set_id"] == "archive-set-1" && set["unavailable_reason"] == "qolip_archived"
+    ));
+
+    let response = archive(json!({
+        "action": "restore", "request_id": "restore-test", "entry_ids": [entry_id]
+    })).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let restored = json_body(read(placement).await.unwrap()).await;
+    assert_eq!(restored["products"].as_array().unwrap().len(), 1);
+    assert_eq!(restored["products"][0]["qolip_code"], "ARCH-MOLD-1");
 }
 
 fn test_state() -> (AppState, tempfile::TempDir) {

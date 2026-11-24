@@ -42,6 +42,7 @@ impl MemoryQolipStore {
                 color: spec.color.clone(),
                 has_qolip_spec: true,
                 is_in_use: false,
+                unavailable_reason: String::new(),
             });
         }
         Ok(spec)
@@ -95,6 +96,7 @@ impl MemoryQolipStore {
                     color: spec.color.clone(),
                     has_qolip_spec: true,
                     is_in_use: false,
+                    unavailable_reason: String::new(),
                 });
             }
         }

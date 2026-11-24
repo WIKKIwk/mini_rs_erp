@@ -221,14 +221,18 @@ impl QolipService {
         {
             return Err(QolipStorageError::Forbidden);
         }
-        self.store
+        let result = self.store
             .storage_action(
                 &input,
                 archive,
                 principal,
                 if admin { None } else { Some(&allowed) },
             )
-            .await
+            .await?;
+        if archive || matches!(input.action.as_str(), "add" | "remove" | "archive" | "restore") {
+            self.notify_storage_changed();
+        }
+        Ok(result)
     }
 }
 #[cfg(test)]

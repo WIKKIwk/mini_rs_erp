@@ -54,12 +54,17 @@ pub async fn sets(
         .await;
     match method {
         Method::GET => {
-            let sets = state
+            let storage_revision = state.qolip.storage_revision();
+            let mut sets = state
                 .qolip
                 .managed_sets(&principal, is_admin)
                 .await
                 .map_err(qolip_error)?;
-            Ok(Json(serde_json::json!({"ok": true, "sets": sets})))
+            state.qolip.mark_unavailable_sets(sets.iter_mut().map(|set| &mut set.snapshot))
+                .await.map_err(qolip_error)?;
+            Ok(Json(serde_json::json!({
+                "ok": true, "sets": sets, "storage_revision": storage_revision
+            })))
         }
         Method::POST => {
             let input: crate::core::qolip::QolipSetEdit =

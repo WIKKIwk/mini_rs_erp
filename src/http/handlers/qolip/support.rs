@@ -185,6 +185,7 @@ pub struct QolipSearchQuery {
     pub(super) limit: Option<usize>,
     pub(super) with_qolip: Option<bool>,
     pub(super) with_qolip_only: Option<bool>,
+    pub(super) placement_warehouse: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -295,6 +296,7 @@ pub(super) fn qolip_error(error: QolipError) -> (StatusCode, Json<QolipErrorResp
         QolipError::QolipInPaddon => conflict("qolip_in_paddon"),
         QolipError::QolipArchived => conflict("qolip_archived"),
         QolipError::QolipInRework => conflict("qolip_in_rework"),
+        QolipError::QolipInTransfer => conflict("qolip_in_transfer"),
         QolipError::ReworkConflict => conflict("qolip_rework_conflict"),
         QolipError::ReworkRequestConflict => conflict("qolip_rework_request_conflict"),
         QolipError::SetChanged => conflict("qolip_set_changed"),

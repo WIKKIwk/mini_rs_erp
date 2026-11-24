@@ -6,7 +6,7 @@ pub(super) async fn load_products(
     allowed_warehouses: Option<&[String]>,
 ) -> Result<Vec<QolipProduct>, QolipError> {
     load_products_inner(
-        pool, query, Some(limit.max(1) as i64), with_qolip_only, allowed_warehouses, None,
+        pool, query, Some(limit.max(1) as i64), with_qolip_only, allowed_warehouses, None, false,
     ).await
 }
 
@@ -17,6 +17,7 @@ pub(super) async fn load_products_inner(
     with_qolip_only: bool,
     allowed_warehouses: Option<&[String]>,
     item_code: Option<&str>,
+    placement_only: bool,
 ) -> Result<Vec<QolipProduct>, QolipError> {
     let query = query.trim().to_lowercase();
     let pattern = format!("%{query}%");
@@ -34,8 +35,10 @@ pub(super) async fn load_products_inner(
         }
     }
     let rows = sqlx::query_as::<_, QolipProductRow>(
-        r#"
-        WITH RECURSIVE group_path(group_name, node_name, parent_name) AS (
+        concat!(r#"
+        WITH RECURSIVE unavailable_molds AS MATERIALIZED (
+        "#, include_str!("../unavailable_molds.sql"), r#"
+        ), group_path(group_name, node_name, parent_name) AS (
             SELECT lower(name), lower(name), lower(parent_item_group)
             FROM mini_item_groups
             UNION ALL
@@ -145,9 +148,20 @@ pub(super) async fn load_products_inner(
             FROM legacy_checkouts checkout
         ),
         visible_sources AS (
-            SELECT * FROM qolip_sources
-            WHERE ($5::text[] IS NULL OR lower(btrim(warehouse)) = ANY($5))
-              AND ($6::text IS NULL OR lower(btrim(item_code)) = $6)
+            SELECT source.*, COALESCE(unavailable.reason, '') AS unavailable_reason
+            FROM qolip_sources source
+            LEFT JOIN unavailable_molds unavailable ON unavailable.code_key = lower(btrim(source.qolip_code))
+            WHERE ($5::text[] IS NULL OR lower(btrim(source.warehouse)) = ANY($5))
+              AND ($6::text IS NULL OR lower(btrim(source.item_code)) = $6)
+              AND unavailable.reason IS DISTINCT FROM 'qolip_archived'
+              AND (NOT $7 OR (
+                  unavailable.code_key IS NULL AND source.size > 0
+                  AND NOT EXISTS (
+                      SELECT 1 FROM mini_qolip_locations placed
+                      WHERE lower(placed.qolip_code) = lower(source.qolip_code)
+                        AND btrim(placed.row_letter) <> '' AND placed.column_number IS NOT NULL
+                  )
+              ))
         ),
         product_rows AS (
             SELECT
@@ -176,6 +190,7 @@ pub(super) async fn load_products_inner(
                 source.size,
                 source.warehouse,
                 source.color,
+                COALESCE(source.unavailable_reason, '') AS unavailable_reason,
                 COALESCE(source.is_extension, false) AS is_extension,
                 source.qolip_code IS NOT NULL AS has_qolip_spec
             FROM eligible_items items
@@ -195,26 +210,6 @@ pub(super) async fn load_products_inner(
             JOIN mini_customers customers ON customers.ref = assignments.customer_ref
             WHERE $6::text IS NULL OR lower(btrim(assignments.item_code)) = $6
             GROUP BY lower(assignments.item_code)
-        ),
-        active_sessions AS MATERIALIZED (
-            SELECT payload_json
-            FROM mini_order_run_sessions
-            WHERE status IN ('active', 'paused', 'frozen', 'roll_detached')
-              AND payload_json->>'qolip_lock_owner' = 'true'
-        ),
-        in_use_qolips AS (
-            SELECT lower(qolip_code) AS code
-            FROM mini_qolip_checkouts
-            WHERE lower(status) = 'open'
-            UNION
-            SELECT lower(payload_json->>'qolip_code') FROM active_sessions
-            UNION
-            SELECT lower(code.value)
-            FROM active_sessions session
-            CROSS JOIN LATERAL jsonb_array_elements_text(
-                CASE WHEN jsonb_typeof(session.payload_json->'qolip_codes') = 'array'
-                     THEN session.payload_json->'qolip_codes' ELSE '[]'::jsonb END
-            ) AS code(value)
         )
         SELECT
             product.code,
@@ -229,13 +224,12 @@ pub(super) async fn load_products_inner(
             COALESCE(set_spec.payload_json->>'qolip_set_id', '') AS qolip_set_id,
             product.has_qolip_spec,
             product.is_extension,
-            in_use.code IS NOT NULL AS is_in_use
+            product.unavailable_reason = 'qolip_in_use' AS is_in_use,
+            product.unavailable_reason
         FROM product_rows product
         LEFT JOIN mini_qolip_product_specs set_spec ON lower(set_spec.qolip_code) = lower(product.qolip_code)
         LEFT JOIN customers_per_item customers ON customers.item_code = lower(product.code)
-        LEFT JOIN in_use_qolips in_use ON in_use.code = lower(product.qolip_code)
         WHERE (NOT $4 OR product.has_qolip_spec)
-          AND public.mini_qolip_storage_state(product.qolip_code) <> 'archived'
           AND (
             $1 = ''
             OR lower(product.code) LIKE $2
@@ -245,7 +239,7 @@ pub(super) async fn load_products_inner(
           )
         ORDER BY lower(product.name), lower(product.code), lower(COALESCE(product.qolip_code, ''))
         LIMIT $3
-        "#,
+        "#),
     )
     .bind(query)
     .bind(pattern)
@@ -253,6 +247,7 @@ pub(super) async fn load_products_inner(
     .bind(with_qolip_only)
     .bind(allowed)
     .bind(item_code.map(|code| code.trim().to_lowercase()))
+    .bind(placement_only)
     .fetch_all(pool)
     .await
     .map_err(super::reworks::storage_error)?;
@@ -273,6 +268,7 @@ pub(super) async fn load_products_inner(
             color: row.color,
             has_qolip_spec: row.has_qolip_spec,
             is_in_use: row.is_in_use,
+            unavailable_reason: row.unavailable_reason,
         })
         .collect())
 }

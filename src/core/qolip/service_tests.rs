@@ -159,6 +159,7 @@ async fn batch_product_spec_save_is_atomic() {
             color: String::new(),
             has_qolip_spec: false,
             is_in_use: false,
+            unavailable_reason: String::new(),
         }])
         .await;
     let service = QolipService::new(store);
@@ -238,6 +239,7 @@ async fn order_start_accepts_slash_code_without_inventing_checkout() {
             color: String::new(),
             has_qolip_spec: false,
             is_in_use: false,
+            unavailable_reason: String::new(),
         }])
         .await;
     let service = QolipService::new(store);
@@ -299,6 +301,7 @@ async fn legacy_stocked_qolip_can_be_promoted_to_colored_spec() {
             color: String::new(),
             has_qolip_spec: false,
             is_in_use: false,
+            unavailable_reason: String::new(),
         }])
         .await;
     let service = QolipService::new(store.clone());
@@ -364,6 +367,7 @@ async fn order_start_accepts_existing_checkout_for_same_worker() {
             color: String::new(),
             has_qolip_spec: false,
             is_in_use: false,
+            unavailable_reason: String::new(),
         }])
         .await;
     let service = QolipService::new(store);
@@ -494,6 +498,7 @@ async fn order_start_rejects_qolip_from_another_finished_product_group() {
             color: String::new(),
             has_qolip_spec: false,
             is_in_use: false,
+            unavailable_reason: String::new(),
         }])
         .await;
     let service = QolipService::new(store);
@@ -566,6 +571,7 @@ async fn order_start_rejects_another_products_qolip_from_same_group() {
                 color: String::new(),
                 has_qolip_spec: false,
                 is_in_use: false,
+                unavailable_reason: String::new(),
             },
             QolipProduct {
                 is_extension: false,
@@ -581,6 +587,7 @@ async fn order_start_rejects_another_products_qolip_from_same_group() {
                 color: String::new(),
                 has_qolip_spec: false,
                 is_in_use: false,
+                unavailable_reason: String::new(),
             },
         ])
         .await;

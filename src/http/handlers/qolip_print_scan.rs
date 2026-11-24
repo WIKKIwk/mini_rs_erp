@@ -41,6 +41,17 @@ pub async fn scan(
         .location_by_qolip_code(qr)
         .await
         .map_err(qolip_error)?;
+    let unavailable = state.qolip
+        .unavailable_molds(std::slice::from_ref(&spec.qolip_code))
+        .await.map_err(qolip_error)?;
+    match unavailable.get(&spec.qolip_code.trim().to_lowercase()).map(String::as_str) {
+        Some("qolip_archived") => return Err(conflict("qolip_archived")),
+        Some("qolip_in_paddon") => return Err(conflict("qolip_in_paddon")),
+        Some("qolip_in_rework") => return Err(conflict("qolip_in_rework")),
+        Some("qolip_in_transfer") => return Err(conflict("qolip_in_transfer")),
+        Some("qolip_in_use") => return Err(conflict("qolip_in_use")),
+        _ => {}
+    }
     if let Some(existing) = &location {
         match accessible_qolip_block(&state, &principal, &existing.block).await {
             Ok(_) => {},

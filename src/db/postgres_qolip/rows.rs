@@ -22,6 +22,7 @@ pub(super) struct QolipProductRow {
     pub(super) color: String,
     pub(super) has_qolip_spec: bool,
     pub(super) is_in_use: bool,
+    pub(super) unavailable_reason: String,
 }
 
 #[derive(sqlx::FromRow)]

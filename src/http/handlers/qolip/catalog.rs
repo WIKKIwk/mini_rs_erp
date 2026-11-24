@@ -33,6 +33,7 @@ pub async fn catalog_page(
 ) -> Result<axum::response::Response, (StatusCode, Json<QolipErrorResponse>)> {
     let principal = authenticated_principal(&state, &headers).await?;
     ensure_qolip_access(&state, &principal).await?;
+    let storage_revision = state.qolip.storage_revision();
     let is_admin = state
         .admin
         .principal_has_admin_workspace_access(&principal)
@@ -100,7 +101,7 @@ pub async fn catalog_page(
         .collect::<Vec<_>>();
     Ok((
         [(header::CACHE_CONTROL, "private, no-store")],
-        Json(serde_json::json!({"ok": true, "items": items,
+        Json(serde_json::json!({"ok": true, "items": items, "storage_revision": storage_revision,
         "next_cursor": next_cursor, "has_more": has_more})),
     )
         .into_response())

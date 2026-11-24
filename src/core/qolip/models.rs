@@ -28,6 +28,8 @@ pub struct QolipProduct {
     pub has_qolip_spec: bool,
     #[serde(default)]
     pub is_in_use: bool,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub unavailable_reason: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -287,6 +289,8 @@ pub enum QolipError {
     QolipArchived,
     #[error("qolip is in peredelka")]
     QolipInRework,
+    #[error("qolip is in an inventory transfer")]
+    QolipInTransfer,
     #[error("qolip peredelka transition conflicts with current state")]
     ReworkConflict,
     #[error("qolip peredelka request id was reused with different input")]

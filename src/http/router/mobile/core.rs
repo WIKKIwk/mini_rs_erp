@@ -238,6 +238,7 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/v1/mobile/qolip/paddons/action", any(qolip::paddon_action))
         .route("/v1/mobile/qolip/paddons/qr/print", any(qolip::paddon_qr_print))
         .route("/v1/mobile/qolip/archive", any(qolip::archive))
+        .route("/v1/mobile/qolip/storage/revision", get(qolip::storage_revision))
         .route("/v1/mobile/qolip/archive/action", any(qolip::archive_action))
         .route("/v1/mobile/qolip/reworks", any(qolip::reworks))
         .route("/v1/mobile/qolip/reworks/send", any(qolip::send_reworks))

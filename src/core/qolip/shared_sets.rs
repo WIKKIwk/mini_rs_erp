@@ -17,6 +17,8 @@ pub struct QolipSetSnapshot {
     pub fingerprint: String,
     pub members: Vec<QolipProductSpec>,
     pub products: Vec<QolipSetProduct>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub unavailable_reason: String,
 }
 
 impl QolipSetSnapshot {
@@ -36,6 +38,7 @@ impl QolipSetSnapshot {
             fingerprint,
             members,
             products,
+            unavailable_reason: String::new(),
         }
     }
 }

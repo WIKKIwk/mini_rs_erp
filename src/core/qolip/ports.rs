@@ -9,6 +9,28 @@ use super::models::{
 
 #[async_trait]
 pub trait QolipStorePort: Send + Sync {
+    async fn unavailable_molds(
+        &self,
+        codes: &[String],
+    ) -> Result<std::collections::BTreeMap<String, String>, QolipError> {
+        let mut unavailable = self.qolip_storage_states(codes).await?;
+        unavailable.retain(|_, state| match state.as_str() {
+            "archived" => {
+                *state = "qolip_archived".into();
+                true
+            }
+            "paddon" => {
+                *state = "qolip_in_paddon".into();
+                true
+            }
+            _ => false,
+        });
+        for code in self.active_rework_codes(codes).await? {
+            unavailable.entry(code.trim().to_lowercase())
+                .or_insert_with(|| "qolip_in_rework".into());
+        }
+        Ok(unavailable)
+    }
     async fn qolip_storage_states(&self, _codes: &[String]) -> Result<std::collections::BTreeMap<String, String>, QolipError> {
         Ok(std::collections::BTreeMap::new())
     }
@@ -131,6 +153,32 @@ pub trait QolipStorePort: Send + Sync {
         with_qolip_only: bool,
         allowed_warehouses: Option<&[String]>,
     ) -> Result<Vec<QolipProduct>, QolipError>;
+    async fn placement_products(
+        &self,
+        query: &str,
+        limit: usize,
+        warehouse: &str,
+    ) -> Result<Vec<QolipProduct>, QolipError> {
+        let allowed = [warehouse.to_owned()];
+        let products = self.products(query, limit, true, Some(&allowed)).await?;
+        let codes: Vec<_> = products.iter().map(|product| product.qolip_code.clone()).collect();
+        let unavailable = self.unavailable_molds(&codes).await?;
+        let mut available = Vec::with_capacity(products.len());
+        for product in products {
+            if product.size <= 0 || product.is_in_use || !product.unavailable_reason.is_empty()
+                || unavailable.contains_key(&product.qolip_code.trim().to_lowercase())
+            {
+                continue;
+            }
+            let location = self.location_by_qolip_code(&product.qolip_code).await?;
+            if !location.is_some_and(|location| {
+                !location.row_letter.trim().is_empty() && location.column_number.is_some()
+            }) {
+                available.push(product);
+            }
+        }
+        Ok(available)
+    }
     async fn order_image_order_ids(
         &self,
         item_codes: &[String],

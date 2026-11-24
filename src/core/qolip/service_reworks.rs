@@ -20,13 +20,15 @@ impl QolipService {
     ) -> Result<Vec<super::QolipRework>, QolipError> {
         super::reworks::normalize_request(&mut input.request_id, &mut input.qolip_codes, true)?;
         let allowed = self.warehouses_for_principal(principal, false).await?;
-        self.store
+        let entries = self.store
             .send_reworks(
                 &input,
                 principal,
                 if is_admin { None } else { Some(&allowed) },
             )
-            .await
+            .await?;
+        self.notify_storage_changed();
+        Ok(entries)
     }
 
     pub async fn return_reworks(
@@ -37,12 +39,14 @@ impl QolipService {
     ) -> Result<Vec<super::QolipRework>, QolipError> {
         super::reworks::normalize_request(&mut input.request_id, &mut input.rework_ids, false)?;
         let allowed = self.warehouses_for_principal(principal, false).await?;
-        self.store
+        let entries = self.store
             .return_reworks(
                 &input,
                 principal,
                 if is_admin { None } else { Some(&allowed) },
             )
-            .await
+            .await?;
+        self.notify_storage_changed();
+        Ok(entries)
     }
 }

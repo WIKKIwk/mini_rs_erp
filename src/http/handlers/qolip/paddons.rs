@@ -1,6 +1,30 @@
 use super::*;
 use crate::core::qolip::{QolipStorageAction, QolipStorageError, QolipStorageQuery};
 
+#[derive(serde::Deserialize)]
+pub struct StorageRevisionQuery {
+    #[serde(default)]
+    after: String,
+}
+
+pub async fn storage_revision(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<StorageRevisionQuery>,
+) -> Result<([(axum::http::HeaderName, &'static str); 1], Json<serde_json::Value>), (StatusCode, Json<QolipErrorResponse>)> {
+    let principal = authenticated_principal(&state, &headers).await?;
+    ensure_qolip_access(&state, &principal).await?;
+    let revision = state.qolip.wait_for_storage_revision(&query.after).await;
+    if revision != query.after {
+        let principal = authenticated_principal(&state, &headers).await?;
+        ensure_qolip_access(&state, &principal).await?;
+    }
+    Ok((
+        [(axum::http::header::CACHE_CONTROL, "private, no-store")],
+        Json(serde_json::json!({"ok": true, "storage_revision": revision})),
+    ))
+}
+
 fn storage_error(e: QolipStorageError) -> (StatusCode, Json<QolipErrorResponse>) {
     match e {
         QolipStorageError::Conflict(code) => conflict(code),

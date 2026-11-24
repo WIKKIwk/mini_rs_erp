@@ -53,6 +53,37 @@ impl PostgresQolipStore {
 
 #[async_trait]
 impl QolipStorePort for PostgresQolipStore {
+    async fn unavailable_molds(
+        &self,
+        codes: &[String],
+    ) -> Result<std::collections::BTreeMap<String, String>, QolipError> {
+        if codes.is_empty() {
+            return Ok(std::collections::BTreeMap::new());
+        }
+        let keys: Vec<_> = codes.iter().map(|code| code.trim().to_lowercase()).collect();
+        let rows = sqlx::query_as::<_, (String, String)>(concat!(
+            "SELECT code_key, reason FROM (",
+            include_str!("postgres_qolip/unavailable_molds.sql"),
+            ") unavailable WHERE code_key = ANY($1)"
+        ))
+        .bind(keys)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(reworks::storage_error)?;
+        Ok(rows.into_iter().collect())
+    }
+
+    async fn placement_products(
+        &self,
+        query: &str,
+        limit: usize,
+        warehouse: &str,
+    ) -> Result<Vec<QolipProduct>, QolipError> {
+        let allowed = [warehouse.to_owned()];
+        catalog::load_products_inner(
+            &self.pool, query, Some(limit as i64), true, Some(&allowed), None, true,
+        ).await
+    }
     async fn qolip_storage_states(&self, codes: &[String]) -> Result<std::collections::BTreeMap<String, String>, QolipError> {
         let rows = sqlx::query_as::<_, (String, String)>(
             "SELECT lower(btrim(code)), public.mini_qolip_storage_state(code) FROM unnest($1::text[]) code WHERE public.mini_qolip_storage_state(code) <> ''"
@@ -89,7 +120,7 @@ impl QolipStorePort for PostgresQolipStore {
     async fn catalog_detail(
         &self, item_code: &str, allowed: Option<&[String]>,
     ) -> Result<Vec<QolipProduct>, QolipError> {
-        catalog::load_products_inner(&self.pool, "", None, true, allowed, Some(item_code)).await
+        catalog::load_products_inner(&self.pool, "", None, true, allowed, Some(item_code), false).await
     }
     async fn next_set_id(&self) -> Result<String, QolipError> {
         sqlx::query_scalar("SELECT public.mini_qolip_next_set_id()")
