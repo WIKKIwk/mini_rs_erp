@@ -3,10 +3,69 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::core::auth::models::PrincipalRole;
+
 pub const SCALE: i64 = 1_000_000;
 pub const MAX_PRODUCTION_NOTE_CHARS: usize = 2000;
 pub const MAX_PRODUCTION_NOTE_ROLLS: usize = 100;
 const MAX: i64 = 999_999_999_999_999_999;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PreparationNoteViewerRole {
+    RezkaMaster,
+    HomashyoRezkachi,
+    RezkaWorker,
+    Aparatchi,
+    TayyorlovMasteri,
+    MaterialTaminotchi,
+    Werka,
+    Metalayzer,
+    Qolipchi,
+    Brigader,
+    Admin,
+}
+
+impl PreparationNoteViewerRole {
+    pub fn for_principal(role: PrincipalRole) -> Option<Self> {
+        Some(match role {
+            PrincipalRole::RezkaMaster => Self::RezkaMaster,
+            PrincipalRole::HomashyoRezkachi => Self::HomashyoRezkachi,
+            PrincipalRole::Aparatchi => Self::Aparatchi,
+            PrincipalRole::TayyorlovMasteri => Self::TayyorlovMasteri,
+            PrincipalRole::MaterialTaminotchi => Self::MaterialTaminotchi,
+            PrincipalRole::Werka => Self::Werka,
+            PrincipalRole::Metalayzer => Self::Metalayzer,
+            PrincipalRole::Qolipchi => Self::Qolipchi,
+            PrincipalRole::Brigader => Self::Brigader,
+            PrincipalRole::Admin => Self::Admin,
+            _ => return None,
+        })
+    }
+
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::RezkaMaster => "rezka_master",
+            Self::HomashyoRezkachi => "homashyo_rezkachi",
+            Self::RezkaWorker => "rezka_worker",
+            Self::Aparatchi => "aparatchi",
+            Self::TayyorlovMasteri => "tayyorlov_masteri",
+            Self::MaterialTaminotchi => "material_taminotchi",
+            Self::Werka => "werka",
+            Self::Metalayzer => "metalayzer",
+            Self::Qolipchi => "qolipchi",
+            Self::Brigader => "brigader",
+            Self::Admin => "admin",
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PreparationNoteAudience {
+    All,
+    Roles { roles: BTreeSet<PreparationNoteViewerRole> },
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -18,36 +77,56 @@ pub struct PreparationRollNoteTarget {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "scope", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PreparationOutputNoteUpdate {
-    Batch { batch_id: String, expected_revision: i64, text: String },
-    Rolls { rolls: Vec<PreparationRollNoteTarget>, text: String },
+    Batch {
+        batch_id: String,
+        expected_revision: i64,
+        text: Option<String>,
+        audience: Option<PreparationNoteAudience>,
+    },
+    Rolls {
+        rolls: Vec<PreparationRollNoteTarget>,
+        text: Option<String>,
+        audience: Option<PreparationNoteAudience>,
+    },
+}
+
+pub struct PreparationNoteChanges<'a> {
+    pub target_kind: &'static str,
+    pub targets: BTreeMap<&'a str, i64>,
+    pub text: Option<&'a str>,
+    pub audience: Option<&'a PreparationNoteAudience>,
 }
 
 impl PreparationOutputNoteUpdate {
-    pub fn targets(&self) -> Result<(&'static str, &str, BTreeMap<&str, i64>), PreparationError> {
-        let (kind, text, targets) = match self {
-            Self::Batch { batch_id, expected_revision, text } => {
+    pub fn changes(&self) -> Result<PreparationNoteChanges<'_>, PreparationError> {
+        let (target_kind, targets, text, audience) = match self {
+            Self::Batch { batch_id, expected_revision, text, audience } => {
                 let id = batch_id.trim();
                 if id.strip_prefix("batch:").is_none_or(|id| id.trim().is_empty()) {
                     return Err(PreparationError::Invalid("Batch tanlanmagan"));
                 }
-                ("batch", text, BTreeMap::from([(id, *expected_revision)]))
+                ("batch", BTreeMap::from([(id, *expected_revision)]), text, audience)
             }
-            Self::Rolls { rolls, text } => {
+            Self::Rolls { rolls, text, audience } => {
                 let selected: BTreeMap<_, _> = rolls.iter()
                     .map(|roll| (roll.receipt_name.trim(), roll.expected_revision)).collect();
                 if selected.is_empty() || selected.len() != rolls.len() || selected.len() > MAX_PRODUCTION_NOTE_ROLLS {
                     return Err(PreparationError::Invalid("1 dan 100 tagacha turli rulon tanlang"));
                 }
-                ("roll", text, selected)
+                ("roll", selected, text, audience)
             }
         };
         if targets.iter().any(|(id, rev)| id.is_empty() || id.len() > 1024 || id.contains('\0') || !(0..9_007_199_254_740_991).contains(rev)) {
             return Err(PreparationError::Invalid("Eslatma yozuvi yoki versiyasi noto‘g‘ri"));
         }
-        if text.trim().chars().count() > MAX_PRODUCTION_NOTE_CHARS || text.contains('\0') {
+        let text = text.as_deref().map(str::trim);
+        if text.is_some_and(|text| text.chars().count() > MAX_PRODUCTION_NOTE_CHARS || text.contains('\0')) {
             return Err(PreparationError::Invalid("Eslatma 2000 belgidan oshmasligi kerak"));
         }
-        Ok((kind, text.trim(), targets))
+        if text.is_none() && audience.is_none() {
+            return Err(PreparationError::Invalid("Eslatma yoki ko‘rinish sozlamasini kiriting"));
+        }
+        Ok(PreparationNoteChanges { target_kind, targets, text, audience: audience.as_ref() })
     }
 }
 

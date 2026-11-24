@@ -1,7 +1,37 @@
 use super::*;
 
 #[tokio::test]
-async fn preparation_reprint_is_limited_to_own_submitted_receipts() {
+async fn scanned_preparation_notes_allow_rezka_roles_without_granting_note_edits() {
+    let state = test_state();
+    let actors = [
+        (PrincipalRole::RezkaMaster, StatusCode::OK),
+        (PrincipalRole::HomashyoRezkachi, StatusCode::OK),
+        (PrincipalRole::Aparatchi, StatusCode::OK),
+        (PrincipalRole::Customer, StatusCode::FORBIDDEN),
+    ];
+    let router = build_router(state.clone());
+    const SCAN: &str = "/v1/mobile/preparation/production/notes/scan?barcode=roll-qr";
+    let response = router.clone().oneshot(request("GET", SCAN, "")).await.unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    for (role, expected) in actors {
+        let token = session_for(&state, role, "note-scan-test").await;
+        let response = router.clone().oneshot(request("GET", SCAN, &token)).await.unwrap();
+        assert_eq!(response.status(), expected, "{role:?}");
+        if expected == StatusCode::OK {
+            assert_eq!(json_body(response).await, serde_json::json!({
+                "barcode": "roll-qr", "batch_note": null, "roll_note": null,
+            }));
+            let response = router.clone().oneshot(request_with_body(
+                "PATCH", "/v1/mobile/preparation/production/notes", &token,
+                r#"{"scope":"batch","batch_id":"batch:test","text":"Eslatma","expected_revision":0}"#,
+            )).await.unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN, "{role:?}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn preparation_receipt_reprint_and_scanned_note_visibility_are_scoped() {
     use crate::core::apparatus_standard::CanonicalApparatusService;
     use crate::db::postgres::{apply_foundation_migration, apply_postgres_migrations_through_version, postgres_test_database_options};
     use crate::db::postgres_canonical_apparatus::PostgresCanonicalApparatusRepository;
@@ -71,12 +101,60 @@ async fn preparation_reprint_is_limited_to_own_submitted_receipts() {
     ).fetch_one(&seed).await.unwrap();
     assert_eq!(quantity.0, 1);
     assert!(quantity.1.starts_with("23"));
+    check_scanned_note_roles(&router, &state, &own).await;
     drop(router);
     drop(state);
     runtime.close().await;
     seed.close().await;
     sqlx::query(&format!(r#"DROP DATABASE "{db}" WITH (FORCE)"#)).execute(&admin).await.unwrap();
     admin.close().await;
+}
+
+async fn check_scanned_note_roles(router: &axum::Router, state: &AppState, owner: &str) {
+    state.apparatus.bootstrap_factory_defaults().await.unwrap();
+    for (worker, apparatus) in [
+        ("cut-worker", "apparatus:default:asset-010"),
+        ("print-worker", "apparatus:default:bosma_7"),
+    ] {
+        state.admin.upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::Aparatchi,
+            principal_ref: worker.into(),
+            role_id: "aparatchi".into(),
+            assigned_apparatus: vec![apparatus.into()],
+            assigned_item_groups: vec![],
+        }).await.unwrap();
+    }
+    let response = router.clone().oneshot(request_with_body(
+        "PATCH", "/v1/mobile/preparation/production/notes", owner,
+        r#"{"scope":"rolls","rolls":[{"receipt_name":"receipt-own","expected_revision":0}],"text":"Restricted note","audience":{"mode":"roles","roles":["rezka_worker","homashyo_rezkachi"]}}"#,
+    )).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    for revision in [1, 2] {
+        if revision == 2 {
+            let response = router.clone().oneshot(request_with_body(
+                "PATCH", "/v1/mobile/preparation/production/notes", owner,
+                r#"{"scope":"rolls","rolls":[{"receipt_name":"receipt-own","expected_revision":1}],"audience":{"mode":"all"}}"#,
+            )).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+        for (role, viewer, selected, all_cutters) in [
+            (PrincipalRole::Aparatchi, "cut-worker", true, true),
+            (PrincipalRole::Aparatchi, "print-worker", false, false),
+            (PrincipalRole::HomashyoRezkachi, "raw-cutter", true, true),
+            (PrincipalRole::RezkaMaster, "rezka-master", false, true),
+            (PrincipalRole::MaterialTaminotchi, "supplier", false, false),
+            (PrincipalRole::TayyorlovMasteri, "prep-reprint", false, false),
+        ] {
+            let token = session_for(state, role, viewer).await;
+            let response = router.clone().oneshot(request(
+                "GET", "/v1/mobile/preparation/production/notes/scan?barcode=qr-own", &token,
+            )).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{viewer}");
+            let visible = if revision == 1 { selected } else { all_cutters };
+            let expected = visible.then(|| serde_json::json!({"text":"Restricted note","revision":revision}));
+            assert_eq!(json_body(response).await["roll_note"], serde_json::json!(expected), "{viewer}");
+        }
+    }
 }
 
 #[tokio::test]

@@ -2,8 +2,11 @@ WITH receipts AS MATERIALIZED (
     SELECT upper(btrim(stock.barcode)) AS barcode, lower(receipt.barcode) AS epc,
            receipt.name AS receipt_name, receipt.payload_json->>'actor_ref' AS owner_ref
     FROM mini_raw_material_stock stock
+    -- Cut pieces keep the source receipt but have their own barcode.
     JOIN mini_gscale_receipts receipt ON receipt.name=stock.source_receipt_id
+      AND lower(receipt.barcode)=lower(stock.barcode)
     WHERE lower(stock.barcode)=ANY($1::text[]) AND receipt.status='submitted'
+      AND stock.status IN ('available','reserved','in_use')
       AND receipt.payload_json->>'actor_role'='tayyorlov_masteri'
 ), owners AS (
     SELECT DISTINCT r.owner_ref FROM receipts r

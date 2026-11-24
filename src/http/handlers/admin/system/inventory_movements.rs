@@ -4,6 +4,7 @@ use crate::core::inventory_movements::{
     InventoryRelocationCreate, InventoryReturnBatchCreate, InventoryTransferAction,
     InventoryTransferActionKind, InventoryTransferCreate, InventoryTransferQuery,
 };
+use crate::core::preparation::PreparationNoteViewerRole;
 
 pub async fn inventory_locations(
     State(state): State<AppState>,
@@ -76,7 +77,11 @@ pub(super) async fn inventory_asset_rows(
     let (mut production_notes, mut output_notes) = if let Some(store) = state.preparation.as_ref() {
         let output_notes = async {
             if actor.principal.role == PrincipalRole::TayyorlovMasteri {
-                store.output_notes_for_inventory(&barcodes).await
+                store.output_notes_for_inventory(
+                    &barcodes,
+                    PreparationNoteViewerRole::TayyorlovMasteri,
+                    &actor.principal.ref_,
+                ).await
             } else {
                 Ok(Default::default())
             }

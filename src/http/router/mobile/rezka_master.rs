@@ -50,6 +50,9 @@ pub(super) fn allows(method: &Method, path: &str) -> bool {
     if path == "admin/apparatus" {
         return *method == Method::GET;
     }
+    if path == "preparation/production/notes/scan" {
+        return *method == Method::GET;
+    }
     if matches!(
         path,
         "admin/raw-material-start-requirements"

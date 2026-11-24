@@ -6,7 +6,10 @@ pub(super) fn output_note_json(alias: &str) -> String {
     format!(
         "CASE WHEN {alias}.revision IS NOT NULL THEN jsonb_build_object(
         'text',{alias}.note,'revision',{alias}.revision,
-        'updated_by_name',{alias}.updated_by_name,'updated_at',{alias}.updated_at) END"
+        'updated_by_name',{alias}.updated_by_name,'updated_at',{alias}.updated_at,
+        'audience',CASE WHEN {alias}.audience_roles IS NULL
+            THEN jsonb_build_object('mode','all')
+            ELSE jsonb_build_object('mode','roles','roles',{alias}.audience_roles) END) END"
     )
 }
 
@@ -18,7 +21,7 @@ impl PostgresPreparationStore {
         actor: &Principal,
         input: &PreparationOutputNoteUpdate,
     ) -> Result<Option<BTreeMap<String, Value>>, PreparationError> {
-        let (kind, text, targets) = input.targets()?;
+        let PreparationNoteChanges { target_kind: kind, targets, text, audience } = input.changes()?;
         let owner = actor.ref_.trim();
         if actor.role != PrincipalRole::TayyorlovMasteri || owner.is_empty() {
             return Err(PreparationError::Forbidden);
@@ -72,24 +75,49 @@ impl PostgresPreparationStore {
             ));
         }
         let revisions: Vec<_> = targets.values().map(|rev| rev + 1).collect();
+        let audience_roles = match audience {
+            Some(PreparationNoteAudience::Roles { roles }) => {
+                Some(roles.iter().map(|role| role.code()).collect::<Vec<_>>())
+            }
+            _ => None,
+        };
         let notes = sqlx::query_as::<_, (String, Value)>(&format!(
             "INSERT INTO mini_preparation_output_notes AS saved
-                (owner_ref,target_kind,target_id,note,revision,updated_by_name)
-             SELECT $1,$2,target_id,$3,revision,$4
+                (owner_ref,target_kind,target_id,note,revision,updated_by_name,audience_roles)
+             SELECT $1,$2,target_id,coalesce($3::text,''),revision,$4,$7::text[]
              FROM unnest($5::text[],$6::bigint[]) AS targets(target_id,revision)
              ON CONFLICT (owner_ref,target_kind,target_id) DO UPDATE SET
-                note=excluded.note,revision=excluded.revision,updated_by_name=excluded.updated_by_name,updated_at=now()
+                note=coalesce($3,saved.note),revision=excluded.revision,
+                updated_by_name=excluded.updated_by_name,updated_at=now(),
+                audience_roles=CASE WHEN $8 THEN excluded.audience_roles ELSE saved.audience_roles END
              RETURNING saved.target_id,{}", output_note_json("saved")
         )).bind(owner).bind(kind).bind(text).bind(actor.display_name.trim()).bind(&ids).bind(&revisions)
+            .bind(audience_roles).bind(audience.is_some())
             .fetch_all(&mut *tx).await?;
         tx.commit().await?;
         Ok(Some(notes.into_iter().collect()))
     }
 
-    /// Only call with barcodes already filtered by the inventory reader.
+    pub async fn output_notes_for_barcode(
+        &self,
+        barcode: &str,
+        viewer: PreparationNoteViewerRole,
+        viewer_ref: &str,
+    ) -> Result<ReceiptOutputNotes, PreparationError> {
+        let mut notes = self
+            .output_notes_for_inventory(&[barcode.to_owned()], viewer, viewer_ref)
+            .await?;
+        Ok(notes
+            .remove(&barcode.trim().to_uppercase())
+            .unwrap_or_default())
+    }
+
+    /// Only call with barcodes already filtered by the inventory reader or an exact scan lookup.
     pub async fn output_notes_for_inventory(
         &self,
         barcodes: &[String],
+        viewer: PreparationNoteViewerRole,
+        viewer_ref: &str,
     ) -> Result<BTreeMap<String, ReceiptOutputNotes>, PreparationError> {
         if barcodes.is_empty() {
             return Ok(BTreeMap::new());
@@ -100,8 +128,10 @@ impl PostgresPreparationStore {
             LEFT JOIN membership m ON m.owner_ref=r.owner_ref AND m.epc=r.epc
             LEFT JOIN mini_preparation_output_notes batch_note ON batch_note.owner_ref=r.owner_ref
                 AND batch_note.target_kind='batch' AND batch_note.target_id='batch:'||m.batch_id
+                AND (batch_note.audience_roles IS NULL OR $2=ANY(batch_note.audience_roles) OR $3=batch_note.owner_ref)
             LEFT JOIN mini_preparation_output_notes roll_note ON roll_note.owner_ref=r.owner_ref
-                AND roll_note.target_kind='roll' AND roll_note.target_id=r.receipt_name",
+                AND roll_note.target_kind='roll' AND roll_note.target_id=r.receipt_name
+                AND (roll_note.audience_roles IS NULL OR $2=ANY(roll_note.audience_roles) OR $3=roll_note.owner_ref)",
             include_str!("output_notes_inventory.sql"),
             output_note_json("batch_note"),
             output_note_json("roll_note")
@@ -112,6 +142,8 @@ impl PostgresPreparationStore {
             .collect::<Vec<_>>();
         let rows = sqlx::query_as::<_, (String, Option<Value>, Option<Value>)>(&query)
             .bind(barcodes)
+            .bind(viewer.code())
+            .bind(if viewer == PreparationNoteViewerRole::TayyorlovMasteri { viewer_ref.trim() } else { "" })
             .fetch_all(&self.pool)
             .await?;
         Ok(rows
