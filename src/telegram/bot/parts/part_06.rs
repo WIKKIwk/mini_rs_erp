@@ -353,6 +353,10 @@ async fn get_telegram_file(
     .await
 }
 
+fn bot_transport_error(error: reqwest::Error) -> TelegramError {
+    TelegramError::Transport(error.without_url().to_string())
+}
+
 async fn download_telegram_file(
     service: &TelegramService,
     token: &str,
@@ -363,7 +367,7 @@ async fn download_telegram_file(
         .get(format!("{TELEGRAM_FILE_BASE}{token}/{file_path}"))
         .send()
         .await
-        .map_err(|error| TelegramError::Transport(error.to_string()))?;
+        .map_err(bot_transport_error)?;
     let status = response.status();
     if !status.is_success() {
         return Err(TelegramError::Transport(format!(
@@ -374,7 +378,7 @@ async fn download_telegram_file(
         .bytes()
         .await
         .map(|bytes| bytes.to_vec())
-        .map_err(|error| TelegramError::Transport(error.to_string()))
+        .map_err(bot_transport_error)
 }
 
 async fn request_json<T: for<'de> Deserialize<'de> + Default, P: Serialize>(
@@ -394,7 +398,7 @@ async fn request_json<T: for<'de> Deserialize<'de> + Default, P: Serialize>(
         .json(payload)
         .send()
         .await
-        .map_err(|error| TelegramError::Transport(error.to_string()))?;
+        .map_err(bot_transport_error)?;
     parse_api_response(response).await
 }
 
@@ -405,7 +409,7 @@ async fn parse_api_response<T: for<'de> Deserialize<'de> + Default>(
     let payload = response
         .json::<TelegramApiResponse<T>>()
         .await
-        .map_err(|error| TelegramError::Transport(error.to_string()))?;
+        .map_err(bot_transport_error)?;
     if !status.is_success() || !payload.ok {
         return Err(TelegramError::Transport(
             payload

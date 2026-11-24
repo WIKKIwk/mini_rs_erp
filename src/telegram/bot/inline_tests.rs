@@ -1,6 +1,16 @@
 #[cfg(test)]
 mod tests {
     #[test]
+    fn bot_transport_diagnostics_strip_private_request_urls() {
+        let url = reqwest::Url::parse("https://example.invalid/bot-test-credential/getUpdates").unwrap();
+        let error = reqwest::Client::new().get("invalid url").build().unwrap_err().with_url(url);
+        let diagnostic = format!("{:?}", super::bot_transport_error(error));
+        assert!(diagnostic.contains("builder error"));
+        assert!(!diagnostic.contains("test-credential"));
+        assert!(!diagnostic.contains("example.invalid"));
+    }
+
+    #[test]
     fn side_buttons_match_the_embedded_reference_image() {
         let image = image::load_from_memory(super::ORDER_SIDE_IMAGE).unwrap();
         assert_eq!((image.width(), image.height()), (1655, 624));

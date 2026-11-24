@@ -49,7 +49,7 @@ async fn send_photo(
         .multipart(form)
         .send()
         .await
-        .map_err(|error| TelegramError::Transport(error.to_string()))?;
+        .map_err(bot_transport_error)?;
     parse_api_response(response)
         .await
         .map(|_: serde_json::Value| ())
@@ -79,7 +79,7 @@ async fn send_document(
         .multipart(form)
         .send()
         .await
-        .map_err(|error| TelegramError::Transport(error.to_string()))?;
+        .map_err(bot_transport_error)?;
     parse_api_response(response)
         .await
         .map(|_: serde_json::Value| ())
@@ -147,7 +147,7 @@ async fn send_message_with_markup_result(
         .json(&body)
         .send()
         .await
-        .map_err(|error| TelegramError::Transport(error.to_string()))?;
+        .map_err(bot_transport_error)?;
     let message: TelegramSentMessage = parse_api_response(response).await?;
     Ok(message.message_id)
 }
@@ -251,7 +251,7 @@ async fn edit_message_with_markup(
         .json(&body)
         .send()
         .await
-        .map_err(|error| TelegramError::Transport(error.to_string()))?;
+        .map_err(bot_transport_error)?;
     parse_api_response(response)
         .await
         .map(|_: serde_json::Value| ())
@@ -277,7 +277,7 @@ async fn edit_inline_message_with_markup(
         .json(&body)
         .send()
         .await
-        .map_err(|error| TelegramError::Transport(error.to_string()))?;
+        .map_err(bot_transport_error)?;
     parse_api_response(response)
         .await
         .map(|_: bool| ())
@@ -305,7 +305,7 @@ async fn delete_message(
         .json(&body)
         .send()
         .await
-        .map_err(|error| TelegramError::Transport(error.to_string()))?;
+        .map_err(bot_transport_error)?;
     parse_api_response(response).await.map(|_: bool| ())
 }
 
@@ -330,7 +330,7 @@ async fn answer_callback_query(
         .json(&body)
         .send()
         .await
-        .map_err(|error| TelegramError::Transport(error.to_string()))?;
+        .map_err(bot_transport_error)?;
     parse_api_response(response)
         .await
         .map(|_: serde_json::Value| ())
@@ -366,7 +366,7 @@ async fn answer_inline_query_page(
         .json(&body)
         .send()
         .await
-        .map_err(|error| TelegramError::Transport(error.to_string()))?;
+        .map_err(bot_transport_error)?;
     parse_api_response(response)
         .await
         .map(|_: serde_json::Value| ())
@@ -651,7 +651,7 @@ async fn send_side_step(
             reqwest::multipart::Part::bytes(ORDER_SIDE_IMAGE.to_vec())
                 .file_name("taraf.jpg")
                 .mime_str("image/jpeg")
-                .map_err(|error| TelegramError::Transport(error.to_string()))?,
+                .map_err(bot_transport_error)?,
         );
     let response = service
         .http_client()
@@ -659,7 +659,7 @@ async fn send_side_step(
         .multipart(form)
         .send()
         .await
-        .map_err(|error| TelegramError::Transport(error.to_string()))?;
+        .map_err(bot_transport_error)?;
     let message: TelegramSentMessage = parse_api_response(response).await?;
     draft.side_prompt_message_id = Some(message.message_id);
     service.save_order_draft(chat_id, draft).await?;
