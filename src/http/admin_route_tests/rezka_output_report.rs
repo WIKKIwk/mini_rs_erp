@@ -6,13 +6,14 @@ use crate::core::production_map::{
 };
 
 const CUT: &str = "apparatus:default:asset-010";
-const ORDER: &str = "card-report-order";
+const ORDER: &str = "zakaz-card-report";
 const CYCLE: &str = "run:123:card-report";
 
 struct CardOnlyStore {
     inner: Arc<MemoryProductionMapStore>,
     map_reads: AtomicUsize,
     control_reads: AtomicUsize,
+    stage_control_reads: AtomicUsize,
     session_reads: AtomicUsize,
     batch_reads: AtomicUsize,
 }
@@ -32,6 +33,16 @@ impl ProductionMapStorePort for CardOnlyStore {
     ) -> Result<Option<OrderControlRecord>, ProductionMapError> {
         self.control_reads.fetch_add(1, Ordering::SeqCst);
         ProductionMapStorePort::order_control_by_id(self.inner.as_ref(), id).await
+    }
+    async fn stage_order_control_by_id(
+        &self,
+        id: &str,
+        apparatus: &str,
+        stage: &str,
+    ) -> Result<Option<OrderControlRecord>, ProductionMapError> {
+        self.stage_control_reads.fetch_add(1, Ordering::SeqCst);
+        ProductionMapStorePort::stage_order_control_by_id(self.inner.as_ref(), id, apparatus, stage)
+            .await
     }
     async fn active_order_run_session(
         &self,
@@ -179,6 +190,7 @@ async fn fixture() -> (AppState, Arc<CardOnlyStore>, String) {
         inner,
         map_reads: AtomicUsize::new(0),
         control_reads: AtomicUsize::new(0),
+        stage_control_reads: AtomicUsize::new(0),
         session_reads: AtomicUsize::new(0),
         batch_reads: AtomicUsize::new(0),
     });
@@ -226,8 +238,43 @@ async fn rezka_output_report_reads_only_the_active_card_and_preserves_saved_slot
     );
     assert_eq!(store.map_reads.load(Ordering::SeqCst), 1);
     assert_eq!(store.control_reads.load(Ordering::SeqCst), 1);
+    assert_eq!(store.stage_control_reads.load(Ordering::SeqCst), 1);
     assert_eq!(store.session_reads.load(Ordering::SeqCst), 1);
     assert_eq!(store.batch_reads.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn rezka_output_report_respects_the_hold_on_its_own_stage() {
+    use crate::core::production_map::{OrderFreezeRequest, OrderFreezeRequestStatus};
+    let (state, store, token) = fixture().await;
+    let router = build_router(state);
+    for (stage, expected) in [("other-cut", StatusCode::OK), ("cut", StatusCode::CONFLICT)] {
+        let mut record = OrderControlRecord::active(ORDER);
+        record.state = OrderControlState::FreezeRequested;
+        record.stage_node_id = stage.into();
+        record.freeze_request = Some(OrderFreezeRequest {
+            scope: "stage".into(),
+            stage_node_id: stage.into(),
+            request_id: format!("hold-{stage}"),
+            status: OrderFreezeRequestStatus::Pending,
+            target_session_id: CYCLE.into(),
+            target_apparatus: CUT.into(),
+            target_worker_role: "aparatchi".into(),
+            target_worker_ref: "card-report-worker".into(),
+            target_worker_display_name: "Worker".into(),
+            requested_at_unix: 2,
+            transitioned_at_unix: 2,
+        });
+        ProductionMapStorePort::put_order_control_state(store.inner.as_ref(), record)
+            .await
+            .unwrap();
+        let response = router
+            .clone()
+            .oneshot(request("GET", &uri(CUT, ORDER), &token))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected, "held stage {stage}");
+    }
 }
 
 #[tokio::test]
@@ -305,7 +352,7 @@ async fn rezka_output_report_rejects_paused_frozen_missing_and_changed_cycles_as
     }
     let response = router
         .clone()
-        .oneshot(request("GET", &uri(CUT, "missing-card-order"), &token))
+        .oneshot(request("GET", &uri(CUT, "zakaz-missing-card"), &token))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::CONFLICT);

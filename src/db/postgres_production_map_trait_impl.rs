@@ -193,6 +193,25 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         order_control_helpers::load_stage_controls(&self.pool).await
     }
 
+    async fn stage_order_control_by_id(
+        &self,
+        order_id: &str,
+        apparatus: &str,
+        stage_node_id: &str,
+    ) -> Result<Option<OrderControlRecord>, ProductionMapError> {
+        let record = sqlx::query_scalar::<_, sqlx::types::Json<OrderControlRecord>>(
+            "SELECT record_json FROM mini_stage_order_controls
+             WHERE order_id = $1 AND canonical_apparatus_id = $2 AND stage_node_id = $3",
+        )
+        .bind(order_id.trim())
+        .bind(apparatus.trim())
+        .bind(stage_node_id.trim())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+        Ok(record.map(|json| json.0))
+    }
+
     async fn order_control_by_id(&self, order_id: &str) -> Result<Option<OrderControlRecord>, ProductionMapError> {
         #[cfg(test)]
         if self.legacy_queue_reads { return Ok(self.order_control_states().await?.remove(order_id.trim())); }

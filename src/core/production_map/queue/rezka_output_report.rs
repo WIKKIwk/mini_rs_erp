@@ -33,6 +33,9 @@ impl ProductionMapService {
         if !apparatus::is_rezka_apparatus(&canonical) {
             return Err(ProductionMapError::ProgressInputInvalid);
         }
+        if !order_id.starts_with("zakaz-") {
+            return Err(ProductionMapError::MapNotFound);
+        }
         let apparatus = canonical.runtime.apparatus_id.as_str();
         let (map, control, session) = tokio::try_join!(
             self.store.map_by_id(order_id),
@@ -59,11 +62,19 @@ impl ProductionMapService {
         {
             return Err(ProductionMapError::RezkaOutputCycleConflict);
         }
-        if self.effective_order_control_for_stage(order_id, apparatus, &session.stage_node_id).await?.state != OrderControlState::Active {
-            return Err(ProductionMapError::RezkaOutputCycleConflict);
-        }
         let stage = chain::work_stage_for_station(&map, apparatus, session.stage_node_id.trim())
             .ok_or(ProductionMapError::RezkaOutputCycleConflict)?;
+        if control
+            .as_ref()
+            .is_none_or(|record| record.early_close.is_none())
+            && self
+                .store
+                .stage_order_control_by_id(order_id, apparatus, &stage.node_id)
+                .await?
+                .is_some_and(|record| record.state != OrderControlState::Active)
+        {
+            return Err(ProductionMapError::RezkaOutputCycleConflict);
+        }
         let (_, partial_rolls) =
             snapshot_session_lineage(Some(&session), true, order_id, apparatus)
                 .ok_or(ProductionMapError::RezkaOutputCycleConflict)?;

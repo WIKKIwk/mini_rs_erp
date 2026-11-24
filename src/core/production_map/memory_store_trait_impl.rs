@@ -300,6 +300,20 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         Ok(self.stage_order_controls.read().await.values().cloned().collect())
     }
 
+    async fn stage_order_control_by_id(
+        &self,
+        order_id: &str,
+        apparatus: &str,
+        stage_node_id: &str,
+    ) -> Result<Option<OrderControlRecord>, ProductionMapError> {
+        let key = (
+            order_id.trim().to_owned(),
+            apparatus.trim().to_owned(),
+            stage_node_id.trim().to_owned(),
+        );
+        Ok(self.stage_order_controls.read().await.get(&key).cloned())
+    }
+
     async fn order_freeze_requests_for_audit(
         &self,
     ) -> Result<Vec<OrderFreezeAuditRecord>, ProductionMapError> {
