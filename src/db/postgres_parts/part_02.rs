@@ -215,12 +215,10 @@ async fn apply_migration(
     )
     .fetch_one(&mut **tx)
     .await?;
-    if !empty_lamination_backfill {
-        for statement in split_sql_statements(sql) {
-            sqlx::query::<Postgres>(&statement)
-                .execute(&mut **tx)
-                .await?;
-        }
+    if version == "0104_runtime_security_boundaries" {
+        apply_runtime_security_boundaries(tx, sql).await?;
+    } else if !empty_lamination_backfill {
+        execute_migration_statements(tx, sql).await?;
     }
     if rewrites_append_only_raw_material_events {
         sqlx::query(
@@ -236,6 +234,48 @@ async fn apply_migration(
         .execute(&mut **tx)
         .await?;
     Ok(())
+}
+
+async fn execute_migration_statements(
+    tx: &mut Transaction<'_, Postgres>,
+    sql: &str,
+) -> Result<(), sqlx::Error> {
+    for statement in split_sql_statements(sql) {
+        sqlx::query::<Postgres>(&statement)
+            .execute(&mut **tx)
+            .await?;
+    }
+    Ok(())
+}
+
+async fn apply_runtime_security_boundaries(
+    tx: &mut Transaction<'_, Postgres>,
+    sql: &str,
+) -> Result<(), sqlx::Error> {
+    use sqlx::Acquire;
+
+    // Roles are cluster-wide. A bootstrap in another database can commit the
+    // owner after 0104's existence check, outside our per-database lock.
+    let mut attempt = tx.begin().await?;
+    match execute_migration_statements(&mut attempt, sql).await {
+        Ok(()) => attempt.commit().await,
+        Err(error) => {
+            let collision = error
+                .as_database_error()
+                .and_then(|db| db.try_downcast_ref::<sqlx::postgres::PgDatabaseError>())
+                .is_some_and(|pg| {
+                    (pg.code() == "23505" && pg.constraint() == Some("pg_authid_rolname_index"))
+                        || (pg.code() == "42710" && pg.routine() == Some("CreateRole"))
+                });
+            attempt.rollback().await?;
+            if !collision {
+                return Err(error);
+            }
+            // Rerun all role, membership and ownership checks on a fresh
+            // READ COMMITTED snapshot. Any failure on this attempt is final.
+            execute_migration_statements(tx, sql).await
+        }
+    }
 }
 
 fn migration_checksum(sql: &str) -> String {

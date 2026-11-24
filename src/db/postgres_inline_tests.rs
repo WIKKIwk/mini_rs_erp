@@ -1309,6 +1309,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn owner_role_collision_rechecks_boundaries_and_preserves_other_failures() {
+        let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://wikki@127.0.0.1:5432/postgres".to_string());
+        let pool = PgPool::connect(&admin_url).await.expect("admin db");
+        for (constraint, expected_message) in [
+            ("pg_authid_rolname_index", "permission check still failed"),
+            ("ordinary_constraint", "unrelated duplicate"),
+        ] {
+            let mut tx = pool.begin().await.unwrap();
+            sqlx::query("CREATE TEMP SEQUENCE boundary_attempt")
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            // Sequence increments survive rollback to a savepoint. A second
+            // execution therefore reaches the same check as a committed owner.
+            let sql = format!(
+                "DO $$ BEGIN
+                    IF nextval('pg_temp.boundary_attempt') = 1 THEN
+                        RAISE EXCEPTION 'unrelated duplicate' USING ERRCODE = '23505', CONSTRAINT = '{constraint}';
+                    END IF;
+                    RAISE EXCEPTION 'permission check still failed';
+                 END $$"
+            );
+            let error = apply_runtime_security_boundaries(&mut tx, &sql)
+                .await
+                .unwrap_err();
+            assert_eq!(
+                error.as_database_error().unwrap().message(),
+                expected_message
+            );
+            tx.rollback().await.unwrap();
+        }
+    }
+
+    #[tokio::test]
     async fn postgres_live_foundation_migration_applies_to_clean_database() {
         let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
             .unwrap_or_else(|_| "postgres://wikki@127.0.0.1:5432/postgres".to_string());
