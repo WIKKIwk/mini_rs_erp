@@ -47,6 +47,16 @@ pub(crate) fn work_report(session: &OrderRunSession) -> Option<StageWorkReport> 
     serde_json::from_value(session.payload_json.get(WORK_REPORT)?.clone()).ok()
 }
 
+// A manager can accept the operator's zero-output completion request without
+// a production report. Keep that decision distinct from measured output.
+fn approved_issue_completion(session: &OrderRunSession) -> bool {
+    session
+        .payload_json
+        .get("completed_with_issue")
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
+}
+
 pub(crate) fn stamp_work_report(
     session: &mut OrderRunSession,
     report_id: &str,
@@ -145,8 +155,10 @@ pub(crate) fn work_control_projected(
     Some(StageWorkControl {
         completed: status.completed,
         local_completed: !status.has_available_input
-            && latest
-                .is_some_and(|s| s.status == OrderRunStatus::Completed && work_report(s).is_some()),
+            && latest.is_some_and(|s| {
+                s.status == OrderRunStatus::Completed
+                    && (work_report(s).is_some() || approved_issue_completion(s))
+            }),
         upstream_closed: status.upstream_closed,
         astatka_available: latest.is_some_and(|s| s.status == OrderRunStatus::Completed),
         astatka_required: status
@@ -288,6 +300,7 @@ pub(crate) fn stage_work_statuses_projected(
                 }
             } else if session.status == OrderRunStatus::Completed
                 && session.payload_json.get(WORK_PROTOCOL).is_some()
+                && !approved_issue_completion(session)
             {
                 required.push(session.apparatus.clone());
             }

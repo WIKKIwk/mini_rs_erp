@@ -89,6 +89,28 @@ fn first_finisher_report_does_not_close_an_active_peer() {
 }
 
 #[test]
+fn approved_zero_output_closes_only_its_execution_without_a_production_report() {
+    let mut approved = session("a", OrderRunStatus::Completed, None);
+    approved.payload_json["completed_with_issue"] = serde_json::json!(true);
+    let mut runs = vec![
+        session("source", OrderRunStatus::Completed, Some(1)),
+        approved,
+        session("b", OrderRunStatus::Active, None),
+    ];
+    let status = statuses(&runs, &[]);
+    assert!(!shared(&status).completed);
+    let own = work_control(&map(), "apparatus:test:a", "a", &status, &runs).unwrap();
+    assert!(own.local_completed);
+    assert!(!own.astatka_required);
+
+    runs[2] = session("b", OrderRunStatus::Completed, Some(2));
+    let status = statuses(&runs, &[]);
+    assert!(shared(&status).completed);
+    assert_eq!(shared(&status).last_worker_ref, "worker-b");
+    assert!(work_report(&runs[1]).is_none());
+}
+
+#[test]
 fn late_upstream_closing_requests_only_missing_reports() {
     let mut s = vec![
         session("source", OrderRunStatus::RollDetached, None),

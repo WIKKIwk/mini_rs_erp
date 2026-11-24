@@ -275,6 +275,9 @@ pub(super) async fn resolve_completion_request_decision(
         raw_material_stock_warehouses = raw_material_outcome.warehouses;
         put_queue_action_state_tx(&mut tx, &resolution.event).await?;
         insert_queue_action_event_tx(&mut tx, &resolution.event).await?;
+        if let Some(session) = resolution.session {
+            put_order_run_session_tx(&mut tx, &session).await?;
+        }
         super::lifecycle::refresh_production_order_lifecycle_tx(
             &mut tx,
             &resolution.event.order_id,
@@ -283,9 +286,6 @@ pub(super) async fn resolve_completion_request_decision(
             "completion_request_approved",
         )
         .await?;
-        if let Some(session) = resolution.session {
-            put_order_run_session_tx(&mut tx, &session).await?;
-        }
         if let Some(report) = resolution.returned_paint_report {
             insert_returned_paint_request_tx(&mut tx, &report)
                 .await

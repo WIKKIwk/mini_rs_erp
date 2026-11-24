@@ -410,7 +410,6 @@ pub(super) async fn resolve_completion_request_decision(
             .await
             .insert(apparatus.to_string(), resolution.states);
         store.queue_events.write().await.push(resolution.event);
-        refresh_production_order_lifecycles(store, &[order_id]).await?;
         if let Some(session) = resolution.session {
             store
                 .order_run_sessions
@@ -418,6 +417,7 @@ pub(super) async fn resolve_completion_request_decision(
                 .await
                 .insert(session.session_id.clone(), session);
         }
+        refresh_production_order_lifecycles(store, &[order_id]).await?;
         if let Some(report) = resolution.returned_paint_report {
             store
                 .returned_paint_requests

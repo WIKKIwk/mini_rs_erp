@@ -393,6 +393,11 @@ async fn admin_approves_zero_output_completion_request_and_closes_order_with_iss
     assert_eq!(approved_body["decision"]["decision"], "approved");
     assert_eq!(approved_body["decision"]["message"], "Muammo bilan yopildi");
     assert_eq!(
+        approved_body["decision"]["worker_ref"],
+        "worker-approve-complete"
+    );
+    assert_eq!(approved_body["decision"]["decided_by_ref"], "admin");
+    assert_eq!(
         approved_body["order_status"]["order_status"],
         "completed_with_issue"
     );
