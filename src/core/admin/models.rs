@@ -163,7 +163,13 @@ pub struct AdminSuppliersPage {
     pub summary: AdminSupplierSummary,
     pub suppliers: Vec<AdminSupplier>,
     pub customers: Vec<CustomerDirectoryEntry>,
-    pub settings: AdminSettings,
+    pub settings: SupplierPageSettings,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SupplierPageSettings {
+    pub default_target_warehouse: String,
+    pub default_uom: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -199,12 +205,18 @@ pub struct AdminSupplierDetail {
     pub name: String,
     pub phone: String,
     pub avatar_url: String,
-    pub code: String,
     pub blocked: bool,
     pub removed: bool,
     pub code_locked: bool,
     pub code_retry_after_sec: i64,
     pub assigned_items: Vec<SupplierItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SupplierCodeRegeneration {
+    #[serde(flatten)]
+    pub detail: AdminSupplierDetail,
+    pub code: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

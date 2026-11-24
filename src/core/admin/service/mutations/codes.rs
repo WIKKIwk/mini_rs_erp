@@ -5,7 +5,7 @@ impl AdminService {
     pub async fn regenerate_supplier_code(
         &self,
         ref_: &str,
-    ) -> Result<AdminSupplierDetail, AdminPortError> {
+    ) -> Result<SupplierCodeRegeneration, AdminPortError> {
         let (entry, mut state) = self.supplier_entry_state(ref_, false).await?;
         let mut existing = self.existing_codes().await?;
         let now = OffsetDateTime::now_utc();
@@ -15,9 +15,8 @@ impl AdminService {
         state.pending_persist_code.clear();
         state.pending_persist_at = None;
         self.put_state(&entry.ref_, state).await?;
-        let mut detail = self.supplier_detail(&entry.ref_).await?;
-        detail.code = code;
-        Ok(detail)
+        let detail = self.supplier_detail(&entry.ref_).await?;
+        Ok(SupplierCodeRegeneration { detail, code })
     }
 
     pub async fn regenerate_customer_code(

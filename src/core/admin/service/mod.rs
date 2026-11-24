@@ -16,7 +16,7 @@ use crate::core::admin::models::{
     AdminActivity, AdminCustomerDetail, AdminDirectoryEntry, AdminItemDetail,
     AdminItemGroupBulkMoveResult, AdminSettings, AdminState, AdminSupplier, AdminSupplierDetail,
     AdminSupplierSummary, AdminSystemUserDetail, AdminUserListEntry, AdminUserListPage,
-    AdminWorkerDetail,
+    AdminWorkerDetail, SupplierCodeRegeneration, SupplierPageSettings,
 };
 use crate::core::admin::ports::{
     AdminAuthConfigSink, AdminEnvPersister, AdminPortError, AdminReadPort, AdminSessionRevoker,

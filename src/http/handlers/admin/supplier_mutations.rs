@@ -109,7 +109,7 @@ pub async fn supplier_code_regenerate(
     method: Method,
     headers: HeaderMap,
     Query(query): Query<RefQuery>,
-) -> Result<Json<AdminSupplierDetail>, AdminError> {
+) -> Result<Json<SupplierCodeRegeneration>, AdminError> {
     authorize_capability(&state, &headers, Capability::SupplierCodeManage).await?;
     if method != Method::POST {
         return Err(method_not_allowed());

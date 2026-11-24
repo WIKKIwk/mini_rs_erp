@@ -1,6 +1,14 @@
 use super::super::*;
 
 impl AdminService {
+    pub async fn supplier_page_settings(&self) -> SupplierPageSettings {
+        let config = self.config.read().await;
+        SupplierPageSettings {
+            default_target_warehouse: config.default_target_warehouse.clone(),
+            default_uom: config.default_uom.clone(),
+        }
+    }
+
     pub async fn suppliers_page(
         &self,
         limit: usize,
@@ -70,7 +78,6 @@ impl AdminService {
             }
             Err(err) => return Err(err),
         };
-        let code = self.access_code(&entry.ref_).await?;
         let avatar_url = self.profile_avatar_url("supplier", &entry.ref_).await;
         let now = OffsetDateTime::now_utc();
         Ok(AdminSupplierDetail {
@@ -78,7 +85,6 @@ impl AdminService {
             name: entry.name,
             phone: entry.phone,
             avatar_url,
-            code,
             blocked: state.blocked,
             removed: state.removed,
             code_locked: state.code_locked(now),

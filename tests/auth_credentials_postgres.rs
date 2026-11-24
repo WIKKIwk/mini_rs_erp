@@ -262,7 +262,7 @@ async fn postgres_credential_cutover_and_all_login_roles() {
         .with_read_port(legacy.clone())
         .with_write_port(legacy.clone());
     assert_eq!(
-        admin.supplier_detail(&supplier.ref_).await.unwrap().code,
+        store.access_code(&supplier.ref_).await.unwrap(),
         "101234567890"
     );
     assert_eq!(
@@ -285,7 +285,7 @@ async fn postgres_credential_cutover_and_all_login_roles() {
             .is_ok()
     );
     assert_eq!(
-        admin.supplier_detail(&supplier.ref_).await.unwrap().code,
+        store.access_code(&supplier.ref_).await.unwrap(),
         supplier_rotated.code
     );
     let material_rotated = admin

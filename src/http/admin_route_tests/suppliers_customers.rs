@@ -22,7 +22,7 @@ async fn admin_suppliers_page_filters_removed_and_counts_blocked_like_go() {
 }
 
 #[tokio::test]
-async fn admin_supplier_detail_returns_current_code_and_assigned_items() {
+async fn admin_supplier_detail_omits_login_code_and_returns_assigned_items() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
 
@@ -38,8 +38,50 @@ async fn admin_supplier_detail_returns_current_code_and_assigned_items() {
     assert_eq!(response.status(), StatusCode::OK);
     let value = json_body(response).await;
     assert_eq!(value["ref"], "SUP-001");
-    assert_eq!(value["code"], "10CUSTOM");
+    assert!(value.get("code").is_none());
     assert_eq!(value["assigned_items"][0]["code"], "ITEM-001");
+}
+
+#[tokio::test]
+async fn supplier_directory_read_does_not_disclose_credentials_or_grant_code_management() {
+    let mut state = test_state();
+    let roles = Arc::new(MemoryRoleDefinitionStore::new());
+    roles.put_role_definition(RoleDefinition {
+        id: "supplier-reader".into(),
+        label: "Supplier directory reader".into(),
+        base_role: None,
+        system: false,
+        capability_codes: vec!["party.supplier.read".into()],
+    }).await.unwrap();
+    roles.put_role_assignment(RoleAssignment {
+        principal_role: PrincipalRole::Brigader,
+        principal_ref: "directory-reader".into(),
+        role_id: "supplier-reader".into(),
+        assigned_apparatus: vec![],
+        assigned_item_groups: vec![],
+    }).await.unwrap();
+    state.admin = state.admin.clone().with_role_store(roles);
+    let token = session_for(&state, PrincipalRole::Brigader, "directory-reader").await;
+    let app = build_router(state);
+    let page = app.clone().oneshot(request("GET", "/v1/mobile/admin/suppliers", &token)).await.unwrap();
+    assert_eq!(page.status(), StatusCode::OK);
+    let value = json_body(page).await;
+    let settings = value["settings"].as_object().unwrap();
+    assert_eq!(settings.len(), 2);
+    assert_eq!(settings["default_target_warehouse"], "Stores - CH");
+    assert!(settings["default_uom"].is_string());
+
+    let detail = app.clone().oneshot(request(
+        "GET", "/v1/mobile/admin/suppliers/detail?ref=SUP-001", &token,
+    )).await.unwrap();
+    assert_eq!(detail.status(), StatusCode::OK);
+    let detail = json_body(detail).await;
+    assert_eq!(detail["ref"], "SUP-001");
+    assert!(detail.get("code").is_none());
+    let denied = app.oneshot(request(
+        "POST", "/v1/mobile/admin/suppliers/code/regenerate?ref=SUP-001", &token,
+    )).await.unwrap();
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]
