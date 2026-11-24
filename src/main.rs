@@ -1,6 +1,6 @@
 use axum::Router;
 use hyper::server::conn::http1;
-use hyper_util::rt::TokioIo;
+use hyper_util::rt::{TokioIo, TokioTimer};
 use hyper_util::service::TowerToHyperService;
 use mini_rs_erp::app::AppState;
 use mini_rs_erp::config::AppConfig;
@@ -132,8 +132,7 @@ async fn serve_listener(
             let opened_at = std::time::Instant::now();
             let io = TokioIo::new(stream);
             let service = TowerToHyperService::new(app);
-            let mut builder = http1::Builder::new();
-            builder.keep_alive(true);
+            let builder = http1_builder(Duration::from_secs(15));
 
             if let Err(error) = builder.serve_connection(io, service).with_upgrades().await {
                 tracing::warn!(
@@ -146,6 +145,15 @@ async fn serve_listener(
             }
         });
     }
+}
+
+fn http1_builder(header_timeout: Duration) -> http1::Builder {
+    let mut builder = http1::Builder::new();
+    builder
+        .timer(TokioTimer::new())
+        .header_read_timeout(header_timeout)
+        .keep_alive(true);
+    builder
 }
 
 fn listener_count() -> usize {
@@ -188,4 +196,22 @@ fn bind_tcp_listener(bind_addr: SocketAddr) -> Result<tokio::net::TcpListener, e
 
     let listener: std::net::TcpListener = socket.into();
     Ok(tokio::net::TcpListener::from_std(listener)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn header_deadline_closes_an_idle_connection() {
+        let (_client, server) = tokio::io::duplex(1024);
+        let builder = http1_builder(Duration::from_millis(20));
+        let service = TowerToHyperService::new(Router::new());
+        let connection = builder.serve_connection(TokioIo::new(server), service);
+        let error = tokio::time::timeout(Duration::from_secs(2), connection)
+            .await
+            .expect("header timer must expire")
+            .expect_err("idle connection must close");
+        assert!(error.is_timeout());
+    }
 }
