@@ -20,6 +20,20 @@ struct MiniRsGateway {
     config: GatewayConfig,
 }
 
+impl MiniRsGateway {
+    fn configured_peer(&self) -> HttpPeer {
+        let mut peer = HttpPeer::new(
+            self.config.upstream_addr.as_str(),
+            false,
+            self.config.upstream_host.clone(),
+        );
+        peer.options.connection_timeout = Some(self.config.connect_timeout);
+        peer.options.read_timeout = Some(self.config.upstream_timeout);
+        peer.options.write_timeout = Some(self.config.upstream_timeout);
+        peer
+    }
+}
+
 #[async_trait]
 impl ProxyHttp for MiniRsGateway {
     type CTX = ();
@@ -40,11 +54,7 @@ impl ProxyHttp for MiniRsGateway {
         _session: &mut Session,
         _ctx: &mut Self::CTX,
     ) -> Result<Box<HttpPeer>> {
-        Ok(Box::new(HttpPeer::new(
-            self.config.upstream_addr.as_str(),
-            false,
-            self.config.upstream_host.clone(),
-        )))
+        Ok(Box::new(self.configured_peer()))
     }
 
     async fn upstream_request_filter(

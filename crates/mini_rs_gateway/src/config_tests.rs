@@ -60,6 +60,18 @@ fn gateway_config_reads_env_pairs() {
 }
 
 #[test]
+fn configured_peer_uses_operator_connection_and_io_timeouts() {
+    let config = GatewayConfig::from_pairs([
+        ("MINI_RS_GATEWAY_CONNECT_TIMEOUT_MS", "380"),
+        ("MINI_RS_GATEWAY_UPSTREAM_TIMEOUT_MS", "7100"),
+    ]).unwrap();
+    let peer = crate::MiniRsGateway { config }.configured_peer();
+    assert_eq!(peer.options.connection_timeout, Some(Duration::from_millis(380)));
+    assert_eq!(peer.options.read_timeout, Some(Duration::from_millis(7100)));
+    assert_eq!(peer.options.write_timeout, Some(Duration::from_millis(7100)));
+}
+
+#[test]
 fn gateway_config_rejects_invalid_bind_addr() {
     let error = GatewayConfig::from_pairs([("MINI_RS_GATEWAY_ADDR", "bad addr")]).unwrap_err();
     assert!(error.contains("MINI_RS_GATEWAY_ADDR"));
