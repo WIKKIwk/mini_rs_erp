@@ -121,11 +121,13 @@ impl MaterialTaminotchiLookup for JsonAdminStore {
 
 #[async_trait]
 impl AdminAccessStateLookup for JsonAdminStore {
-    async fn list_states(&self) -> Result<BTreeMap<String, AdminAccessState>, AuthPortError> {
+    async fn states_for_refs(
+        &self,
+        refs: &[&str],
+    ) -> Result<BTreeMap<String, AdminAccessState>, AuthPortError> {
         let data = self.data.lock().await;
-        Ok(data
-            .states
-            .iter()
+        Ok(refs.iter()
+            .filter_map(|&id| data.states.get_key_value(id))
             .map(|(key, state)| {
                 (
                     key.clone(),

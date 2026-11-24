@@ -330,6 +330,55 @@ async fn supplier_login_accepts_migrated_deterministic_code() {
 }
 
 #[tokio::test]
+async fn login_reads_verifiers_only_for_matching_phones() {
+    use crate::core::auth::ports::BuiltinLoginIdentity;
+    use std::sync::Mutex;
+
+    struct RequestedStates {
+        requested: Mutex<Vec<Vec<String>>>,
+        states: FakeStateLookup,
+    }
+    #[async_trait]
+    impl AdminAccessStateLookup for RequestedStates {
+        async fn states_for_refs(
+            &self,
+            refs: &[&str],
+        ) -> Result<BTreeMap<String, AdminAccessState>, AuthPortError> {
+            self.requested.lock().unwrap().push(refs.iter().map(|id| id.to_string()).collect());
+            self.states.states_for_refs(refs).await
+        }
+
+        async fn builtin_identity(&self, id: &str) -> Result<Option<BuiltinLoginIdentity>, AuthPortError> {
+            Ok((id == "admin").then(|| BuiltinLoginIdentity {
+                phone: "+998880000000".into(),
+                name: "Admin".into(),
+            }))
+        }
+    }
+
+    let supplier_phone = "+998901234567";
+    let store = Arc::new(RequestedStates {
+        requested: Mutex::default(),
+        states: FakeStateLookup { states: BTreeMap::from([
+            ("admin".into(), AdminAccessState { custom_code: "19621978".into(), ..Default::default() }),
+            ("supplier".into(), AdminAccessState { custom_code: "104LJINSVVO5".into(), ..Default::default() }),
+        ]) },
+    });
+    let suppliers = Arc::new(FakeSupplierLookup { suppliers: vec![
+        SupplierRecord { id: "unrelated".into(), name: supplier_phone.into(), phone: "+998901234560".into() },
+        SupplierRecord { id: "supplier".into(), name: "Supplier".into(), phone: supplier_phone.into() },
+    ] });
+    let auth = AuthService::new(&config()).with_supplier_dependencies(suppliers, store.clone())
+        .with_access_state_lookup(store.clone());
+
+    assert_eq!(auth.login("+998901111111", "104LJINSVVO5").await, Err(AuthError::InvalidCredentials));
+    assert!(store.requested.lock().unwrap().is_empty());
+    assert_eq!(auth.login(supplier_phone, "104LJINSVVO5").await.unwrap().ref_, "supplier");
+    assert_eq!(auth.login("+998880000000", "19621978").await.unwrap().role, PrincipalRole::Admin);
+    assert_eq!(*store.requested.lock().unwrap(), [vec!["supplier"], vec!["admin"]]);
+}
+
+#[tokio::test]
 async fn database_mode_rejects_missing_builtin_without_config_fallback() {
     let config = config();
     let auth =
@@ -734,8 +783,14 @@ struct FakeStateLookup {
 
 #[async_trait]
 impl AdminAccessStateLookup for FakeStateLookup {
-    async fn list_states(&self) -> Result<BTreeMap<String, AdminAccessState>, AuthPortError> {
-        let mut states = self.states.clone();
+    async fn states_for_refs(
+        &self,
+        refs: &[&str],
+    ) -> Result<BTreeMap<String, AdminAccessState>, AuthPortError> {
+        let mut states: BTreeMap<_, _> = refs.iter()
+            .filter_map(|&id| self.states.get_key_value(id))
+            .map(|(id, state)| (id.clone(), state.clone()))
+            .collect();
         for state in states.values_mut() {
             if !state.custom_code.is_empty()
                 && !crate::core::auth::password::is_password_hash(&state.custom_code)

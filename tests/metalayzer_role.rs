@@ -38,12 +38,13 @@ impl AdminStatePort for AccessState {
 }
 #[async_trait]
 impl AdminAccessStateLookup for AccessState {
-    async fn list_states(&self) -> Result<BTreeMap<String, AdminAccessState>, AuthPortError> {
-        Ok(self
-            .0
-            .read()
-            .await
-            .iter()
+    async fn states_for_refs(
+        &self,
+        refs: &[&str],
+    ) -> Result<BTreeMap<String, AdminAccessState>, AuthPortError> {
+        let states = self.0.read().await;
+        Ok(refs.iter()
+            .filter_map(|&id| states.get_key_value(id))
             .map(|(id, state)| {
                 (
                     id.clone(),

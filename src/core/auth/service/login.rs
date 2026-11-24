@@ -163,40 +163,33 @@ impl AuthService {
         code: &str,
         fallback: (&str, &str, &str),
     ) -> Result<Option<Principal>, AuthError> {
-        let mut identity = crate::core::auth::ports::BuiltinLoginIdentity {
-            phone: fallback.0.to_string(),
-            name: fallback.1.to_string(),
-        };
-        let mut hash = fallback.2.to_string();
-        if let Some(lookup) = &self.admin_state_lookup {
-            if let Some(stored) = lookup
-                .builtin_identity(ref_)
-                .await
-                .map_err(|_| AuthError::Internal)?
-            {
-                identity = stored;
-                let states = lookup
-                    .list_states()
-                    .await
-                    .map_err(|_| AuthError::Internal)?;
-                let state = states.get(ref_).ok_or(AuthError::Internal)?;
-                if state.blocked || state.removed {
-                    return Ok(None);
-                }
-                hash = state.custom_code.clone();
-            } else if self.builtin_credentials_from_store {
+        let (name, hash) = if let Some(lookup) = &self.admin_state_lookup
+            && let Some(identity) = lookup.builtin_identity(ref_).await.map_err(|_| AuthError::Internal)?
+        {
+            if !super::helpers::phone_matches_normalized(&identity.phone, phone) {
                 return Ok(None);
             }
-        }
-        if !super::helpers::phone_matches_normalized(&identity.phone, phone)
-            || !super::helpers::code_matches(&hash, code).await?
-        {
+            let mut states = lookup.states_for_refs(&[ref_]).await.map_err(|_| AuthError::Internal)?;
+            let state = states.remove(ref_).ok_or(AuthError::Internal)?;
+            if state.blocked || state.removed {
+                return Ok(None);
+            }
+            (identity.name, state.custom_code)
+        } else {
+            if self.builtin_credentials_from_store
+                || !super::helpers::phone_matches_normalized(fallback.0, phone)
+            {
+                return Ok(None);
+            }
+            (fallback.1.to_owned(), fallback.2.to_owned())
+        };
+        if !super::helpers::code_matches(&hash, code).await? {
             return Ok(None);
         }
         Ok(Some(Principal {
             role,
-            display_name: identity.name.clone(),
-            legal_name: identity.name,
+            display_name: name.clone(),
+            legal_name: name,
             ref_: ref_.to_string(),
             phone: phone.to_string(),
             avatar_url: String::new(),

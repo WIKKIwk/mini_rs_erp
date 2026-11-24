@@ -367,23 +367,25 @@ impl AdminAccessStateLookup for PostgresAuthStore {
         self.recover_access_code(ref_, code).await.map(|_| ()).map_err(|_| AuthPortError::LookupFailed)
     }
 
-    async fn list_states(&self) -> Result<BTreeMap<String, AdminAccessState>, AuthPortError> {
-        Ok(self
-            .states()
-            .await
-            .map_err(|_| AuthPortError::LookupFailed)?
-            .into_iter()
-            .map(|(id, state)| {
-                (
-                    id,
-                    AdminAccessState {
-                        custom_code: state.custom_code,
-                        blocked: state.blocked,
-                        removed: state.removed,
-                    },
-                )
+    async fn states_for_refs(
+        &self,
+        refs: &[&str],
+    ) -> Result<BTreeMap<String, AdminAccessState>, AuthPortError> {
+        let rows = sqlx::query_as::<_, (String, Option<String>, sqlx::types::Json<AdminState>)>(
+            "SELECT principal_ref, credential_hash, access_state
+             FROM mini_auth_accounts WHERE principal_ref = ANY($1::text[])",
+        )
+        .bind(refs)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|_| AuthPortError::LookupFailed)?;
+        Ok(rows.into_iter().map(|(id, hash, state)| {
+            (id, AdminAccessState {
+                custom_code: hash.unwrap_or_default(),
+                blocked: state.blocked,
+                removed: state.removed,
             })
-            .collect())
+        }).collect())
     }
 
     async fn builtin_identity(

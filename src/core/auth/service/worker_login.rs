@@ -51,27 +51,29 @@ impl AuthService {
             .system_user_lookup
             .as_ref()
             .ok_or(AuthError::InvalidCredentials)?;
-        let states = self
+        let admin_state_lookup = self
             .admin_state_lookup
             .as_ref()
-            .ok_or(AuthError::InvalidCredentials)?
-            .list_states()
-            .await
-            .map_err(|_| AuthError::Internal)?;
-        let users = self
+            .ok_or(AuthError::InvalidCredentials)?;
+        let mut users = self
             .search_system_users_for_login(lookup.as_ref(), normalized_phone, role)
             .await?;
+
+        users.retain(|user| user.role == role && phone_matches_normalized(&user.phone, normalized_phone));
+        let states = super::helpers::candidate_states(
+            admin_state_lookup.as_ref(),
+            users.iter().map(|user| user.id.as_str()),
+        )
+        .await?;
 
         for user in users {
             let state = states
                 .get(user.id.trim())
-                .cloned()
                 .ok_or(AuthError::Internal)?;
-            if state.removed || state.blocked || user.role != role {
+            if state.removed || state.blocked {
                 continue;
             }
             if !state.custom_code.trim().is_empty()
-                && phone_matches_normalized(&user.phone, normalized_phone)
                 && super::helpers::code_matches(&state.custom_code, code).await?
             {
                 return Ok(Principal {
@@ -103,18 +105,19 @@ impl AuthService {
             .as_ref()
             .ok_or(AuthError::InvalidCredentials)?;
 
-        let workers = self
+        let mut workers = self
             .search_workers_for_login(worker_lookup.as_ref(), normalized_phone)
             .await?;
-        let states = admin_state_lookup
-            .list_states()
-            .await
-            .map_err(|_| AuthError::Internal)?;
+        workers.retain(|worker| phone_matches_normalized(&worker.phone, normalized_phone));
+        let states = super::helpers::candidate_states(
+            admin_state_lookup.as_ref(),
+            workers.iter().map(|worker| worker.id.as_str()),
+        )
+        .await?;
 
         for worker in workers {
             let state = states
                 .get(worker.id.trim())
-                .cloned()
                 .ok_or(AuthError::Internal)?;
             if state.removed || state.blocked {
                 continue;
@@ -123,9 +126,7 @@ impl AuthService {
             if code_value.is_empty() {
                 continue;
             }
-            if phone_matches_normalized(&worker.phone, normalized_phone)
-                && super::helpers::code_matches(code_value, code).await?
-            {
+            if super::helpers::code_matches(code_value, code).await? {
                 return Ok(Principal {
                     role,
                     display_name: worker.name.clone(),

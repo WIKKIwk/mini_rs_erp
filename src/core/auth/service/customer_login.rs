@@ -29,17 +29,19 @@ impl AuthService {
             .as_ref()
             .ok_or(AuthError::InvalidCredentials)?;
 
-        let customers = self
+        let mut customers = self
             .search_customers_for_login(customer_lookup.as_ref(), normalized_phone)
             .await?;
 
-        let states = admin_state_lookup
-            .list_states()
-            .await
-            .map_err(|_| AuthError::Internal)?;
+        customers.retain(|customer| phone_matches_normalized(&customer.phone, normalized_phone));
+        let states = super::helpers::candidate_states(
+            admin_state_lookup.as_ref(),
+            customers.iter().map(|customer| customer.id.as_str()),
+        )
+        .await?;
 
         for customer in customers {
-            let Some(state) = states.get(customer.id.trim()).cloned() else {
+            let Some(state) = states.get(customer.id.trim()) else {
                 continue;
             };
             if state.blocked || state.removed { continue; }
@@ -47,9 +49,7 @@ impl AuthService {
             if code_value.is_empty() {
                 continue;
             }
-            if phone_matches_normalized(&customer.phone, normalized_phone)
-                && super::helpers::code_matches(code_value, code).await?
-            {
+            if super::helpers::code_matches(code_value, code).await? {
                 return Ok(Principal {
                     role,
                     display_name: customer.name.clone(),

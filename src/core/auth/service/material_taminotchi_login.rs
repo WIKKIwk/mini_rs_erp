@@ -21,18 +21,19 @@ impl AuthService {
             .as_ref()
             .ok_or(AuthError::InvalidCredentials)?;
 
-        let materials = self
+        let mut materials = self
             .search_material_taminotchilar_for_login(lookup.as_ref(), normalized_phone)
             .await?;
-        let states = admin_state_lookup
-            .list_states()
-            .await
-            .map_err(|_| AuthError::Internal)?;
+        materials.retain(|material| phone_matches_normalized(&material.phone, normalized_phone));
+        let states = super::helpers::candidate_states(
+            admin_state_lookup.as_ref(),
+            materials.iter().map(|material| material.id.as_str()),
+        )
+        .await?;
 
         for material in materials {
             let state = states
                 .get(material.id.trim())
-                .cloned()
                 .ok_or(AuthError::Internal)?;
             if state.removed || state.blocked {
                 continue;
@@ -41,9 +42,7 @@ impl AuthService {
             if code_value.is_empty() {
                 continue;
             }
-            if phone_matches_normalized(&material.phone, normalized_phone)
-                && super::helpers::code_matches(code_value, code).await?
-            {
+            if super::helpers::code_matches(code_value, code).await? {
                 return Ok(Principal {
                     role: PrincipalRole::MaterialTaminotchi,
                     display_name: material.name.clone(),

@@ -37,18 +37,16 @@ impl AuthService {
                 .map_err(|_| AuthError::Internal)?;
         }
 
-        let states = admin_state_lookup
-            .list_states()
-            .await
-            .map_err(|_| AuthError::Internal)?;
+        suppliers.retain(|supplier| phone_matches_normalized(&supplier.phone, normalized_phone));
+        let states = super::helpers::candidate_states(
+            admin_state_lookup.as_ref(),
+            suppliers.iter().map(|supplier| supplier.id.as_str()),
+        )
+        .await?;
 
         for supplier in suppliers {
-            if !phone_matches_normalized(&supplier.phone, normalized_phone) {
-                continue;
-            }
             let state = states
                 .get(supplier.id.trim())
-                .cloned()
                 .ok_or(AuthError::Internal)?;
             if state.removed || state.blocked {
                 continue;

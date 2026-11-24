@@ -1,7 +1,21 @@
 use crate::core::auth::models::PrincipalRole;
-use crate::core::auth::ports::{CustomerRecord, MaterialTaminotchiRecord, WorkerRecord};
+use crate::core::auth::ports::{
+    AdminAccessState, AdminAccessStateLookup, CustomerRecord, MaterialTaminotchiRecord, WorkerRecord,
+};
+use std::collections::BTreeMap;
 
 use super::AuthError;
+
+pub(super) async fn candidate_states<'a>(
+    lookup: &dyn AdminAccessStateLookup,
+    refs: impl Iterator<Item = &'a str>,
+) -> Result<BTreeMap<String, AdminAccessState>, AuthError> {
+    let refs: Vec<_> = refs.map(str::trim).collect();
+    if refs.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    lookup.states_for_refs(&refs).await.map_err(|_| AuthError::Internal)
+}
 
 pub(super) async fn code_matches(hash: &str, code: &str) -> Result<bool, AuthError> {
     crate::core::auth::password::verify_password(hash, code.trim())
