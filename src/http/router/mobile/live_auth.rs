@@ -111,33 +111,46 @@ pub(super) async fn authenticate(
     let Ok(Query(query)) = Query::<Credentials>::try_from_uri(req.uri()) else {
         return StatusCode::BAD_REQUEST.into_response();
     };
-    if query.token.is_some() {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    // Use exactly one credential source. Every workspace policy and handler
-    // receives this same principal, regardless of how the socket authenticated.
-    let session = match (req.headers().contains_key(header::AUTHORIZATION), query.ticket) {
-        (true, None) => {
-            let Some(token) = bearer_token(req.headers()) else {
-                return StatusCode::UNAUTHORIZED.into_response();
-            };
-            let Ok(principal) = state.sessions.get(&token).await else {
-                return StatusCode::UNAUTHORIZED.into_response();
-            };
-            LiveSession { principal, digest: crate::core::session::session_digest(&token) }
-        }
-        (false, Some(ticket)) => {
-            let Ok((digest, principal)) = state.sessions
-                .resolve_ticket(&ticket, TicketScope::Live { path }).await else {
-                return StatusCode::UNAUTHORIZED.into_response();
-            };
-            LiveSession { principal, digest }
-        }
+    // Never let a second credential select a different principal downstream.
+    let has_header = req.headers().contains_key(header::AUTHORIZATION);
+    let legacy = query.token.is_some();
+    let token = match (has_header, query.token, &query.ticket) {
+        (true, None, None) => bearer_token(req.headers()),
+        (false, Some(token), None) if state.legacy_ws_query_token_until
+            .is_some_and(|until| time::OffsetDateTime::now_utc() < until) => Some(token),
+        (false, None, Some(_)) => None,
         _ => return StatusCode::UNAUTHORIZED.into_response(),
+    };
+    let session = if let Some(token) = &token {
+        let Ok(principal) = state.sessions.get(token).await else {
+            return StatusCode::UNAUTHORIZED.into_response();
+        };
+        LiveSession { principal, digest: crate::core::session::session_digest(token) }
+    } else if let Some(ticket) = query.ticket {
+        let Ok((digest, principal)) = state.sessions
+            .resolve_ticket(&ticket, TicketScope::Live { path }).await else {
+            return StatusCode::UNAUTHORIZED.into_response();
+        };
+        LiveSession { principal, digest }
+    } else {
+        return StatusCode::UNAUTHORIZED.into_response();
     };
     if !role_allows(&state, &session.principal, req.method(), path).await {
         return StatusCode::FORBIDDEN.into_response();
     }
+    let migration = legacy.then(|| {
+        let version = req.headers().get("x-app-version").and_then(|v| v.to_str().ok())
+            .filter(|v| v.len() <= 64 && !v.is_empty()
+                && v.bytes().all(|b| b.is_ascii_alphanumeric() || b".-+_".contains(&b))
+                && !token.as_deref().is_some_and(|secret| v.contains(secret)));
+        (path.to_owned(), session.principal.role, version.map(str::to_owned))
+    });
     req.extensions_mut().insert(session);
-    next.run(req).await
+    let response = next.run(req).await;
+    if response.status() == StatusCode::SWITCHING_PROTOCOLS
+        && let Some((route, role, app_version)) = migration
+    {
+        tracing::info!(%route, ?role, app_version = app_version.as_deref(), "legacy_ws_query_connected");
+    }
+    response
 }

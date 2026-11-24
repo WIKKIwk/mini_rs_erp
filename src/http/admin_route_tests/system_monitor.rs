@@ -677,6 +677,7 @@ async fn monitor_and_chat_streams_stop_after_the_issuing_session_is_revoked() {
 #[tokio::test]
 async fn monitor_with_valid_session_stops_when_admin_access_is_removed() {
     let mut state = test_state();
+    state.legacy_ws_query_token_until = Some(time::OffsetDateTime::now_utc() + time::Duration::hours(1));
     assert!(state.system_monitor_hub.mark_started());
     state.system_monitor_hub.publish(Default::default());
     let roles = Arc::new(MemoryRoleDefinitionStore::new());
@@ -695,12 +696,16 @@ async fn monitor_with_valid_session_stops_when_admin_access_is_removed() {
     let uri = format!("http://{}/v1/mobile/admin/system/monitor/live", listener.local_addr().unwrap());
     let service = build_router(state.clone());
     let server = tokio::spawn(async move { axum::serve(listener, service).await.unwrap() });
-    let mut socket = open_live(reqwest::Client::new().get(uri).bearer_auth(&token)).await;
+    let client = reqwest::Client::new();
+    let mut socket = open_live(client.get(&uri).bearer_auth(&token)).await;
+    let mut legacy = open_live(client.get(&uri).query(&[("token", &token)])).await;
+    assert_eq!(super::inventory_live::message(&mut legacy).await["ok"], true);
     assert_eq!(super::inventory_live::message(&mut socket).await["ok"], true);
     role.capability_codes.clear();
     roles.put_role_definition(role).await.unwrap();
     state.system_monitor_hub.publish(Default::default());
     assert_live_ended(&mut socket).await;
+    assert_live_ended(&mut legacy).await;
     assert!(state.sessions.get(&token).await.is_ok());
     server.abort();
 }

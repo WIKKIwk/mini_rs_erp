@@ -112,6 +112,7 @@ pub struct AppState {
     pub system_users: SystemUserService,
     pub worker_groups: WorkerGroupService,
     pub sessions: SessionManager,
+    pub(crate) legacy_ws_query_token_until: Option<time::OffsetDateTime>,
     pub telegram: TelegramService,
     pub warehouse_events: WarehouseEventHub,
     pub raw_material_events: Option<PostgresRawMaterialEventStore>,
@@ -374,6 +375,9 @@ impl AppState {
             worker_show_all_apparatus_tabs:
                 crate::config::worker_show_all_apparatus_tabs_from_env()
                     .expect("validated worker apparatus tab configuration"),
+            legacy_ws_query_token_until: crate::config::legacy_ws_query_token_until(
+                std::env::var("MINI_ERP_LEGACY_WS_QUERY_TOKEN_UNTIL").ok().as_deref(),
+            ),
             config: Arc::new(config),
             admin,
             auth,

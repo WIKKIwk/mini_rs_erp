@@ -79,6 +79,10 @@ impl AppConfig {
     }
 }
 
+pub(crate) fn legacy_ws_query_token_until(value: Option<&str>) -> Option<time::OffsetDateTime> {
+    time::OffsetDateTime::parse(value?.trim(), &time::format_description::well_known::Rfc3339).ok()
+}
+
 /// Calibrated for the zlib-rs backend also used by negotiated WebSocket deflate.
 /// The HTTP snapshot path favors traffic savings; the live transport has its
 /// own independent low-latency compression level.

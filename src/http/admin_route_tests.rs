@@ -80,6 +80,7 @@ mod factory_locations;
 mod fakes;
 mod flexo_edge_allowance;
 mod inventory_live;
+mod legacy_ws;
 mod inventory_movements;
 mod item_groups;
 mod material_start_receipt;

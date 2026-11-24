@@ -14,7 +14,7 @@ The original `audit-fixes` branch started at `f093beb7`. The table follows its c
 | P11 | Werka MIME detection borrows the multipart image. Only the buffer transferred to the AI service is copied. Order-image optimization moves the existing HTTP body into the blocking task. | `parsed_upload_borrows_the_original_multipart_image_for_mime_detection` checks the buffer address and MIME inferred from its bytes. The order-image route tests exercise upload, WebP storage, owner-scoped reads and invalid input. |
 | P12 | The gateway installs the configured connection deadline and read/write timeouts on every upstream peer. | `configured_peer_uses_operator_connection_and_io_timeouts` verifies all three options using nondefault values. |
 | S07 | Browser CORS permission uses an exact origin allowlist. Responses vary on `Origin` so caches keep permissions separate. | The CORS tests cover allowed and unlisted origins, missing and null origins, actual requests, preflights and the required headers. |
-| S04 | Six private live routes resolve the bearer header or path-bound ticket to one session before applying role restrictions and upgrade-specific capability checks. They reject raw query bearers and mixed credential sources. | `private_live_streams_enforce_the_same_scope_for_headers_and_path_tickets` exercises the issuance and upgrade paths over loopback. |
+| S04 | Six private live routes resolve the bearer header or path-bound ticket to one session before applying role restrictions and upgrade-specific capability checks. Mixed credential sources always fail. Raw query bearers fail outside the explicitly configured migration window described below. | `private_live_streams_enforce_the_same_scope_for_headers_and_path_tickets` exercises the issuance and upgrade paths over loopback. |
 | S05 | Chat keeps its one-use ticket and binds it to the issuing session. All seven authenticated streams recheck that session and the stream’s current access requirements before sending data and while idle. A revoked stream sends only its fixed denial notice, where its protocol defines one, and closes. | A supply-task test checks the 401 frame and immediate close. Loopback monitor and chat tests cover logout, revocation of an outstanding ticket, replay, expiry, capability removal, and a second session for the same account remaining usable. |
 | S14 | A finite session TTL rejects and removes restored records missing their expiry. At the exact expiry instant the session is invalid. Explicitly unlimited sessions retain their existing semantics. JSON session writers lock a sibling `.lock` file while applying changes to the latest snapshot. | `expiry_policy_tests` exercises cached and persisted records, bearer lookup/update, session handles and scoped tickets on JSON and LMDB, including a stale cache and concurrent JSON writers. |
 
@@ -85,3 +85,12 @@ Both comparison runs used `cargo test --workspace --no-fail-fast`, Rust 1.98.1, 
 | Lint suppressions | The baseline-to-final comparison found 24 Rust lint allowances in the affected files both before and after. Existing allowances moved with their items. No new allowance or Clippy configuration change was introduced. |
 
 Three additional regression tests cover the owner-role retry and privilege errors, approved zero-output work with an active peer, and the effect of a hold on the current versus another cutting stage. The final run also passed the real database reset and voice-media conversion tests. All ten code fixes have individual commits on `main`.
+
+## WebSocket mijozlarini ko‘chirish muddati
+
+`MINI_ERP_LEGACY_WS_QUERY_TOKEN_UNTIL` oltita yopiq live yo‘lida eski mijozlarning
+query orqali yuborgan sessiyasini vaqtincha qabul qilishning mutlaq RFC 3339
+muddatidir. Masalan, reliz 2026-11-24 10:00 UTC da tarqatilsa, ikki haftalik
+qiymat `2026-12-08T10:00:00Z` bo‘ladi. Har bir yangi ulanishda server joriy
+vaqtni tekshiradi. Muddatga yetganda, qiymat bo‘sh yoki yaroqsiz bo‘lganda
+bu usul HTTP 401 qaytaradi. Monitoring hodisasi `legacy_ws_query_connected`.
