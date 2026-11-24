@@ -36,12 +36,9 @@ async fn qolip_catalog_revalidates_data_and_authorization_before_304() {
     assert_eq!(first.status(), StatusCode::OK);
     assert_eq!(first.headers()[header::CACHE_CONTROL], "private, no-cache");
     assert_eq!(first.headers()[header::VARY], "Authorization");
-    assert!(
-        first.headers()[header::ACCESS_CONTROL_EXPOSE_HEADERS]
-            .to_str()
-            .unwrap()
-            .contains("etag")
-    );
+    // This native request has no Origin. Its ETag is usable without browser CORS headers.
+    assert!(!first.headers().contains_key(header::ACCESS_CONTROL_EXPOSE_HEADERS));
+    assert!(first.headers().get_all(header::VARY).iter().any(|value| value == "Origin"));
     let etag = first.headers()[header::ETAG].clone();
     assert_eq!(
         json_body(first).await["products"].as_array().unwrap().len(),
@@ -94,10 +91,5 @@ async fn qolip_catalog_revalidates_data_and_authorization_before_304() {
         .await
         .unwrap();
     assert_eq!(options.status(), StatusCode::NO_CONTENT);
-    assert!(
-        options.headers()[header::ACCESS_CONTROL_ALLOW_HEADERS]
-            .to_str()
-            .unwrap()
-            .contains("if-none-match")
-    );
+    assert!(!options.headers().contains_key(header::ACCESS_CONTROL_ALLOW_HEADERS));
 }

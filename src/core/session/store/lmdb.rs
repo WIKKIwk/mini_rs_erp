@@ -123,6 +123,24 @@ impl SessionStore for LmdbSessionStore {
         wtxn.commit().map_err(lmdb_error)
     }
 
+    async fn delete_if_expired(
+        &self,
+        digest: &[u8; 32],
+        now: time::OffsetDateTime,
+        ttl_seconds: Option<u64>,
+    ) -> Result<(), AppError> {
+        let _guard = self.write_lock.lock().await;
+        let mut txn = self.env.write_txn().map_err(lmdb_error)?;
+        if let Some(record) = self.db.get(&txn, digest).map_err(lmdb_error)?
+            && record.is_expired(now, ttl_seconds)
+        {
+            self.delete_expiry_index(&mut txn, digest, &record)?;
+            self.db.delete(&mut txn, digest).map_err(lmdb_error)?;
+            txn.commit().map_err(lmdb_error)?;
+        }
+        Ok(())
+    }
+
     async fn delete_for_principal(
         &self,
         role: &PrincipalRole,

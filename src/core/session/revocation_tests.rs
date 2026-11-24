@@ -41,6 +41,15 @@ impl SessionStore for PausedReadStore {
         self.inner.delete(token).await
     }
 
+    async fn delete_if_expired(
+        &self,
+        digest: &[u8; 32],
+        now: time::OffsetDateTime,
+        ttl_seconds: Option<u64>,
+    ) -> Result<(), AppError> {
+        self.inner.delete_if_expired(digest, now, ttl_seconds).await
+    }
+
     async fn delete_for_principal(
         &self,
         role: &PrincipalRole,

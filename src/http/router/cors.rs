@@ -128,6 +128,8 @@ mod tests {
         assert_eq!(response.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN], "https://accord.example");
         for (header, token) in [
             (header::ACCESS_CONTROL_ALLOW_HEADERS, "prefer"),
+            (header::ACCESS_CONTROL_ALLOW_HEADERS, "if-none-match"),
+            (header::ACCESS_CONTROL_EXPOSE_HEADERS, "etag"),
             (header::ACCESS_CONTROL_EXPOSE_HEADERS, "preference-applied"),
             (header::ACCESS_CONTROL_EXPOSE_HEADERS, "x-production-epoch"),
             (

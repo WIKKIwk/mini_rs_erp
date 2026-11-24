@@ -29,6 +29,12 @@ pub trait SessionStore: Send + Sync {
     ) -> Result<Option<([u8; 32], SessionRecord)>, AppError>;
     async fn put(&self, token: &str, record: &SessionRecord) -> Result<(), AppError>;
     async fn delete(&self, token: &str) -> Result<(), AppError>;
+    async fn delete_if_expired(
+        &self,
+        digest: &[u8; 32],
+        now: time::OffsetDateTime,
+        ttl_seconds: Option<u64>,
+    ) -> Result<(), AppError>;
     async fn delete_for_principal(
         &self,
         role: &PrincipalRole,

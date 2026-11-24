@@ -10,6 +10,7 @@ use tokio::sync::RwLock;
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::session::access::SessionAccessValidator;
 use crate::core::session::models::SessionRecord;
+use crate::core::session::session_digest;
 use crate::core::session::store::{JsonSessionStore, LmdbSessionStore, SessionStore};
 use crate::error::AppError;
 
@@ -17,7 +18,7 @@ use crate::error::AppError;
 pub struct SessionManager {
     store: Arc<dyn SessionStore>,
     ttl_seconds: Option<u64>,
-    cache: Arc<RwLock<HashMap<String, SessionRecord>>>,
+    cache: Arc<RwLock<HashMap<[u8; 32], SessionRecord>>>,
     operations: Arc<RwLock<()>>,
     access_validator: Option<Arc<dyn SessionAccessValidator>>,
 }
@@ -77,18 +78,16 @@ impl SessionManager {
         let now = time::OffsetDateTime::now_utc();
         let record = SessionRecord::new(principal, now, None, self.ttl_seconds);
         self.store.put(&token, &record).await?;
-        self.cache.write().await.insert(token.clone(), record);
+        self.cache.write().await.insert(session_digest(&token), record);
         Ok(token)
     }
 
     pub async fn get(&self, token: &str) -> Result<Principal, AppError> {
         let _operation = self.operations.read().await;
-        let cached = self.cache.read().await.get(token).cloned();
+        let digest = session_digest(token);
+        let cached = self.cache.read().await.get(&digest).cloned();
         if let Some(record) = cached {
-            if record.is_expired(time::OffsetDateTime::now_utc()) {
-                self.delete_record(token).await?;
-                return Err(AppError::Unauthorized);
-            }
+            self.require_unexpired(&digest, &record).await?;
             self.require_active(&record.principal).await?;
             return Ok(record.principal);
         }
@@ -97,21 +96,17 @@ impl SessionManager {
             return Err(AppError::Unauthorized);
         };
 
-        if record.is_expired(time::OffsetDateTime::now_utc()) {
-            self.store.delete(token).await?;
-            return Err(AppError::Unauthorized);
-        }
-
+        self.require_unexpired(&digest, &record).await?;
         let principal = record.principal.clone();
         self.require_active(&principal).await?;
-        self.cache.write().await.insert(token.to_string(), record);
+        self.cache.write().await.insert(digest, record);
         Ok(principal)
     }
 
     pub async fn get_by_digest(&self, digest: &[u8; 32]) -> Result<Principal, AppError> {
         let _operation = self.operations.read().await;
         let record = self.store.get_by_digest(digest).await?.ok_or(AppError::Unauthorized)?;
-        self.active_session_principal(record).await
+        self.active_session_principal(digest, record).await
     }
 
     pub(crate) async fn resolve_ticket(
@@ -124,13 +119,29 @@ impl SessionManager {
         let (digest, record) = self.store.ticket_session(ticket.locator()).await?
             .ok_or(AppError::Unauthorized)?;
         ticket.verify(&digest, scope)?;
-        Ok((digest, self.active_session_principal(record).await?))
+        Ok((digest, self.active_session_principal(&digest, record).await?))
     }
 
-    async fn active_session_principal(&self, record: SessionRecord) -> Result<Principal, AppError> {
-        if record.is_expired(time::OffsetDateTime::now_utc()) {
+    async fn require_unexpired(
+        &self,
+        digest: &[u8; 32],
+        record: &SessionRecord,
+    ) -> Result<(), AppError> {
+        let now = time::OffsetDateTime::now_utc();
+        if record.is_expired(now, self.ttl_seconds) {
+            self.store.delete_if_expired(digest, now, self.ttl_seconds).await?;
+            self.cache.write().await.remove(digest);
             return Err(AppError::Unauthorized);
         }
+        Ok(())
+    }
+
+    async fn active_session_principal(
+        &self,
+        digest: &[u8; 32],
+        record: SessionRecord,
+    ) -> Result<Principal, AppError> {
+        self.require_unexpired(digest, &record).await?;
         self.require_active(&record.principal).await?;
         Ok(record.principal)
     }
@@ -142,7 +153,7 @@ impl SessionManager {
 
     async fn delete_record(&self, token: &str) -> Result<(), AppError> {
         self.store.delete(token).await?;
-        self.cache.write().await.remove(token);
+        self.cache.write().await.remove(&session_digest(token));
         Ok(())
     }
 
@@ -175,7 +186,8 @@ impl SessionManager {
     pub async fn update(&self, token: &str, principal: Principal) -> Result<(), AppError> {
         let _operation = self.operations.read().await;
         self.require_active(&principal).await?;
-        let cached = self.cache.read().await.get(token).cloned();
+        let digest = session_digest(token);
+        let cached = self.cache.read().await.get(&digest).cloned();
         let existing = if let Some(record) = cached {
             Some(record)
         } else {
@@ -185,15 +197,11 @@ impl SessionManager {
             return Err(AppError::Unauthorized);
         };
 
-        if existing.is_expired(time::OffsetDateTime::now_utc()) {
-            self.delete_record(token).await?;
-            return Err(AppError::Unauthorized);
-        }
-
+        self.require_unexpired(&digest, &existing).await?;
         let now = time::OffsetDateTime::now_utc();
         let record = SessionRecord::new(principal, now, existing.created_at, self.ttl_seconds);
         self.store.put(token, &record).await?;
-        self.cache.write().await.insert(token.to_string(), record);
+        self.cache.write().await.insert(digest, record);
         Ok(())
     }
 }
@@ -203,6 +211,10 @@ fn generate_token() -> String {
     rand::rng().fill_bytes(&mut bytes);
     URL_SAFE_NO_PAD.encode(bytes)
 }
+
+#[cfg(test)]
+#[path = "expiry_policy_tests.rs"]
+mod expiry_policy_tests;
 
 #[cfg(test)]
 #[path = "revocation_tests.rs"]
@@ -242,6 +254,15 @@ mod tests {
 
         async fn delete(&self, _token: &str) -> Result<(), AppError> {
             Err(AppError::Storage("session delete failed".to_string()))
+        }
+
+        async fn delete_if_expired(
+            &self,
+            _digest: &[u8; 32],
+            _now: time::OffsetDateTime,
+            _ttl_seconds: Option<u64>,
+        ) -> Result<(), AppError> {
+            Err(AppError::Storage("session expiry cleanup failed".into()))
         }
 
         async fn delete_for_principal(
