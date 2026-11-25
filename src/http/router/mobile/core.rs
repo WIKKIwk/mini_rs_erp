@@ -44,6 +44,8 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/v1/mobile/preparation/production/batch", get(crate::http::handlers::preparation::production_batch))
         .route("/v1/mobile/preparation/production/batches", get(crate::http::handlers::preparation::production_batches))
         .route("/v1/mobile/preparation/production/rolls", get(crate::http::handlers::preparation::production_rolls))
+        .route("/v1/mobile/preparation/production/paddon-options", post(crate::http::handlers::preparation::production_paddon_options))
+        .route("/v1/mobile/preparation/production/paddon-attach", post(crate::http::handlers::preparation::attach_prepared_rolls))
         .route("/v1/mobile/preparation/production/sync", post(crate::http::handlers::preparation::sync_production_journal))
         .route("/v1/mobile/preparation/production/notes", axum::routing::patch(crate::http::handlers::preparation::update_output_notes))
         .route("/v1/mobile/preparation/production/notes/scan", get(crate::http::handlers::preparation::scanned_roll_notes))

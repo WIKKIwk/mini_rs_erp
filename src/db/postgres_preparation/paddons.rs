@@ -5,8 +5,10 @@ use crate::db::postgres_raw_material_events::{
 };
 use serde::{Deserialize, Serialize};
 
+mod attachments;
 mod issues;
 mod printing;
+pub use attachments::{PaddonRollAttachment, PaddonRollOptions};
 pub use issues::{PaddonIdentity, PaddonIssueCreate};
 pub use printing::PaddonLabelPrint;
 
@@ -112,6 +114,16 @@ pub struct PaddonQuery {
     limit: Option<u32>,
 }
 
+// Packed preparation rolls may still be linked to their production order.
+const PREPARED_PADDON_STOCK: &str =
+    concat!("s.status = 'on_paddon' AND ", physically_in_warehouse!());
+
+fn paddon_unit_stock_sql(sql: &str) -> String {
+    sql.replace("{PADDON_UNIT_STOCK}", &format!(
+        "(CASE WHEN u.prepared_roll THEN ({PREPARED_PADDON_STOCK}) ELSE ({PADDON_STOCK}) END)"
+    ))
+}
+
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum BalanceFilter {
@@ -141,7 +153,7 @@ impl PostgresPreparationStore {
                 "Paddon ro‘yxati filtri noto‘g‘ri",
             ));
         }
-        self.read_raw_material_paddons(actor, query, limit).await
+        self.read_raw_material_paddons(actor, query, limit, None).await
     }
 
     pub(crate) async fn preparation_journal_paddons(
@@ -152,7 +164,7 @@ impl PostgresPreparationStore {
         limit: u32,
     ) -> Result<Value, PreparationError> {
         let query = PaddonQuery { q, status, ..PaddonQuery::default() };
-        self.read_raw_material_paddons(actor, query, limit).await
+        self.read_raw_material_paddons(actor, query, limit, None).await
     }
 
     async fn read_raw_material_paddons(
@@ -160,6 +172,7 @@ impl PostgresPreparationStore {
         actor: &Principal,
         query: PaddonQuery,
         limit: u32,
+        warehouse_id: Option<&str>,
     ) -> Result<Value, PreparationError> {
         let role = role_code(actor)?;
         if query.q.chars().count() > 200 {
@@ -175,7 +188,7 @@ impl PostgresPreparationStore {
             BalanceFilter::Available => "available",
             BalanceFilter::Empty => "empty",
         };
-        let sql = include_str!("paddons.sql").replace("{PADDON_STOCK}", PADDON_STOCK);
+        let sql = paddon_unit_stock_sql(include_str!("paddons.sql"));
         let mut paddons: Vec<Value> = sqlx::query_scalar(&sql)
             .bind(role)
             .bind(&actor.ref_)
@@ -184,6 +197,7 @@ impl PostgresPreparationStore {
             .bind(i64::from(limit) + 1)
             .bind(i64::from(query.offset))
             .bind(code)
+            .bind(warehouse_id)
             .fetch_all(&self.pool)
             .await?;
         let has_more = paddons.len() > limit as usize;
@@ -317,6 +331,36 @@ impl PostgresPreparationStore {
         tx.commit().await?;
         Ok(json!({"paddon_id": id, "paddon_code": code, "warehouse": warehouse}))
     }
+}
+
+async fn lock_paddon(tx: &mut Transaction<'_, Postgres>, code: &str) -> Result<(), PreparationError> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("paddon-issue:{code}"))
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
+async fn scoped_paddon(
+    tx: &mut Transaction<'_, Postgres>,
+    actor: &Principal,
+    code: &str,
+) -> Result<(String, String, String), PreparationError> {
+    sqlx::query_as(
+        "SELECT p.id, w.id, w.name
+         FROM mini_raw_material_paddons p
+         JOIN mini_warehouses w ON w.id = p.warehouse_id
+         JOIN mini_warehouse_assignments a ON lower(a.warehouse_name) = lower(w.name)
+         WHERE p.code = $1 AND p.owner_role = $2 AND p.owner_ref = $3 AND NOT w.is_group
+           AND a.assignment_kind = 'warehouse' AND a.principal_role = $2 AND a.principal_ref = $3
+         FOR SHARE OF w, a",
+    )
+    .bind(code)
+    .bind(role_code(actor)?)
+    .bind(&actor.ref_)
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or(PreparationError::Forbidden)
 }
 
 async fn paddon_material(

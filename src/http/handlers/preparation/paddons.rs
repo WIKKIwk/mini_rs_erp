@@ -2,6 +2,7 @@ use super::*;
 use crate::core::inventory_movements::InventoryActor;
 use crate::db::postgres_preparation::paddons::{
     PaddonCreate, PaddonIdentity, PaddonIssueCreate, PaddonLabelPrint, PaddonQuery,
+    PaddonRollAttachment, PaddonRollOptions,
 };
 
 async fn paddon_actor(
@@ -76,6 +77,36 @@ pub async fn receive_raw_material_paddon(
             .warehouse_events
             .notify_updated(warehouse, "raw_material_paddon");
     }
+    Ok(Json(result))
+}
+
+pub async fn production_paddon_options(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<PaddonRollOptions>,
+) -> Result<Json<Value>, ApiError> {
+    let actor = authorize(&state, &headers).await?;
+    store(&state)?
+        .production_paddon_options(&actor, input)
+        .await
+        .map(Json)
+        .map_err(error)
+}
+
+pub async fn attach_prepared_rolls(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<PaddonRollAttachment>,
+) -> Result<Json<Value>, ApiError> {
+    let actor = authorize(&state, &headers).await?;
+    let result = store(&state)?
+        .attach_prepared_rolls(&actor, input)
+        .await
+        .map_err(error)?;
+    if let Some(warehouse) = result["warehouse"].as_str() {
+        state.warehouse_events.notify_updated(warehouse, "raw_material_paddon");
+    }
+    state.production_maps.notify_live();
     Ok(Json(result))
 }
 

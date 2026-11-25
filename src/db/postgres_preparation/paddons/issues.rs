@@ -74,6 +74,7 @@ impl PaddonIssueCreate {
 struct IssueUnit {
     unit_no: i32,
     stock_id: Option<String>,
+    prepared_roll: bool,
     #[sqlx(flatten)]
     material: PaddonMaterial,
 }
@@ -111,33 +112,14 @@ impl PostgresPreparationStore {
         mut input: PaddonIssueCreate,
     ) -> Result<Value, PreparationError> {
         let actor = &inventory_actor.principal;
-        let role = role_code(actor)?;
         let weights = input.quantities()?;
         let remainder = input.remainder_kg.as_deref().map(decimal).transpose()?;
         let expected = input.expected_open_kg.as_deref().map(decimal).transpose()?;
         input.code = paddon_code(&input.code)?;
         let request = json!(&input);
         let mut tx = self.pool.begin().await?;
-        // Serialize issues from a paddon, including retries and concurrent scans.
-        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
-            .bind(format!("paddon-issue:{}", input.code))
-            .execute(&mut *tx)
-            .await?;
-        let (paddon_id, warehouse_id, warehouse): (String, String, String) = sqlx::query_as(
-            "SELECT p.id, w.id, w.name
-             FROM mini_raw_material_paddons p
-             JOIN mini_warehouses w ON w.id = p.warehouse_id
-             JOIN mini_warehouse_assignments a ON lower(a.warehouse_name) = lower(w.name)
-             WHERE p.code = $1 AND p.owner_role = $2 AND p.owner_ref = $3 AND NOT w.is_group
-               AND a.assignment_kind = 'warehouse' AND a.principal_role = $2 AND a.principal_ref = $3
-             FOR SHARE OF w, a",
-        )
-        .bind(&input.code)
-        .bind(role)
-        .bind(&actor.ref_)
-        .fetch_optional(&mut *tx)
-        .await?
-        .ok_or(PreparationError::Forbidden)?;
+        lock_paddon(&mut tx, &input.code).await?;
+        let (paddon_id, warehouse_id, warehouse) = scoped_paddon(&mut tx, actor, &input.code).await?;
         if let Some((saved, response)) = sqlx::query_as::<_, (Value, Value)>(
             "SELECT request_json, result FROM mini_raw_material_paddon_issue_history
              WHERE paddon_id = $1 AND request_id = $2",
@@ -178,8 +160,8 @@ impl PostgresPreparationStore {
                 .ok_or(PreparationError::Invalid("Faol state topilmadi"))?
             }
         };
-        let candidates: Vec<IssueUnit> = sqlx::query_as(&format!(
-            "SELECT u.unit_no, u.stock_id, COALESCE(s.item_code, u.item_code) AS item_code,
+        let candidates: Vec<IssueUnit> = sqlx::query_as(&paddon_unit_stock_sql(
+            "SELECT u.unit_no, u.stock_id, u.prepared_roll, COALESCE(s.item_code, u.item_code) AS item_code,
                     COALESCE(NULLIF(s.item_name, ''), NULLIF(u.item_name, ''), s.item_code, u.item_code) AS item_name,
                     u.lot_number, COALESCE(s.width_mm, u.width_mm)::text AS width_mm,
                     COALESCE(s.micron, u.micron)::text AS micron
@@ -187,7 +169,7 @@ impl PostgresPreparationStore {
              LEFT JOIN mini_raw_material_stock s ON s.id = u.stock_id
              WHERE u.paddon_id = $1 AND u.line_no = $2 AND u.issue_id IS NULL
                AND (($5::integer IS NULL AND NOT u.opened) OR (u.opened AND u.unit_no=$5))
-               AND (s.id IS NULL OR (lower(s.warehouse) = lower($3) AND s.qty > 0 AND {PADDON_STOCK}))
+               AND (s.id IS NULL OR (lower(s.warehouse) = lower($3) AND s.qty > 0 AND {PADDON_UNIT_STOCK}))
              ORDER BY u.unit_no LIMIT $4",
         ))
         .bind(&paddon_id)
@@ -199,6 +181,12 @@ impl PostgresPreparationStore {
         .await?;
         if candidates.len() != weights.len() {
             return Err(PreparationError::Insufficient);
+        }
+        let existing_qr = candidates.iter().any(|unit| unit.prepared_roll);
+        if existing_qr && (weights.len() != 1 || remainder.is_some() || input.moves_stock()) {
+            return Err(PreparationError::Invalid(
+                "Ishlab chiqarilgan rulonni to‘liq, o‘z omboriga yeching",
+            ));
         }
 
         let issue_id = new_id();
@@ -231,7 +219,10 @@ impl PostgresPreparationStore {
                 ),
                 None => None,
             };
-            let stock = if let Some(id) = source {
+            let stock = if unit.prepared_roll {
+                let id = source.as_deref().ok_or(PreparationError::StoreFailed)?;
+                release_prepared_roll(&mut tx, &warehouse, id, kg).await?
+            } else if let Some(id) = source {
                 let existing = weigh_paddon_unit(
                     &mut tx, actor, &warehouse, &paddon_id, &issue_id, &id, material, kg,
                     remainder, expected,
@@ -327,6 +318,7 @@ impl PostgresPreparationStore {
             "destination": destination_name, "destination_kind": destination_kind, "label_warehouse": label_warehouse,
             "transfer_status": transfer_status.map(InventoryTransferStatus::as_str),
             "labels": labels, "remainder_kg": remainder.map(decimal_text), "print_tracking": true,
+            "existing_qr": existing_qr,
         });
         sqlx::query(
             "INSERT INTO mini_raw_material_paddon_issues
@@ -358,6 +350,31 @@ impl PostgresPreparationStore {
         tx.commit().await?;
         Ok(result)
     }
+}
+
+async fn release_prepared_roll(
+    tx: &mut Transaction<'_, Postgres>,
+    warehouse: &str,
+    id: &str,
+    expected_kg: i64,
+) -> Result<PaddonStock, PreparationError> {
+    sqlx::query("SELECT id FROM mini_raw_material_stock WHERE id=$1 FOR UPDATE")
+        .bind(id)
+        .fetch_optional(&mut **tx)
+        .await?
+        .ok_or(PreparationError::Insufficient)?;
+    let barcode = sqlx::query_scalar(&format!(
+        "UPDATE mini_raw_material_stock s SET status='available', updated_at=now()
+         WHERE s.id=$1 AND lower(s.warehouse)=lower($2) AND s.qty=$3::text::numeric
+           AND {PREPARED_PADDON_STOCK} RETURNING s.barcode"
+    ))
+    .bind(id)
+    .bind(warehouse)
+    .bind(decimal_text(expected_kg))
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or(PreparationError::Conflict("Rulon qoldig‘i o‘zgargan. Paddonni yangilang"))?;
+    Ok(PaddonStock { id: id.into(), barcode })
 }
 
 async fn weigh_paddon_unit(

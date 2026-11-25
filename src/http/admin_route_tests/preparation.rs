@@ -227,6 +227,19 @@ async fn preparation_production_journal_requires_master_capability_and_valid_pag
         assert_eq!(response.status(), expected);
     }
     let invalid = r#"{"view":"paddons","q":"","status":"active","length":50}"#;
+    for (path, body) in [
+        ("/v1/mobile/preparation/production/paddon-options", r#"{"receipt_names":["receipt-1"]}"#),
+        ("/v1/mobile/preparation/production/paddon-attach", r#"{"receipt_names":["receipt-1"],"code":"XP-1234567890123456","request_id":"request-1"}"#),
+    ] {
+        for (token, status) in [
+            ("", StatusCode::UNAUTHORIZED),
+            (admin.as_str(), StatusCode::FORBIDDEN),
+            (master.as_str(), StatusCode::SERVICE_UNAVAILABLE),
+        ] {
+            let response = router.clone().oneshot(request_with_body("POST", path, token, body)).await.unwrap();
+            assert_eq!(response.status(), status, "{path}");
+        }
+    }
     let response = router.oneshot(request_with_body("POST", sync, &master, invalid)).await.unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }

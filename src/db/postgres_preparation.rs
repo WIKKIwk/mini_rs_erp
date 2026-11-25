@@ -22,7 +22,6 @@ mod production_journal;
 pub(crate) use production_journal::MAX_JOURNAL_WINDOW;
 mod production_notes;
 mod output_notes;
-pub mod paddons;
 pub(crate) mod orders;
 mod order_customers;
 
@@ -35,10 +34,8 @@ impl From<sqlx::Error> for PreparationError {
 
 // Reuse the shared stock and physical-location authority. A lot can be
 // accounted to this warehouse but physically at an apparatus or in transit.
-macro_rules! free_in_warehouse {
-    () => { "s.reserved_order_id = ''
-    AND btrim(COALESCE(s.payload_json->>'inventory_transfer_id', '')) = ''
-    AND NOT EXISTS (SELECT 1 FROM mini_raw_material_assignments a WHERE lower(a.barcode) = lower(s.barcode))
+macro_rules! physically_in_warehouse {
+    () => { "btrim(COALESCE(s.payload_json->>'inventory_transfer_id', '')) = ''
     AND NOT EXISTS (
         SELECT 1 FROM mini_inventory_placements p
         JOIN mini_inventory_locations l ON l.id = p.physical_location_id
@@ -47,8 +44,16 @@ macro_rules! free_in_warehouse {
           AND (l.kind <> 'warehouse' OR w.name IS NULL OR lower(w.name) <> lower(s.warehouse)))" };
 }
 
+macro_rules! free_in_warehouse {
+    () => { concat!("s.reserved_order_id = ''
+    AND NOT EXISTS (SELECT 1 FROM mini_raw_material_assignments a WHERE lower(a.barcode) = lower(s.barcode))
+    AND ", physically_in_warehouse!()) };
+}
+
 const AVAILABLE_STOCK: &str = concat!("s.status = 'available' AND ", free_in_warehouse!());
 const PADDON_STOCK: &str = concat!("s.status = 'on_paddon' AND ", free_in_warehouse!());
+
+pub mod paddons;
 
 const PREPARATION_ITEM_GROUP: &str = "Homashyo";
 const PREPARATION_MATERIAL_CHILD_GROUP: &str = "seriyo";

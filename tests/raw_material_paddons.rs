@@ -7,7 +7,7 @@ use mini_rs_erp::db::{
     postgres::{apply_postgres_migrations_through_version, canonical_apparatus_service},
     postgres_preparation::{
         PostgresPreparationStore,
-        paddons::{PaddonCreate, PaddonIssueCreate, PaddonQuery},
+        paddons::{PaddonCreate, PaddonIssueCreate, PaddonQuery, PaddonRollAttachment, PaddonRollOptions},
     },
 };
 use serde_json::{Value, json};
@@ -81,7 +81,7 @@ async fn verify(pool: &PgPool, options: PgConnectOptions) {
         .await
         .unwrap();
     verify_paddon_upgrade(pool).await;
-    apply_postgres_migrations_through_version(pool, "0204")
+    apply_postgres_migrations_through_version(pool, "0206")
         .await
         .unwrap();
     sqlx::raw_sql(
@@ -395,7 +395,118 @@ async fn verify(pool: &PgPool, options: PgConnectOptions) {
     assert_eq!(supplier_after["paddons"][0]["remaining_kg"], "25.000000");
     assert_eq!(supplier_after["paddons"][0]["remaining_count"], 1);
     verify_partial_and_transfer(pool, &store, &master_inventory, &supply_inventory, &runtime).await;
+    verify_prepared_roll_packing(pool, &store, &master_inventory, code, supply_code, item).await;
     runtime.close().await;
+}
+
+async fn verify_prepared_roll_packing(
+    pool: &PgPool,
+    store: &PostgresPreparationStore,
+    inventory: &InventoryActor,
+    code: &str,
+    foreign_code: &str,
+    item: &str,
+) {
+    use mini_rs_erp::core::gscale::{models::CreateMaterialReceiptDraftInput, ports::MaterialReceiptStorePort};
+    use mini_rs_erp::db::postgres_gscale_receipt::PostgresGscaleReceiptStore;
+
+    let master = &inventory.principal;
+    let receipts = PostgresGscaleReceiptStore::new(pool.clone());
+    let order = "paddon-prep-order";
+    let apparatus = "apparatus:default:bosma_7";
+    sqlx::query("INSERT INTO mini_production_maps(id,product_code,title,map_json)
+                 VALUES($1,'PE','PE','{}')")
+        .bind(order)
+        .execute(pool)
+        .await
+        .unwrap();
+    let mut names = Vec::new();
+    for (barcode, linked) in [("PADDON-PREP-1", true), ("PADDON-PREP-2", false)] {
+        let draft = receipts.create_material_receipt_draft(CreateMaterialReceiptDraftInput {
+            item_code: item.into(),
+            item_name: "PE".into(),
+            warehouse: "Own".into(),
+            barcode: barcode.into(),
+            qty: 12.75,
+            width_mm: Some(720.0),
+            micron: Some(20.0),
+            length_m: Some(400.0),
+            actor_role: "tayyorlov_masteri".into(),
+            actor_ref: master.ref_.clone(),
+            order_assignment: linked.then(|| json!({
+                "order_id": order, "apparatus": apparatus, "item_group": "Homashyo",
+                "assigned_by_role": "tayyorlov_masteri", "assigned_by_ref": master.ref_,
+            })),
+            ..Default::default()
+        }).await.unwrap();
+        receipts.submit_stock_entry_draft(&draft.name).await.unwrap();
+        names.push(draft.name);
+    }
+    let options: PaddonRollOptions = serde_json::from_value(json!({"receipt_names": names})).unwrap();
+    let choices = store.production_paddon_options(master, options).await.unwrap();
+    let choices = choices["paddons"].as_array().unwrap();
+    assert!(choices.iter().any(|paddon| paddon["paddon_code"] == code));
+    assert!(choices.iter().all(|paddon| paddon["warehouse"] == "Own"));
+
+    let attach = |key, target, receipt_names: &[String]| -> PaddonRollAttachment {
+        serde_json::from_value(json!({
+            "request_id":key, "code": target, "receipt_names": receipt_names
+        })).unwrap()
+    };
+    assert!(matches!(
+        store.attach_prepared_rolls(master, attach("pack-foreign", foreign_code, &names)).await,
+        Err(PreparationError::Forbidden)
+    ));
+    assert!(store.attach_prepared_rolls(master, attach(
+        "pack-missing", code, &[names[0].clone(), "missing-receipt".into()]
+    )).await.is_err());
+    let before: Vec<(String, String, String, String)> = sqlx::query_as(
+        "SELECT id, status, qty::text, source_receipt_id FROM mini_raw_material_stock
+         WHERE source_receipt_id=ANY($1::text[]) ORDER BY id",
+    ).bind(&names).fetch_all(pool).await.unwrap();
+    assert_eq!(before.len(), 2);
+    assert!(before.iter().all(|(_, status, _, _)| status == "available"));
+
+    let (saved, retry) = tokio::join!(
+        store.attach_prepared_rolls(master, attach("pack-prep-1", code, &names)),
+        store.attach_prepared_rolls(master, attach("pack-prep-1", code, &names)),
+    );
+    let saved = saved.unwrap();
+    assert_eq!(saved, retry.unwrap());
+    assert!(store.attach_prepared_rolls(master, attach("pack-prep-2", code, &names)).await.is_err());
+    let after: Vec<(String, String, String, String)> = sqlx::query_as(
+        "SELECT id, status, qty::text, source_receipt_id FROM mini_raw_material_stock
+         WHERE source_receipt_id=ANY($1::text[]) ORDER BY id",
+    ).bind(&names).fetch_all(pool).await.unwrap();
+    let expected: Vec<_> = before.into_iter().map(|(id, _, qty, receipt)| {
+        (id, "on_paddon".to_owned(), qty, receipt)
+    }).collect();
+    assert_eq!(after, expected);
+
+    let page = store.raw_material_paddons(master, filter("all", code)).await.unwrap();
+    let unit = page["paddons"][0]["contents"].as_array().unwrap().iter()
+        .find(|unit| unit["prepared_barcode"] == "PADDON-PREP-1").unwrap();
+    assert_eq!(unit["issuable_count"], 1);
+    let issue = |key, kg| -> PaddonIssueCreate {
+        serde_json::from_value(json!({
+            "request_id": key, "code":code, "line_no":unit["line_no"], "weights":[kg]
+        })).unwrap()
+    };
+    assert!(matches!(
+        store.issue_raw_material_paddon(inventory, issue("unpack-wrong-kg", "13")).await,
+        Err(PreparationError::Conflict(_))
+    ));
+    let issued = store.issue_raw_material_paddon(inventory, issue("unpack-prep", "12.75")).await.unwrap();
+    assert_eq!(issued["existing_qr"], true);
+    assert_eq!(issued["labels"][0]["barcode"], "PADDON-PREP-1");
+    assert_eq!(store.attach_prepared_rolls(master, attach("pack-prep-1", code, &names)).await.unwrap(), saved);
+    let restored: (String, String, String, String) = sqlx::query_as(
+        "SELECT s.status, s.qty::text, s.source_receipt_id, a.order_id
+         FROM mini_raw_material_stock s JOIN mini_raw_material_assignments a ON a.barcode=s.barcode
+         WHERE s.barcode='PADDON-PREP-1'",
+    ).fetch_one(pool).await.unwrap();
+    assert_eq!(restored, ("available".into(), "12.750000".into(), names[0].clone(), order.into()));
+    store.attach_prepared_rolls(master, attach("pack-released", code, &names[..1])).await.unwrap();
 }
 
 async fn verify_partial_and_transfer(
