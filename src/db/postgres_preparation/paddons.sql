@@ -4,7 +4,7 @@ WITH scoped AS (
     JOIN mini_warehouses w ON w.id = p.warehouse_id
     WHERE p.owner_role = $1 AND p.owner_ref = $2 AND NOT w.is_group
       AND ($7::text IS NULL OR p.code = $7)
-      AND ($8::text IS NULL OR p.warehouse_id = $8)
+      AND ($8::text[] IS NULL OR p.warehouse_id = ANY($8))
       AND EXISTS (
           SELECT 1 FROM mini_warehouse_assignments a
           WHERE a.assignment_kind = 'warehouse'

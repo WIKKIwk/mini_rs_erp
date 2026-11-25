@@ -2,7 +2,7 @@ use super::*;
 use super::output_notes::output_note_json;
 use super::production_notes::note_json_sql;
 
-const BASE: &str = include_str!("production_journal.sql");
+pub(super) const BASE: &str = include_str!("production_journal.sql");
 pub(crate) const MAX_JOURNAL_WINDOW: usize = 10_000;
 const ORDER_JSON: &str = "jsonb_build_object('order_id',o.order_id,'order_code',o.order_code,
     'order_title',o.order_title,'customer_name',o.customer_name,'active_batch_count',o.active_batch_count,

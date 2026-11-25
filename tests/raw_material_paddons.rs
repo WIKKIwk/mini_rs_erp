@@ -396,6 +396,7 @@ async fn verify(pool: &PgPool, options: PgConnectOptions) {
     assert_eq!(supplier_after["paddons"][0]["remaining_count"], 1);
     verify_partial_and_transfer(pool, &store, &master_inventory, &supply_inventory, &runtime).await;
     verify_prepared_roll_packing(pool, &store, &master_inventory, code, supply_code, item).await;
+    verify_batch_packing(pool, &store, &master, code, item).await;
     runtime.close().await;
 }
 
@@ -507,6 +508,129 @@ async fn verify_prepared_roll_packing(
     ).fetch_one(pool).await.unwrap();
     assert_eq!(restored, ("available".into(), "12.750000".into(), names[0].clone(), order.into()));
     store.attach_prepared_rolls(master, attach("pack-released", code, &names[..1])).await.unwrap();
+}
+
+async fn verify_batch_packing(
+    pool: &PgPool,
+    store: &PostgresPreparationStore,
+    master: &Principal,
+    code: &str,
+    item: &str,
+) {
+    const BATCH: &str = "batch:pack-history";
+    sqlx::query(
+        "INSERT INTO mini_gscale_receipts (name, status, item_code, warehouse, qty, barcode, payload_json)
+         SELECT 'batch-pack-'||n, 'submitted', $1, 'Own', 5, 'BATCH-PACK-'||n,
+                jsonb_build_object('actor_role','tayyorlov_masteri','actor_ref',$2::text)
+         FROM generate_series(1, 106) n",
+    )
+    .bind(item)
+    .bind(&master.ref_)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO mini_raw_material_stock
+             (id, status, warehouse, item_code, barcode, qty, source_receipt_id)
+         SELECT 'roll-'||name, CASE WHEN barcode='BATCH-PACK-103' THEN 'consumed' ELSE 'available' END,
+                CASE WHEN barcode='BATCH-PACK-105' THEN 'Supply' ELSE 'Own' END,
+                item_code, barcode, qty, name
+         FROM mini_gscale_receipts WHERE name LIKE 'batch-pack-%'",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO mini_rps_batch_history (batch_id, owner_key, owner_role, owner_ref, payload_json)
+         SELECT 'pack-history', 'tayyorlov_masteri:'||$1, 'tayyorlov_masteri', $1,
+                jsonb_build_object('prints', jsonb_agg(jsonb_build_object('epc', 'BATCH-PACK-'||n)))
+         FROM generate_series(1, 105) n",
+    )
+    .bind(&master.ref_)
+    .execute(pool)
+    .await
+    .unwrap();
+    let options = || serde_json::from_value::<PaddonRollOptions>(json!({"batch_id": BATCH})).unwrap();
+    let attach = |request_id, names: &[String]| {
+        serde_json::from_value::<PaddonRollAttachment>(json!({
+            "request_id": request_id, "code": code, "receipt_names": names, "batch_id": BATCH
+        }))
+        .unwrap()
+    };
+    store
+        .attach_prepared_rolls(
+            master,
+            serde_json::from_value(json!({
+                "request_id": "pack-one-first", "code": code, "receipt_names": ["batch-pack-104"]
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let outsider = actor(PrincipalRole::TayyorlovMasteri, "another-master");
+    assert!(matches!(
+        store.production_paddon_options(&outsider, options()).await,
+        Err(PreparationError::Forbidden)
+    ));
+
+    let page = store.production_paddon_options(master, options()).await.unwrap();
+    assert!(page["paddons"].as_array().unwrap().iter().any(|p| p["paddon_code"] == code));
+    assert!(page["paddons"].as_array().unwrap().iter().all(|p| p["warehouse"] == "Own"));
+    let preview = &page["batch_selection"];
+    assert_eq!(preview["batch_id"], BATCH);
+    assert_eq!(preview["total_rolls"], 105);
+    assert_eq!(
+        preview["skipped"],
+        json!({"consumed": 1, "outside_warehouse": 1, "packed": 1})
+    );
+    let selected: Vec<String> = serde_json::from_value(
+        preview["receipt_names_by_warehouse"]["Own"].clone(),
+    )
+    .unwrap();
+    assert_eq!(selected.len(), 102);
+    assert!(selected.iter().all(|name| name != "batch-pack-106"));
+
+    let mut wrong = selected.clone();
+    wrong[0] = "batch-pack-106".into();
+    assert!(matches!(
+        store.attach_prepared_rolls(master, attach("pack-batch-wrong", &wrong)).await,
+        Err(PreparationError::Conflict(_))
+    ));
+    sqlx::query("UPDATE mini_raw_material_stock SET status='in_use' WHERE barcode='BATCH-PACK-1'")
+        .execute(pool)
+        .await
+        .unwrap();
+    assert!(matches!(
+        store.attach_prepared_rolls(master, attach("pack-batch-stale", &selected)).await,
+        Err(PreparationError::Conflict(_))
+    ));
+    let preview = store.production_paddon_options(master, options()).await.unwrap();
+    let selected: Vec<String> =
+        serde_json::from_value(preview["batch_selection"]["receipt_names_by_warehouse"]["Own"].clone())
+            .unwrap();
+    assert_eq!(selected.len(), 101);
+    let saved = store
+        .attach_prepared_rolls(master, attach("pack-batch-confirmed", &selected))
+        .await
+        .unwrap();
+    assert_eq!(saved["receipt_names"].as_array().unwrap().len(), 101);
+    assert_eq!(
+        store.attach_prepared_rolls(master, attach("pack-batch-confirmed", &selected)).await.unwrap(),
+        saved
+    );
+    let packed: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM mini_raw_material_paddon_units u
+         JOIN mini_raw_material_stock s ON s.id=u.stock_id
+         WHERE u.issue_id IS NULL AND s.status='on_paddon' AND s.source_receipt_id=ANY($1)",
+    )
+    .bind(&selected)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(packed, 101);
+    let empty = store.production_paddon_options(master, options()).await.unwrap();
+    assert_eq!(empty["paddons"], json!([]));
+    assert_eq!(empty["batch_selection"]["receipt_names_by_warehouse"], json!({}));
 }
 
 async fn verify_partial_and_transfer(

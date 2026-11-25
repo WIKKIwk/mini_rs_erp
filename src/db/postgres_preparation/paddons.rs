@@ -172,7 +172,7 @@ impl PostgresPreparationStore {
         actor: &Principal,
         query: PaddonQuery,
         limit: u32,
-        warehouse_id: Option<&str>,
+        warehouse_ids: Option<&[String]>,
     ) -> Result<Value, PreparationError> {
         let role = role_code(actor)?;
         if query.q.chars().count() > 200 {
@@ -197,7 +197,7 @@ impl PostgresPreparationStore {
             .bind(i64::from(limit) + 1)
             .bind(i64::from(query.offset))
             .bind(code)
-            .bind(warehouse_id)
+            .bind(warehouse_ids)
             .fetch_all(&self.pool)
             .await?;
         let has_more = paddons.len() > limit as usize;
