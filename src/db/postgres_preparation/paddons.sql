@@ -62,12 +62,14 @@ WITH scoped AS (
 )
 SELECT jsonb_build_object(
     'paddon_id', p.id, 'paddon_code', p.code, 'name', p.name, 'warehouse', p.warehouse,
-    'remaining_kg', t.remaining_kg::text, 'remaining_count', t.remaining_count,
-    'unweighed_count', t.unweighed_count, 'contents', t.contents
+    'remaining_kg', COALESCE(t.remaining_kg, 0::numeric(18,6))::text,
+    'remaining_count', COALESCE(t.remaining_count, 0),
+    'unweighed_count', COALESCE(t.unweighed_count, 0),
+    'contents', COALESCE(t.contents, '[]'::jsonb)
 )
-FROM scoped p JOIN totals t ON t.id = p.id
+FROM scoped p LEFT JOIN totals t ON t.id = p.id
 WHERE ($3 = '' OR strpos(lower(p.code), $3) > 0 OR strpos(lower(p.name), $3) > 0 OR t.matches)
   AND ($4 = 'all' OR ($4 = 'available' AND t.remaining_count > 0)
-                 OR ($4 = 'empty' AND t.remaining_count = 0))
+                 OR ($4 = 'empty' AND COALESCE(t.remaining_count, 0) = 0))
 ORDER BY p.created_at DESC, p.id DESC
 LIMIT $5 OFFSET $6

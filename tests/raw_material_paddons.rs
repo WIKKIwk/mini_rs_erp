@@ -396,9 +396,84 @@ async fn verify(pool: &PgPool, options: PgConnectOptions) {
     assert_eq!(supplier_after["paddons"][0]["remaining_kg"], "25.000000");
     assert_eq!(supplier_after["paddons"][0]["remaining_count"], 1);
     verify_partial_and_transfer(pool, &store, &master_inventory, &supply_inventory, &runtime).await;
-    verify_prepared_roll_packing(pool, &store, &master_inventory, code, supply_code, item).await;
+    let empty_code = verify_empty_paddon(pool, &store, &master, &supplier).await;
+    verify_prepared_roll_packing(pool, &store, &master_inventory, &empty_code, supply_code, item).await;
     verify_batch_packing(pool, &store, &master, code, source_code, item).await;
     runtime.close().await;
+}
+
+async fn verify_empty_paddon(
+    pool: &PgPool,
+    store: &PostgresPreparationStore,
+    master: &Principal,
+    supplier: &Principal,
+) -> String {
+    let create = |warehouse: &str, name: &str| -> PaddonCreate {
+        serde_json::from_value(json!({
+            "request_id": "empty-paddon-1",
+            "warehouse": warehouse,
+            "name": name,
+            "contents": []
+        })).unwrap()
+    };
+    let inventory_counts = || async {
+        sqlx::query_as::<_, (i64, i64, i64)>(
+            "SELECT (SELECT count(*) FROM mini_raw_material_stock),
+                    (SELECT count(*) FROM mini_preparation_receipts),
+                    (SELECT count(*) FROM mini_raw_material_events)",
+        ).fetch_one(pool).await.unwrap()
+    };
+
+    let before = inventory_counts().await;
+    assert!(matches!(
+        store.receive_raw_material_paddon(supplier, create("Supply", ""), &[]).await,
+        Err(PreparationError::Forbidden)
+    ));
+    assert!(matches!(
+        store.receive_raw_material_paddon(master, create("Supply", ""), &[]).await,
+        Err(PreparationError::WarehouseNotExclusive)
+    ));
+
+    let (created, retried) = tokio::join!(
+        store.receive_raw_material_paddon(master, create("Own", "Tayyor rulonlar"), &[]),
+        store.receive_raw_material_paddon(master, create("Own", "Tayyor rulonlar"), &[]),
+    );
+    let created = created.unwrap();
+    assert_eq!(created, retried.unwrap());
+    assert!(matches!(
+        store.receive_raw_material_paddon(master, create("Own", "Boshqa nom"), &[]).await,
+        Err(PreparationError::Conflict(_))
+    ));
+    assert_eq!(inventory_counts().await, before);
+
+    let code = created["paddon_code"].as_str().unwrap();
+    let lookup = serde_json::from_value(json!({
+        "code": format!("raw-material-paddon:{code}")
+    })).unwrap();
+    let page = store.raw_material_paddons(master, lookup).await.unwrap();
+    assert_eq!(page["paddons"], json!([{
+        "paddon_id": created["paddon_id"],
+        "paddon_code": code,
+        "warehouse": "Own",
+        "name": "Tayyor rulonlar",
+        "remaining_kg": "0.000000",
+        "remaining_count": 0,
+        "unweighed_count": 0,
+        "contents": []
+    }]));
+    assert_eq!(
+        store.raw_material_paddons(master, filter("empty", "tayyor rulonlar")).await.unwrap()["paddons"],
+        page["paddons"]
+    );
+    assert_eq!(
+        store.raw_material_paddons(master, filter("available", code)).await.unwrap()["paddons"],
+        json!([])
+    );
+    assert_eq!(
+        store.raw_material_paddons(supplier, filter("all", code)).await.unwrap()["paddons"],
+        json!([])
+    );
+    code.into()
 }
 
 async fn verify_prepared_roll_packing(
@@ -486,6 +561,8 @@ async fn verify_prepared_roll_packing(
     assert_eq!(after, expected);
 
     let page = store.raw_material_paddons(master, filter("all", code)).await.unwrap();
+    assert_eq!(page["paddons"][0]["remaining_count"], 2);
+    assert_eq!(page["paddons"][0]["remaining_kg"], "25.500000");
     let unit = page["paddons"][0]["contents"].as_array().unwrap().iter()
         .find(|unit| unit["prepared_barcode"] == "PADDON-PREP-1").unwrap();
     assert_eq!(unit["issuable_count"], 1);

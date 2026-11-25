@@ -67,7 +67,6 @@ impl PaddonCreate {
                 .bytes()
                 .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_'))
             || self.warehouse.trim().is_empty()
-            || self.contents.is_empty()
             || self
                 .contents
                 .iter()
@@ -216,6 +215,9 @@ impl PostgresPreparationStore {
         material_groups: &[String],
     ) -> Result<Value, PreparationError> {
         let role = role_code(actor)?;
+        if input.contents.is_empty() && actor.role != PrincipalRole::TayyorlovMasteri {
+            return Err(PreparationError::Forbidden);
+        }
         input.name = input.name.trim().to_owned();
         input.validate()?;
         let mut tx = self.pool.begin().await?;
