@@ -6,6 +6,8 @@ use mini_rs_erp::core::pending_orders::{
 
 const PROJECTION: &str = "orders_list_v1";
 const QUERY: &str = "view=orders&projection=orders_list_v1";
+const REZKA_ORDERS: &str = "/v1/mobile/rezka-master/orders";
+const REZKA_SETTINGS: &str = "/v1/mobile/rezka-master/order-settings";
 
 #[derive(Default)]
 struct Intake(tokio::sync::Mutex<Vec<PendingOrder>>);
@@ -89,6 +91,64 @@ async fn response(f: &Fixture, token: &str, uri: &str) -> (StatusCode, Value) {
             serde_json::from_slice(&bytes).unwrap()
         },
     )
+}
+
+#[tokio::test]
+async fn rezka_master_reads_the_shared_order_catalog_with_scoped_settings() {
+    let _guard = FIXTURE_LOCK.lock().await;
+    let mut f = Fixture::new().await;
+    f.state
+        .production_maps
+        .upsert_map(map("zakaz-press-order", "apparatus:default:bosma_7"))
+        .await
+        .unwrap();
+    f.state.pending_orders = Some(Arc::new(Intake(tokio::sync::Mutex::new(vec![pending(
+        "zakaz-9000",
+    )]))));
+    f.router = build_router(f.state.clone());
+    let master = f
+        .state
+        .sessions
+        .create(Principal {
+            role: PrincipalRole::RezkaMaster,
+            ref_: "catalog-master".into(),
+            display_name: "Rezka master".into(),
+            legal_name: String::new(),
+            phone: String::new(),
+            avatar_url: String::new(),
+        })
+        .await
+        .unwrap();
+    let admin = admin(&f, "catalog-admin").await;
+    let admin_page = page(&f, &admin, QUERY).await;
+    let (status, master_page) = response(&f, &master, REZKA_ORDERS).await;
+    assert_eq!(status, StatusCode::OK, "{master_page}");
+    for key in ["projection", "total", "order_ids", "rows", "pending_rows"] {
+        assert_eq!(master_page[key], admin_page[key], "{key}");
+    }
+    let cursor = master_page["next_cursor"].as_str().unwrap();
+    let (status, next_page) =
+        response(&f, &master, &format!("{REZKA_ORDERS}?cursor={cursor}")).await;
+    assert_eq!(status, StatusCode::OK, "{next_page}");
+    assert_eq!(next_page["offset"], 20);
+    let (_, print_page) = response(&f, &master, &format!("{REZKA_ORDERS}?search=press-order")).await;
+    assert_eq!(print_page["order_ids"], json!(["zakaz-press-order"]));
+    assert_eq!(response(&f, &f.token, REZKA_ORDERS).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(
+        response(&f, &master, &format!("{REZKA_ORDERS}?view=audit")).await.0,
+        StatusCode::BAD_REQUEST
+    );
+
+    let (status, settings) =
+        response(&f, &master, &format!("{REZKA_SETTINGS}?order_id=zakaz-000")).await;
+    assert_eq!(status, StatusCode::OK, "{settings}");
+    assert_eq!(settings["can_edit_work_options"], true);
+    assert_eq!(settings["standard_print_side"], true);
+    assert_eq!(settings["duplicate_rezka_labels"], false);
+    assert_eq!(
+        response(&f, &master, &format!("{REZKA_SETTINGS}?order_id=zakaz-press-order")).await.0,
+        StatusCode::NOT_FOUND
+    );
 }
 
 #[tokio::test]

@@ -122,8 +122,34 @@ pub async fn production_map_order_page(
         ],
     )
     .await?;
+    order_page_response(&state, &principal, query).await
+}
+
+pub async fn rezka_master_orders(
+    State(state): State<AppState>,
+    Query(mut query): Query<OrderPageQuery>,
+    headers: HeaderMap,
+) -> Result<Response, AdminError> {
+    let principal = super::super::rezka_master::authorize_master(&state, &headers).await?;
+    if !query.apparatus.is_empty()
+        || !query.target.is_empty()
+        || (!query.view.is_empty() && query.view != "orders")
+        || (!query.projection.is_empty() && query.projection != ORDERS_LIST_PROJECTION)
+    {
+        return Err(bad_request("invalid_order_page_scope"));
+    }
+    query.view = "orders".into();
+    query.projection = ORDERS_LIST_PROJECTION.into();
+    order_page_response(&state, &principal, query).await
+}
+
+async fn order_page_response(
+    state: &AppState,
+    principal: &Principal,
+    query: OrderPageQuery,
+) -> Result<Response, AdminError> {
     let identity = query.compression == "identity";
-    let response = match read_page(&state, &principal, query).await? {
+    let response = match read_page(state, principal, query).await? {
         Some(payload) => json_response(payload),
         None => not_modified(),
     };

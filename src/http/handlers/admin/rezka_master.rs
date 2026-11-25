@@ -7,7 +7,10 @@ use crate::core::{
     production_map::{ProductionMapDefinition, ProductionOrderLifecycleStatus, chain},
 };
 
-async fn authorize_master(state: &AppState, headers: &HeaderMap) -> Result<Principal, AdminError> {
+pub(super) async fn authorize_master(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<Principal, AdminError> {
     let principal = authorize_capability(state, headers, Capability::RezkaMasterAccess).await?;
     if principal.role != PrincipalRole::RezkaMaster {
         return Err(forbidden());
@@ -42,6 +45,38 @@ pub(super) async fn require_order_scope(
     Ok(map)
 }
 
+async fn work_options_editable(state: &AppState, order_id: &str) -> Result<bool, AdminError> {
+    let lifecycle = state
+        .production_maps
+        .production_order_lifecycle(order_id)
+        .await
+        .map_err(production_maps::production_map_error)?;
+    Ok(matches!(
+        lifecycle.status,
+        ProductionOrderLifecycleStatus::Released | ProductionOrderLifecycleStatus::InProgress
+    ))
+}
+
+#[derive(Deserialize)]
+pub struct OrderSettingsQuery {
+    order_id: String,
+}
+
+pub async fn read_order_settings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<OrderSettingsQuery>,
+) -> Result<Response, AdminError> {
+    let principal = authorize_master(&state, &headers).await?;
+    let map = require_order_scope(&state, &principal, &query.order_id).await?;
+    Ok(json_response(serde_json::json!({
+        "standard_print_side": map.standard_print_side.unwrap_or(true),
+        "duplicate_rezka_labels": map.duplicate_rezka_labels.unwrap_or(false),
+        "include_bobina_in_net": map.include_bobina_in_net.unwrap_or(false),
+        "can_edit_work_options": work_options_editable(&state, &map.id).await?,
+    })))
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OrderSettings {
@@ -60,15 +95,7 @@ pub async fn order_settings(
     let principal = authorize_master(&state, &headers).await?;
     let _guard = state.production_maps.queue_action_guard().await;
     let mut map = require_order_scope(&state, &principal, &input.order_id).await?;
-    let lifecycle = state
-        .production_maps
-        .production_order_lifecycle(&map.id)
-        .await
-        .map_err(production_maps::production_map_error)?;
-    if !matches!(
-        lifecycle.status,
-        ProductionOrderLifecycleStatus::Released | ProductionOrderLifecycleStatus::InProgress
-    ) {
+    if !work_options_editable(&state, &map.id).await? {
         return Err(conflict("rezka_order_settings_order_finished"));
     }
     let duplicate = map.duplicate_rezka_labels.unwrap_or(false);

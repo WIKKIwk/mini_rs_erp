@@ -1,4 +1,7 @@
-use crate::{app::AppState, http::handlers::admin::rezka_master};
+use crate::{
+    app::AppState,
+    http::handlers::admin::{production_maps::order_page, rezka_master},
+};
 use axum::{
     Router,
     http::Method,
@@ -8,12 +11,16 @@ use axum::{
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
         .route(
+            "/v1/mobile/rezka-master/orders",
+            get(order_page::rezka_master_orders),
+        )
+        .route(
             "/v1/mobile/rezka-master/workers",
             get(rezka_master::workers).put(rezka_master::assign_worker),
         )
         .route(
             "/v1/mobile/rezka-master/order-settings",
-            put(rezka_master::order_settings),
+            get(rezka_master::read_order_settings).put(rezka_master::order_settings),
         )
         .route("/v1/mobile/rezka-master/print-side", put(rezka_master::print_side))
 }
@@ -41,10 +48,13 @@ pub(super) fn allows(method: &Method, path: &str) -> bool {
     {
         return true;
     }
-    if path == "rezka-master/workers" {
+    if path == "rezka-master/orders" {
+        return *method == Method::GET;
+    }
+    if matches!(path, "rezka-master/workers" | "rezka-master/order-settings") {
         return matches!(*method, Method::GET | Method::PUT);
     }
-    if matches!(path, "rezka-master/order-settings" | "rezka-master/print-side") {
+    if path == "rezka-master/print-side" {
         return *method == Method::PUT;
     }
     if path == "admin/apparatus" {
