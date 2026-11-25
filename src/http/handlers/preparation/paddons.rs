@@ -84,15 +84,18 @@ pub async fn receive_raw_material_paddon(
 pub struct PaddonOptionsQuery {
     #[serde(default)]
     preview_partial: bool,
+    #[serde(default)]
+    transfer_between_warehouses: bool,
 }
 
 pub async fn production_paddon_options(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<PaddonOptionsQuery>,
-    Json(input): Json<PaddonRollOptions>,
+    Json(mut input): Json<PaddonRollOptions>,
 ) -> Result<Json<Value>, ApiError> {
     let actor = authorize(&state, &headers).await?;
+    input.transfer_between_warehouses = query.transfer_between_warehouses;
     store(&state)?
         .production_paddon_options(&actor, input, query.preview_partial)
         .await
@@ -112,6 +115,11 @@ pub async fn attach_prepared_rolls(
         .map_err(error)?;
     if let Some(warehouse) = result["warehouse"].as_str() {
         state.warehouse_events.notify_updated(warehouse, "raw_material_paddon");
+    }
+    if let Some(origins) = result["transferred_from"].as_array() {
+        for warehouse in origins.iter().filter_map(Value::as_str) {
+            state.warehouse_events.notify_updated(warehouse, "raw_material_paddon");
+        }
     }
     state.production_maps.notify_live();
     Ok(Json(result))

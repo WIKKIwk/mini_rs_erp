@@ -20,7 +20,7 @@ async fn ensure_transfer_assets_tx(
     Ok(())
 }
 
-async fn ensure_raw_material_destination_scope_tx(
+pub(super) async fn ensure_raw_material_destination_scope_tx(
     tx: &mut Transaction<'_, Postgres>,
     item_code: &str,
     destination_warehouse_id: &str,

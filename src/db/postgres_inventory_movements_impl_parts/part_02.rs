@@ -140,10 +140,39 @@ impl PostgresInventoryMovementStore {
         transfer_id: &str,
         input: &InventoryTransferCreate,
     ) -> Result<InventoryTransferStatus, InventoryMovementError> {
+        Self::create_transfer_in_scope_tx(tx, actor, transfer_id, input, false).await
+    }
+
+    pub(super) async fn create_paddon_transfer_assets_tx(
+        tx: &mut Transaction<'_, Postgres>,
+        actor: &InventoryActor,
+        transfer_id: &str,
+        input: &InventoryTransferCreate,
+    ) -> Result<InventoryTransferStatus, InventoryMovementError> {
+        Self::create_transfer_in_scope_tx(tx, actor, transfer_id, input, true).await
+    }
+
+    async fn create_transfer_in_scope_tx(
+        tx: &mut Transaction<'_, Postgres>,
+        actor: &InventoryActor,
+        transfer_id: &str,
+        input: &InventoryTransferCreate,
+        for_paddon: bool,
+    ) -> Result<InventoryTransferStatus, InventoryMovementError> {
         let source = warehouse_by_id_tx(tx, &input.source_warehouse_id).await?;
         let destination = warehouse_by_id_tx(tx, &input.destination_warehouse_id).await?;
-        ensure_transfer_warehouse(&source)?;
-        ensure_transfer_warehouse(&destination)?;
+        let internal_transfer = actor.manages_transfer_internally(&source.name, &destination.name);
+        if for_paddon {
+            if source.is_group || destination.is_group {
+                return Err(InventoryMovementError::WarehouseNotFound);
+            }
+            if !internal_transfer {
+                return Err(InventoryMovementError::WarehouseForbidden);
+            }
+        } else {
+            ensure_transfer_warehouse(&source)?;
+            ensure_transfer_warehouse(&destination)?;
+        }
         if source.id == destination.id {
             return Err(InventoryMovementError::SameWarehouse);
         }
@@ -153,7 +182,6 @@ impl PostgresInventoryMovementStore {
         if destination.assignment_count == 0 {
             return Err(InventoryMovementError::DestinationWarehouseUnassigned);
         }
-        let internal_transfer = actor.manages_transfer_internally(&source.name, &destination.name);
         let source_location_id = warehouse_location_id_tx(tx, &source.id).await?;
 
         sqlx::query(

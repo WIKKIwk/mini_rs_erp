@@ -1,4 +1,12 @@
 use super::*;
+use super::issues::movement_error;
+use crate::core::inventory_movements::{
+    InventoryActor, InventoryAssetKind, InventoryAssetSelector, InventoryMovementError,
+    InventoryTransferCreate, InventoryTransferStatus,
+};
+use crate::db::postgres_inventory_movements::{
+    PostgresInventoryMovementStore, ensure_raw_material_destination_scope_tx,
+};
 use crate::db::postgres_preparation::production_journal::BASE as JOURNAL_CTES;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -38,7 +46,7 @@ const PADDON_LOCATION: &str = "LEFT JOIN mini_raw_material_paddon_units u
                 AND a.assignment_kind = 'warehouse'
                 AND a.principal_role = 'tayyorlov_masteri' AND a.principal_ref = $1
         )";
-const PREVIEW_FIELDS: &str = "s.id AS stock_id, w.id AS warehouse_id, w.name AS warehouse,
+const PREVIEW_FIELDS: &str = "s.id AS stock_id, s.item_code, w.id AS warehouse_id, w.name AS warehouse,
     p.code AS paddon_code, p.name AS paddon_name";
 
 #[derive(Debug, Deserialize)]
@@ -50,6 +58,8 @@ pub struct PaddonRollOptions {
     receipt_names: Vec<String>,
     #[serde(default)]
     offset: u32,
+    #[serde(skip)]
+    pub transfer_between_warehouses: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -60,6 +70,8 @@ pub struct PaddonRollAttachment {
     receipt_names: Vec<String>,
     batch_id: Option<String>,
     batch_ids: Option<Vec<String>>,
+    #[serde(default)]
+    transfer_between_warehouses: bool,
 }
 
 fn normalize_batch_ids(
@@ -129,13 +141,20 @@ impl PostgresPreparationStore {
             validate_roll_selection(&mut input.receipt_names, false)?;
         }
         let mut tx = self.pool.begin().await?;
-        let (warehouse_ids, selection) = if from_batches || preview_partial {
+        let preview = from_batches || preview_partial || input.transfer_between_warehouses;
+        let (warehouse_ids, selection) = if preview {
             let rolls = if from_batches {
                 batch_rolls(&mut tx, actor, &batch_ids).await?
             } else {
                 selected_rolls(&mut tx, actor, &input.receipt_names).await?
             };
-            let (warehouses, selection) = preview_roll_selection(&rolls, &batch_ids);
+            let (mut warehouses, mut selection) = preview_roll_selection(&rolls, &batch_ids);
+            if input.transfer_between_warehouses && !warehouses.is_empty() {
+                let targets = transfer_warehouses(&mut tx, actor, &rolls).await?;
+                let (ids, names): (Vec<_>, Vec<_>) = targets.into_iter().unzip();
+                warehouses.extend(ids);
+                selection["transfer_warehouses"] = json!(names);
+            }
             (warehouses, Some(selection))
         } else {
             let (warehouse_id, _) = eligible_rolls(&mut tx, actor, &input.receipt_names).await?;
@@ -181,14 +200,15 @@ impl PostgresPreparationStore {
         {
             return Err(PreparationError::Invalid("Biriktirish kaliti noto‘g‘ri"));
         }
+        let attachment_key = format!("paddon-attach:{}:{}", actor.ref_, input.request_id);
         let mut tx = self.pool.begin().await?;
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
-            .bind(format!("paddon-attach:{}:{}", actor.ref_, input.request_id))
+            .bind(&attachment_key)
             .execute(&mut *tx)
             .await?;
         lock_paddon(&mut tx, &code).await?;
         let (paddon_id, warehouse_id, warehouse) = scoped_paddon(&mut tx, actor, &code).await?;
-        let result = json!({
+        let mut result = json!({
             "paddon_code": code, "warehouse": warehouse, "receipt_names": input.receipt_names
         });
         let previous: Option<(String, Vec<String>)> = sqlx::query_as(
@@ -205,6 +225,19 @@ impl PostgresPreparationStore {
                     "Biriktirish kaliti avval ishlatilgan",
                 ));
             }
+            let origins: Vec<String> = sqlx::query_scalar(
+                "SELECT source_warehouse FROM mini_inventory_transfers
+                 WHERE requested_by_role = 'tayyorlov_masteri' AND requested_by_ref = $1
+                   AND starts_with(idempotency_key, $2)
+                 ORDER BY source_warehouse_id",
+            )
+            .bind(&actor.ref_)
+            .bind(format!("{attachment_key}:"))
+            .fetch_all(&mut *tx)
+            .await?;
+            if !origins.is_empty() {
+                result["transferred_from"] = json!(origins);
+            }
             return Ok(result);
         }
 
@@ -216,26 +249,48 @@ impl PostgresPreparationStore {
         .bind(&input.receipt_names)
         .fetch_all(&mut *tx)
         .await?;
-        let stock_ids = if !batch_ids.is_empty() {
-            let mut eligible: Vec<_> = batch_rolls(&mut tx, actor, &batch_ids)
-                .await?
+        let from_batches = !batch_ids.is_empty();
+        let stock_ids = if from_batches || input.transfer_between_warehouses {
+            let rolls = if from_batches {
+                batch_rolls(&mut tx, actor, &batch_ids).await?
+            } else {
+                selected_rolls(&mut tx, actor, &input.receipt_names).await?
+            };
+            let mut eligible: Vec<_> = rolls
                 .into_iter()
                 .filter(|roll| {
-                    roll.blocker.is_none() && roll.warehouse_id.as_deref() == Some(&warehouse_id)
+                    roll.blocker.is_none()
+                        && roll.stock_id.is_some()
+                        && (input.transfer_between_warehouses
+                            || roll.warehouse_id.as_deref() == Some(&warehouse_id))
                 })
-                .filter_map(|roll| Some((roll.receipt_name, roll.stock_id?)))
                 .collect();
-            eligible.sort_unstable_by(|(first, _), (second, _)| first.cmp(second));
+            eligible.sort_unstable_by(|first, second| first.receipt_name.cmp(&second.receipt_name));
             if !eligible
                 .iter()
-                .map(|(name, _)| name)
+                .map(|roll| &roll.receipt_name)
                 .eq(&input.receipt_names)
             {
                 return Err(PreparationError::Conflict(
-                    "Batchdagi rulonlar holati o‘zgargan. Tanlovni qayta tekshiring",
+                    "Rulonlar holati o‘zgargan. Tanlovni qayta tekshiring",
                 ));
             }
-            eligible.into_iter().map(|(_, stock_id)| stock_id).collect()
+            if input.transfer_between_warehouses {
+                let origins = transfer_prepared_rolls(
+                    &mut tx,
+                    actor,
+                    &eligible,
+                    &warehouse_id,
+                    &warehouse,
+                    &code,
+                    &attachment_key,
+                )
+                .await?;
+                if !origins.is_empty() {
+                    result["transferred_from"] = json!(origins);
+                }
+            }
+            eligible.into_iter().filter_map(|roll| roll.stock_id).collect()
         } else {
             let (origin, stock_ids) = eligible_rolls(&mut tx, actor, &input.receipt_names).await?;
             if origin != warehouse_id {
@@ -328,11 +383,122 @@ struct PaddonRoll {
     receipt_name: String,
     barcode: Option<String>,
     stock_id: Option<String>,
+    item_code: Option<String>,
     warehouse_id: Option<String>,
     warehouse: Option<String>,
     blocker: Option<String>,
     paddon_code: Option<String>,
     paddon_name: Option<String>,
+}
+
+async fn transfer_warehouses(
+    tx: &mut Transaction<'_, Postgres>,
+    actor: &Principal,
+    rolls: &[PaddonRoll],
+) -> Result<Vec<(String, String)>, PreparationError> {
+    let warehouses: Vec<(String, String)> = sqlx::query_as(
+        "SELECT w.id, w.name FROM mini_warehouses w
+         WHERE NOT w.is_group
+           AND EXISTS (SELECT 1 FROM mini_warehouse_assignments a
+                       WHERE lower(a.warehouse_name) = lower(w.name) AND a.assignment_kind = 'warehouse'
+                         AND a.principal_role = 'tayyorlov_masteri' AND a.principal_ref = $1)
+           AND EXISTS (SELECT 1 FROM mini_inventory_locations l
+                       WHERE l.warehouse_id = w.id AND l.kind = 'warehouse' AND l.active)
+         ORDER BY w.id",
+    )
+    .bind(&actor.ref_)
+    .fetch_all(&mut **tx)
+    .await?;
+    let eligible: Vec<_> = rolls.iter().filter(|roll| roll.blocker.is_none()).collect();
+    let ready: BTreeSet<_> = warehouses.iter().map(|(id, _)| id.as_str()).collect();
+    if eligible.iter().any(|roll| {
+        !roll
+            .warehouse_id
+            .as_deref()
+            .is_some_and(|id| ready.contains(id))
+    }) {
+        return Ok(Vec::new());
+    }
+    let mut targets = Vec::new();
+    'destination: for (id, name) in warehouses {
+        let items: BTreeSet<_> = eligible
+            .iter()
+            .filter(|roll| roll.warehouse_id.as_deref() != Some(id.as_str()))
+            .filter_map(|roll| roll.item_code.as_deref())
+            .collect();
+        if items.is_empty() {
+            continue;
+        }
+        for item in items {
+            match ensure_raw_material_destination_scope_tx(tx, item, &id, &name).await {
+                Ok(()) => {}
+                Err(InventoryMovementError::MaterialWarehouseScopeMissing) => continue 'destination,
+                Err(error) => return Err(movement_error(error)),
+            }
+        }
+        targets.push((id, name));
+    }
+    Ok(targets)
+}
+
+async fn transfer_prepared_rolls(
+    tx: &mut Transaction<'_, Postgres>,
+    principal: &Principal,
+    rolls: &[PaddonRoll],
+    destination_id: &str,
+    destination: &str,
+    code: &str,
+    attachment_key: &str,
+) -> Result<Vec<String>, PreparationError> {
+    let mut origins = BTreeMap::<_, Vec<_>>::new();
+    for roll in rolls {
+        let (Some(id), Some(name), Some(stock_id)) =
+            (&roll.warehouse_id, &roll.warehouse, &roll.stock_id)
+        else {
+            return Err(PreparationError::Conflict("Rulon ombori aniqlanmadi"));
+        };
+        if id != destination_id {
+            origins
+                .entry((id, name))
+                .or_default()
+                .push(InventoryAssetSelector {
+                    asset_kind: InventoryAssetKind::RawMaterial,
+                    asset_ref: stock_id.clone(),
+                });
+        }
+    }
+    if origins.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut sources = Vec::with_capacity(origins.len());
+    for (_, name) in origins.keys() {
+        sources.push(assigned_warehouse(tx, &principal.ref_, name).await?);
+    }
+    let actor = InventoryActor::new(
+        principal.clone(),
+        false,
+        sources.iter().cloned().chain([destination.into()]),
+    );
+    for (index, ((source_warehouse_id, _), assets)) in origins.into_iter().enumerate() {
+        let status = PostgresInventoryMovementStore::create_paddon_transfer_assets_tx(
+            tx,
+            &actor,
+            &new_id(),
+            &InventoryTransferCreate {
+                source_warehouse_id: source_warehouse_id.clone(),
+                destination_warehouse_id: destination_id.into(),
+                assets,
+                note: format!("Rulonlarni {code} paddoniga biriktirish"),
+                idempotency_key: format!("{attachment_key}:{index}"),
+            },
+        )
+        .await
+        .map_err(movement_error)?;
+        if status != InventoryTransferStatus::Received {
+            return Err(PreparationError::Forbidden);
+        }
+    }
+    Ok(sources)
 }
 
 fn preview_roll_selection(rolls: &[PaddonRoll], batch_ids: &[String]) -> (Vec<String>, Value) {

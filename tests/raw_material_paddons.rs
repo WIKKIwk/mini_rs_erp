@@ -403,7 +403,124 @@ async fn verify(pool: &PgPool, options: PgConnectOptions) {
     let shared_inventory = InventoryActor::new(master.clone(), false, ["Shared".into()]);
     verify_prepared_roll_packing(pool, &store, &shared_inventory, &empty_code, supply_code, item).await;
     verify_batch_packing(pool, &store, &master, code, source_code, item).await;
+    verify_cross_warehouse_packing(pool, &store, &master, supply_code).await;
     runtime.close().await;
+}
+
+async fn verify_cross_warehouse_packing(
+    pool: &PgPool,
+    store: &PostgresPreparationStore,
+    master: &Principal,
+    foreign_paddon: &str,
+) {
+    use mini_rs_erp::core::inventory_movements::{
+        InventoryAssetKind, InventoryAssetSelector, InventoryMovementError,
+        InventoryMovementStorePort, InventoryTransferCreate,
+    };
+    use mini_rs_erp::db::postgres_inventory_movements::PostgresInventoryMovementStore;
+
+    sqlx::raw_sql(
+        "INSERT INTO mini_warehouses(id,name,parent_warehouse) VALUES ('packing','Packing','Own');
+         INSERT INTO mini_warehouse_assignments
+             (assignment_kind,warehouse,warehouse_name,principal_role,principal_ref)
+         VALUES ('warehouse','Packing','Packing','tayyorlov_masteri','prep-1');
+         INSERT INTO mini_gscale_receipts (name,status,item_code,warehouse,qty,barcode,payload_json)
+         VALUES ('pack-transfer-own','submitted','PE-XFER','Own',11,'PACK-XFER-1',
+                    '{\"actor_role\":\"tayyorlov_masteri\",\"actor_ref\":\"prep-1\"}'),
+                ('pack-transfer-shared','submitted','PE-XFER','Shared',13,'PACK-XFER-2',
+                    '{\"actor_role\":\"tayyorlov_masteri\",\"actor_ref\":\"prep-1\"}');
+         INSERT INTO mini_raw_material_stock
+             (id,status,warehouse,item_code,barcode,qty,source_receipt_id,reserved_order_id)
+         SELECT 'stock-'||name,'available',warehouse,item_code,barcode,qty,name,'paddon-prep-order'
+         FROM mini_gscale_receipts WHERE name LIKE 'pack-transfer-%';
+         INSERT INTO mini_rps_batch_history (batch_id,owner_key,owner_role,owner_ref,payload_json)
+         VALUES ('transfer-own','tayyorlov_masteri:prep-1','tayyorlov_masteri','prep-1',
+                    '{\"prints\":[{\"epc\":\"PACK-XFER-1\"}]}'),
+                ('transfer-shared','tayyorlov_masteri:prep-1','tayyorlov_masteri','prep-1',
+                    '{\"prints\":[{\"epc\":\"PACK-XFER-2\"}]}');",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    let paddon = store.receive_raw_material_paddon(
+        master,
+        serde_json::from_value(json!({
+            "request_id": "open-transfer-target",
+            "warehouse": "Packing",
+            "contents": [],
+        })).unwrap(),
+        &[],
+    ).await.unwrap();
+    let code = paddon["paddon_code"].as_str().unwrap();
+    let batches = ["batch:transfer-own", "batch:transfer-shared"];
+    let mut options: PaddonRollOptions =
+        serde_json::from_value(json!({"batch_ids": batches})).unwrap();
+    options.transfer_between_warehouses = true;
+    let page = store.production_paddon_options(master, options, false).await.unwrap();
+    assert!(page["paddons"].as_array().unwrap().iter().any(|p| p["paddon_code"] == code));
+    assert_eq!(
+        page["batch_selection"]["transfer_warehouses"],
+        json!(["Own", "Packing", "Shared"])
+    );
+    assert_eq!(
+        page["batch_selection"]["receipt_names_by_warehouse"],
+        json!({"Own":["pack-transfer-own"],"Shared":["pack-transfer-shared"]})
+    );
+    let inventory_actor = InventoryActor::new(
+        master.clone(), false, ["Own".into(), "Shared".into(), "Packing".into()],
+    );
+    let movements = PostgresInventoryMovementStore::new(pool.clone());
+    let ordinary_transfer = InventoryTransferCreate {
+        source_warehouse_id: "own".into(),
+        destination_warehouse_id: "packing".into(),
+        assets: vec![InventoryAssetSelector {
+            asset_kind: InventoryAssetKind::RawMaterial,
+            asset_ref: "stock-pack-transfer-own".into(),
+        }],
+        note: String::new(),
+        idempotency_key: "ordinary-to-subwarehouse".into(),
+    };
+    assert!(matches!(
+        InventoryMovementStorePort::create_transfer(
+            &movements, &inventory_actor, "ordinary-to-subwarehouse", &ordinary_transfer
+        ).await,
+        Err(InventoryMovementError::WarehouseNotFound)
+    ));
+
+    let attach = |target| serde_json::from_value::<PaddonRollAttachment>(json!({
+        "code": target,
+        "request_id": "attach-transfer-rolls",
+        "batch_ids": batches,
+        "receipt_names": ["pack-transfer-own", "pack-transfer-shared"],
+        "transfer_between_warehouses": true,
+    })).unwrap();
+    assert!(matches!(
+        store.attach_prepared_rolls(master, attach(foreign_paddon)).await,
+        Err(PreparationError::Forbidden)
+    ));
+    let saved = store.attach_prepared_rolls(master, attach(code)).await.unwrap();
+    assert_eq!(saved["transferred_from"], json!(["Own", "Shared"]));
+    assert_eq!(store.attach_prepared_rolls(master, attach(code)).await.unwrap(), saved);
+
+    let packed = store.raw_material_paddons(master, filter("all", code)).await.unwrap();
+    assert_eq!(packed["paddons"][0]["remaining_count"], 2);
+    assert_eq!(packed["paddons"][0]["remaining_kg"], "24.000000");
+    let rows: Vec<(String, String, String, String)> = sqlx::query_as(
+        "SELECT s.barcode, s.status, s.reserved_order_id, l.warehouse_id
+         FROM mini_raw_material_stock s
+         JOIN mini_inventory_placements p ON p.asset_kind='raw_material' AND p.asset_ref=s.id
+         JOIN mini_inventory_locations l ON l.id=p.physical_location_id
+         WHERE s.warehouse='Packing' AND s.source_receipt_id LIKE 'pack-transfer-%'
+         ORDER BY s.barcode",
+    ).fetch_all(pool).await.unwrap();
+    assert_eq!(rows, ["PACK-XFER-1", "PACK-XFER-2"].map(|barcode| (
+        barcode.to_owned(), "on_paddon".to_owned(), "paddon-prep-order".to_owned(), "packing".to_owned(),
+    )));
+    let transfers: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM mini_inventory_transfers
+         WHERE destination_warehouse_id='packing' AND status='received'",
+    ).fetch_one(pool).await.unwrap();
+    assert_eq!(transfers, 2);
 }
 
 async fn verify_empty_paddon(

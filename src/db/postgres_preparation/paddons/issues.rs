@@ -460,7 +460,7 @@ async fn weigh_paddon_unit(
     })
 }
 
-fn movement_error(error: InventoryMovementError) -> PreparationError {
+pub(super) fn movement_error(error: InventoryMovementError) -> PreparationError {
     match error {
         InventoryMovementError::WarehouseForbidden => PreparationError::Forbidden,
         InventoryMovementError::MaterialWarehouseScopeMissing => {
