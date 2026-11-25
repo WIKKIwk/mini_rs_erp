@@ -80,14 +80,21 @@ pub async fn receive_raw_material_paddon(
     Ok(Json(result))
 }
 
+#[derive(Deserialize)]
+pub struct PaddonOptionsQuery {
+    #[serde(default)]
+    preview_partial: bool,
+}
+
 pub async fn production_paddon_options(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<PaddonOptionsQuery>,
     Json(input): Json<PaddonRollOptions>,
 ) -> Result<Json<Value>, ApiError> {
     let actor = authorize(&state, &headers).await?;
     store(&state)?
-        .production_paddon_options(&actor, input)
+        .production_paddon_options(&actor, input, query.preview_partial)
         .await
         .map(Json)
         .map_err(error)

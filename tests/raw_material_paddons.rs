@@ -149,6 +149,7 @@ async fn verify(pool: &PgPool, options: PgConnectOptions) {
         store.receive_raw_material_paddon(&master, named_receipt("Oq zaxira"), &[]),
     );
     let first = first.unwrap();
+    let source_code = first["paddon_code"].as_str().unwrap();
     assert_eq!(first, retry.unwrap());
     let second = store
         .receive_raw_material_paddon(&supplier, receipt("Supply", item, "supply-1"), &groups)
@@ -396,7 +397,7 @@ async fn verify(pool: &PgPool, options: PgConnectOptions) {
     assert_eq!(supplier_after["paddons"][0]["remaining_count"], 1);
     verify_partial_and_transfer(pool, &store, &master_inventory, &supply_inventory, &runtime).await;
     verify_prepared_roll_packing(pool, &store, &master_inventory, code, supply_code, item).await;
-    verify_batch_packing(pool, &store, &master, code, item).await;
+    verify_batch_packing(pool, &store, &master, code, source_code, item).await;
     runtime.close().await;
 }
 
@@ -444,7 +445,7 @@ async fn verify_prepared_roll_packing(
         names.push(draft.name);
     }
     let options: PaddonRollOptions = serde_json::from_value(json!({"receipt_names": names})).unwrap();
-    let choices = store.production_paddon_options(master, options).await.unwrap();
+    let choices = store.production_paddon_options(master, options, false).await.unwrap();
     let choices = choices["paddons"].as_array().unwrap();
     assert!(choices.iter().any(|paddon| paddon["paddon_code"] == code));
     assert!(choices.iter().all(|paddon| paddon["warehouse"] == "Own"));
@@ -515,6 +516,7 @@ async fn verify_batch_packing(
     store: &PostgresPreparationStore,
     master: &Principal,
     code: &str,
+    source_code: &str,
     item: &str,
 ) {
     const BATCH: &str = "batch:pack-history";
@@ -567,7 +569,7 @@ async fn verify_batch_packing(
         .attach_prepared_rolls(
             master,
             serde_json::from_value(json!({
-                "request_id": "pack-one-first", "code": code, "receipt_names": ["batch-pack-104"]
+                "request_id": "pack-one-first", "code": source_code, "receipt_names": ["batch-pack-104"]
             }))
             .unwrap(),
         )
@@ -575,22 +577,22 @@ async fn verify_batch_packing(
         .unwrap();
     let outsider = actor(PrincipalRole::TayyorlovMasteri, "another-master");
     assert!(matches!(
-        store.production_paddon_options(&outsider, options(&both)).await,
+        store.production_paddon_options(&outsider, options(&both), false).await,
         Err(PreparationError::Forbidden)
     ));
 
     assert!(matches!(
-        store.production_paddon_options(master, options(&[BATCH, "batch:missing"])).await,
+        store.production_paddon_options(master, options(&[BATCH, "batch:missing"]), false).await,
         Err(PreparationError::Forbidden)
     ));
     let single = store
-        .production_paddon_options(master, serde_json::from_value(json!({"batch_id": BATCH})).unwrap())
+        .production_paddon_options(master, serde_json::from_value(json!({"batch_id": BATCH})).unwrap(), false)
         .await
         .unwrap();
     assert_eq!(single["batch_selection"]["batch_id"], BATCH);
     assert_eq!(single["batch_selection"]["total_rolls"], 105);
 
-    let page = store.production_paddon_options(master, options(&both)).await.unwrap();
+    let page = store.production_paddon_options(master, options(&both), false).await.unwrap();
     assert!(page["paddons"].as_array().unwrap().iter().any(|p| p["paddon_code"] == code));
     assert!(page["paddons"].as_array().unwrap().iter().all(|p| p["warehouse"] == "Own"));
     let preview = &page["batch_selection"];
@@ -600,6 +602,12 @@ async fn verify_batch_packing(
         preview["skipped"],
         json!({"consumed": 1, "outside_warehouse": 1, "packed": 1})
     );
+    let already_packed = json!([{
+        "barcode": "BATCH-PACK-104",
+        "paddon_name": "Oq zaxira",
+        "paddon_code": source_code
+    }]);
+    assert_eq!(preview["packed_rolls"], already_packed);
     let selected: Vec<String> = serde_json::from_value(
         preview["receipt_names_by_warehouse"]["Own"].clone(),
     )
@@ -622,7 +630,7 @@ async fn verify_batch_packing(
         store.attach_prepared_rolls(master, attach("pack-batch-stale", &selected)).await,
         Err(PreparationError::Conflict(_))
     ));
-    let preview = store.production_paddon_options(master, options(&both)).await.unwrap();
+    let preview = store.production_paddon_options(master, options(&both), false).await.unwrap();
     let selected: Vec<String> =
         serde_json::from_value(preview["batch_selection"]["receipt_names_by_warehouse"]["Own"].clone())
             .unwrap();
@@ -646,9 +654,43 @@ async fn verify_batch_packing(
     .await
     .unwrap();
     assert_eq!(packed, 102);
-    let empty = store.production_paddon_options(master, options(&both)).await.unwrap();
+    let empty = store.production_paddon_options(master, options(&both), false).await.unwrap();
     assert_eq!(empty["paddons"], json!([]));
     assert_eq!(empty["batch_selection"]["receipt_names_by_warehouse"], json!({}));
+
+    let roll_options = || serde_json::from_value(json!({
+        "receipt_names": ["batch-pack-104", "batch-pack-107"]
+    })).unwrap();
+    assert!(matches!(
+        store.production_paddon_options(master, roll_options(), false).await,
+        Err(PreparationError::Conflict(_))
+    ));
+    let page = store.production_paddon_options(master, roll_options(), true).await.unwrap();
+    let preview = &page["roll_selection"];
+    assert_eq!(preview["total_rolls"], 2);
+    assert_eq!(preview["skipped"], json!({"packed": 1}));
+    assert_eq!(preview["packed_rolls"], already_packed);
+    assert_eq!(preview["receipt_names_by_warehouse"]["Own"], json!(["batch-pack-107"]));
+    let attachable = &preview["receipt_names_by_warehouse"]["Own"];
+    let saved = store.attach_prepared_rolls(master, serde_json::from_value(json!({
+        "request_id": "pack-manual-remaining", "code": code, "receipt_names": attachable
+    })).unwrap()).await.unwrap();
+    assert_eq!(saved["receipt_names"], *attachable);
+
+    let places: Vec<(String, String)> = sqlx::query_as(
+        "SELECT s.barcode, p.code FROM mini_raw_material_paddon_units u
+         JOIN mini_raw_material_stock s ON s.id = u.stock_id
+         JOIN mini_raw_material_paddons p ON p.id = u.paddon_id
+         WHERE u.issue_id IS NULL AND s.barcode IN ('BATCH-PACK-104','BATCH-PACK-107')
+         ORDER BY s.barcode",
+    ).fetch_all(pool).await.unwrap();
+    assert_eq!(places, [
+        ("BATCH-PACK-104".into(), source_code.into()),
+        ("BATCH-PACK-107".into(), code.into()),
+    ]);
+    let all_packed = store.production_paddon_options(master, roll_options(), true).await.unwrap();
+    assert_eq!(all_packed["paddons"], json!([]));
+    assert_eq!(all_packed["roll_selection"]["skipped"], json!({"packed": 2}));
 }
 
 async fn verify_partial_and_transfer(
