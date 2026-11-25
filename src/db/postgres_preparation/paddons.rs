@@ -229,7 +229,7 @@ impl PostgresPreparationStore {
             ))
             .execute(&mut *tx)
             .await?;
-        if actor.role == PrincipalRole::TayyorlovMasteri {
+        if actor.role == PrincipalRole::TayyorlovMasteri && !input.contents.is_empty() {
             exclusive_warehouse(&mut tx, &actor.ref_, &input.warehouse).await?;
         }
         let (warehouse_id, warehouse): (String, String) = sqlx::query_as(

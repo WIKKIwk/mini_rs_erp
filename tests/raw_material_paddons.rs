@@ -87,11 +87,14 @@ async fn verify(pool: &PgPool, options: PgConnectOptions) {
     sqlx::raw_sql(
         "INSERT INTO mini_system_users(id,role,name,phone)
              VALUES ('prep-1','tayyorlov_masteri','Master','901234567');
-         INSERT INTO mini_warehouses(id,name) VALUES ('own','Own'),('supply','Supply');
+         INSERT INTO mini_warehouses(id,name)
+             VALUES ('own','Own'),('supply','Supply'),('shared','Shared');
          INSERT INTO mini_warehouse_assignments
              (assignment_kind,warehouse,warehouse_name,principal_role,principal_ref)
              VALUES ('warehouse','Own','Own','tayyorlov_masteri','prep-1'),
-                    ('warehouse','Supply','Supply','material_taminotchi','supply-1');",
+                    ('warehouse','Supply','Supply','material_taminotchi','supply-1'),
+                    ('warehouse','Shared','Shared','tayyorlov_masteri','prep-1'),
+                    ('warehouse','Shared','Shared','material_taminotchi','supply-1');",
     )
     .execute(pool)
     .await
@@ -396,8 +399,9 @@ async fn verify(pool: &PgPool, options: PgConnectOptions) {
     assert_eq!(supplier_after["paddons"][0]["remaining_kg"], "25.000000");
     assert_eq!(supplier_after["paddons"][0]["remaining_count"], 1);
     verify_partial_and_transfer(pool, &store, &master_inventory, &supply_inventory, &runtime).await;
-    let empty_code = verify_empty_paddon(pool, &store, &master, &supplier).await;
-    verify_prepared_roll_packing(pool, &store, &master_inventory, &empty_code, supply_code, item).await;
+    let empty_code = verify_empty_paddon(pool, &store, &master, &supplier, item).await;
+    let shared_inventory = InventoryActor::new(master.clone(), false, ["Shared".into()]);
+    verify_prepared_roll_packing(pool, &store, &shared_inventory, &empty_code, supply_code, item).await;
     verify_batch_packing(pool, &store, &master, code, source_code, item).await;
     runtime.close().await;
 }
@@ -407,6 +411,7 @@ async fn verify_empty_paddon(
     store: &PostgresPreparationStore,
     master: &Principal,
     supplier: &Principal,
+    item: &str,
 ) -> String {
     let create = |warehouse: &str, name: &str| -> PaddonCreate {
         serde_json::from_value(json!({
@@ -431,17 +436,21 @@ async fn verify_empty_paddon(
     ));
     assert!(matches!(
         store.receive_raw_material_paddon(master, create("Supply", ""), &[]).await,
+        Err(PreparationError::Forbidden)
+    ));
+    assert!(matches!(
+        store.receive_raw_material_paddon(master, receipt("Shared", item, "shared-stock-1"), &[]).await,
         Err(PreparationError::WarehouseNotExclusive)
     ));
 
     let (created, retried) = tokio::join!(
-        store.receive_raw_material_paddon(master, create("Own", "Tayyor rulonlar"), &[]),
-        store.receive_raw_material_paddon(master, create("Own", "Tayyor rulonlar"), &[]),
+        store.receive_raw_material_paddon(master, create("Shared", "Tayyor rulonlar"), &[]),
+        store.receive_raw_material_paddon(master, create("Shared", "Tayyor rulonlar"), &[]),
     );
     let created = created.unwrap();
     assert_eq!(created, retried.unwrap());
     assert!(matches!(
-        store.receive_raw_material_paddon(master, create("Own", "Boshqa nom"), &[]).await,
+        store.receive_raw_material_paddon(master, create("Shared", "Boshqa nom"), &[]).await,
         Err(PreparationError::Conflict(_))
     ));
     assert_eq!(inventory_counts().await, before);
@@ -454,7 +463,7 @@ async fn verify_empty_paddon(
     assert_eq!(page["paddons"], json!([{
         "paddon_id": created["paddon_id"],
         "paddon_code": code,
-        "warehouse": "Own",
+        "warehouse": "Shared",
         "name": "Tayyor rulonlar",
         "remaining_kg": "0.000000",
         "remaining_count": 0,
@@ -502,7 +511,7 @@ async fn verify_prepared_roll_packing(
         let draft = receipts.create_material_receipt_draft(CreateMaterialReceiptDraftInput {
             item_code: item.into(),
             item_name: "PE".into(),
-            warehouse: "Own".into(),
+            warehouse: "Shared".into(),
             barcode: barcode.into(),
             qty: 12.75,
             width_mm: Some(720.0),
@@ -523,7 +532,7 @@ async fn verify_prepared_roll_packing(
     let choices = store.production_paddon_options(master, options, false).await.unwrap();
     let choices = choices["paddons"].as_array().unwrap();
     assert!(choices.iter().any(|paddon| paddon["paddon_code"] == code));
-    assert!(choices.iter().all(|paddon| paddon["warehouse"] == "Own"));
+    assert!(choices.iter().all(|paddon| paddon["warehouse"] == "Shared"));
 
     let attach = |key, target, receipt_names: &[String]| -> PaddonRollAttachment {
         serde_json::from_value(json!({
