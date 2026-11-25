@@ -93,6 +93,7 @@ pub(super) fn allows(method: &Method, path: &str) -> bool {
                 | "order-image/view"
                 | "completed-orders"
                 | "wip-batches"
+                | "opening-wip"
                 | "output-stats"
                 | "rezka-output-report"
                 | "rezka-astatka"

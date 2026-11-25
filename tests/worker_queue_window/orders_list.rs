@@ -8,6 +8,7 @@ const PROJECTION: &str = "orders_list_v1";
 const QUERY: &str = "view=orders&projection=orders_list_v1";
 const REZKA_ORDERS: &str = "/v1/mobile/rezka-master/orders";
 const REZKA_SETTINGS: &str = "/v1/mobile/rezka-master/order-settings";
+const OPENING_WIP: &str = "/v1/mobile/admin/production-maps/opening-wip";
 
 #[derive(Default)]
 struct Intake(tokio::sync::Mutex<Vec<PendingOrder>>);
@@ -149,6 +150,31 @@ async fn rezka_master_reads_the_shared_order_catalog_with_scoped_settings() {
         response(&f, &master, &format!("{REZKA_SETTINGS}?order_id=zakaz-press-order")).await.0,
         StatusCode::NOT_FOUND
     );
+
+    let cut_opening_wip = format!("{OPENING_WIP}?order_id=zakaz-000&status=all&limit=500");
+    let (status, opening_wip) = response(&f, &master, &cut_opening_wip).await;
+    assert_eq!(status, StatusCode::OK, "{opening_wip}");
+    assert_eq!(opening_wip["records"], json!([]));
+    let unrelated_opening_wip = format!("{OPENING_WIP}?order_id=zakaz-press-order");
+    for uri in [OPENING_WIP, unrelated_opening_wip.as_str()] {
+        assert_eq!(response(&f, &master, uri).await.0, StatusCode::FORBIDDEN);
+    }
+    for method in ["POST", "DELETE"] {
+        let denied = f
+            .router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(cut_opening_wip.as_str())
+                    .header(header::AUTHORIZATION, format!("Bearer {master}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), StatusCode::FORBIDDEN, "{method}");
+    }
 }
 
 #[tokio::test]
