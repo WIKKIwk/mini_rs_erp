@@ -150,10 +150,27 @@ impl PostgresPreparationStore {
             };
             let (mut warehouses, mut selection) = preview_roll_selection(&rolls, &batch_ids);
             if input.transfer_between_warehouses && !warehouses.is_empty() {
-                let targets = transfer_warehouses(&mut tx, actor, &rolls).await?;
-                let (ids, names): (Vec<_>, Vec<_>) = targets.into_iter().unzip();
-                warehouses.extend(ids);
-                selection["transfer_warehouses"] = json!(names);
+                let ready = transfer_warehouses(&mut tx, actor).await?;
+                let eligible_count = rolls.iter().filter(|roll| roll.blocker.is_none()).count();
+                let mut full_transfers = Vec::new();
+                let mut transfers = BTreeMap::new();
+                for (id, name) in &ready {
+                    let eligible = rolls_for_destination(&mut tx, &rolls, id, name, &ready).await?;
+                    let moving: Vec<_> = eligible
+                        .iter()
+                        .filter(|roll| roll.warehouse_id.as_deref() != Some(id.as_str()))
+                        .map(|roll| &roll.receipt_name)
+                        .collect();
+                    if !moving.is_empty() {
+                        warehouses.push(id.clone());
+                        if eligible.len() == eligible_count {
+                            full_transfers.push(name);
+                        }
+                        transfers.insert(name, moving);
+                    }
+                }
+                selection["transfer_warehouses"] = json!(full_transfers);
+                selection["transfer_receipt_names_by_warehouse"] = json!(transfers);
             }
             (warehouses, Some(selection))
         } else {
@@ -256,15 +273,13 @@ impl PostgresPreparationStore {
             } else {
                 selected_rolls(&mut tx, actor, &input.receipt_names).await?
             };
-            let mut eligible: Vec<_> = rolls
-                .into_iter()
-                .filter(|roll| {
-                    roll.blocker.is_none()
-                        && roll.stock_id.is_some()
-                        && (input.transfer_between_warehouses
-                            || roll.warehouse_id.as_deref() == Some(&warehouse_id))
-                })
-                .collect();
+            let ready = if input.transfer_between_warehouses {
+                transfer_warehouses(&mut tx, actor).await?
+            } else {
+                BTreeMap::new()
+            };
+            let mut eligible =
+                rolls_for_destination(&mut tx, &rolls, &warehouse_id, &warehouse, &ready).await?;
             eligible.sort_unstable_by(|first, second| first.receipt_name.cmp(&second.receipt_name));
             if !eligible
                 .iter()
@@ -290,7 +305,10 @@ impl PostgresPreparationStore {
                     result["transferred_from"] = json!(origins);
                 }
             }
-            eligible.into_iter().filter_map(|roll| roll.stock_id).collect()
+            eligible
+                .iter()
+                .filter_map(|roll| roll.stock_id.clone())
+                .collect()
         } else {
             let (origin, stock_ids) = eligible_rolls(&mut tx, actor, &input.receipt_names).await?;
             if origin != warehouse_id {
@@ -394,8 +412,7 @@ struct PaddonRoll {
 async fn transfer_warehouses(
     tx: &mut Transaction<'_, Postgres>,
     actor: &Principal,
-    rolls: &[PaddonRoll],
-) -> Result<Vec<(String, String)>, PreparationError> {
+) -> Result<BTreeMap<String, String>, PreparationError> {
     let warehouses: Vec<(String, String)> = sqlx::query_as(
         "SELECT w.id, w.name FROM mini_warehouses w
          WHERE NOT w.is_group
@@ -409,42 +426,59 @@ async fn transfer_warehouses(
     .bind(&actor.ref_)
     .fetch_all(&mut **tx)
     .await?;
-    let eligible: Vec<_> = rolls.iter().filter(|roll| roll.blocker.is_none()).collect();
-    let ready: BTreeSet<_> = warehouses.iter().map(|(id, _)| id.as_str()).collect();
-    if eligible.iter().any(|roll| {
-        !roll
-            .warehouse_id
-            .as_deref()
-            .is_some_and(|id| ready.contains(id))
-    }) {
-        return Ok(Vec::new());
-    }
-    let mut targets = Vec::new();
-    'destination: for (id, name) in warehouses {
-        let items: BTreeSet<_> = eligible
-            .iter()
-            .filter(|roll| roll.warehouse_id.as_deref() != Some(id.as_str()))
-            .filter_map(|roll| roll.item_code.as_deref())
-            .collect();
-        if items.is_empty() {
+    Ok(warehouses.into_iter().collect())
+}
+
+async fn rolls_for_destination<'a>(
+    tx: &mut Transaction<'_, Postgres>,
+    rolls: &'a [PaddonRoll],
+    warehouse_id: &str,
+    warehouse: &str,
+    transfer_warehouses: &BTreeMap<String, String>,
+) -> Result<Vec<&'a PaddonRoll>, PreparationError> {
+    let can_receive = transfer_warehouses.contains_key(warehouse_id);
+    let mut item_allowed = BTreeMap::new();
+    let mut eligible = Vec::new();
+    for roll in rolls.iter().filter(|roll| roll.blocker.is_none()) {
+        let Some(source) = roll.warehouse_id.as_deref() else {
+            continue;
+        };
+        if source == warehouse_id {
+            eligible.push(roll);
             continue;
         }
-        for item in items {
-            match ensure_raw_material_destination_scope_tx(tx, item, &id, &name).await {
-                Ok(()) => {}
-                Err(InventoryMovementError::MaterialWarehouseScopeMissing) => continue 'destination,
-                Err(error) => return Err(movement_error(error)),
-            }
+        if !can_receive || !transfer_warehouses.contains_key(source) {
+            continue;
         }
-        targets.push((id, name));
+        let Some(item) = roll.item_code.as_deref() else {
+            continue;
+        };
+        if let std::collections::btree_map::Entry::Vacant(entry) = item_allowed.entry(item) {
+            let allowed = match ensure_raw_material_destination_scope_tx(
+                tx,
+                item,
+                warehouse_id,
+                warehouse,
+            )
+            .await
+            {
+                Ok(()) => true,
+                Err(InventoryMovementError::MaterialWarehouseScopeMissing) => false,
+                Err(error) => return Err(movement_error(error)),
+            };
+            entry.insert(allowed);
+        }
+        if item_allowed[item] {
+            eligible.push(roll);
+        }
     }
-    Ok(targets)
+    Ok(eligible)
 }
 
 async fn transfer_prepared_rolls(
     tx: &mut Transaction<'_, Postgres>,
     principal: &Principal,
-    rolls: &[PaddonRoll],
+    rolls: &[&PaddonRoll],
     destination_id: &str,
     destination: &str,
     code: &str,
