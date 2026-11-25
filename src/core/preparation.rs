@@ -8,6 +8,7 @@ use crate::core::auth::models::PrincipalRole;
 pub const SCALE: i64 = 1_000_000;
 pub const MAX_PRODUCTION_NOTE_CHARS: usize = 2000;
 pub const MAX_PRODUCTION_NOTE_ROLLS: usize = 100;
+pub(crate) const MAX_PREPARATION_BATCH_SELECTION: usize = 100;
 const MAX: i64 = 999_999_999_999_999_999;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
@@ -69,6 +70,13 @@ pub enum PreparationNoteAudience {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct PreparationBatchNoteTarget {
+    pub batch_id: String,
+    pub expected_revision: i64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PreparationRollNoteTarget {
     pub receipt_name: String,
     pub expected_revision: i64,
@@ -80,6 +88,11 @@ pub enum PreparationOutputNoteUpdate {
     Batch {
         batch_id: String,
         expected_revision: i64,
+        text: Option<String>,
+        audience: Option<PreparationNoteAudience>,
+    },
+    Batches {
+        batches: Vec<PreparationBatchNoteTarget>,
         text: Option<String>,
         audience: Option<PreparationNoteAudience>,
     },
@@ -101,11 +114,19 @@ impl PreparationOutputNoteUpdate {
     pub fn changes(&self) -> Result<PreparationNoteChanges<'_>, PreparationError> {
         let (target_kind, targets, text, audience) = match self {
             Self::Batch { batch_id, expected_revision, text, audience } => {
-                let id = batch_id.trim();
-                if id.strip_prefix("batch:").is_none_or(|id| id.trim().is_empty()) {
-                    return Err(PreparationError::Invalid("Batch tanlanmagan"));
+                ("batch", BTreeMap::from([(batch_id.trim(), *expected_revision)]), text, audience)
+            }
+            Self::Batches { batches, text, audience } => {
+                let selected: BTreeMap<_, _> = batches
+                    .iter()
+                    .map(|batch| (batch.batch_id.trim(), batch.expected_revision))
+                    .collect();
+                if !(1..=MAX_PREPARATION_BATCH_SELECTION).contains(&batches.len())
+                    || selected.len() != batches.len()
+                {
+                    return Err(PreparationError::Invalid("1 dan 100 tagacha turli batch tanlang"));
                 }
-                ("batch", BTreeMap::from([(id, *expected_revision)]), text, audience)
+                ("batch", selected, text, audience)
             }
             Self::Rolls { rolls, text, audience } => {
                 let selected: BTreeMap<_, _> = rolls.iter()
@@ -116,6 +137,13 @@ impl PreparationOutputNoteUpdate {
                 ("roll", selected, text, audience)
             }
         };
+        if target_kind == "batch"
+            && targets.keys().any(|id| {
+                id.strip_prefix("batch:").is_none_or(|id| id.trim().is_empty())
+            })
+        {
+            return Err(PreparationError::Invalid("Batch tanlanmagan"));
+        }
         if targets.iter().any(|(id, rev)| id.is_empty() || id.len() > 1024 || id.contains('\0') || !(0..9_007_199_254_740_991).contains(rev)) {
             return Err(PreparationError::Invalid("Eslatma yozuvi yoki versiyasi noto‘g‘ri"));
         }

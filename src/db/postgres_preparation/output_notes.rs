@@ -37,12 +37,21 @@ impl PostgresPreparationStore {
         .await?;
 
         let visible: i64 = if kind == "batch" {
+            let batch_ids: Vec<_> = ids.iter().filter_map(|id| id.strip_prefix("batch:")).collect();
             sqlx::query_scalar(
-                "SELECT count(*) FROM (SELECT batch_id FROM mini_rps_batches
-                     WHERE owner_key='tayyorlov_masteri:'||$1 AND owner_role='tayyorlov_masteri' AND owner_ref=$1 AND batch_id=$2
+                "SELECT count(*) FROM (
+                     SELECT batch_id FROM mini_rps_batches
+                     WHERE owner_key='tayyorlov_masteri:'||$1 AND owner_role='tayyorlov_masteri'
+                       AND owner_ref=$1 AND batch_id=ANY($2)
                      UNION SELECT batch_id FROM mini_rps_batch_history
-                     WHERE owner_key='tayyorlov_masteri:'||$1 AND owner_role='tayyorlov_masteri' AND owner_ref=$1 AND batch_id=$2) matches",
-            ).bind(owner).bind(ids[0].strip_prefix("batch:").unwrap_or_default()).fetch_one(&mut *tx).await?
+                     WHERE owner_key='tayyorlov_masteri:'||$1 AND owner_role='tayyorlov_masteri'
+                       AND owner_ref=$1 AND batch_id=ANY($2)
+                 ) matches",
+            )
+            .bind(owner)
+            .bind(&batch_ids)
+            .fetch_one(&mut *tx)
+            .await?
         } else {
             sqlx::query_scalar::<_, String>(
                 "SELECT name FROM mini_gscale_receipts

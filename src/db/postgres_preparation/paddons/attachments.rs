@@ -32,6 +32,7 @@ const SELECTED_RECEIPTS: &str = "WHERE r.name = ANY($2::text[]) AND r.status = '
 #[serde(deny_unknown_fields)]
 pub struct PaddonRollOptions {
     batch_id: Option<String>,
+    batch_ids: Option<Vec<String>>,
     #[serde(default)]
     receipt_names: Vec<String>,
     #[serde(default)]
@@ -45,27 +46,42 @@ pub struct PaddonRollAttachment {
     request_id: String,
     receipt_names: Vec<String>,
     batch_id: Option<String>,
+    batch_ids: Option<Vec<String>>,
 }
 
-fn validate_batch_id(id: &str) -> Result<(), PreparationError> {
-    if id.len() > 1024
-        || id.contains('\0')
-        || id
-            .strip_prefix("batch:")
-            .is_none_or(|id| id.trim().is_empty())
+fn normalize_batch_ids(
+    batch_id: Option<String>,
+    batch_ids: Option<Vec<String>>,
+) -> Result<Vec<String>, PreparationError> {
+    let mut ids = match (batch_id, batch_ids) {
+        (None, None) => return Ok(Vec::new()),
+        (Some(id), None) => vec![id],
+        (None, Some(ids)) => ids,
+        (Some(_), Some(_)) => return Err(PreparationError::Invalid("Batch tanlovi noto‘g‘ri")),
+    };
+    if !(1..=MAX_PREPARATION_BATCH_SELECTION).contains(&ids.len())
+        || ids.iter().any(|id| {
+            id.len() > 1024
+                || id.contains('\0')
+                || id
+                    .strip_prefix("batch:")
+                    .is_none_or(|id| id.trim().is_empty())
+        })
     {
-        return Err(PreparationError::Invalid("Batch tanlanmagan"));
+        return Err(PreparationError::Invalid("1 dan 100 tagacha batch tanlang"));
     }
-    Ok(())
+    ids.sort_unstable();
+    if ids.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err(PreparationError::Invalid("Batch faqat bir marta tanlanadi"));
+    }
+    Ok(ids)
 }
 
 fn validate_roll_selection(
     names: &mut [String],
-    batch_id: Option<&str>,
+    from_batches: bool,
 ) -> Result<(), PreparationError> {
-    if let Some(id) = batch_id {
-        validate_batch_id(id)?;
-    } else if !(1..=100).contains(&names.len()) {
+    if !from_batches && !(1..=100).contains(&names.len()) {
         return Err(PreparationError::Invalid("1–100 ta rulon tanlang"));
     }
     if names.is_empty()
@@ -89,13 +105,13 @@ impl PostgresPreparationStore {
         mut input: PaddonRollOptions,
     ) -> Result<Value, PreparationError> {
         require_preparation_master(actor)?;
+        let batch_ids = normalize_batch_ids(input.batch_id, input.batch_ids)?;
         let mut tx = self.pool.begin().await?;
-        let (warehouse_ids, batch_selection) = if let Some(batch_id) = input.batch_id {
-            validate_batch_id(&batch_id)?;
+        let (warehouse_ids, batch_selection) = if !batch_ids.is_empty() {
             if !input.receipt_names.is_empty() {
                 return Err(PreparationError::Invalid("Batch yoki rulonlarni tanlang"));
             }
-            let rolls = batch_rolls(&mut tx, actor, &batch_id).await?;
+            let rolls = batch_rolls(&mut tx, actor, &batch_ids).await?;
             let mut warehouse_ids = BTreeSet::new();
             let mut receipts = BTreeMap::<_, Vec<_>>::new();
             let mut skipped = BTreeMap::new();
@@ -107,15 +123,18 @@ impl PostgresPreparationStore {
                     receipts.entry(name).or_default().push(&roll.receipt_name);
                 }
             }
-            let selection = json!({
-                "batch_id": batch_id,
+            let mut selection = json!({
+                "batch_ids": batch_ids,
                 "total_rolls": rolls.len(),
                 "receipt_names_by_warehouse": receipts,
                 "skipped": skipped
             });
+            if let [batch_id] = batch_ids.as_slice() {
+                selection["batch_id"] = json!(batch_id);
+            }
             (warehouse_ids.into_iter().collect(), Some(selection))
         } else {
-            validate_roll_selection(&mut input.receipt_names, None)?;
+            validate_roll_selection(&mut input.receipt_names, false)?;
             let (warehouse_id, _) = eligible_rolls(&mut tx, actor, &input.receipt_names).await?;
             (vec![warehouse_id], None)
         };
@@ -143,8 +162,8 @@ impl PostgresPreparationStore {
         mut input: PaddonRollAttachment,
     ) -> Result<Value, PreparationError> {
         require_preparation_master(actor)?;
-        let batch_id = input.batch_id.as_deref();
-        validate_roll_selection(&mut input.receipt_names, batch_id)?;
+        let batch_ids = normalize_batch_ids(input.batch_id, input.batch_ids)?;
+        validate_roll_selection(&mut input.receipt_names, !batch_ids.is_empty())?;
         let code = paddon_code(&input.code)?;
         if !(8..=128).contains(&input.request_id.len())
             || !input
@@ -189,8 +208,8 @@ impl PostgresPreparationStore {
         .bind(&input.receipt_names)
         .fetch_all(&mut *tx)
         .await?;
-        let stock_ids = if let Some(batch_id) = batch_id {
-            let mut eligible: Vec<_> = batch_rolls(&mut tx, actor, batch_id)
+        let stock_ids = if !batch_ids.is_empty() {
+            let mut eligible: Vec<_> = batch_rolls(&mut tx, actor, &batch_ids)
                 .await?
                 .into_iter()
                 .filter(|roll| {
@@ -297,6 +316,7 @@ async fn eligible_rolls(
 
 #[derive(sqlx::FromRow)]
 struct BatchRoll {
+    batch_id: String,
     receipt_name: String,
     stock_id: Option<String>,
     warehouse_id: Option<String>,
@@ -307,23 +327,24 @@ struct BatchRoll {
 async fn batch_rolls(
     tx: &mut Transaction<'_, Postgres>,
     actor: &Principal,
-    batch_id: &str,
+    batch_ids: &[String],
 ) -> Result<Vec<BatchRoll>, PreparationError> {
     let mut rolls: Vec<BatchRoll> = sqlx::query_as(&format!(
         "{JOURNAL_CTES}
-         SELECT COALESCE(r.receipt_name, '') AS receipt_name, s.id AS stock_id,
+         SELECT b.batch_id, COALESCE(r.receipt_name, '') AS receipt_name, s.id AS stock_id,
                 w.id AS warehouse_id, w.name AS warehouse, ({ROLL_BLOCKER}) AS blocker
          FROM batches b
          LEFT JOIN rolls r ON r.recorded_batch_id = b.batch_id
          LEFT JOIN mini_raw_material_stock s ON s.source_receipt_id = r.receipt_name
              AND lower(s.barcode) = lower(r.epc)
-         {STOCK_WAREHOUSE} WHERE b.batch_id = $2",
+         {STOCK_WAREHOUSE} WHERE b.batch_id = ANY($2)",
     ))
     .bind(&actor.ref_)
-    .bind(batch_id)
+    .bind(batch_ids)
     .fetch_all(&mut **tx)
     .await?;
-    if rolls.is_empty() {
+    let found: BTreeSet<_> = rolls.iter().map(|roll| &roll.batch_id).collect();
+    if found.len() != batch_ids.len() {
         return Err(PreparationError::Forbidden);
     }
     rolls.retain(|roll| !roll.receipt_name.is_empty());

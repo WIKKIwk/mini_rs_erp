@@ -518,11 +518,12 @@ async fn verify_batch_packing(
     item: &str,
 ) {
     const BATCH: &str = "batch:pack-history";
+    const NEXT_BATCH: &str = "batch:pack-next";
     sqlx::query(
         "INSERT INTO mini_gscale_receipts (name, status, item_code, warehouse, qty, barcode, payload_json)
          SELECT 'batch-pack-'||n, 'submitted', $1, 'Own', 5, 'BATCH-PACK-'||n,
                 jsonb_build_object('actor_role','tayyorlov_masteri','actor_ref',$2::text)
-         FROM generate_series(1, 106) n",
+         FROM generate_series(1, 107) n",
     )
     .bind(item)
     .bind(&master.ref_)
@@ -542,18 +543,23 @@ async fn verify_batch_packing(
     .unwrap();
     sqlx::query(
         "INSERT INTO mini_rps_batch_history (batch_id, owner_key, owner_role, owner_ref, payload_json)
-         SELECT 'pack-history', 'tayyorlov_masteri:'||$1, 'tayyorlov_masteri', $1,
+         SELECT CASE WHEN n <= 105 THEN 'pack-history' ELSE 'pack-next' END,
+                'tayyorlov_masteri:'||$1, 'tayyorlov_masteri', $1,
                 jsonb_build_object('prints', jsonb_agg(jsonb_build_object('epc', 'BATCH-PACK-'||n)))
-         FROM generate_series(1, 105) n",
+         FROM generate_series(1, 106) n
+         GROUP BY 1",
     )
     .bind(&master.ref_)
     .execute(pool)
     .await
     .unwrap();
-    let options = || serde_json::from_value::<PaddonRollOptions>(json!({"batch_id": BATCH})).unwrap();
+    let options = |ids: &[&str]| {
+        serde_json::from_value::<PaddonRollOptions>(json!({"batch_ids": ids})).unwrap()
+    };
+    let both = [BATCH, NEXT_BATCH];
     let attach = |request_id, names: &[String]| {
         serde_json::from_value::<PaddonRollAttachment>(json!({
-            "request_id": request_id, "code": code, "receipt_names": names, "batch_id": BATCH
+            "request_id": request_id, "code": code, "receipt_names": names, "batch_ids": both
         }))
         .unwrap()
     };
@@ -569,16 +575,27 @@ async fn verify_batch_packing(
         .unwrap();
     let outsider = actor(PrincipalRole::TayyorlovMasteri, "another-master");
     assert!(matches!(
-        store.production_paddon_options(&outsider, options()).await,
+        store.production_paddon_options(&outsider, options(&both)).await,
         Err(PreparationError::Forbidden)
     ));
 
-    let page = store.production_paddon_options(master, options()).await.unwrap();
+    assert!(matches!(
+        store.production_paddon_options(master, options(&[BATCH, "batch:missing"])).await,
+        Err(PreparationError::Forbidden)
+    ));
+    let single = store
+        .production_paddon_options(master, serde_json::from_value(json!({"batch_id": BATCH})).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(single["batch_selection"]["batch_id"], BATCH);
+    assert_eq!(single["batch_selection"]["total_rolls"], 105);
+
+    let page = store.production_paddon_options(master, options(&both)).await.unwrap();
     assert!(page["paddons"].as_array().unwrap().iter().any(|p| p["paddon_code"] == code));
     assert!(page["paddons"].as_array().unwrap().iter().all(|p| p["warehouse"] == "Own"));
     let preview = &page["batch_selection"];
-    assert_eq!(preview["batch_id"], BATCH);
-    assert_eq!(preview["total_rolls"], 105);
+    assert_eq!(preview["batch_ids"], json!(both));
+    assert_eq!(preview["total_rolls"], 106);
     assert_eq!(
         preview["skipped"],
         json!({"consumed": 1, "outside_warehouse": 1, "packed": 1})
@@ -587,11 +604,12 @@ async fn verify_batch_packing(
         preview["receipt_names_by_warehouse"]["Own"].clone(),
     )
     .unwrap();
-    assert_eq!(selected.len(), 102);
-    assert!(selected.iter().all(|name| name != "batch-pack-106"));
+    assert_eq!(selected.len(), 103);
+    assert!(selected.iter().any(|name| name == "batch-pack-106"));
+    assert!(selected.iter().all(|name| name != "batch-pack-107"));
 
     let mut wrong = selected.clone();
-    wrong[0] = "batch-pack-106".into();
+    wrong[0] = "batch-pack-107".into();
     assert!(matches!(
         store.attach_prepared_rolls(master, attach("pack-batch-wrong", &wrong)).await,
         Err(PreparationError::Conflict(_))
@@ -604,16 +622,16 @@ async fn verify_batch_packing(
         store.attach_prepared_rolls(master, attach("pack-batch-stale", &selected)).await,
         Err(PreparationError::Conflict(_))
     ));
-    let preview = store.production_paddon_options(master, options()).await.unwrap();
+    let preview = store.production_paddon_options(master, options(&both)).await.unwrap();
     let selected: Vec<String> =
         serde_json::from_value(preview["batch_selection"]["receipt_names_by_warehouse"]["Own"].clone())
             .unwrap();
-    assert_eq!(selected.len(), 101);
+    assert_eq!(selected.len(), 102);
     let saved = store
         .attach_prepared_rolls(master, attach("pack-batch-confirmed", &selected))
         .await
         .unwrap();
-    assert_eq!(saved["receipt_names"].as_array().unwrap().len(), 101);
+    assert_eq!(saved["receipt_names"].as_array().unwrap().len(), 102);
     assert_eq!(
         store.attach_prepared_rolls(master, attach("pack-batch-confirmed", &selected)).await.unwrap(),
         saved
@@ -627,8 +645,8 @@ async fn verify_batch_packing(
     .fetch_one(pool)
     .await
     .unwrap();
-    assert_eq!(packed, 101);
-    let empty = store.production_paddon_options(master, options()).await.unwrap();
+    assert_eq!(packed, 102);
+    let empty = store.production_paddon_options(master, options(&both)).await.unwrap();
     assert_eq!(empty["paddons"], json!([]));
     assert_eq!(empty["batch_selection"]["receipt_names_by_warehouse"], json!({}));
 }

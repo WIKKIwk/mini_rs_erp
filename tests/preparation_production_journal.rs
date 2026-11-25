@@ -525,6 +525,36 @@ async fn check_output_workspace(pool: &PgPool, journal: &PostgresPreparationStor
     let (batch_note, roll_note) = journal.output_notes_for_barcode("no-order", prep, &other.ref_).await.unwrap();
     assert_eq!(batch_note, Some(later["batch:unassigned"].clone()));
     assert!(roll_note.is_none());
+
+    let note_for_batches = |first_revision, second_id| {
+        serde_json::from_value::<PreparationOutputNoteUpdate>(json!({
+            "scope": "batches",
+            "batches": [
+                {"batch_id": "batch:batch-a", "expected_revision": first_revision},
+                {"batch_id": second_id, "expected_revision": 1}
+            ],
+            "text": "Bir xil o‘lchamda kesish",
+            "audience": {"mode": "roles", "roles": ["rezka_master"]}
+        }))
+        .unwrap()
+    };
+    assert!(journal.update_output_notes(owner, &note_for_batches(3, "batch:missing"))
+        .await.unwrap().is_none());
+    assert!(matches!(
+        journal.update_output_notes(owner, &note_for_batches(2, "batch:unassigned")).await,
+        Err(PreparationError::Conflict(_))
+    ));
+    let saved = journal.update_output_notes(owner, &note_for_batches(3, "batch:unassigned"))
+        .await.unwrap().unwrap();
+    assert_eq!(saved.len(), 2);
+    for (barcode, batch_id) in [("epc1", "batch:batch-a"), ("no-order", "batch:unassigned")] {
+        assert_eq!(saved[batch_id]["text"], "Bir xil o‘lchamda kesish");
+        assert_eq!(
+            journal.output_notes_for_barcode(barcode, PreparationNoteViewerRole::RezkaMaster, "cutter")
+                .await.unwrap().0.as_ref(),
+            Some(&saved[batch_id])
+        );
+    }
 }
 
 async fn check_note_audiences(journal: &PostgresPreparationStore, owner: &Principal, other: &Principal) {
