@@ -231,6 +231,16 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/v1/mobile/qolip/products", any(qolip::products))
         .route("/v1/mobile/qolip/products/page", get(qolip::catalog_page))
         .route("/v1/mobile/qolip/products/detail", get(qolip::catalog_detail))
+        .route(
+            "/v1/mobile/qolip/products/information",
+            get(qolip::product_information)
+                .put(qolip::save_product_information)
+                .layer(DefaultBodyLimit::max(qolip::MAX_PRODUCT_INFORMATION_BODY)),
+        )
+        .route(
+            "/v1/mobile/qolip/products/information/attachment",
+            get(qolip::product_attachment),
+        )
         .route("/v1/mobile/qolip/order-products", any(qolip::order_products))
         .route("/v1/mobile/qolip/product-specs", any(qolip::product_specs))
         .route("/v1/mobile/qolip/shared-sets", any(qolip::shared_sets))

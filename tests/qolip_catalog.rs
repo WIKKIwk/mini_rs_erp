@@ -11,6 +11,9 @@ use mini_rs_erp::http::router::build_router;
 use std::sync::Arc;
 use tower::ServiceExt;
 
+#[path = "qolip_catalog/product_information.rs"]
+mod product_information;
+
 async fn verify_http_catalog(pool: &sqlx::PgPool) {
     use mini_rs_erp::db::postgres_qolip::PostgresQolipStore;
     let (mut state, _files) = test_state();
@@ -259,6 +262,7 @@ async fn qolip_catalog_postgres_pages_match_visible_inventory_and_details_are_un
         include_str!("../migrations/postgres/0167_qolip_set_names.sql"),
         include_str!("../migrations/postgres/0173_qolip_paddons.sql"),
         include_str!("../migrations/postgres/0174_qolip_storage_guards.sql"),
+        include_str!("../migrations/postgres/0207_qolip_product_information.sql"),
     ] {
         sqlx::raw_sql(migration).execute(&pool).await.unwrap();
     }
@@ -381,6 +385,7 @@ async fn qolip_catalog_postgres_pages_match_visible_inventory_and_details_are_un
         .unwrap();
     assert_eq!(search.len(), 1);
     assert_eq!(search[0].code, "ITEM-401");
+    product_information::verify(&pool).await;
     sqlx::query("UPDATE mini_qolip_checkouts SET status = 'returned' WHERE id = 'locked'")
         .execute(&pool)
         .await

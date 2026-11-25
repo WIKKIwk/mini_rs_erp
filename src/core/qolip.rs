@@ -4,6 +4,7 @@ mod catalog;
 pub(crate) mod normalize;
 mod normalize_qr;
 mod ports;
+pub mod product_information;
 mod service;
 mod shared_sets;
 mod set_ids;

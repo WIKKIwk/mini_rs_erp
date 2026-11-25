@@ -85,6 +85,33 @@ pub trait QolipStorePort: Send + Sync {
             .into_iter().filter(|product| product.code.trim().eq_ignore_ascii_case(item_code.trim()))
             .collect())
     }
+    async fn product_information_statuses(
+        &self,
+        _codes: &[String],
+    ) -> Result<std::collections::HashMap<String, super::product_information::ProductInformationStatus>, QolipError> {
+        Ok(std::collections::HashMap::new())
+    }
+    async fn product_information(
+        &self,
+        _code: &str,
+    ) -> Result<super::product_information::ProductInformation, QolipError> {
+        Err(QolipError::StoreFailed)
+    }
+    async fn save_product_information(
+        &self,
+        _code: &str,
+        _edit: super::product_information::ProductInformationEdit,
+        _principal: &Principal,
+    ) -> Result<Option<super::product_information::ProductInformation>, QolipError> {
+        Err(QolipError::StoreFailed)
+    }
+    async fn product_attachment(
+        &self,
+        _code: &str,
+        _revision: i64,
+    ) -> Result<Option<super::product_information::ProductAttachment>, QolipError> {
+        Err(QolipError::StoreFailed)
+    }
     async fn next_set_id(&self) -> Result<String, QolipError> {
         super::set_ids::next_memory_set_id()
     }

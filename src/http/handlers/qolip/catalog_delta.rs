@@ -53,10 +53,13 @@ async fn read(
         .admin
         .principal_has_admin_workspace_access(principal)
         .await;
-    let images = state
-        .qolip
-        .order_image_order_ids(&codes.iter().cloned().collect::<Vec<_>>())
-        .await?
+    let item_codes = codes.iter().cloned().collect::<Vec<_>>();
+    let (images, information) = tokio::join!(
+        state.qolip.order_image_order_ids(&item_codes),
+        state.qolip.product_information_statuses(&item_codes),
+    );
+    let information = information?;
+    let images = images?
         .into_iter()
         .map(|(code, id)| (code.trim().to_lowercase(), id))
         .collect::<std::collections::HashMap<_, _>>();
@@ -76,6 +79,7 @@ async fn read(
             "id": format!("qp1.{}", URL_SAFE_NO_PAD.encode(code.as_bytes())),
             "name": first.name,
             "order_image_order_id": image,
+            "information_status": information.get(&code).copied().unwrap_or_default(),
             "products": products.into_iter().map(|product| QolipProductResponse {
                 product, order_image_order_id: image.clone(),
             }).collect::<Vec<_>>(),

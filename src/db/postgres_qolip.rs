@@ -2,6 +2,9 @@ use async_trait::async_trait;
 use sqlx::PgPool;
 
 use crate::core::auth::models::Principal;
+use crate::core::qolip::product_information::{
+    ProductAttachment, ProductInformation, ProductInformationEdit, ProductInformationStatus,
+};
 use crate::core::qolip::{
     QolipBlock, QolipCellQr, QolipCheckout, QolipError, QolipLocation, QolipLocationMove,
     QolipProduct, QolipProductSpec, QolipStorePort,
@@ -15,6 +18,7 @@ mod checkouts;
 mod locations;
 mod order_products;
 mod product_by_code;
+mod product_information;
 mod product_transfer;
 mod shared_sets;
 mod management;
@@ -122,6 +126,35 @@ impl QolipStorePort for PostgresQolipStore {
     ) -> Result<Vec<QolipProduct>, QolipError> {
         catalog::load_products_inner(&self.pool, "", None, true, allowed, Some(item_code), false).await
     }
+
+    async fn product_information_statuses(
+        &self,
+        codes: &[String],
+    ) -> Result<std::collections::HashMap<String, ProductInformationStatus>, QolipError> {
+        product_information::statuses(&self.pool, codes).await
+    }
+
+    async fn product_information(&self, code: &str) -> Result<ProductInformation, QolipError> {
+        product_information::read(&self.pool, code).await
+    }
+
+    async fn save_product_information(
+        &self,
+        code: &str,
+        edit: ProductInformationEdit,
+        principal: &Principal,
+    ) -> Result<Option<ProductInformation>, QolipError> {
+        product_information::save(&self.pool, code, edit, principal).await
+    }
+
+    async fn product_attachment(
+        &self,
+        code: &str,
+        revision: i64,
+    ) -> Result<Option<ProductAttachment>, QolipError> {
+        product_information::attachment(&self.pool, code, revision).await
+    }
+
     async fn next_set_id(&self) -> Result<String, QolipError> {
         sqlx::query_scalar("SELECT public.mini_qolip_next_set_id()")
             .fetch_one(&self.pool)

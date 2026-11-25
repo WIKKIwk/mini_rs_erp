@@ -26,6 +26,14 @@ pub struct DetailQuery {
     id: String,
 }
 
+pub(super) fn catalog_product_code(id: &str) -> Option<String> {
+    id.strip_prefix("qp1.")
+        .filter(|raw| raw.len() <= 8192)
+        .and_then(|raw| URL_SAFE_NO_PAD.decode(raw).ok())
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .filter(|code| !code.trim().is_empty() && !code.contains('\0'))
+}
+
 pub async fn catalog_page(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -114,13 +122,7 @@ pub async fn catalog_detail(
 ) -> Result<axum::response::Response, (StatusCode, Json<QolipErrorResponse>)> {
     let principal = authenticated_principal(&state, &headers).await?;
     ensure_qolip_access(&state, &principal).await?;
-    let code = query
-        .id
-        .strip_prefix("qp1.")
-        .filter(|raw| raw.len() <= 8192)
-        .and_then(|raw| URL_SAFE_NO_PAD.decode(raw).ok())
-        .and_then(|bytes| String::from_utf8(bytes).ok())
-        .filter(|code| !code.trim().is_empty())
+    let code = catalog_product_code(&query.id)
         .ok_or_else(|| bad_request("invalid_product_id"))?;
     let is_admin = state
         .admin
@@ -134,12 +136,17 @@ pub async fn catalog_detail(
     if products.is_empty() {
         return Err(qolip_error(QolipError::ProductNotFound));
     }
-    let images = state
-        .qolip
-        .order_image_order_ids(&[code.clone()])
-        .await
-        .map_err(qolip_error)?;
-    let order_id = images
+    let item_codes = [code.clone()];
+    let (images, information) = tokio::join!(
+        state.qolip.order_image_order_ids(&item_codes),
+        state.qolip.product_information_statuses(&item_codes),
+    );
+    let information_status = information
+        .map_err(qolip_error)?
+        .get(&code.trim().to_lowercase())
+        .copied()
+        .unwrap_or_default();
+    let order_id = images.map_err(qolip_error)?
         .into_iter()
         .find(|(item, _)| item.trim().eq_ignore_ascii_case(code.trim()))
         .map(|(_, id)| id)
@@ -153,7 +160,9 @@ pub async fn catalog_detail(
         .collect::<Vec<_>>();
     Ok((
         [(header::CACHE_CONTROL, "private, no-store")],
-        Json(serde_json::json!({"ok": true, "products": products})),
+        Json(serde_json::json!({
+            "ok": true, "products": products, "information_status": information_status,
+        })),
     )
         .into_response())
 }

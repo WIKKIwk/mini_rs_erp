@@ -30,7 +30,7 @@ verification = ["dep:tower"]
 mini_rs_apparatus_contract = { path = "crates/mini_rs_apparatus_contract" }
 mini_rs_domain_types = { path = "crates/mini_rs_domain_types" }
 mini_rs_gscale_domain = { path = "crates/mini_rs_gscale_domain" }
-axum = { version = "0.8" }
+axum = { version = "0.8", features = ["multipart"] }
 sockudo-ws = { version = "=2.0.1", path = "third_party/sockudo-ws", default-features = false, features = ["simd", "fastrand", "tokio-runtime", "axum-integration", "permessage-deflate"] }
 async-stream = "0.3"
 futures-core = "0.3"

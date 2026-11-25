@@ -28,6 +28,7 @@ mod reworks;
 mod mileage;
 mod catalog;
 mod catalog_delta;
+mod product_information;
 
 pub use order_products::order_products;
 pub use product_transfer::product_transfer;
@@ -36,6 +37,9 @@ pub use management::{sets, create_set, rename_set, product_molds};
 pub use reworks::{reworks, send_reworks, return_reworks};
 pub use mileage::mileage;
 pub use catalog::{catalog_page, catalog_detail};
+pub use product_information::{
+    MAX_PRODUCT_INFORMATION_BODY, product_attachment, product_information, save_product_information,
+};
 
 use self::support::*;
 pub use self::support::{
