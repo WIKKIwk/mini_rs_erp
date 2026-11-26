@@ -403,9 +403,11 @@ pub(super) fn qolip_block_delete_error(
     match error {
         WarehouseError::MissingWarehouse => bad_request("block_required"),
         WarehouseError::InvalidApparatus => bad_request("block_not_found"),
+        WarehouseError::TypeMismatch => bad_request("block_not_found"),
         WarehouseError::NotFound => bad_request("block_not_found"),
         WarehouseError::NotEmpty(_)
         | WarehouseError::HasActiveReservations(_)
+        | WarehouseError::HasWasteReceipts
         | WarehouseError::HasChildren => conflict("block_in_use"),
         WarehouseError::MissingPrincipalRef
         | WarehouseError::AssignmentNotFound

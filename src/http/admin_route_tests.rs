@@ -566,6 +566,7 @@ async fn assign_warehouse_to_principal(
             warehouse: warehouse.to_string(),
             company: "Company".to_string(),
             is_group: false,
+            is_waste: false,
             parent_warehouse: String::new(),
         })
         .await

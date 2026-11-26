@@ -33,6 +33,11 @@ fn warehouse_error(error: WarehouseError) -> AdminError {
             StatusCode::CONFLICT,
             Json(AdminErrorResponse::new("warehouse_has_children")),
         ),
+        WarehouseError::TypeMismatch => bad_request("warehouse_type_mismatch"),
+        WarehouseError::HasWasteReceipts => (
+            StatusCode::CONFLICT,
+            Json(AdminErrorResponse::new("warehouse_has_waste_receipts")),
+        ),
         WarehouseError::StoreFailed => server_error("warehouse store failed"),
     }
 }

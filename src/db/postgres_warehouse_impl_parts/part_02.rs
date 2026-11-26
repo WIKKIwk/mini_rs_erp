@@ -124,8 +124,8 @@ impl PostgresWarehouseStore {
             .map_err(|_| WarehouseError::StoreFailed)?;
         // Transfer creation holds FOR KEY SHARE on these same rows until its
         // transaction commits, so the delete recheck cannot miss a new transfer.
-        let (warehouse_id, warehouse_name) = sqlx::query_as::<_, (String, String)>(
-            "SELECT id, name
+        let (warehouse_id, warehouse_name, is_waste) = sqlx::query_as::<_, (String, String, bool)>(
+            "SELECT id, name, is_waste
              FROM mini_warehouses
              WHERE lower(name) = lower($1)
              FOR UPDATE",
@@ -135,6 +135,16 @@ impl PostgresWarehouseStore {
         .await
         .map_err(|_| WarehouseError::StoreFailed)?
         .ok_or(WarehouseError::NotFound)?;
+        if is_waste && sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM mini_waste_warehouse_receipts WHERE warehouse_id = $1)",
+        )
+        .bind(&warehouse_id)
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(|_| WarehouseError::StoreFailed)?
+        {
+            return Err(WarehouseError::HasWasteReceipts);
+        }
         let has_children = sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS(
                  SELECT 1 FROM mini_warehouses

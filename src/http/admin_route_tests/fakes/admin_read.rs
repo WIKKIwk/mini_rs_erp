@@ -337,18 +337,21 @@ impl AdminReadPort for FakeAdminReadPort {
                 warehouse: "Stores - CH".to_string(),
                 company: "Company".to_string(),
                 is_group: false,
+                is_waste: false,
                 parent_warehouse: String::new(),
             },
             crate::core::admin::models::AdminWarehouse {
                 warehouse: "Finished Goods - CH".to_string(),
                 company: "Company".to_string(),
                 is_group: false,
+                is_waste: false,
                 parent_warehouse: String::new(),
             },
             crate::core::admin::models::AdminWarehouse {
                 warehouse: "Godex aparat - CH".to_string(),
                 company: "Company".to_string(),
                 is_group: false,
+                is_waste: false,
                 parent_warehouse: "aparat - A".to_string(),
             },
         ];

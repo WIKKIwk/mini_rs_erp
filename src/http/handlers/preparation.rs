@@ -137,6 +137,7 @@ fn warehouse_api_error(error: WarehouseError) -> ApiError {
         WarehouseError::MissingWarehouse
         | WarehouseError::MissingPrincipalRef
         | WarehouseError::InvalidApparatus
+        | WarehouseError::TypeMismatch
         | WarehouseError::NotFound
         | WarehouseError::AssignmentNotFound => (
             StatusCode::BAD_REQUEST,
@@ -144,6 +145,7 @@ fn warehouse_api_error(error: WarehouseError) -> ApiError {
         ),
         WarehouseError::NotEmpty(_)
         | WarehouseError::HasActiveReservations(_)
+        | WarehouseError::HasWasteReceipts
         | WarehouseError::HasChildren => (
             StatusCode::CONFLICT,
             Json(json!({"code":"preparation_conflict","error":error.to_string()})),

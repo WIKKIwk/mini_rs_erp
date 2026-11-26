@@ -38,8 +38,11 @@ async fn waste_bin_lifecycle() {
          SET search_path TO {schema};
          GRANT USAGE ON SCHEMA {schema} TO mini_rs_erp;
          CREATE TABLE mini_apparatus(id text PRIMARY KEY, name text NOT NULL);
+         CREATE TABLE mini_warehouses(id text PRIMARY KEY, name text NOT NULL, is_group boolean NOT NULL DEFAULT false);
+         CREATE TABLE mini_warehouse_assignments(warehouse_name text, assignment_kind text, principal_role text, principal_ref text);
          INSERT INTO mini_apparatus VALUES ('a', 'Rezka'), ('b', 'Bosma');
-         GRANT SELECT ON mini_apparatus TO mini_rs_erp;",
+         GRANT SELECT ON mini_apparatus TO mini_rs_erp;
+         GRANT SELECT, UPDATE ON mini_warehouses, mini_warehouse_assignments TO mini_rs_erp;",
     ))
     .execute(&mut *init)
     .await
@@ -47,6 +50,20 @@ async fn waste_bin_lifecycle() {
     sqlx::raw_sql(include_str!(
         "../../../migrations/postgres/0208_waste_bins.sql"
     ))
+    .execute(&mut *init)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/postgres/0210_waste_warehouses.sql"
+    ))
+    .execute(&mut *init)
+    .await
+    .unwrap();
+    sqlx::raw_sql(
+        "INSERT INTO mini_warehouses(id, name, is_waste) VALUES ('main', 'Chiqindi 1', true);
+         INSERT INTO mini_warehouse_assignments
+         VALUES ('Chiqindi 1', 'warehouse', 'chiqindi_qabulchi', 'receiver');",
+    )
     .execute(&mut *init)
     .await
     .unwrap();
@@ -182,7 +199,7 @@ async fn waste_bin_lifecycle() {
     );
 
     assert_eq!(
-        store.receive("a1", first, 23.0, "gscale", "", &ali).await,
+        store.receive("a1", first, "main", 23.0, "gscale", "", &ali).await,
         Err(WasteBinError::Forbidden)
     );
     assert_eq!(
@@ -191,12 +208,12 @@ async fn waste_bin_lifecycle() {
     );
     assert_eq!(
         store
-            .receive("a1", first, 23.0, "gscale", "", &receiver)
+            .receive("a1", first, "main", 23.0, "gscale", "", &receiver)
             .await,
         Err(WasteBinError::DiscrepancyNoteRequired)
     );
     let accepted = store
-        .receive("a1", first, 23.0, "gscale", "Qayta tortildi", &receiver)
+        .receive("a1", first, "main", 23.0, "gscale", "Qayta tortildi", &receiver)
         .await
         .unwrap();
     let receipt = &accepted["cycle"]["receipt"];
@@ -205,14 +222,14 @@ async fn waste_bin_lifecycle() {
     assert_eq!(receipt["outside_tolerance"], true);
     assert_eq!(
         store
-            .receive("a1", first, 23.0, "gscale", "Qayta tortildi", &receiver)
+            .receive("a1", first, "main", 23.0, "gscale", "Qayta tortildi", &receiver)
             .await
             .unwrap(),
         accepted
     );
     assert_eq!(
         store
-            .receive("a1", first, 24.0, "manual", "Yangilash", &receiver)
+            .receive("a1", first, "main", 24.0, "manual", "Yangilash", &receiver)
             .await,
         Err(WasteBinError::Conflict)
     );

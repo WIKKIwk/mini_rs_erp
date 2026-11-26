@@ -330,9 +330,11 @@ async fn waste_routes_require_native_receiver_and_scope_operators_to_assigned_ap
     const APPARATUS: &str = "apparatus:default:asset-010";
     const OTHER_APPARATUS: &str = "apparatus:default:asset-011";
     const RECEIVE: &str = "/v1/mobile/waste/bins/receive";
+    const DESTINATION: &str = "/v1/mobile/waste/bins/destination";
     const RESET: &str = "/v1/mobile/waste/bins/reset";
     let receive = json!({"code":"BIN-1","cycle_id":"cycle-1","gross_kg":20,
-        "measurement_source":"manual"});
+        "measurement_source":"manual","warehouse_id":"warehouse-1"});
+    let destination = json!({"code":"BIN-1","cycle_id":"cycle-1","warehouse_id":"warehouse-1"});
     let reset = json!({"code":"BIN-1","cycle_id":"cycle-1"});
     let temp = tempfile::tempdir().unwrap();
     let mut cfg = config();
@@ -365,7 +367,11 @@ async fn waste_routes_require_native_receiver_and_scope_operators_to_assigned_ap
         .await
         .unwrap();
     let router = build_router(state.clone());
-    for (path, body) in [(RECEIVE, receive), (RESET, reset.clone())] {
+    for (path, body) in [
+        (RECEIVE, receive),
+        (DESTINATION, destination),
+        (RESET, reset.clone()),
+    ] {
         for token in [&admin, &worker] {
             assert_eq!(
                 call(&router, "POST", path, token, body.clone()).await.0,

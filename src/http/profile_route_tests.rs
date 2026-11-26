@@ -233,6 +233,7 @@ async fn profile_get_returns_material_scope_and_capabilities() {
             warehouse: "Kalidor".to_string(),
             company: "Company".to_string(),
             is_group: false,
+            is_waste: false,
             parent_warehouse: String::new(),
         })
         .await

@@ -53,6 +53,7 @@ pub async fn blocks(
                     warehouse: block.to_string(),
                     company: String::new(),
                     is_group: false,
+                    is_waste: false,
                     parent_warehouse: parent.clone(),
                 })
                 .await

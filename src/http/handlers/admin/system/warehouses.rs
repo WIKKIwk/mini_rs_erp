@@ -45,6 +45,9 @@ pub async fn warehouses(
     if method == Method::POST {
         require_capability(&state, &principal, Capability::ProductionMapManage).await?;
         let input: WarehouseUpsert = parse_json(&body)?;
+        if input.is_waste {
+            require_capability(&state, &principal, Capability::AdminAccess).await?;
+        }
         let saved = state
             .warehouses
             .upsert_warehouse(input)
@@ -85,6 +88,9 @@ pub async fn warehouses(
     if let Some(scope) = warehouse_scope.as_ref() {
         warehouses = scoped_warehouses(warehouses, scope);
     }
+    if principal.role != PrincipalRole::Admin {
+        warehouses.retain(|warehouse| !warehouse.is_waste);
+    }
     let mut response = warehouses
         .into_iter()
         .map(AdminWarehouseResponse::from)
@@ -104,6 +110,7 @@ struct AdminWarehouseResponse {
     warehouse: String,
     company: String,
     is_group: bool,
+    is_waste: bool,
     parent_warehouse: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     id: Option<String>,
@@ -115,6 +122,7 @@ impl From<AdminWarehouse> for AdminWarehouseResponse {
             warehouse: warehouse.warehouse,
             company: warehouse.company,
             is_group: warehouse.is_group,
+            is_waste: warehouse.is_waste,
             parent_warehouse: warehouse.parent_warehouse,
             id: None,
         }
@@ -168,6 +176,9 @@ pub async fn warehouse_summaries(
         .map_err(warehouse_error)?;
     if let Some(scope) = warehouse_scope.as_ref() {
         summaries = scoped_summaries(summaries, scope);
+    }
+    if principal.role != PrincipalRole::Admin {
+        summaries.retain(|summary| !summary.is_waste);
     }
     summaries.truncate(limit);
     Ok(json_response(summaries))
@@ -373,6 +384,19 @@ async fn validate_warehouse_assignee(
     input: &WarehouseAssignmentUpsert,
 ) -> Result<(), AdminError> {
     match input.principal_role {
+        PrincipalRole::ChiqindiQabulchi => {
+            let id = input.principal_ref.trim();
+            if id.is_empty() {
+                return Err(bad_request("warehouse_assignee_not_allowed"));
+            }
+            let users = state.system_users.users_by_ids(&[id.to_string()]).await
+                .map_err(|_| server_error("warehouse assignee lookup failed"))?;
+            if users.iter().any(|user| user.id == id && user.role == PrincipalRole::ChiqindiQabulchi) {
+                Ok(())
+            } else {
+                Err(bad_request("warehouse_assignee_not_allowed"))
+            }
+        }
         PrincipalRole::Werka
         | PrincipalRole::Brigader
         | PrincipalRole::MaterialTaminotchi

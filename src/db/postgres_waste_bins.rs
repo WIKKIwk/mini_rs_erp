@@ -1,5 +1,6 @@
 mod entries;
 mod read;
+mod warehouse;
 #[cfg(test)]
 mod tests;
 
@@ -27,6 +28,10 @@ pub enum WasteBinError {
     Forbidden,
     #[error("record a reason for measurement outside tolerance")]
     DiscrepancyNoteRequired,
+    #[error("select the waste warehouse for this receipt")]
+    WarehouseRequired,
+    #[error("waste warehouse is not assigned to this receiver")]
+    WarehouseNotAssigned,
     #[error("waste bin storage operation failed")]
     StoreFailed,
 }
@@ -39,6 +44,8 @@ impl WasteBinError {
             Self::Conflict => "waste_bin_conflict",
             Self::Forbidden => "waste_bin_forbidden",
             Self::DiscrepancyNoteRequired => "waste_discrepancy_note_required",
+            Self::WarehouseRequired => "waste_warehouse_required",
+            Self::WarehouseNotAssigned => "waste_warehouse_not_assigned",
             Self::StoreFailed => "waste_bin_store_failed",
         }
     }
@@ -340,6 +347,7 @@ impl PostgresWasteBinStore {
         &self,
         raw_code: &str,
         cycle_id: &str,
+        warehouse_id: &str,
         gross_kg: f64,
         measurement_source: &str,
         note: &str,
@@ -347,6 +355,7 @@ impl PostgresWasteBinStore {
     ) -> Result<Value, WasteBinError> {
         receiver(actor)?;
         let code = code(raw_code)?;
+        let warehouse_id = warehouse::destination_id(warehouse_id)?;
         let gross = units(gross_kg)?;
         let note = note.trim();
         if !matches!(measurement_source, "gscale" | "manual") || note.len() > 1000 {
@@ -362,6 +371,7 @@ impl PostgresWasteBinStore {
                 || receipt.measurement_source != measurement_source
                 || receipt.note != note
                 || receipt.received_by_ref != actor.ref_
+                || receipt.warehouse_id.as_deref() != Some(warehouse_id)
             {
                 return Err(WasteBinError::Conflict);
             }
@@ -374,6 +384,7 @@ impl PostgresWasteBinStore {
             if (net - expected).abs() > bin.tolerance_units && note.is_empty() {
                 return Err(WasteBinError::DiscrepancyNoteRequired);
             }
+            let warehouse = warehouse::assigned_warehouse(&mut tx, warehouse_id, &actor.ref_).await?;
             sqlx::query(
                 "INSERT INTO mini_waste_bin_receipts(cycle_id, gross_units, tare_units, expected_units,
                     tolerance_units, measurement_source, note, received_by_ref, received_by_display_name)
@@ -390,6 +401,7 @@ impl PostgresWasteBinStore {
             .bind(&actor.display_name)
             .execute(&mut *tx)
             .await?;
+            warehouse::stock_receipt(&mut tx, cycle_id, &warehouse, actor).await?;
         }
         let result = read::bin_snapshot(&mut tx, &code, Some(cycle_id)).await?;
         tx.commit().await?;
@@ -408,10 +420,10 @@ impl PostgresWasteBinStore {
         lock_bins(&mut tx, std::slice::from_ref(&code)).await?;
         cycle_apparatus(&mut tx, &code, cycle_id).await?;
         let cycle = read::load_cycle(&mut tx, cycle_id).await?;
-        if cycle.receipt()?.is_none() {
-            return Err(WasteBinError::Conflict);
-        }
+        let receipt = cycle.receipt()?.ok_or(WasteBinError::Conflict)?;
         if cycle.reset_at_unix.is_none() {
+            let warehouse_id = receipt.warehouse_id.ok_or(WasteBinError::WarehouseRequired)?;
+            warehouse::assigned_warehouse(&mut tx, &warehouse_id, &actor.ref_).await?;
             sqlx::query(
                 "UPDATE mini_waste_bin_cycles SET reset_at=now(), reset_by_ref=$2,
                     reset_by_display_name=$3 WHERE id=$1",

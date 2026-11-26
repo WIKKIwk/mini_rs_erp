@@ -31,6 +31,7 @@ impl PostgresInventoryMovementStore {
                         FROM mini_warehouses warehouse
                         WHERE warehouse.id = location.warehouse_id
                           AND btrim(warehouse.parent_warehouse) = ''
+                          AND NOT warehouse.is_waste
                     )
               )
             GROUP BY

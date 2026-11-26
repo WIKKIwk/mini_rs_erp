@@ -378,7 +378,7 @@ pub(super) async fn require_material_warehouse_access(
             )
         })?;
         return match destination {
-            Some(warehouse) if !warehouse.is_group => Ok(()),
+            Some(warehouse) if !warehouse.is_group && !warehouse.is_waste => Ok(()),
             _ => Err((
                 StatusCode::FORBIDDEN,
                 Json(GscaleErrorResponse::new(

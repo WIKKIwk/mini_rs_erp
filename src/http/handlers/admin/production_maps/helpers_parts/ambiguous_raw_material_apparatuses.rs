@@ -17,7 +17,9 @@ pub(super) fn warehouse_error(error: WarehouseError) -> AdminError {
         WarehouseError::AssignmentNotFound => not_found("warehouse assignment not found"),
         WarehouseError::NotEmpty(_)
         | WarehouseError::HasActiveReservations(_)
-        | WarehouseError::HasChildren => bad_request("warehouse operation is not allowed"),
+        | WarehouseError::HasChildren
+        | WarehouseError::TypeMismatch
+        | WarehouseError::HasWasteReceipts => bad_request("warehouse operation is not allowed"),
         WarehouseError::StoreFailed => server_error("warehouse store failed"),
     }
 }

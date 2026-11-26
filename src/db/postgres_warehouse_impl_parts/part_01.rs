@@ -5,7 +5,7 @@ impl PostgresWarehouseStore {
             return Ok(None);
         }
         let row = sqlx::query_as::<_, WarehouseRow>(
-            "SELECT name, company, is_group, parent_warehouse
+            "SELECT name, company, is_group, parent_warehouse, is_waste
              FROM mini_warehouses
              WHERE lower(name) = lower($1)",
         )
@@ -17,6 +17,7 @@ impl PostgresWarehouseStore {
             warehouse: row.name,
             company: row.company,
             is_group: row.is_group,
+            is_waste: row.is_waste,
             parent_warehouse: row.parent_warehouse,
         }))
     }
@@ -31,7 +32,7 @@ impl PostgresWarehouseStore {
         let pattern = format!("%{query}%");
         let parent = parent.trim().to_lowercase();
         let rows = sqlx::query_as::<_, WarehouseRow>(
-            "SELECT name, company, is_group, parent_warehouse
+            "SELECT name, company, is_group, parent_warehouse, is_waste
              FROM mini_warehouses
              WHERE ($1 = '' OR lower(name) LIKE $2)
                AND ($3 = '' OR lower(parent_warehouse) = $3)
@@ -52,6 +53,7 @@ impl PostgresWarehouseStore {
                 warehouse: row.name,
                 company: row.company,
                 is_group: row.is_group,
+                is_waste: row.is_waste,
                 parent_warehouse: row.parent_warehouse,
             })
             .collect())
@@ -67,9 +69,9 @@ impl PostgresWarehouseStore {
         }
         sqlx::query_as::<_, WarehouseRow>(
             "INSERT INTO mini_warehouses (
-                 id, name, company, is_group, parent_warehouse, payload_json
+                 id, name, company, is_group, parent_warehouse, payload_json, is_waste
              )
-             VALUES ($1, $2, $3, $4, $5, $6)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
              ON CONFLICT ((lower(name))) DO UPDATE SET
                name = excluded.name,
                company = excluded.company,
@@ -77,7 +79,8 @@ impl PostgresWarehouseStore {
                parent_warehouse = excluded.parent_warehouse,
                payload_json = excluded.payload_json,
                updated_at = now()
-             RETURNING name, company, is_group, parent_warehouse",
+             WHERE mini_warehouses.is_waste = excluded.is_waste
+             RETURNING name, company, is_group, parent_warehouse, is_waste",
         )
         .bind(warehouse_id(name))
         .bind(name)
@@ -88,17 +91,21 @@ impl PostgresWarehouseStore {
             "warehouse": name,
             "company": warehouse.company.trim(),
             "is_group": warehouse.is_group,
+            "is_waste": warehouse.is_waste,
             "parent_warehouse": warehouse.parent_warehouse.trim(),
         }))
-        .fetch_one(&self.pool)
+        .bind(warehouse.is_waste)
+        .fetch_optional(&self.pool)
         .await
+        .map_err(|_| WarehouseError::StoreFailed)?
         .map(|row| AdminWarehouse {
             warehouse: row.name,
             company: row.company,
             is_group: row.is_group,
+            is_waste: row.is_waste,
             parent_warehouse: row.parent_warehouse,
         })
-        .map_err(|_| WarehouseError::StoreFailed)
+        .ok_or(WarehouseError::TypeMismatch)
     }
 
     async fn warehouse_assignments(
@@ -252,7 +259,7 @@ impl PostgresWarehouseStore {
             warehouse_names AS (
                 SELECT name AS warehouse
                 FROM mini_warehouses
-                WHERE btrim(parent_warehouse) = ''
+                WHERE btrim(parent_warehouse) = '' OR is_waste
                 UNION
                 SELECT warehouse FROM raw_counts
                 UNION
@@ -281,7 +288,10 @@ impl PostgresWarehouseStore {
                     + COALESCE(transfer_counts.transfer_count, 0)
                 )::bigint AS reserved_count,
                 COALESCE(assignment_counts.assignment_count, 0)::bigint AS assignment_count,
-                COALESCE(assignment_counts.assigned_display_names, '') AS assigned_display_names
+                COALESCE(assignment_counts.assigned_display_names, '') AS assigned_display_names,
+                COALESCE(warehouse_metadata.is_waste, false) AS is_waste,
+                COALESCE(waste_balance.on_hand_kg, 0)::float8 AS waste_on_hand_kg,
+                COALESCE(waste_balance.receipt_count, 0)::bigint AS waste_receipt_count
             FROM warehouse_names
             LEFT JOIN raw_counts ON lower(raw_counts.warehouse) = lower(warehouse_names.warehouse)
             LEFT JOIN finished_counts ON lower(finished_counts.warehouse) = lower(warehouse_names.warehouse)
@@ -290,6 +300,10 @@ impl PostgresWarehouseStore {
             LEFT JOIN reservation_counts ON lower(reservation_counts.warehouse) = lower(warehouse_names.warehouse)
             LEFT JOIN transfer_counts ON lower(transfer_counts.warehouse) = lower(warehouse_names.warehouse)
             LEFT JOIN assignment_counts ON lower(assignment_counts.warehouse) = lower(warehouse_names.warehouse)
+            LEFT JOIN mini_warehouses warehouse_metadata
+              ON lower(warehouse_metadata.name) = lower(warehouse_names.warehouse)
+            LEFT JOIN mini_waste_warehouse_balances waste_balance
+              ON waste_balance.warehouse_id = warehouse_metadata.id
             WHERE ($1 = '' OR lower(warehouse_names.warehouse) LIKE $2)
             ORDER BY lower(warehouse_names.warehouse)
             LIMIT $3

@@ -29,7 +29,7 @@ fn warehouse_lookup_query<'q>()
                   AND lower(assignment.warehouse_name) = lower(warehouse.name)
             ) AS assignment_count
         FROM mini_warehouses warehouse
-        WHERE warehouse.id = $1
+        WHERE warehouse.id = $1 AND NOT warehouse.is_waste
         FOR KEY SHARE OF warehouse
         "#,
     )

@@ -31,7 +31,9 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/v1/mobile/waste/bins/submit", post(submit))
         .route("/v1/mobile/waste/bins/entry", post(add))
         .route("/v1/mobile/waste/bins/reconcile", post(reconcile))
+        .route("/v1/mobile/waste/warehouses", get(warehouses))
         .route("/v1/mobile/waste/bins/receive", post(receive))
+        .route("/v1/mobile/waste/bins/destination", post(record_destination))
         .route("/v1/mobile/waste/bins/reset", post(reset))
 }
 
@@ -60,6 +62,11 @@ fn domain_error(err: WasteBinError) -> ApiError {
         ),
         WasteBinError::Forbidden => (StatusCode::FORBIDDEN, "Bu amal uchun ruxsat yo‘q"),
         WasteBinError::DiscrepancyNoteRequired => (StatusCode::CONFLICT, "Tafovut sababini yozing"),
+        WasteBinError::WarehouseRequired => (StatusCode::BAD_REQUEST, "Chiqindi omborini tanlang"),
+        WasteBinError::WarehouseNotAssigned => (
+            StatusCode::FORBIDDEN,
+            "Bu chiqindi ombori sizga biriktirilmagan",
+        ),
         WasteBinError::StoreFailed => (
             StatusCode::INTERNAL_SERVER_ERROR,
             "Chiqindi ma’lumoti saqlanmadi. Qayta tekshiring",
@@ -72,6 +79,17 @@ fn result(value: Result<Value, WasteBinError>) -> Result<ApiResponse, ApiError> 
     value
         .map(|value| ([(header::CACHE_CONTROL, "no-store")], Json(value)))
         .map_err(domain_error)
+}
+
+fn warehouse_credit(
+    state: &AppState,
+    value: Result<Value, WasteBinError>,
+) -> Result<ApiResponse, ApiError> {
+    let snapshot = value.map_err(domain_error)?;
+    if let Some(warehouse) = snapshot.pointer("/cycle/receipt/warehouse").and_then(Value::as_str) {
+        state.warehouse_events.notify_updated(warehouse, "waste_receipt");
+    }
+    result(Ok(snapshot))
 }
 
 fn store(state: &AppState) -> Result<&PostgresWasteBinStore, ApiError> {
@@ -124,6 +142,23 @@ async fn receiver(state: &AppState, headers: &HeaderMap) -> Result<QueueActionAc
         return Err(forbidden());
     }
     Ok(actor(&principal))
+}
+
+async fn warehouses(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<ApiResponse, ApiError> {
+    let principal = principal(&state, &headers).await?;
+    let receiver_ref = if is_receiver(&state, &principal).await {
+        Some(principal.ref_.as_str())
+    } else if principal.role == PrincipalRole::Admin
+        && state.admin.principal_has_capability(&principal, Capability::AdminAccess).await
+    {
+        None
+    } else {
+        return Err(forbidden());
+    };
+    result(store(&state)?.warehouses(receiver_ref).await)
 }
 
 fn actor(principal: &Principal) -> QueueActionActor {
@@ -455,6 +490,8 @@ async fn reconcile(
 struct ReceiveRequest {
     code: String,
     cycle_id: String,
+    #[serde(default)]
+    warehouse_id: String,
     gross_kg: f64,
     measurement_source: String,
     #[serde(default)]
@@ -467,16 +504,40 @@ async fn receive(
     Json(input): Json<ReceiveRequest>,
 ) -> Result<ApiResponse, ApiError> {
     let actor = receiver(&state, &headers).await?;
-    result(
+    warehouse_credit(
+        &state,
         store(&state)?
             .receive(
                 &input.code,
                 &input.cycle_id,
+                &input.warehouse_id,
                 input.gross_kg,
                 &input.measurement_source,
                 &input.note,
                 &actor,
             )
+            .await,
+    )
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DestinationRequest {
+    code: String,
+    cycle_id: String,
+    warehouse_id: String,
+}
+
+async fn record_destination(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<DestinationRequest>,
+) -> Result<ApiResponse, ApiError> {
+    let actor = receiver(&state, &headers).await?;
+    warehouse_credit(
+        &state,
+        store(&state)?
+            .record_legacy_destination(&input.code, &input.cycle_id, &input.warehouse_id, &actor)
             .await,
     )
 }

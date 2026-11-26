@@ -114,6 +114,8 @@ pub struct AdminWarehouse {
     pub warehouse: String,
     pub company: String,
     pub is_group: bool,
+    #[serde(default)]
+    pub is_waste: bool,
     pub parent_warehouse: String,
 }
 

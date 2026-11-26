@@ -917,6 +917,7 @@ async fn material_taminotchi_warehouses_are_limited_to_assigned_warehouses() {
             warehouse: "Boshqa ombor".to_string(),
             company: "Company".to_string(),
             is_group: false,
+            is_waste: false,
             parent_warehouse: String::new(),
         })
         .await
@@ -960,6 +961,7 @@ async fn werka_gscale_warehouses_are_limited_to_assigned_warehouses() {
             warehouse: "Boshqa ombor".to_string(),
             company: "Company".to_string(),
             is_group: false,
+            is_waste: false,
             parent_warehouse: String::new(),
         })
         .await

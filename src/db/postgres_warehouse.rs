@@ -134,6 +134,7 @@ struct WarehouseRow {
     name: String,
     company: String,
     is_group: bool,
+    is_waste: bool,
     parent_warehouse: String,
 }
 
@@ -155,6 +156,9 @@ struct WarehouseSummaryRow {
     reserved_count: i64,
     assignment_count: i64,
     assigned_display_names: String,
+    is_waste: bool,
+    waste_on_hand_kg: f64,
+    waste_receipt_count: i64,
 }
 
 #[derive(sqlx::FromRow)]
@@ -253,6 +257,9 @@ fn row_to_summary(row: WarehouseSummaryRow) -> WarehouseSummary {
         product_count: row.product_count.max(0) as usize,
         reserved_count: row.reserved_count.max(0) as usize,
         assignment_count: row.assignment_count.max(0) as usize,
+        is_waste: row.is_waste,
+        waste_on_hand_kg: row.waste_on_hand_kg,
+        waste_receipt_count: count_as_usize(row.waste_receipt_count),
         assigned_display_names: row
             .assigned_display_names
             .lines()

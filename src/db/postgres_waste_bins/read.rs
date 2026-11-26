@@ -18,10 +18,14 @@ const CYCLES: &str = "
                 'expected_units', r.expected_units, 'tolerance_units', r.tolerance_units,
                 'measurement_source', r.measurement_source, 'note', r.note,
                 'received_by_ref', r.received_by_ref, 'received_by_display_name', r.received_by_display_name,
-                'received_at_unix', EXTRACT(EPOCH FROM r.received_at)::bigint)
+                'received_at_unix', EXTRACT(EPOCH FROM r.received_at)::bigint,
+                'warehouse_id', w.warehouse_id, 'warehouse', w.warehouse_name,
+                'stocked_by_display_name', w.stocked_by_display_name,
+                'stocked_at_unix', EXTRACT(EPOCH FROM w.stocked_at)::bigint)
         END AS receipt_payload
     FROM mini_waste_bin_cycles c
-    LEFT JOIN mini_waste_bin_receipts r ON r.cycle_id = c.id";
+    LEFT JOIN mini_waste_bin_receipts r ON r.cycle_id = c.id
+    LEFT JOIN mini_waste_warehouse_receipts w ON w.cycle_id = c.id";
 
 #[derive(sqlx::FromRow)]
 pub(super) struct Cycle {
@@ -55,6 +59,10 @@ pub(super) struct Receipt {
     pub received_by_ref: String,
     pub received_by_display_name: String,
     pub received_at_unix: i64,
+    pub warehouse_id: Option<String>,
+    pub warehouse: Option<String>,
+    pub stocked_by_display_name: Option<String>,
+    pub stocked_at_unix: Option<i64>,
 }
 
 impl Receipt {
@@ -73,6 +81,10 @@ impl Receipt {
             "received_by_ref": self.received_by_ref,
             "received_by_display_name": self.received_by_display_name,
             "received_at_unix": self.received_at_unix,
+            "warehouse_id": self.warehouse_id,
+            "warehouse": self.warehouse,
+            "stocked_by_display_name": self.stocked_by_display_name,
+            "stocked_at_unix": self.stocked_at_unix,
         })
     }
 }

@@ -44,6 +44,9 @@ impl WarehouseStorePort for MemoryWarehouseStore {
             .iter()
             .position(|item| item.warehouse.to_lowercase() == key)
         {
+            if warehouses[index].is_waste != warehouse.is_waste {
+                return Err(WarehouseError::TypeMismatch);
+            }
             warehouses[index] = warehouse.clone();
         } else {
             warehouses.push(warehouse.clone());
@@ -276,7 +279,7 @@ impl WarehouseStorePort for MemoryWarehouseStore {
         let mut summaries = warehouses
             .into_iter()
             .filter(|warehouse| {
-                warehouse.parent_warehouse.trim().is_empty()
+                (warehouse.parent_warehouse.trim().is_empty() || warehouse.is_waste)
                     && (query.is_empty() || warehouse.warehouse.to_lowercase().contains(&query))
             })
             .map(|warehouse| {
@@ -304,6 +307,9 @@ impl WarehouseStorePort for MemoryWarehouseStore {
                     .unwrap_or((stock_product_count, 0));
                 WarehouseSummary {
                     warehouse: warehouse.warehouse,
+                    is_waste: warehouse.is_waste,
+                    waste_on_hand_kg: 0.0,
+                    waste_receipt_count: 0,
                     product_count,
                     reserved_count,
                     assignment_count: assigned.len(),

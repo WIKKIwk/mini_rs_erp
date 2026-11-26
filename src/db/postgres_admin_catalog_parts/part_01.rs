@@ -276,8 +276,8 @@ impl AdminReadPort for PostgresAdminCatalogStore {
         let query = query.trim().to_lowercase();
         let needle = format!("%{query}%");
         let parent = parent.trim().to_lowercase();
-        sqlx::query_as::<_, (String, String, bool, String)>(
-            "SELECT name, company, is_group, parent_warehouse
+        sqlx::query_as::<_, (String, String, bool, String, bool)>(
+            "SELECT name, company, is_group, parent_warehouse, is_waste
              FROM mini_warehouses
              WHERE ($1 = '' OR lower(name) LIKE $2)
                AND ($3 = '' OR lower(parent_warehouse) = $3)
@@ -293,10 +293,11 @@ impl AdminReadPort for PostgresAdminCatalogStore {
         .map(|rows| {
             rows.into_iter()
                 .map(
-                    |(warehouse, company, is_group, parent_warehouse)| AdminWarehouse {
+                    |(warehouse, company, is_group, parent_warehouse, is_waste)| AdminWarehouse {
                         warehouse,
                         company,
                         is_group,
+                        is_waste,
                         parent_warehouse,
                     },
                 )

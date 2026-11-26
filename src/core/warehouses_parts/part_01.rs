@@ -8,6 +8,8 @@ pub struct WarehouseUpsert {
     #[serde(default)]
     pub is_group: bool,
     #[serde(default)]
+    pub is_waste: bool,
+    #[serde(default)]
     pub parent_warehouse: String,
 }
 
@@ -25,13 +27,19 @@ pub struct WarehouseAssignment {
     pub display_name: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct WarehouseSummary {
     pub warehouse: String,
     pub product_count: usize,
     pub reserved_count: usize,
     pub assignment_count: usize,
     pub assigned_display_names: Vec<String>,
+    #[serde(default)]
+    pub is_waste: bool,
+    #[serde(default)]
+    pub waste_on_hand_kg: f64,
+    #[serde(default)]
+    pub waste_receipt_count: usize,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -133,6 +141,10 @@ pub enum WarehouseError {
     HasActiveReservations(usize),
     #[error("warehouse contains child warehouses")]
     HasChildren,
+    #[error("warehouse type does not match the requested operation")]
+    TypeMismatch,
+    #[error("warehouse contains recorded waste receipts")]
+    HasWasteReceipts,
     #[error("warehouse store failed")]
     StoreFailed,
 }
@@ -337,8 +349,12 @@ impl WarehouseService {
         &self,
         input: WarehouseAssignmentUpsert,
     ) -> Result<WarehouseAssignment, WarehouseError> {
-        let assignment = normalize_assignment(input)?;
+        let mut assignment = normalize_assignment(input)?;
+        let waste_receiver = assignment.principal_role == PrincipalRole::ChiqindiQabulchi;
         if assignment.assignment_kind == "apparatus" {
+            if waste_receiver {
+                return Err(WarehouseError::TypeMismatch);
+            }
             let apparatus_id = assignment
                 .apparatus_id
                 .as_deref()
@@ -357,6 +373,16 @@ impl WarehouseService {
                 || !canonical.is_active()
             {
                 return Err(WarehouseError::InvalidApparatus);
+            }
+        } else {
+            let name = assignment.warehouse_name.as_deref().ok_or(WarehouseError::MissingWarehouse)?;
+            let waste_warehouse = self.store.warehouse(name).await?.filter(|warehouse| warehouse.is_waste);
+            if waste_warehouse.is_some() != waste_receiver {
+                return Err(WarehouseError::TypeMismatch);
+            }
+            if let Some(warehouse) = waste_warehouse {
+                assignment.warehouse = warehouse.warehouse.clone();
+                assignment.warehouse_name = Some(warehouse.warehouse);
             }
         }
         self.store.put_warehouse_assignment(assignment).await
@@ -396,16 +422,21 @@ fn normalize_warehouse(input: WarehouseUpsert) -> Result<AdminWarehouse, Warehou
         warehouse,
         company,
         is_group,
+        is_waste,
         parent_warehouse,
     } = input;
     let warehouse = trim_owned(warehouse);
     if warehouse.is_empty() {
         return Err(WarehouseError::MissingWarehouse);
     }
+    if is_waste && is_group {
+        return Err(WarehouseError::TypeMismatch);
+    }
     Ok(AdminWarehouse {
         warehouse,
         company: trim_owned(company),
         is_group,
+        is_waste,
         parent_warehouse: trim_owned(parent_warehouse),
     })
 }
