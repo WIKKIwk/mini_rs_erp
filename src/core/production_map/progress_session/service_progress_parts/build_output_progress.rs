@@ -412,6 +412,18 @@ impl ProductionMapService {
                 event.payload_json["zero_output_waste"] = waste;
             }
         }
+        if is_rezka && !recording && matches!(action,
+            queue_state::ApparatusQueueAction::Complete | queue_state::ApparatusQueueAction::RollComplete)
+        {
+            // A closing report can cover several frames, including ones printed
+            // earlier. Each frame's accounting belongs to this closing event.
+            let kg = if first_healthy_index.is_none() {
+                session_metrics.reported_waste_kg()
+            } else {
+                frame_values.iter().map(|frame| frame.metrics.reported_waste_kg()).sum()
+            };
+            event.payload_json["waste_bin_report_kg"] = serde_json::json!(kg);
+        }
         if frame_issues
             .as_array()
             .is_some_and(|items| !items.is_empty())

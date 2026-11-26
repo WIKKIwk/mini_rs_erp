@@ -118,6 +118,7 @@ pub struct AppState {
     pub raw_material_events: Option<PostgresRawMaterialEventStore>,
     pub preparation: Option<crate::db::postgres_preparation::PostgresPreparationStore>,
     pub raw_material_split: Option<crate::db::postgres_raw_material_split::PostgresRawMaterialSplitStore>,
+    pub waste_bins: Option<crate::db::postgres_waste_bins::PostgresWasteBinStore>,
     pub raw_material_split_printer: Arc<dyn crate::core::gscale::ports::ScaleDriverPort>,
     pub system_monitor_hub: SystemMonitorHub,
     pub backup_doctor: BackupDoctor,
@@ -354,6 +355,9 @@ impl AppState {
         let rezka = build_rezka_service(scale_driver);
         let qolip = build_qolip_service();
         let returned_paint = build_returned_paint_service();
+        let waste_bins = werka_pool.as_ref().map(|pool|
+            crate::db::postgres_waste_bins::PostgresWasteBinStore::new(pool.clone())
+        );
         let werka = build_werka_service(&config, werka_pool);
         let worker_groups = build_worker_group_service();
         let sessions = session_security::protect_sessions(&mut admin, build_session_manager(&config));
@@ -426,6 +430,7 @@ impl AppState {
                 .map(crate::db::postgres_preparation::PostgresPreparationStore::new),
             raw_material_split: postgres_pool::postgres_pool("raw_material_split")
                 .map(crate::db::postgres_raw_material_split::PostgresRawMaterialSplitStore::new),
+            waste_bins,
             raw_material_split_printer,
             system_monitor_hub,
             backup_doctor,

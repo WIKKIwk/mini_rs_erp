@@ -24,3 +24,4 @@ pub mod werka;
 pub mod preparation;
 pub mod raw_material_split;
 pub mod metalayzer;
+pub mod waste;

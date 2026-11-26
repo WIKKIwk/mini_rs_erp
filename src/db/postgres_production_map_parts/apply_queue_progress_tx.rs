@@ -303,6 +303,7 @@ pub(super) async fn apply_queue_progress_tx(
         }
         if let Some(progress_event) = &write.progress_event {
             put_order_progress_event_tx(tx, progress_event).await?;
+            waste::record_progress(tx, progress_event, &write.event.actor).await?;
         }
         if write.progress_batches.is_empty() {
             if let Some(batch) = &write.progress_batch {

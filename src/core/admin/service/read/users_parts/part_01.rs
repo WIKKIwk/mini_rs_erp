@@ -303,6 +303,7 @@ impl AdminService {
                 PrincipalRole::Brigader => "Brigader",
                 PrincipalRole::RezkaMaster => "Rezka master",
                 PrincipalRole::Metalayzer => "Metalayzer",
+                PrincipalRole::ChiqindiQabulchi => "Chiqindi qabul qiluvchi",
                 _ => "System user",
             };
             entries.push(AdminUserListEntry {

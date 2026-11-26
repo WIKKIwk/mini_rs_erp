@@ -190,6 +190,12 @@ async fn commit_report_tx(
                 .execute(&mut **tx).await.map_err(|_| ProductionMapError::StoreFailed)?;
         }
     }
+    super::waste::record_astatka(
+        tx,
+        report,
+        expected.as_ref().map(|session| session.session_id.as_str()),
+        actor,
+    ).await?;
     // Legacy report clients may still submit output metrics in an astatka.
     // Report-only waste/paint is allowed during a reopened pause; actual output
     // irrevocably removes the no-work reclose permission.

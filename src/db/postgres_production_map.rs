@@ -47,6 +47,7 @@ mod reactivation;
 #[cfg(test)]
 mod sequence_move_tests;
 mod stage_execution;
+mod waste;
 pub(crate) mod pending_orders;
 #[path = "postgres_production_map/catalog/maps.rs"]
 mod map_helpers;

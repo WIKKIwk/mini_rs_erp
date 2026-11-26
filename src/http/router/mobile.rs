@@ -17,6 +17,7 @@ pub(super) fn routes(state: AppState) -> Router {
         .merge(core::routes())
         .merge(admin::routes())
         .merge(rezka_master::routes())
+        .merge(crate::http::handlers::waste::routes())
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             sales::enforce_scope,

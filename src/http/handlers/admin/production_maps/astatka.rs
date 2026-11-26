@@ -1,6 +1,7 @@
 use super::*;
 
 use crate::core::production_map::queue_state;
+use sha2::{Digest, Sha256};
 
 #[cfg(test)]
 #[path = "astatka_label_tests.rs"]
@@ -8,6 +9,8 @@ mod label_tests;
 
 #[derive(serde::Deserialize)]
 struct BosmaAstatkaRequest {
+    #[serde(default)]
+    request_id: String,
     apparatus: String,
     order_id: String,
     total_waste: f64,
@@ -43,6 +46,10 @@ pub async fn production_map_bosma_astatka(
         return Err(method_not_allowed());
     }
     let input: BosmaAstatkaRequest = parse_json(&body)?;
+    let request_id = input.request_id.trim();
+    if !request_id.is_empty() && !(8..=128).contains(&request_id.len()) {
+        return Err(production_map_error(ProductionMapError::ProgressInputInvalid));
+    }
     let apparatus = input.apparatus.trim().to_string();
     let order_id = input.order_id.trim().to_string();
     if !state
@@ -83,7 +90,14 @@ pub async fn production_map_bosma_astatka(
     let report = state
         .production_maps
         .record_bosma_astatka(crate::core::production_map::BosmaAstatkaReport {
-            report_id: String::new(),
+            report_id: if request_id.is_empty() {
+                String::new()
+            } else {
+                let scoped_key = serde_json::json!([
+                    principal.role, principal.ref_, &order_id, &apparatus, request_id,
+                ]);
+                format!("bosma-astatka:{:x}", Sha256::digest(scoped_key.to_string()))
+            },
             order_id,
             apparatus,
             from_at_unix: 0,

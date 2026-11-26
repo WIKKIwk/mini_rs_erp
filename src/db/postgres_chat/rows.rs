@@ -363,6 +363,7 @@ pub(super) fn role_key(role: &PrincipalRole) -> &'static str {
         PrincipalRole::Brigader => "brigader",
         PrincipalRole::RezkaMaster => "rezka_master",
         PrincipalRole::Metalayzer => "metalayzer",
+        PrincipalRole::ChiqindiQabulchi => "chiqindi_qabulchi",
         PrincipalRole::MaterialTaminotchi => "material_taminotchi",
         PrincipalRole::Admin => "admin",
     }
@@ -382,6 +383,7 @@ pub(super) fn parse_role(value: &str) -> Result<PrincipalRole, ChatError> {
         "brigader" => Ok(PrincipalRole::Brigader),
         "rezka_master" => Ok(PrincipalRole::RezkaMaster),
         "metalayzer" => Ok(PrincipalRole::Metalayzer),
+        "chiqindi_qabulchi" => Ok(PrincipalRole::ChiqindiQabulchi),
         "material_taminotchi" => Ok(PrincipalRole::MaterialTaminotchi),
         "admin" => Ok(PrincipalRole::Admin),
         _ => Err(ChatError::StoreFailed),

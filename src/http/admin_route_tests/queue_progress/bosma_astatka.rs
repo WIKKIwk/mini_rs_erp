@@ -166,6 +166,7 @@ async fn bosma_astatka_http_reports_without_changing_running_paused_or_completed
         let print_count = prints.lock().await.len();
         for legacy in [false, true] {
             let mut report_payload = payload.clone();
+            report_payload["request_id"] = serde_json::json!(format!("bosma-astatka-{action}-{legacy}"));
             if legacy {
                 report_payload["finished_goods_meter"] = serde_json::json!(80);
                 report_payload["finished_goods_kg"] = serde_json::json!(12);
@@ -199,6 +200,11 @@ async fn bosma_astatka_http_reports_without_changing_running_paused_or_completed
             }
             assert_eq!(report["returned_paint"]["sender_ref"], "astatka-worker");
             assert_eq!(report["returned_paint"]["items"][1]["values"]["Mix"], "1");
+            let retry = router.clone().oneshot(request_with_body(
+                "POST", endpoint, &worker, &report_payload.to_string(),
+            )).await.unwrap();
+            assert_eq!(retry.status(), StatusCode::OK);
+            assert_eq!(json_body(retry).await["report"], *report);
             if let Some(previous) = previous_to {
                 assert_eq!(report["from_at_unix"], previous);
             }

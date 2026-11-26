@@ -26,6 +26,7 @@ pub mod postgres_rps_batch;
 pub mod postgres_system_user;
 pub mod postgres_training_workspace;
 pub mod postgres_warehouse;
+pub mod postgres_waste_bins;
 pub mod postgres_werka;
 pub mod postgres_worker;
 pub mod postgres_worker_group;

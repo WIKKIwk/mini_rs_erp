@@ -20,6 +20,7 @@ pub enum PrincipalRole {
     Brigader,
     RezkaMaster,
     Metalayzer,
+    ChiqindiQabulchi,
 }
 
 impl PrincipalRole {

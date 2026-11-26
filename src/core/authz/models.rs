@@ -10,6 +10,7 @@ pub enum Capability {
     BrigaderAccess,
     RezkaMasterAccess,
     MetalayzerAccess,
+    WasteReceive,
     ProductionMapRead,
     ProductionOrderCreate,
     ProductionOrderEdit,

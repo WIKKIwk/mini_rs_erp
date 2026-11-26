@@ -88,6 +88,7 @@ impl ProfileService {
             | PrincipalRole::Brigader
             | PrincipalRole::RezkaMaster
             | PrincipalRole::Metalayzer
+            | PrincipalRole::ChiqindiQabulchi
             | PrincipalRole::MaterialTaminotchi
             | PrincipalRole::Admin => {}
         }

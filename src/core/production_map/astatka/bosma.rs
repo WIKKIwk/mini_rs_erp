@@ -52,6 +52,21 @@ impl ProductionMapService {
             .await?
             .ok_or(ProductionMapError::MapNotFound)?;
         let _guard = self.queue_action_guard().await;
+        report.description = report.description.trim().to_string();
+        let previous_reports = self.store.bosma_astatka_reports_for_order(&report.order_id).await?;
+        if let Some(saved) = previous_reports.iter().find(|item| item.report_id == report.report_id) {
+            if saved.total_waste != report.total_waste
+                || saved.finished_goods_meter != report.finished_goods_meter
+                || saved.finished_goods_kg != report.finished_goods_kg
+                || saved.bobina_kg != report.bobina_kg
+                || saved.description != report.description
+                || saved.returned_paint.items != report.returned_paint.items
+                || saved.returned_paint.image != report.returned_paint.image
+            {
+                return Err(ProductionMapError::ProgressInputInvalid);
+            }
+            return Ok(saved.clone());
+        }
         let anchor = self.astatka_execution_anchor(&report.order_id, &report.apparatus).await?;
         if self.effective_order_control_for_apparatus(&report.order_id, &report.apparatus).await?.state == OrderControlState::Frozen
         {
@@ -75,10 +90,7 @@ impl ProductionMapService {
             .filter(|time| *time > 0)
             .min()
             .ok_or(ProductionMapError::OrderNotStarted)?;
-        let previous = self
-            .store
-            .bosma_astatka_reports_for_order(&report.order_id)
-            .await?
+        let previous = previous_reports
             .into_iter()
             .filter(|item| item.apparatus == report.apparatus)
             .map(|item| item.to_at_unix)
@@ -88,13 +100,10 @@ impl ProductionMapService {
         if report.to_at_unix < report.from_at_unix {
             return Err(ProductionMapError::ProgressInputInvalid);
         }
-        let entropy = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        report.report_id = format!("bosma-astatka:{entropy}:{}", report.order_id);
+        if report.report_id.is_empty() {
+            report.report_id = format!("bosma-astatka:{:032x}", rand::random::<u128>());
+        }
         report.returned_paint.id = report.report_id.clone();
-        report.description = report.description.trim().to_string();
         let actor = QueueActionActor {
             role: serde_json::to_value(report.returned_paint.sender_role).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default(), ref_: report.returned_paint.sender_ref.clone(),
             display_name: report.returned_paint.sender_display_name.clone(),

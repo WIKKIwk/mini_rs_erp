@@ -18,6 +18,13 @@ pub(super) struct ProgressMetrics {
 }
 
 impl ProgressMetrics {
+    pub(super) fn reported_waste_kg(self) -> f64 {
+        reported_waste_kg(
+            self.total_waste,
+            [self.rezka_bosma_waste, self.rezka_lamination_waste, self.rezka_edge_waste],
+        )
+    }
+
     pub(super) fn write_payload_fields(
         self,
         payload: &mut serde_json::Value,
@@ -49,6 +56,14 @@ impl ProgressMetrics {
         event.finished_goods_meter = self.finished_goods_meter;
         event.diameter = self.diameter;
     }
+}
+
+/// A reported total covers the category breakdown. Category-only Rezka reports
+/// are also valid and contribute the sum of their measured parts.
+pub(crate) fn reported_waste_kg(total: Option<f64>, categories: [Option<f64>; 3]) -> f64 {
+    total.filter(|kg| *kg > 0.0).unwrap_or_else(|| {
+        categories.into_iter().flatten().filter(|kg| *kg > 0.0).sum()
+    })
 }
 
 pub(super) fn validated_progress_metrics(

@@ -39,6 +39,12 @@ const INVENTORY_MOVEMENT_ROLES: &[PrincipalRole] = &[
 
 pub(super) const CAPABILITY_CATALOG: &[CapabilityDefinition] = &[
     CapabilityDefinition {
+        capability: Capability::WasteReceive,
+        code: "waste.receive",
+        label: "Chiqindi qabul qiluvchi",
+        default_roles: &[PrincipalRole::ChiqindiQabulchi],
+    },
+    CapabilityDefinition {
         capability: Capability::MetalayzerAccess,
         code: "metalayzer.access",
         label: "Metalayzer ish joyi",

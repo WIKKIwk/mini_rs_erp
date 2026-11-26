@@ -126,6 +126,7 @@ impl AdminService {
                 | PrincipalRole::Brigader
                 | PrincipalRole::RezkaMaster
                 | PrincipalRole::Metalayzer
+                | PrincipalRole::ChiqindiQabulchi
         ) && !has_capability(principal, capability)
         {
             return false;
@@ -160,6 +161,7 @@ impl AdminService {
                         | PrincipalRole::Brigader
                         | PrincipalRole::RezkaMaster
                         | PrincipalRole::Metalayzer
+                        | PrincipalRole::ChiqindiQabulchi
                 ) =>
             {
                 let allowed = capability_codes_for_role(principal.role);

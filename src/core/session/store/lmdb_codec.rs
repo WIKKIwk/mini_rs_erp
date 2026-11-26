@@ -135,6 +135,7 @@ fn encode_role(role: &PrincipalRole) -> u8 {
         PrincipalRole::Brigader => 12,
         PrincipalRole::RezkaMaster => 13,
         PrincipalRole::Metalayzer => 14,
+        PrincipalRole::ChiqindiQabulchi => 15,
     }
 }
 
@@ -154,6 +155,7 @@ fn decode_role(role: u8) -> Result<PrincipalRole, BoxedError> {
         12 => Ok(PrincipalRole::Brigader),
         13 => Ok(PrincipalRole::RezkaMaster),
         14 => Ok(PrincipalRole::Metalayzer),
+        15 => Ok(PrincipalRole::ChiqindiQabulchi),
         _ => Err("invalid stored session principal role".into()),
     }
 }

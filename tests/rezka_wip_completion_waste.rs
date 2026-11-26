@@ -93,7 +93,7 @@ async fn fixture(
     upstream_closed: bool,
 ) -> (ProductionMapService, Arc<MemoryProductionMapStore>) {
     let store = Arc::new(MemoryProductionMapStore::new());
-    let service = fixture_with_store(intermediate, input_count, upstream_closed, store.clone()).await;
+    let service = fixture_with_store(intermediate, input_count, upstream_closed, store.clone(), resolver()).await;
     (service, store)
 }
 
@@ -102,8 +102,9 @@ async fn fixture_with_store(
     input_count: usize,
     upstream_closed: bool,
     store: Arc<dyn ProductionMapStorePort>,
+    resolver: Arc<dyn CanonicalApparatusResolver>,
 ) -> ProductionMapService {
-    let service = ProductionMapService::new(store.clone(), resolver());
+    let service = ProductionMapService::new(store.clone(), resolver);
     let mut nodes = vec![
         json!({"id":"start", "kind":"start", "title":"Start"}),
         json!({"id":"press", "kind":"apparatus", "title":"Bosma", "apparatus_id":PRESS}),
@@ -615,6 +616,7 @@ async fn next_roll_does_not_erase_or_repeat_issue_cycle_waste() {
 #[ignore = "requires WASTE_TEST_DATABASE_URL pointing at a disposable PostgreSQL server"]
 async fn postgres_unsaved_issue_waste_survives_order_and_closed_history_reads() {
     use mini_rs_erp::db::{postgres, postgres_production_map::PostgresProductionMapStore};
+    use mini_rs_erp::db::postgres_waste_bins::{PostgresWasteBinStore, WasteEntry};
     let url = std::env::var("WASTE_TEST_DATABASE_URL").expect("disposable database URL required");
     let admin = sqlx::PgPool::connect(&url).await.unwrap();
     for intermediate in [false, true] {
@@ -626,7 +628,39 @@ async fn postgres_unsaved_issue_waste_survives_order_and_closed_history_reads() 
         postgres::canonical_apparatus_service(pool.clone()).bootstrap_factory_defaults().await.unwrap();
         postgres::apply_foundation_migration(&pool).await.unwrap();
         let store = Arc::new(PostgresProductionMapStore::new(pool.clone()));
-        let service = fixture_with_store(intermediate, 1, true, store.clone()).await;
+        let resolver = Arc::new(CanonicalServiceApparatusResolver::new(
+            postgres::canonical_apparatus_service(pool.clone()),
+        ));
+        let service = fixture_with_store(intermediate, 1, true, store.clone(), resolver).await;
+        store.put_apparatus_sequence(CUT, vec![ORDER.into()]).await.unwrap();
+        let bins = PostgresWasteBinStore::new(pool.clone());
+        let cycle_id = if intermediate {
+            None
+        } else {
+            let receiver = QueueActionActor {
+                role: "chiqindi_qabulchi".into(),
+                ref_: "waste-receiver".into(),
+                display_name: "Chiqindi qabul qiluvchi".into(),
+            };
+            bins.register("CUT-TEST", 1.0, None, &receiver).await.unwrap();
+            bins.register("CUT-NEXT", 1.0, None, &receiver).await.unwrap();
+            let bin = bins.assign("CUT-TEST", CUT, &actor()).await.unwrap();
+            let cycle_id = bin["cycle"]["id"].as_str().unwrap();
+            bins.add("CUT-TEST", cycle_id, &WasteEntry {
+                request_id: "cut-manual-deposit",
+                apparatus_id: CUT,
+                order_id: Some(ORDER),
+                session_id: None,
+                expected_cycle_id: Some(cycle_id),
+                kg: 1.0,
+                reason: "Chet chiqindisi",
+                actor: &actor(),
+                reconcile_manual: false,
+            }).await.unwrap();
+            let sealed = bins.submit("CUT-TEST", cycle_id, Some("CUT-NEXT"), &actor()).await.unwrap();
+            assert_eq!(sealed["cycle"]["expected_kg"], 1.0);
+            Some(sealed["replacement"]["cycle"]["id"].as_str().unwrap().to_owned())
+        };
         start(&service, 0).await;
         let result = service.apply_apparatus_queue_action_with_progress(
             CUT, ORDER, queue_state::ApparatusQueueAction::Complete,
@@ -643,12 +677,24 @@ async fn postgres_unsaved_issue_waste_survives_order_and_closed_history_reads() 
             .bind(ORDER).fetch_one(&pool).await.unwrap();
         assert_eq!(persisted["total_waste"], 2.5);
         assert_eq!(persisted["rezka_bosma_waste"], if intermediate { json!(null) } else { json!(1.0) });
+        let ledger: Vec<(Option<String>, i64, String)> = sqlx::query_as(
+            "SELECT cycle_id, units, actor_ref FROM mini_waste_bin_entries
+             WHERE order_id=$1 AND apparatus_id=$2 AND origin='production'",
+        )
+        .bind(ORDER).bind(CUT).fetch_all(&pool).await.unwrap();
+        let new_units = if intermediate { 2_500_000 } else { 1_500_000 };
+        assert_eq!(ledger, vec![(cycle_id, new_units, actor().ref_)]);
         assert!(store.progress_batches_for_order(ORDER).await.unwrap().iter().all(|b| b.apparatus != CUT));
         pool.close().await;
         // Both SQL projections and the closed-order serializer read the durable
         // event after reconnect, without relying on a session/cache payload.
         let pool = sqlx::PgPool::connect_with(options).await.unwrap();
-        let service = ProductionMapService::new(Arc::new(PostgresProductionMapStore::new(pool.clone())), resolver());
+        let service = ProductionMapService::new(
+            Arc::new(PostgresProductionMapStore::new(pool.clone())),
+            Arc::new(CanonicalServiceApparatusResolver::new(
+                postgres::canonical_apparatus_service(pool.clone()),
+            )),
+        );
         let logs = service.queue_action_logs_for_order(ORDER).await.unwrap();
         let order_reports: Vec<_> = logs.iter().filter_map(|log| log.zero_output_waste.as_ref()).collect();
         assert_eq!(order_reports, vec![&persisted]);

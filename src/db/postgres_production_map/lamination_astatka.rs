@@ -249,6 +249,12 @@ impl PostgresProductionMapStore {
             .ok_or(ProductionMapError::OrderNotStarted)?;
         if let Some(report) = &report {
             astatka_helpers::put_laminatsiya_astatka_report_tx(&mut tx, report).await?;
+            waste::record_astatka(
+                &mut tx,
+                &crate::core::production_map::StageAstatkaReport::Laminate(report.clone()),
+                Some(&expected_session.session_id),
+                &actor,
+            ).await?;
         }
         let report_id = report
             .as_ref()
