@@ -123,9 +123,12 @@ async fn record(
         return Ok(());
     }
 
-    let cycle_id = open_cycle_id(db, entry.apparatus_id).await?;
+    let mut cycle_id = access::open_cycle_for_actor(db, entry.apparatus_id, entry.actor).await?;
     if entry.expected_cycle_id.is_some() && entry.expected_cycle_id != cycle_id.as_deref() {
-        return Err(WasteBinError::Conflict);
+        if origin == Origin::Manual {
+            return Err(WasteBinError::Conflict);
+        }
+        cycle_id = None;
     }
 
     let entry_id = new_id();
@@ -236,6 +239,14 @@ impl PostgresWasteBinStore {
         {
             return Err(WasteBinError::Conflict);
         }
+        lock_apparatus(&mut tx, &apparatus).await?;
+        let bins = lock_bins(&mut tx, std::slice::from_ref(&code)).await?;
+        if !read::load_cycle(&mut tx, cycle_id)
+            .await?
+            .allows(&bins[0], entry.actor)
+        {
+            return Err(WasteBinError::Forbidden);
+        }
         let entry = WasteEntry {
             expected_cycle_id: Some(cycle_id),
             ..*entry
@@ -243,7 +254,7 @@ impl PostgresWasteBinStore {
         record(&mut tx, entry, Origin::Manual).await?;
         let result = read::bin_snapshot(&mut tx, &code, Some(cycle_id)).await?;
         tx.commit().await?;
-        Ok(result)
+        Ok(operator_snapshot(result))
     }
 
     pub async fn reconcile(
@@ -268,6 +279,13 @@ impl PostgresWasteBinStore {
         let mut tx = self.pool.begin().await?;
         let apparatus = cycle_apparatus(&mut tx, &code, cycle_id).await?;
         lock_apparatus(&mut tx, &apparatus).await?;
+        let bins = lock_bins(&mut tx, std::slice::from_ref(&code)).await?;
+        if !read::load_cycle(&mut tx, cycle_id)
+            .await?
+            .allows(&bins[0], actor)
+        {
+            return Err(WasteBinError::Forbidden);
+        }
         let rows: Vec<(String, Option<String>)> = sqlx::query_as(
             "SELECT id, cycle_id FROM mini_waste_bin_entries
              WHERE id=ANY($1) AND apparatus_id=$2 AND units>0
@@ -293,7 +311,11 @@ impl PostgresWasteBinStore {
             .filter_map(|(id, assigned)| assigned.is_none().then_some(id.as_str()))
             .collect();
         if !pending.is_empty() {
-            if open_cycle_id(&mut tx, &apparatus).await?.as_deref() != Some(cycle_id) {
+            if access::open_cycle_for_actor(&mut tx, &apparatus, actor)
+                .await?
+                .as_deref()
+                != Some(cycle_id)
+            {
                 return Err(WasteBinError::Conflict);
             }
             sqlx::query(
@@ -308,6 +330,6 @@ impl PostgresWasteBinStore {
         }
         let result = read::bin_snapshot(&mut tx, &code, Some(cycle_id)).await?;
         tx.commit().await?;
-        Ok(result)
+        Ok(operator_snapshot(result))
     }
 }

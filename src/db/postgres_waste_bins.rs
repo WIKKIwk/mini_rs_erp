@@ -1,14 +1,16 @@
+mod access;
 mod entries;
 mod read;
-mod warehouse;
 #[cfg(test)]
 mod tests;
+mod warehouse;
 
 use crate::core::production_map::QueueActionActor;
 use crate::core::quantity::{erp_quantity_from_units, erp_quantity_to_units};
 use serde_json::{Value, json};
 use sqlx::{PgConnection, PgPool};
 
+pub use access::{WasteBinAccessInput, WasteBinOperator};
 pub use entries::WasteEntry;
 pub(crate) use entries::record_production_waste;
 
@@ -72,14 +74,35 @@ pub struct PostgresWasteBinStore {
 #[derive(sqlx::FromRow)]
 struct Bin {
     code: String,
+    name: String,
     tare_units: i64,
     tolerance_units: i64,
+    apparatus_ids: Vec<String>,
+    operators: sqlx::types::Json<Vec<WasteBinOperator>>,
 }
 
 impl Bin {
+    fn allows(&self, apparatus: &str, actor: &QueueActionActor) -> bool {
+        self.apparatus_ids.iter().any(|id| id == apparatus)
+            && self
+                .operators
+                .iter()
+                .any(|operator| operator.role == actor.role && operator.r#ref == actor.ref_)
+    }
+
+    fn matches_access(&self, access: &WasteBinAccessInput) -> bool {
+        self.name == access.name
+            && self.apparatus_ids == access.apparatus_ids
+            && self.operators.0 == access.operators
+    }
+
     fn snapshot(&self, current_status: &str, cycle: Value) -> Value {
         json!({
             "code": self.code,
+            "name": self.name,
+            "apparatus_ids": self.apparatus_ids,
+            "operators": self.operators.0,
+            "configured": !self.apparatus_ids.is_empty() && !self.operators.is_empty(),
             "qr_payload": format!("{QR_PREFIX}{}", self.code),
             "tare_kg": erp_quantity_from_units(self.tare_units),
             "tolerance_kg": erp_quantity_from_units(self.tolerance_units),
@@ -87,6 +110,18 @@ impl Bin {
             "cycle": cycle
         })
     }
+}
+
+fn operator_snapshot(mut snapshot: Value) -> Value {
+    if let Some(fields) = snapshot.as_object_mut() {
+        fields.remove("apparatus_ids");
+        fields.remove("operators");
+        if let Some(replacement) = fields.get_mut("replacement").and_then(Value::as_object_mut) {
+            replacement.remove("apparatus_ids");
+            replacement.remove("operators");
+        }
+    }
+    snapshot
 }
 
 fn code(raw: &str) -> Result<String, WasteBinError> {
@@ -136,7 +171,7 @@ async fn lock_apparatus(db: &mut PgConnection, apparatus: &str) -> Result<(), Wa
     Ok(())
 }
 
-async fn lock_bins(db: &mut PgConnection, codes: &[String]) -> Result<Vec<Bin>, WasteBinError> {
+async fn lock_bin_keys(db: &mut PgConnection, codes: &[String]) -> Result<(), WasteBinError> {
     let mut ordered = codes.to_vec();
     ordered.sort_unstable();
     for code in &ordered {
@@ -147,10 +182,15 @@ async fn lock_bins(db: &mut PgConnection, codes: &[String]) -> Result<Vec<Bin>, 
         .execute(&mut *db)
         .await?;
     }
-    let rows = sqlx::query_as(
-        "SELECT code, tare_units, tolerance_units FROM mini_waste_bins
-         WHERE code = ANY($1) ORDER BY code",
-    )
+    Ok(())
+}
+
+async fn lock_bins(db: &mut PgConnection, codes: &[String]) -> Result<Vec<Bin>, WasteBinError> {
+    lock_bin_keys(db, codes).await?;
+    let rows = sqlx::query_as(&format!(
+        "{} WHERE b.code = ANY($1) ORDER BY b.code",
+        read::BINS
+    ))
     .bind(codes)
     .fetch_all(db)
     .await?;
@@ -180,12 +220,13 @@ async fn create_cycle(
 ) -> Result<String, WasteBinError> {
     let id = new_id();
     sqlx::query(
-        "INSERT INTO mini_waste_bin_cycles(id, bin_code, apparatus_id, opened_by_ref, opened_by_display_name)
-         VALUES ($1, $2, $3, $4, $5)",
+        "INSERT INTO mini_waste_bin_cycles(id, bin_code, apparatus_id, opened_by_role, opened_by_ref, opened_by_display_name)
+         VALUES ($1, $2, $3, $4, $5, $6)",
     )
     .bind(&id)
     .bind(code)
     .bind(apparatus)
+    .bind(&actor.role)
     .bind(&actor.ref_)
     .bind(&actor.display_name)
     .execute(db)
@@ -218,45 +259,105 @@ impl PostgresWasteBinStore {
         raw_code: &str,
         tare_kg: f64,
         tolerance_kg: Option<f64>,
+        access: &WasteBinAccessInput,
         actor: &QueueActionActor,
     ) -> Result<Value, WasteBinError> {
+        receiver(actor)?;
+        let access = access.normalized()?;
         let code = code(raw_code)?;
         let tare = units(tare_kg)?;
         let tolerance = units(tolerance_kg.unwrap_or(DEFAULT_TOLERANCE_KG))?;
-        let existing = sqlx::query_as::<_, Bin>(
-            "INSERT INTO mini_waste_bins(code, tare_units, tolerance_units, registered_by_ref)
-             VALUES ($1, $2, $3, $4) ON CONFLICT (code) DO NOTHING
-             RETURNING code, tare_units, tolerance_units",
+        let mut tx = self.pool.begin().await?;
+        lock_bin_keys(&mut tx, std::slice::from_ref(&code)).await?;
+        let inserted = sqlx::query(
+            "INSERT INTO mini_waste_bins(code, name, tare_units, tolerance_units, registered_by_ref)
+             VALUES ($1, $2, $3, $4, $5) ON CONFLICT (code) DO NOTHING",
         )
         .bind(&code)
+        .bind(&access.name)
         .bind(tare)
         .bind(tolerance)
         .bind(&actor.ref_)
-        .fetch_optional(&self.pool)
-        .await?;
-        if let Some(bin) = existing {
-            return Ok(bin.snapshot("empty", Value::Null));
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        if inserted == 1 {
+            access::write(&mut tx, &code, &access).await?;
+        } else {
+            let previous = read::load_bin(&mut tx, &code).await?;
+            if previous.tare_units != tare
+                || previous.tolerance_units != tolerance
+                || !previous.matches_access(&access)
+            {
+                return Err(WasteBinError::Conflict);
+            }
         }
-        let previous = read::load_bin(&mut *self.pool.acquire().await?, &code).await?;
-        if previous.tare_units != tare || previous.tolerance_units != tolerance {
-            return Err(WasteBinError::Conflict);
+        let result = read::bin_snapshot(&mut tx, &code, None).await?;
+        tx.commit().await?;
+        Ok(result)
+    }
+
+    pub async fn configure(
+        &self,
+        raw_code: &str,
+        access: &WasteBinAccessInput,
+        actor: &QueueActionActor,
+    ) -> Result<Value, WasteBinError> {
+        receiver(actor)?;
+        let access = access.normalized()?;
+        let code = code(raw_code)?;
+        let mut tx = self.pool.begin().await?;
+        let bins = lock_bins(&mut tx, std::slice::from_ref(&code)).await?;
+        if !bins[0].matches_access(&access) {
+            if read::current_cycle(&mut tx, &code).await?.is_some() {
+                return Err(WasteBinError::Conflict);
+            }
+            access::write(&mut tx, &code, &access).await?;
         }
-        self.detail(&code).await
+        let result = read::bin_snapshot(&mut tx, &code, None).await?;
+        tx.commit().await?;
+        Ok(result)
     }
 
     pub async fn active(&self, apparatus: &str) -> Result<Value, WasteBinError> {
+        self.active_with_scope(apparatus, None).await
+    }
+
+    pub async fn active_for_operator(
+        &self,
+        apparatus: &str,
+        actor: &QueueActionActor,
+    ) -> Result<Value, WasteBinError> {
+        self.active_with_scope(apparatus, Some(actor)).await
+    }
+
+    async fn active_with_scope(
+        &self,
+        apparatus: &str,
+        actor: Option<&QueueActionActor>,
+    ) -> Result<Value, WasteBinError> {
         let apparatus = identity(apparatus)?;
         let mut tx = self.pool.begin().await?;
         lock_apparatus(&mut tx, apparatus).await?;
-        let bin = match open_cycle_id(&mut tx, apparatus).await? {
+        let cycle_id = match actor {
+            Some(actor) => access::open_cycle_for_actor(&mut tx, apparatus, actor).await?,
+            None => open_cycle_id(&mut tx, apparatus).await?,
+        };
+        let bin = match cycle_id {
             Some(id) => {
                 let cycle = read::load_cycle(&mut tx, &id).await?;
-                let bin = read::load_bin(&mut tx, &cycle.bin_code).await?;
-                bin.snapshot("open", cycle.snapshot(&mut tx, true).await?)
+                let summary = read::load_bin(&mut tx, &cycle.bin_code)
+                    .await?
+                    .snapshot("open", cycle.snapshot(&mut tx, true).await?);
+                if actor.is_some() {
+                    operator_snapshot(summary)
+                } else {
+                    summary
+                }
             }
             None => Value::Null,
         };
-        let pending = read::pending_entries(&mut tx, apparatus).await?;
+        let pending = read::pending_entries(&mut tx, apparatus, actor).await?;
         tx.commit().await?;
         Ok(json!({"bin": bin, "pending": pending}))
     }
@@ -271,15 +372,28 @@ impl PostgresWasteBinStore {
         let apparatus = identity(apparatus)?;
         let mut tx = self.pool.begin().await?;
         lock_apparatus(&mut tx, apparatus).await?;
-        lock_bins(&mut tx, std::slice::from_ref(&code)).await?;
-        let id = match read::current_cycle(&mut tx, &code).await? {
-            Some(cycle) if cycle.status() == "open" && cycle.apparatus_id == apparatus => cycle.id,
+        let bins = lock_bins(&mut tx, std::slice::from_ref(&code)).await?;
+        let current = read::current_cycle(&mut tx, &code).await?;
+        let legacy_holder = current
+            .as_ref()
+            .is_some_and(|cycle| cycle.apparatus_id == apparatus && cycle.is_legacy_holder(actor));
+        if !bins[0].allows(apparatus, actor) && !legacy_holder {
+            return Err(WasteBinError::Forbidden);
+        }
+        let id = match current {
+            Some(cycle)
+                if cycle.status() == "open"
+                    && cycle.apparatus_id == apparatus
+                    && cycle.held_by(actor) =>
+            {
+                cycle.id
+            }
             Some(_) => return Err(WasteBinError::Conflict),
             None => create_cycle(&mut tx, &code, apparatus, actor).await?,
         };
         let result = read::bin_snapshot(&mut tx, &code, Some(&id)).await?;
         tx.commit().await?;
-        Ok(result)
+        Ok(operator_snapshot(result))
     }
 
     pub async fn submit(
@@ -299,8 +413,24 @@ impl PostgresWasteBinStore {
         lock_apparatus(&mut tx, &apparatus).await?;
         let mut codes = vec![code.clone()];
         codes.extend(next.iter().cloned());
-        lock_bins(&mut tx, &codes).await?;
+        let bins = lock_bins(&mut tx, &codes).await?;
+        let bin = bins
+            .iter()
+            .find(|bin| bin.code == code)
+            .ok_or(WasteBinError::NotFound)?;
         let old = read::load_cycle(&mut tx, cycle_id).await?;
+        if !old.allows(bin, actor) {
+            return Err(WasteBinError::Forbidden);
+        }
+        if let Some(next) = &next {
+            let replacement = bins
+                .iter()
+                .find(|bin| bin.code == *next)
+                .ok_or(WasteBinError::NotFound)?;
+            if !replacement.allows(&apparatus, actor) {
+                return Err(WasteBinError::Forbidden);
+            }
+        }
         let replacement_id = if old.status() == "open" {
             let total = read::cycle_units(&mut tx, cycle_id).await?;
             sqlx::query(
@@ -326,7 +456,13 @@ impl PostgresWasteBinStore {
             }
         } else {
             let earlier_code = match &old.replacement_cycle_id {
-                Some(id) => Some(read::load_cycle(&mut tx, id).await?.bin_code),
+                Some(id) => {
+                    let replacement = read::load_cycle(&mut tx, id).await?;
+                    if !replacement.held_by(actor) {
+                        return Err(WasteBinError::Conflict);
+                    }
+                    Some(replacement.bin_code)
+                }
                 None => None,
             };
             if earlier_code != next {
@@ -340,7 +476,7 @@ impl PostgresWasteBinStore {
             _ => Value::Null,
         };
         tx.commit().await?;
-        Ok(result)
+        Ok(operator_snapshot(result))
     }
 
     pub async fn receive(
@@ -384,7 +520,8 @@ impl PostgresWasteBinStore {
             if (net - expected).abs() > bin.tolerance_units && note.is_empty() {
                 return Err(WasteBinError::DiscrepancyNoteRequired);
             }
-            let warehouse = warehouse::assigned_warehouse(&mut tx, warehouse_id, &actor.ref_).await?;
+            let warehouse =
+                warehouse::assigned_warehouse(&mut tx, warehouse_id, &actor.ref_).await?;
             sqlx::query(
                 "INSERT INTO mini_waste_bin_receipts(cycle_id, gross_units, tare_units, expected_units,
                     tolerance_units, measurement_source, note, received_by_ref, received_by_display_name)
@@ -422,7 +559,9 @@ impl PostgresWasteBinStore {
         let cycle = read::load_cycle(&mut tx, cycle_id).await?;
         let receipt = cycle.receipt()?.ok_or(WasteBinError::Conflict)?;
         if cycle.reset_at_unix.is_none() {
-            let warehouse_id = receipt.warehouse_id.ok_or(WasteBinError::WarehouseRequired)?;
+            let warehouse_id = receipt
+                .warehouse_id
+                .ok_or(WasteBinError::WarehouseRequired)?;
             warehouse::assigned_warehouse(&mut tx, &warehouse_id, &actor.ref_).await?;
             sqlx::query(
                 "UPDATE mini_waste_bin_cycles SET reset_at=now(), reset_by_ref=$2,

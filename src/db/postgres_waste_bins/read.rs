@@ -2,11 +2,20 @@ use super::*;
 
 use std::collections::HashMap;
 
+pub(super) const BINS: &str = r#"
+    SELECT b.code, b.name, b.tare_units, b.tolerance_units,
+        ARRAY(SELECT a.apparatus_id FROM mini_waste_bin_apparatuses a
+              WHERE a.bin_code = b.code ORDER BY a.apparatus_id COLLATE "C") AS apparatus_ids,
+        COALESCE((SELECT jsonb_agg(jsonb_build_object('role', o.operator_role, 'ref', o.operator_ref)
+            ORDER BY o.operator_role COLLATE "C", o.operator_ref COLLATE "C")
+            FROM mini_waste_bin_operators o WHERE o.bin_code = b.code), '[]'::jsonb) AS operators
+    FROM mini_waste_bins b"#;
+
 const CYCLES: &str = "
     SELECT c.id, c.bin_code, c.apparatus_id,
         COALESCE((SELECT name FROM mini_apparatus WHERE id = c.apparatus_id), c.apparatus_id) AS apparatus_name,
         EXTRACT(EPOCH FROM c.opened_at)::bigint AS opened_at_unix,
-        c.opened_by_ref, c.opened_by_display_name, c.expected_units,
+        c.opened_by_role, c.opened_by_ref, c.opened_by_display_name, c.expected_units,
         COALESCE(c.expected_units, (SELECT COALESCE(sum(units), 0)::bigint
             FROM mini_waste_bin_entries WHERE cycle_id = c.id)) AS visible_units,
         EXTRACT(EPOCH FROM c.sealed_at)::bigint AS sealed_at_unix,
@@ -34,6 +43,7 @@ pub(super) struct Cycle {
     pub apparatus_id: String,
     pub apparatus_name: String,
     pub opened_at_unix: i64,
+    pub opened_by_role: Option<String>,
     pub opened_by_ref: String,
     pub opened_by_display_name: String,
     pub expected_units: Option<i64>,
@@ -90,6 +100,22 @@ impl Receipt {
 }
 
 impl Cycle {
+    pub(super) fn is_legacy_holder(&self, actor: &QueueActionActor) -> bool {
+        self.opened_by_role.is_none()
+            && self.reset_at_unix.is_none()
+            && self.opened_by_ref == actor.ref_
+    }
+
+    pub(super) fn held_by(&self, actor: &QueueActionActor) -> bool {
+        self.is_legacy_holder(actor)
+            || (self.opened_by_role.as_deref() == Some(actor.role.as_str())
+                && self.opened_by_ref == actor.ref_)
+    }
+
+    pub(super) fn allows(&self, bin: &Bin, actor: &QueueActionActor) -> bool {
+        self.is_legacy_holder(actor) || bin.allows(&self.apparatus_id, actor)
+    }
+
     pub(super) fn status(&self) -> &'static str {
         if self.reset_at_unix.is_some() {
             "reset"
@@ -162,11 +188,15 @@ const ENTRIES: &str = "
 pub(super) async fn pending_entries(
     db: &mut PgConnection,
     apparatus: &str,
+    actor: Option<&QueueActionActor>,
 ) -> Result<Vec<Value>, WasteBinError> {
     Ok(sqlx::query_scalar(&format!(
-        "{ENTRIES} WHERE apparatus_id=$1 AND cycle_id IS NULL AND units>0 ORDER BY created_at, id"
+        "{ENTRIES} WHERE apparatus_id=$1 AND cycle_id IS NULL AND units>0
+         AND ($2::text IS NULL OR (actor_role=$2 AND actor_ref=$3)) ORDER BY created_at, id"
     ))
     .bind(apparatus)
+    .bind(actor.map(|actor| actor.role.as_str()))
+    .bind(actor.map(|actor| actor.ref_.as_str()))
     .fetch_all(db)
     .await?)
 }
@@ -184,7 +214,7 @@ pub(super) async fn cycle_units(
 }
 
 pub(super) async fn load_bin(db: &mut PgConnection, code: &str) -> Result<Bin, WasteBinError> {
-    sqlx::query_as("SELECT code, tare_units, tolerance_units FROM mini_waste_bins WHERE code=$1")
+    sqlx::query_as(&format!("{BINS} WHERE b.code=$1"))
         .bind(code)
         .fetch_optional(db)
         .await?
@@ -216,6 +246,15 @@ pub(super) async fn bin_snapshot(
     code: &str,
     cycle_id: Option<&str>,
 ) -> Result<Value, WasteBinError> {
+    bin_snapshot_with_scope(db, code, cycle_id, None).await
+}
+
+async fn bin_snapshot_with_scope(
+    db: &mut PgConnection,
+    code: &str,
+    cycle_id: Option<&str>,
+    scope: Option<(&str, &QueueActionActor)>,
+) -> Result<Value, WasteBinError> {
     let bin = load_bin(db, code).await?;
     let current = current_cycle(db, code).await?;
     let current_status = current.as_ref().map_or("empty", Cycle::status);
@@ -229,11 +268,29 @@ pub(super) async fn bin_snapshot(
         }
         _ => current,
     };
-    let snapshot = match selected {
+    let (status, allow) = match scope {
+        Some((apparatus, actor)) => match selected.as_ref() {
+            Some(cycle) => (
+                cycle.status(),
+                cycle.apparatus_id == apparatus && cycle.allows(&bin, actor),
+            ),
+            None => ("empty", bin.allows(apparatus, actor)),
+        },
+        None => (current_status, true),
+    };
+    if !allow {
+        return Err(WasteBinError::NotFound);
+    }
+    let cycle = match selected {
         Some(cycle) => cycle.snapshot(db, true).await?,
         None => Value::Null,
     };
-    Ok(bin.snapshot(current_status, snapshot))
+    let snapshot = bin.snapshot(status, cycle);
+    Ok(if scope.is_some() {
+        operator_snapshot(snapshot)
+    } else {
+        snapshot
+    })
 }
 
 impl PostgresWasteBinStore {
@@ -265,12 +322,51 @@ impl PostgresWasteBinStore {
         .await
     }
 
+    pub async fn detail_for_operator(
+        &self,
+        raw_code: &str,
+        cycle_id: Option<&str>,
+        apparatus: &str,
+        actor: &QueueActionActor,
+    ) -> Result<Value, WasteBinError> {
+        let apparatus = identity(apparatus)?;
+        let code = code(raw_code)?;
+        let cycle_id = cycle_id.map(identity).transpose()?;
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+            .execute(&mut *tx)
+            .await?;
+        let result =
+            bin_snapshot_with_scope(&mut tx, &code, cycle_id, Some((apparatus, actor))).await?;
+        tx.commit().await?;
+        Ok(result)
+    }
+
     pub async fn list(
         &self,
         status: Option<&str>,
         apparatus: Option<&str>,
     ) -> Result<Value, WasteBinError> {
         let apparatus = apparatus.map(identity).transpose()?;
+        self.list_with_scope(status, apparatus, None).await
+    }
+
+    pub async fn list_for_operator(
+        &self,
+        status: Option<&str>,
+        apparatus: &str,
+        actor: &QueueActionActor,
+    ) -> Result<Value, WasteBinError> {
+        self.list_with_scope(status, Some(identity(apparatus)?), Some(actor))
+            .await
+    }
+
+    async fn list_with_scope(
+        &self,
+        status: Option<&str>,
+        apparatus: Option<&str>,
+        actor: Option<&QueueActionActor>,
+    ) -> Result<Value, WasteBinError> {
         if status.is_some_and(|s| !matches!(s, "empty" | "open" | "sealed" | "received")) {
             return Err(WasteBinError::InvalidInput);
         }
@@ -278,11 +374,9 @@ impl PostgresWasteBinStore {
         sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
             .execute(&mut *tx)
             .await?;
-        let bins: Vec<Bin> = sqlx::query_as(
-            "SELECT code, tare_units, tolerance_units FROM mini_waste_bins ORDER BY code",
-        )
-        .fetch_all(&mut *tx)
-        .await?;
+        let bins: Vec<Bin> = sqlx::query_as(&format!("{BINS} ORDER BY b.code"))
+            .fetch_all(&mut *tx)
+            .await?;
         let active: Vec<Cycle> = sqlx::query_as(&format!("{CYCLES} WHERE c.reset_at IS NULL"))
             .fetch_all(&mut *tx)
             .await?;
@@ -295,20 +389,29 @@ impl PostgresWasteBinStore {
         for bin in bins {
             let cycle = by_code.get(bin.code.as_str()).copied();
             let current_status = cycle.map_or("empty", Cycle::status);
-            if status.is_some_and(|expected| expected != current_status)
-                || apparatus.is_some_and(|id| !cycle.is_some_and(|c| c.apparatus_id == id))
-            {
+            let visible = match (apparatus, actor, cycle) {
+                (Some(id), Some(actor), Some(cycle)) => {
+                    cycle.apparatus_id == id && cycle.allows(&bin, actor)
+                }
+                (Some(id), Some(actor), None) => bin.allows(id, actor),
+                (Some(id), None, _) => cycle.is_some_and(|c| c.apparatus_id == id),
+                _ => true,
+            };
+            if status.is_some_and(|expected| expected != current_status) || !visible {
                 continue;
             }
-            snapshots.push(
-                bin.snapshot(
-                    current_status,
-                    cycle
-                        .map(Cycle::summary)
-                        .transpose()?
-                        .unwrap_or(Value::Null),
-                ),
+            let snapshot = bin.snapshot(
+                current_status,
+                cycle
+                    .map(Cycle::summary)
+                    .transpose()?
+                    .unwrap_or(Value::Null),
             );
+            snapshots.push(if actor.is_some() {
+                operator_snapshot(snapshot)
+            } else {
+                snapshot
+            });
         }
         Ok(json!({"bins": snapshots}))
     }

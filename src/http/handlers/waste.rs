@@ -14,8 +14,12 @@ use crate::{
         authz::Capability,
         production_map::{QueueActionActor, queue_state::apparatus_matches_assigned},
     },
-    db::postgres_waste_bins::{PostgresWasteBinStore, WasteBinError, WasteEntry},
+    db::postgres_waste_bins::{
+        PostgresWasteBinStore, WasteBinAccessInput, WasteBinError, WasteBinOperator, WasteEntry,
+    },
 };
+
+mod operators;
 
 type ApiError = (StatusCode, Json<Value>);
 type ApiResponse = ([(header::HeaderName, &'static str); 1], Json<Value>);
@@ -26,14 +30,19 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/v1/mobile/waste/bins/active", get(active))
         .route("/v1/mobile/waste/bins/detail", get(detail))
         .route("/v1/mobile/waste/bins/history", get(history))
+        .route("/v1/mobile/waste/bins/options", get(options))
         .route("/v1/mobile/waste/bins/register", post(register))
+        .route("/v1/mobile/waste/bins/configure", post(configure))
         .route("/v1/mobile/waste/bins/assign", post(assign))
         .route("/v1/mobile/waste/bins/submit", post(submit))
         .route("/v1/mobile/waste/bins/entry", post(add))
         .route("/v1/mobile/waste/bins/reconcile", post(reconcile))
         .route("/v1/mobile/waste/warehouses", get(warehouses))
         .route("/v1/mobile/waste/bins/receive", post(receive))
-        .route("/v1/mobile/waste/bins/destination", post(record_destination))
+        .route(
+            "/v1/mobile/waste/bins/destination",
+            post(record_destination),
+        )
         .route("/v1/mobile/waste/bins/reset", post(reset))
 }
 
@@ -86,8 +95,13 @@ fn warehouse_credit(
     value: Result<Value, WasteBinError>,
 ) -> Result<ApiResponse, ApiError> {
     let snapshot = value.map_err(domain_error)?;
-    if let Some(warehouse) = snapshot.pointer("/cycle/receipt/warehouse").and_then(Value::as_str) {
-        state.warehouse_events.notify_updated(warehouse, "waste_receipt");
+    if let Some(warehouse) = snapshot
+        .pointer("/cycle/receipt/warehouse")
+        .and_then(Value::as_str)
+    {
+        state
+            .warehouse_events
+            .notify_updated(warehouse, "waste_receipt");
     }
     result(Ok(snapshot))
 }
@@ -152,7 +166,10 @@ async fn warehouses(
     let receiver_ref = if is_receiver(&state, &principal).await {
         Some(principal.ref_.as_str())
     } else if principal.role == PrincipalRole::Admin
-        && state.admin.principal_has_capability(&principal, Capability::AdminAccess).await
+        && state
+            .admin
+            .principal_has_capability(&principal, Capability::AdminAccess)
+            .await
     {
         None
     } else {
@@ -163,17 +180,20 @@ async fn warehouses(
 
 fn actor(principal: &Principal) -> QueueActionActor {
     QueueActionActor {
-        role: match principal.role {
-            PrincipalRole::ChiqindiQabulchi => "chiqindi_qabulchi",
-            PrincipalRole::RezkaMaster => "rezka_master",
-            PrincipalRole::TayyorlovMasteri => "tayyorlov_masteri",
-            PrincipalRole::Metalayzer => "metalayzer",
-            PrincipalRole::HomashyoRezkachi => "homashyo_rezkachi",
-            _ => "aparatchi",
-        }
-        .into(),
+        role: actor_role(principal.role).into(),
         ref_: principal.ref_.clone(),
         display_name: principal.display_name.clone(),
+    }
+}
+
+fn actor_role(role: PrincipalRole) -> &'static str {
+    match role {
+        PrincipalRole::ChiqindiQabulchi => "chiqindi_qabulchi",
+        PrincipalRole::RezkaMaster => "rezka_master",
+        PrincipalRole::TayyorlovMasteri => "tayyorlov_masteri",
+        PrincipalRole::Metalayzer => "metalayzer",
+        PrincipalRole::HomashyoRezkachi => "homashyo_rezkachi",
+        _ => "aparatchi",
     }
 }
 
@@ -183,16 +203,7 @@ async fn operator_scope(
     apparatus: &str,
     write: bool,
 ) -> Result<(), ApiError> {
-    let capability = match principal.role {
-        PrincipalRole::Aparatchi | PrincipalRole::RezkaMaster if write => {
-            Capability::ApparatusQueueManage
-        }
-        PrincipalRole::Aparatchi | PrincipalRole::RezkaMaster => Capability::ApparatusQueueRead,
-        PrincipalRole::TayyorlovMasteri => Capability::PreparationAccess,
-        PrincipalRole::Metalayzer => Capability::MetalayzerAccess,
-        PrincipalRole::HomashyoRezkachi => Capability::RawMaterialSplitAccess,
-        _ => return Err(forbidden()),
-    };
+    let capability = operator_capability(principal.role, write).ok_or_else(forbidden)?;
     if !state
         .admin
         .principal_has_capability(principal, capability)
@@ -218,11 +229,17 @@ async fn operator_scope(
     Ok(())
 }
 
-fn require_cycle_scope(bin: &Value, apparatus: &str) -> Result<(), ApiError> {
-    if bin.pointer("/cycle/apparatus_id").and_then(Value::as_str) != Some(apparatus.trim()) {
-        return Err(forbidden());
-    }
-    Ok(())
+fn operator_capability(role: PrincipalRole, write: bool) -> Option<Capability> {
+    Some(match role {
+        PrincipalRole::Aparatchi | PrincipalRole::RezkaMaster if write => {
+            Capability::ApparatusQueueManage
+        }
+        PrincipalRole::Aparatchi | PrincipalRole::RezkaMaster => Capability::ApparatusQueueRead,
+        PrincipalRole::TayyorlovMasteri => Capability::PreparationAccess,
+        PrincipalRole::Metalayzer => Capability::MetalayzerAccess,
+        PrincipalRole::HomashyoRezkachi => Capability::RawMaterialSplitAccess,
+        _ => return None,
+    })
 }
 
 #[derive(Deserialize)]
@@ -238,15 +255,17 @@ async fn list(
 ) -> Result<ApiResponse, ApiError> {
     let principal = principal(&state, &headers).await?;
     let status = query.status.as_deref();
-    let mut apparatus = query.apparatus_id.as_deref().map(str::trim);
-    if !can_inspect_all(&state, &principal).await {
-        operator_scope(&state, &principal, apparatus.ok_or_else(forbidden)?, false).await?;
-        if status == Some("empty") {
-            // Empty bins can be selected at any apparatus.
-            apparatus = None;
-        }
+    let apparatus = query.apparatus_id.as_deref().map(str::trim);
+    if can_inspect_all(&state, &principal).await {
+        return result(store(&state)?.list(status, apparatus).await);
     }
-    result(store(&state)?.list(status, apparatus).await)
+    let apparatus = apparatus.ok_or_else(forbidden)?;
+    operator_scope(&state, &principal, apparatus, false).await?;
+    result(
+        store(&state)?
+            .list_for_operator(status, apparatus, &actor(&principal))
+            .await,
+    )
 }
 
 #[derive(Deserialize)]
@@ -261,18 +280,15 @@ async fn active(
 ) -> Result<ApiResponse, ApiError> {
     let principal = principal(&state, &headers).await?;
     let apparatus = query.apparatus_id.trim();
-    let inspect_all = can_inspect_all(&state, &principal).await;
-    if !inspect_all {
-        operator_scope(&state, &principal, apparatus, false).await?;
+    if can_inspect_all(&state, &principal).await {
+        return result(store(&state)?.active(apparatus).await);
     }
-    let mut value = store(&state)?
-        .active(apparatus)
-        .await
-        .map_err(domain_error)?;
-    if !inspect_all && let Some(pending) = value.get_mut("pending").and_then(Value::as_array_mut) {
-        pending.retain(|entry| entry["actor_ref"].as_str() == Some(principal.ref_.as_str()));
-    }
-    result(Ok(value))
+    operator_scope(&state, &principal, apparatus, false).await?;
+    result(
+        store(&state)?
+            .active_for_operator(apparatus, &actor(&principal))
+            .await,
+    )
 }
 
 #[derive(Deserialize)]
@@ -288,21 +304,21 @@ async fn detail(
     Query(query): Query<DetailQuery>,
 ) -> Result<ApiResponse, ApiError> {
     let principal = principal(&state, &headers).await?;
-    let inspect_all = can_inspect_all(&state, &principal).await;
-    let apparatus = query.apparatus_id.as_deref();
-    if !inspect_all {
-        operator_scope(&state, &principal, apparatus.ok_or_else(forbidden)?, false).await?;
+    let cycle_id = query.cycle_id.as_deref();
+    if can_inspect_all(&state, &principal).await {
+        let store = store(&state)?;
+        return result(match cycle_id {
+            Some(cycle_id) => store.detail_cycle(&query.code, cycle_id).await,
+            None => store.detail(&query.code).await,
+        });
     }
-    let store = store(&state)?;
-    let bin = match query.cycle_id.as_deref() {
-        Some(cycle_id) => store.detail_cycle(&query.code, cycle_id).await,
-        None => store.detail(&query.code).await,
-    }
-    .map_err(domain_error)?;
-    if !inspect_all {
-        require_cycle_scope(&bin, apparatus.ok_or_else(forbidden)?)?;
-    }
-    result(Ok(bin))
+    let apparatus = query.apparatus_id.as_deref().ok_or_else(forbidden)?.trim();
+    operator_scope(&state, &principal, apparatus, false).await?;
+    result(
+        store(&state)?
+            .detail_for_operator(&query.code, cycle_id, apparatus, &actor(&principal))
+            .await,
+    )
 }
 
 #[derive(Deserialize)]
@@ -322,12 +338,24 @@ async fn history(
     result(store(&state)?.history(&query.code).await)
 }
 
+async fn options(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<ApiResponse, ApiError> {
+    receiver(&state, &headers).await?;
+    let catalog = operators::catalog(&state, None).await?;
+    result(Ok(json!(catalog)))
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RegisterRequest {
     code: String,
     tare_kg: f64,
     tolerance_kg: Option<f64>,
+    name: String,
+    apparatus_ids: Vec<String>,
+    operators: Vec<WasteBinOperator>,
 }
 
 async fn register(
@@ -336,11 +364,47 @@ async fn register(
     Json(input): Json<RegisterRequest>,
 ) -> Result<ApiResponse, ApiError> {
     let actor = receiver(&state, &headers).await?;
+    let access = WasteBinAccessInput {
+        name: input.name,
+        apparatus_ids: input.apparatus_ids,
+        operators: input.operators,
+    };
+    operators::validate_access(&state, &access).await?;
     result(
         store(&state)?
-            .register(&input.code, input.tare_kg, input.tolerance_kg, &actor)
+            .register(
+                &input.code,
+                input.tare_kg,
+                input.tolerance_kg,
+                &access,
+                &actor,
+            )
             .await,
     )
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ConfigureRequest {
+    code: String,
+    name: String,
+    apparatus_ids: Vec<String>,
+    operators: Vec<WasteBinOperator>,
+}
+
+async fn configure(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<ConfigureRequest>,
+) -> Result<ApiResponse, ApiError> {
+    let actor = receiver(&state, &headers).await?;
+    let access = WasteBinAccessInput {
+        name: input.name,
+        apparatus_ids: input.apparatus_ids,
+        operators: input.operators,
+    };
+    operators::validate_access(&state, &access).await?;
+    result(store(&state)?.configure(&input.code, &access, &actor).await)
 }
 
 #[derive(Deserialize)]

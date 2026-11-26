@@ -1,6 +1,10 @@
 use super::*;
 use sqlx::postgres::PgPoolOptions;
 
+const REZKA: &str = "apparatus:test:rezka";
+const BOSMA: &str = "apparatus:test:bosma";
+const LEGACY_STATION: &str = "apparatus:test:legacy";
+
 fn actor(role: &str, name: &str) -> QueueActionActor {
     QueueActionActor {
         role: role.into(),
@@ -40,7 +44,7 @@ async fn waste_bin_lifecycle() {
          CREATE TABLE mini_apparatus(id text PRIMARY KEY, name text NOT NULL);
          CREATE TABLE mini_warehouses(id text PRIMARY KEY, name text NOT NULL, is_group boolean NOT NULL DEFAULT false);
          CREATE TABLE mini_warehouse_assignments(warehouse_name text, assignment_kind text, principal_role text, principal_ref text);
-         INSERT INTO mini_apparatus VALUES ('a', 'Rezka'), ('b', 'Bosma');
+         INSERT INTO mini_apparatus VALUES ('{REZKA}', 'Rezka'), ('{BOSMA}', 'Bosma'), ('{LEGACY_STATION}', 'Eski');
          GRANT SELECT ON mini_apparatus TO mini_rs_erp;
          GRANT SELECT, UPDATE ON mini_warehouses, mini_warehouse_assignments TO mini_rs_erp;",
     ))
@@ -59,11 +63,21 @@ async fn waste_bin_lifecycle() {
     .execute(&mut *init)
     .await
     .unwrap();
-    sqlx::raw_sql(
+    sqlx::raw_sql(&format!(
         "INSERT INTO mini_warehouses(id, name, is_waste) VALUES ('main', 'Chiqindi 1', true);
          INSERT INTO mini_warehouse_assignments
-         VALUES ('Chiqindi 1', 'warehouse', 'chiqindi_qabulchi', 'receiver');",
-    )
+         VALUES ('Chiqindi 1', 'warehouse', 'chiqindi_qabulchi', 'receiver');
+         INSERT INTO mini_waste_bins (code,tare_units,tolerance_units,registered_by_ref)
+         VALUES ('OLD-EMPTY',0,0,'receiver'), ('OLD-ACTIVE',0,0,'receiver');
+         INSERT INTO mini_waste_bin_cycles (id,bin_code,apparatus_id,opened_by_ref,opened_by_display_name)
+         VALUES ('legacy-cycle','OLD-ACTIVE','{LEGACY_STATION}','Vali','Vali');",
+    ))
+    .execute(&mut *init)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/postgres/0211_waste_bin_access.sql"
+    ))
     .execute(&mut *init)
     .await
     .unwrap();
@@ -89,18 +103,73 @@ async fn waste_bin_lifecycle() {
     let ali = actor("aparatchi", "Ali");
     let vali = actor("aparatchi", "Vali");
     let receiver = actor(RECEIVER_ROLE, "receiver");
+    let access = WasteBinAccessInput {
+        name: "Quruq chiqindi".into(),
+        apparatus_ids: vec![REZKA.into(), BOSMA.into()],
+        operators: [&ali, &vali]
+            .into_iter()
+            .map(|actor| WasteBinOperator {
+                role: actor.role.clone(),
+                r#ref: actor.ref_.clone(),
+            })
+            .collect(),
+    };
+
+    assert_eq!(
+        store.detail("OLD-EMPTY").await.unwrap()["configured"],
+        false
+    );
+    assert_eq!(
+        store.assign("OLD-EMPTY", REZKA, &ali).await,
+        Err(WasteBinError::Forbidden)
+    );
+    let renamed = store
+        .configure("OLD-EMPTY", &access, &receiver)
+        .await
+        .unwrap();
+    assert_eq!(renamed["name"], "Quruq chiqindi");
+    let operator_view = store
+        .detail_for_operator("OLD-EMPTY", None, REZKA, &ali)
+        .await
+        .unwrap();
+    assert_eq!(operator_view["name"], "Quruq chiqindi");
+    assert!(operator_view.get("operators").is_none());
+    assert!(
+        store
+            .active_for_operator(LEGACY_STATION, &ali)
+            .await
+            .unwrap()["bin"]
+            .is_null()
+    );
+    assert_eq!(
+        store
+            .active_for_operator(LEGACY_STATION, &vali)
+            .await
+            .unwrap()["bin"]["name"],
+        "OLD-ACTIVE"
+    );
+    assert_eq!(
+        store
+            .submit("OLD-ACTIVE", "legacy-cycle", None, &vali)
+            .await
+            .unwrap()["status"],
+        "sealed"
+    );
 
     assert_eq!(
         store
-            .register("ACCORD-WASTE:a1", 5.0, Some(0.5), &admin_actor)
+            .register("ACCORD-WASTE:a1", 5.0, Some(0.5), &access, &receiver)
             .await
             .unwrap()["qr_payload"],
         "ACCORD-WASTE:A1"
     );
-    store.register("b2", 3.0, None, &admin_actor).await.unwrap();
+    store
+        .register("b2", 3.0, None, &access, &receiver)
+        .await
+        .unwrap();
     let pending = WasteEntry {
         request_id: "report-before-bin",
-        apparatus_id: "a",
+        apparatus_id: REZKA,
         order_id: Some("order"),
         session_id: Some("session"),
         expected_cycle_id: None,
@@ -110,19 +179,19 @@ async fn waste_bin_lifecycle() {
         reconcile_manual: true,
     };
     production_write(&pool, pending).await.unwrap();
-    let status = store.active("a").await.unwrap();
+    let status = store.active(REZKA).await.unwrap();
     assert!(status["bin"].is_null());
     let pending_id = status["pending"][0]["id"].as_str().unwrap().to_string();
 
-    let initial = store.assign("a1", "a", &ali).await.unwrap();
+    let initial = store.assign("a1", REZKA, &ali).await.unwrap();
     assert_eq!(initial["cycle"]["apparatus_name"], "Rezka");
     let first = initial["cycle"]["id"].as_str().unwrap();
     assert_eq!(
-        store.assign("b2", "a", &vali).await,
+        store.assign("b2", REZKA, &vali).await,
         Err(WasteBinError::Conflict)
     );
     assert_eq!(
-        store.assign("a1", "b", &vali).await,
+        store.assign("a1", BOSMA, &vali).await,
         Err(WasteBinError::Conflict)
     );
     let manual = WasteEntry {
@@ -153,7 +222,7 @@ async fn waste_bin_lifecycle() {
     assert_eq!(swapped["status"], "sealed");
     let second = swapped["replacement"]["cycle"]["id"].as_str().unwrap();
     assert_eq!(
-        store.active("a").await.unwrap()["bin"]["cycle"]["id"],
+        store.active(REZKA).await.unwrap()["bin"]["cycle"]["id"],
         second
     );
     assert_eq!(
@@ -182,7 +251,7 @@ async fn waste_bin_lifecycle() {
     };
     production_write(&pool, closing).await.unwrap();
     assert_eq!(
-        store.active("a").await.unwrap()["bin"]["cycle"]["expected_kg"],
+        store.active(REZKA).await.unwrap()["bin"]["cycle"]["expected_kg"],
         0.0
     );
     let closing = WasteEntry {
@@ -194,12 +263,14 @@ async fn waste_bin_lifecycle() {
     production_write(&pool, closing).await.unwrap();
     production_write(&pool, pending).await.unwrap();
     assert_eq!(
-        store.active("a").await.unwrap()["bin"]["cycle"]["expected_kg"],
+        store.active(REZKA).await.unwrap()["bin"]["cycle"]["expected_kg"],
         2.0
     );
 
     assert_eq!(
-        store.receive("a1", first, "main", 23.0, "gscale", "", &ali).await,
+        store
+            .receive("a1", first, "main", 23.0, "gscale", "", &ali)
+            .await,
         Err(WasteBinError::Forbidden)
     );
     assert_eq!(
@@ -213,7 +284,15 @@ async fn waste_bin_lifecycle() {
         Err(WasteBinError::DiscrepancyNoteRequired)
     );
     let accepted = store
-        .receive("a1", first, "main", 23.0, "gscale", "Qayta tortildi", &receiver)
+        .receive(
+            "a1",
+            first,
+            "main",
+            23.0,
+            "gscale",
+            "Qayta tortildi",
+            &receiver,
+        )
         .await
         .unwrap();
     let receipt = &accepted["cycle"]["receipt"];
@@ -222,7 +301,15 @@ async fn waste_bin_lifecycle() {
     assert_eq!(receipt["outside_tolerance"], true);
     assert_eq!(
         store
-            .receive("a1", first, "main", 23.0, "gscale", "Qayta tortildi", &receiver)
+            .receive(
+                "a1",
+                first,
+                "main",
+                23.0,
+                "gscale",
+                "Qayta tortildi",
+                &receiver
+            )
             .await
             .unwrap(),
         accepted
@@ -246,7 +333,7 @@ async fn waste_bin_lifecycle() {
         store.history("a1").await.unwrap()["cycles"][0]["receipt"],
         *receipt
     );
-    let reopened = store.assign("a1", "b", &vali).await.unwrap();
+    let reopened = store.assign("a1", BOSMA, &vali).await.unwrap();
     assert_ne!(reopened["cycle"]["id"], first);
     assert_eq!(
         store.detail_cycle("a1", first).await.unwrap()["cycle"]["receipt"],

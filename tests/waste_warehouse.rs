@@ -12,7 +12,9 @@ use mini_rs_erp::{
     db::{
         postgres,
         postgres_warehouse::PostgresWarehouseStore,
-        postgres_waste_bins::{PostgresWasteBinStore, WasteBinError, WasteEntry},
+        postgres_waste_bins::{
+            PostgresWasteBinStore, WasteBinAccessInput, WasteBinError, WasteBinOperator, WasteEntry,
+        },
     },
 };
 use sqlx::{
@@ -25,6 +27,24 @@ fn actor(role: &str, name: &str) -> QueueActionActor {
         role: role.into(),
         ref_: name.into(),
         display_name: name.into(),
+    }
+}
+
+fn bin_access(
+    name: &str,
+    apparatuses: &[&str],
+    actors: &[&QueueActionActor],
+) -> WasteBinAccessInput {
+    WasteBinAccessInput {
+        name: name.into(),
+        apparatus_ids: apparatuses.iter().map(|id| (*id).into()).collect(),
+        operators: actors
+            .iter()
+            .map(|actor| WasteBinOperator {
+                role: actor.role.clone(),
+                r#ref: actor.ref_.clone(),
+            })
+            .collect(),
     }
 }
 
@@ -58,6 +78,21 @@ async fn waste_warehouse_receives_actual_kg_once_and_preserves_legacy_history() 
         .unwrap();
     let apparatus = postgres::canonical_apparatus_service(setup.clone());
     apparatus.bootstrap_factory_defaults().await.unwrap();
+    postgres::apply_postgres_migrations_through_version(&setup, "0210")
+        .await
+        .unwrap();
+    sqlx::raw_sql(
+        "INSERT INTO mini_waste_bins(code,tare_units,tolerance_units,registered_by_ref)
+         VALUES ('OLD-EMPTY',4000000,500000,'previous-receiver'),
+                ('OLD-ACTIVE',4000000,500000,'previous-receiver');
+         INSERT INTO mini_waste_bin_cycles
+             (id,bin_code,apparatus_id,opened_by_ref,opened_by_display_name)
+         VALUES ('old-waste-cycle','OLD-ACTIVE','apparatus:default:asset-012',
+                 'old-operator','Old operator');",
+    )
+    .execute(&setup)
+    .await
+    .unwrap();
     postgres::apply_foundation_migration(&setup).await.unwrap();
 
     // Run domain calls under the same grants as the application.
@@ -147,9 +182,15 @@ async fn waste_warehouse_receives_actual_kg_once_and_preserves_legacy_history() 
     .unwrap();
 
     let station = "apparatus:default:asset-010";
-    bins.register("TEST-QUTI", 5.0, Some(0.5), &receiver)
-        .await
-        .unwrap();
+    bins.register(
+        "TEST-QUTI",
+        5.0,
+        Some(0.5),
+        &bin_access("Ombor sinovi qutisi", &[station], &[&worker]),
+        &receiver,
+    )
+    .await
+    .unwrap();
     let active = bins.assign("TEST-QUTI", station, &worker).await.unwrap();
     let cycle = active["cycle"]["id"].as_str().unwrap();
     bins.add(
@@ -287,6 +328,8 @@ async fn waste_warehouse_receives_actual_kg_once_and_preserves_legacy_history() 
     assert_eq!(stock["warehouses"][0]["on_hand_kg"].as_f64(), Some(21.0));
     assert_eq!(stock["warehouses"][0]["receipt_count"].as_i64(), Some(2));
 
+    verify_legacy_bin_access(&bins, &receiver).await;
+    verify_bin_race_and_scope(&bins, &receiver).await;
     runtime.close().await;
     setup.close().await;
     sqlx::query(&format!("DROP DATABASE {db_name}"))
@@ -294,4 +337,152 @@ async fn waste_warehouse_receives_actual_kg_once_and_preserves_legacy_history() 
         .await
         .unwrap();
     admin.close().await;
+}
+
+async fn verify_legacy_bin_access(bins: &PostgresWasteBinStore, receiver: &QueueActionActor) {
+    const APPARATUS: &str = "apparatus:default:asset-012";
+    let owner = actor("aparatchi", "old-operator");
+    let other = actor("aparatchi", "another-operator");
+    let empty = bins.detail("OLD-EMPTY").await.unwrap();
+    assert_eq!(empty["name"], "OLD-EMPTY");
+    assert_eq!(
+        bins.assign("OLD-EMPTY", APPARATUS, &owner).await,
+        Err(WasteBinError::Forbidden),
+    );
+    assert!(bins.active_for_operator(APPARATUS, &other).await.unwrap()["bin"].is_null());
+    assert_eq!(
+        bins.active_for_operator(APPARATUS, &owner).await.unwrap()["bin"]["code"],
+        "OLD-ACTIVE",
+    );
+    bins.submit("OLD-ACTIVE", "old-waste-cycle", None, &owner)
+        .await
+        .unwrap();
+    let access = bin_access("Eski bo‘sh quti", &[APPARATUS], &[&owner]);
+    let configured = bins
+        .configure("OLD-EMPTY", &access, receiver)
+        .await
+        .unwrap();
+    assert_eq!(configured["qr_payload"], empty["qr_payload"]);
+    bins.assign("OLD-EMPTY", APPARATUS, &owner).await.unwrap();
+}
+
+async fn verify_bin_race_and_scope(bins: &PostgresWasteBinStore, receiver: &QueueActionActor) {
+    const FIRST: &str = "apparatus:default:asset-010";
+    const SECOND: &str = "apparatus:default:asset-011";
+    let ali = actor("aparatchi", "operator-ali");
+    let vali = actor("aparatchi", "operator-vali");
+    let outsider = actor("aparatchi", "operator-other");
+    let access = bin_access("Umumiy plyonka", &[FIRST, SECOND], &[&ali, &vali]);
+    let bin = bins
+        .register("SHARED", 4.0, None, &access, receiver)
+        .await
+        .unwrap();
+    assert_eq!(bin["name"], "Umumiy plyonka");
+    let access = bin_access("Plyonka qutisi", &[FIRST, SECOND], &[&ali, &vali]);
+    assert_eq!(
+        bins.configure("SHARED", &access, &ali).await,
+        Err(WasteBinError::Forbidden),
+    );
+    let edited = bins.configure("SHARED", &access, receiver).await.unwrap();
+    assert_eq!(edited["name"], "Plyonka qutisi");
+    assert_eq!(edited["qr_payload"], bin["qr_payload"]);
+
+    bins.register(
+        "PRIVATE",
+        4.0,
+        None,
+        &bin_access("Boshqa guruh", &[FIRST, SECOND], &[&outsider]),
+        receiver,
+    )
+    .await
+    .unwrap();
+    bins.register(
+        "FIRST-ONLY",
+        4.0,
+        None,
+        &bin_access("Faqat birinchi apparat", &[FIRST], &[&ali]),
+        receiver,
+    )
+    .await
+    .unwrap();
+    for (operator, apparatus, expected) in [
+        (&ali, FIRST, &["FIRST-ONLY", "SHARED"][..]),
+        (&ali, SECOND, &["SHARED"][..]),
+        (&vali, SECOND, &["SHARED"][..]),
+    ] {
+        let list = bins
+            .list_for_operator(Some("empty"), apparatus, operator)
+            .await
+            .unwrap();
+        let mut codes: Vec<_> = list["bins"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|bin| {
+                assert!(bin.get("operators").is_none());
+                bin["code"].as_str().unwrap()
+            })
+            .collect();
+        codes.sort_unstable();
+        assert_eq!(codes.as_slice(), expected);
+    }
+    assert_eq!(
+        bins.assign("FIRST-ONLY", SECOND, &ali).await,
+        Err(WasteBinError::Forbidden),
+    );
+    assert_eq!(
+        bins.assign("ACCORD-WASTE:SHARED", FIRST, &outsider).await,
+        Err(WasteBinError::Forbidden),
+    );
+    assert!(
+        bins.detail_for_operator("SHARED", None, FIRST, &outsider)
+            .await
+            .is_err()
+    );
+
+    let (first, second) = tokio::join!(
+        bins.assign("SHARED", FIRST, &ali),
+        bins.assign("SHARED", SECOND, &vali),
+    );
+    let (held, apparatus, holder, peer) = match (first, second) {
+        (Ok(bin), Err(WasteBinError::Conflict)) => (bin, FIRST, &ali, &vali),
+        (Err(WasteBinError::Conflict), Ok(bin)) => (bin, SECOND, &vali, &ali),
+        unexpected => panic!("expected exactly one reservation: {unexpected:?}"),
+    };
+    let cycle = held["cycle"]["id"].as_str().unwrap();
+    assert_eq!(
+        bins.assign("SHARED", apparatus, holder).await.unwrap()["cycle"]["id"],
+        cycle
+    );
+    assert_eq!(
+        bins.assign("SHARED", apparatus, peer).await,
+        Err(WasteBinError::Conflict),
+    );
+    assert_eq!(
+        bins.submit("SHARED", cycle, Some("PRIVATE"), holder).await,
+        Err(WasteBinError::Forbidden),
+    );
+    assert_eq!(
+        bins.active_for_operator(apparatus, holder).await.unwrap()["bin"]["cycle"]["id"],
+        cycle
+    );
+    assert!(
+        bins.active_for_operator(apparatus, &outsider)
+            .await
+            .unwrap()["bin"]
+            .is_null()
+    );
+    bins.register("NEXT-SHARED", 4.0, None, &access, receiver)
+        .await
+        .unwrap();
+    let replaced = bins
+        .submit("SHARED", cycle, Some("NEXT-SHARED"), holder)
+        .await
+        .unwrap();
+    assert_eq!(replaced["replacement"]["code"], "NEXT-SHARED");
+    assert_eq!(
+        bins.submit("SHARED", cycle, Some("NEXT-SHARED"), peer)
+            .await,
+        Err(WasteBinError::Conflict),
+    );
 }

@@ -616,7 +616,9 @@ async fn next_roll_does_not_erase_or_repeat_issue_cycle_waste() {
 #[ignore = "requires WASTE_TEST_DATABASE_URL pointing at a disposable PostgreSQL server"]
 async fn postgres_unsaved_issue_waste_survives_order_and_closed_history_reads() {
     use mini_rs_erp::db::{postgres, postgres_production_map::PostgresProductionMapStore};
-    use mini_rs_erp::db::postgres_waste_bins::{PostgresWasteBinStore, WasteEntry};
+    use mini_rs_erp::db::postgres_waste_bins::{
+        PostgresWasteBinStore, WasteBinAccessInput, WasteBinOperator, WasteEntry,
+    };
     let url = std::env::var("WASTE_TEST_DATABASE_URL").expect("disposable database URL required");
     let admin = sqlx::PgPool::connect(&url).await.unwrap();
     for intermediate in [false, true] {
@@ -634,16 +636,35 @@ async fn postgres_unsaved_issue_waste_survives_order_and_closed_history_reads() 
         let service = fixture_with_store(intermediate, 1, true, store.clone(), resolver).await;
         store.put_apparatus_sequence(CUT, vec![ORDER.into()]).await.unwrap();
         let bins = PostgresWasteBinStore::new(pool.clone());
+        let receiver = QueueActionActor {
+            role: "chiqindi_qabulchi".into(),
+            ref_: "waste-receiver".into(),
+            display_name: "Chiqindi qabul qiluvchi".into(),
+        };
         let cycle_id = if intermediate {
+            let other = QueueActionActor {
+                ref_: "other-cut-worker".into(),
+                ..actor()
+            };
+            let access = WasteBinAccessInput {
+                name: "Boshqa operator qutisi".into(),
+                apparatus_ids: vec![CUT.into()],
+                operators: vec![WasteBinOperator {
+                    role: other.role.clone(),
+                    r#ref: other.ref_.clone(),
+                }],
+            };
+            bins.register("CUT-PRIVATE", 1.0, None, &access, &receiver).await.unwrap();
+            bins.assign("CUT-PRIVATE", CUT, &other).await.unwrap();
             None
         } else {
-            let receiver = QueueActionActor {
-                role: "chiqindi_qabulchi".into(),
-                ref_: "waste-receiver".into(),
-                display_name: "Chiqindi qabul qiluvchi".into(),
+            let access = WasteBinAccessInput {
+                name: "Rezka chiqindisi".into(),
+                apparatus_ids: vec![CUT.into()],
+                operators: vec![WasteBinOperator { role: actor().role, r#ref: actor().ref_ }],
             };
-            bins.register("CUT-TEST", 1.0, None, &receiver).await.unwrap();
-            bins.register("CUT-NEXT", 1.0, None, &receiver).await.unwrap();
+            bins.register("CUT-TEST", 1.0, None, &access, &receiver).await.unwrap();
+            bins.register("CUT-NEXT", 1.0, None, &access, &receiver).await.unwrap();
             let bin = bins.assign("CUT-TEST", CUT, &actor()).await.unwrap();
             let cycle_id = bin["cycle"]["id"].as_str().unwrap();
             bins.add("CUT-TEST", cycle_id, &WasteEntry {
