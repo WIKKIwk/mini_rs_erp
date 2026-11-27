@@ -141,6 +141,12 @@ impl From<&InventoryLocation> for InventoryLocationRef {
 pub struct InventoryAsset {
     #[serde(default)]
     pub is_metalayzer: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stock_use: Option<InventoryStockUse>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preparation_qr: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paddon_code: Option<String>,
     pub kind: InventoryAssetKind,
     pub asset_ref: String,
     pub custody_warehouse_id: String,
@@ -155,6 +161,24 @@ pub struct InventoryAsset {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub transfer_id: String,
     pub placement_version: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InventoryStockUse {
+    PreparationInput,
+    PreparedRoll,
+    Other,
+}
+
+impl InventoryStockUse {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::PreparationInput => "preparation_input",
+            Self::PreparedRoll => "prepared_roll",
+            Self::Other => "other",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -213,6 +237,8 @@ pub struct InventoryTransfer {
     pub rejected_at_unix: Option<i64>,
     pub cancelled_at_unix: Option<i64>,
     pub lines: Vec<InventoryTransferLine>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_preparation_lots: Option<i64>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
@@ -222,7 +248,15 @@ pub struct InventoryAssetQuery {
     #[serde(default)]
     pub query: String,
     #[serde(default)]
+    pub identifier: String,
+    #[serde(default)]
     pub asset_kind: Option<InventoryAssetKind>,
+    #[serde(default)]
+    pub stock_use: Option<InventoryStockUse>,
+    #[serde(default)]
+    pub include_prepared_paddons: bool,
+    #[serde(skip)]
+    pub packed_item_groups: Vec<String>,
     /// Legacy wire name: state locations within the actor's warehouse scope,
     /// regardless of who last placed the asset there.
     #[serde(default)]

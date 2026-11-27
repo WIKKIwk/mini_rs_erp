@@ -49,18 +49,18 @@ impl PostgresPreparationStore {
         let id = new_id();
         let mut lines = Vec::new();
         let mut allocations = Vec::new();
+        let preparation_lot = preparation_lot_for_master!("$1", "EXISTS (
+            SELECT 1 FROM mini_items i JOIN seriyo_groups g
+              ON lower(btrim(g.name)) = lower(btrim(i.item_group))
+            WHERE i.code = s.item_code
+        )");
         for (code, percent, required) in quantities {
-            let name = material_name_in_warehouse(&mut tx, &actor.ref_, &code, &warehouse).await?;
+            let name = material_name_in_warehouse(&mut tx, &actor.ref_, &code, &warehouse, false).await?;
             let lots = sqlx::query(&format!(
-                "SELECT r.id AS receipt_id, s.id, s.barcode, s.qty::text AS kg
+                "WITH RECURSIVE {SERIYO_GROUPS_SQL}
+                SELECT r.id AS receipt_id, s.id, s.barcode, s.qty::text AS kg
                 FROM mini_raw_material_stock s LEFT JOIN mini_preparation_receipts r ON s.id=r.stock_id
-                WHERE s.item_code=$2 AND s.warehouse=$3 AND (r.owner_ref=$1 OR (
-                    s.payload_json->>'source'='raw_material_paddon' AND EXISTS (
-                       SELECT 1 FROM mini_inventory_transfer_lines tl
-                       JOIN mini_inventory_transfers t ON t.id=tl.transfer_id
-                       JOIN mini_warehouses w ON w.id=t.destination_warehouse_id
-                       WHERE tl.asset_kind='raw_material' AND tl.asset_ref=s.id
-                         AND t.status='received' AND lower(w.name)=lower(s.warehouse))))
+                WHERE s.item_code=$2 AND s.warehouse=$3 AND {preparation_lot}
                   AND {AVAILABLE_STOCK}
                 ORDER BY coalesce(r.created_at,s.created_at), coalesce(r.id,s.id) FOR UPDATE OF s"
             ))
@@ -90,7 +90,7 @@ impl PostgresPreparationStore {
                 }
                 let receipt_id = match receipt_id {
                     Some(id) => id,
-                    None => paddons::received_preparation_lot(&mut tx, actor, &stock_id, &warehouse)
+                    None => paddons::received_preparation_lot(&mut tx, actor, &stock_id, &warehouse, None)
                         .await?.ok_or(PreparationError::Insufficient)?,
                 };
                 let after = if remaining == 0 {

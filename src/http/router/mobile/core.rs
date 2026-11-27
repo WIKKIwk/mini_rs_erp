@@ -57,6 +57,7 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/v1/mobile/preparation/orders/{order_id}", get(crate::http::handlers::preparation::order_detail))
         .route("/v1/mobile/preparation/formula-orders", get(crate::http::handlers::preparation::formula_orders))
         .route("/v1/mobile/preparation/formula-catalog", get(crate::http::handlers::preparation::formula_catalog))
+        .route("/v1/mobile/preparation/formulas/live", get(crate::http::handlers::preparation::formula_library_live))
         .route("/v1/mobile/preparation/formula-sets", get(crate::http::handlers::preparation::formula_sets)
             .patch(crate::http::handlers::preparation::rename_formula_set))
         .route("/v1/mobile/preparation/formula-variants", get(crate::http::handlers::preparation::formula_variants)
@@ -80,6 +81,10 @@ pub(super) fn routes() -> Router<AppState> {
             .patch(crate::http::handlers::preparation::rename_warehouse)
             .delete(crate::http::handlers::preparation::delete_warehouse))
         .route("/v1/mobile/preparation/receipts", axum::routing::post(crate::http::handlers::preparation::receipt))
+        .route(
+            "/v1/mobile/preparation/transfers/{transfer_id}/accept",
+            axum::routing::post(crate::http::handlers::preparation::accept_received_transfer),
+        )
         .route("/v1/mobile/preparation/receipt-reversals", axum::routing::post(crate::http::handlers::preparation::receipt_reversal))
         .route("/v1/mobile/preparation/consumptions", axum::routing::post(crate::http::handlers::preparation::consumption))
         .route(

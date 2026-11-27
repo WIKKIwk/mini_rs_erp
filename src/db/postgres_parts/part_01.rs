@@ -9,7 +9,7 @@ macro_rules! migration {
     };
 }
 
-const POSTGRES_MIGRATIONS: [(&str, &str); 213] = [
+const POSTGRES_MIGRATIONS: [(&str, &str); 214] = [
     migration!("0001_mini_erp_foundation"),
     migration!("0002_order_integrity"),
     migration!("0003_erp_data_integrity"),
@@ -223,6 +223,7 @@ const POSTGRES_MIGRATIONS: [(&str, &str); 213] = [
     migration!("0211_waste_bin_access"),
     migration!("0212_material_paddon_roll_attachments"),
     migration!("0213_waste_bin_generated_codes"),
+    migration!("0214_preparation_formula_live"),
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]

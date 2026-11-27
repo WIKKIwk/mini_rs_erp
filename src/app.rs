@@ -117,6 +117,7 @@ pub struct AppState {
     pub warehouse_events: WarehouseEventHub,
     pub raw_material_events: Option<PostgresRawMaterialEventStore>,
     pub preparation: Option<crate::db::postgres_preparation::PostgresPreparationStore>,
+    pub(crate) preparation_formula_live: Option<crate::db::postgres_preparation::formula_live::FormulaLive>,
     pub raw_material_split: Option<crate::db::postgres_raw_material_split::PostgresRawMaterialSplitStore>,
     pub waste_bins: Option<crate::db::postgres_waste_bins::PostgresWasteBinStore>,
     pub raw_material_split_printer: Arc<dyn crate::core::gscale::ports::ScaleDriverPort>,
@@ -345,6 +346,8 @@ impl AppState {
         let scale_driver = build_scale_driver(&config);
         let raw_material_split_printer = scale_driver.clone();
         let warehouse_events = WarehouseEventHub::new();
+        let preparation_formula_live = werka_pool.clone()
+            .map(crate::db::postgres_preparation::formula_live::FormulaLive::start);
         if let Some(pool) = werka_pool.as_ref() {
             crate::db::postgres_inventory_live::start_listener(pool.clone(), warehouse_events.clone());
         }
@@ -428,6 +431,7 @@ impl AppState {
             raw_material_events,
             preparation: postgres_pool::postgres_pool("preparation")
                 .map(crate::db::postgres_preparation::PostgresPreparationStore::new),
+            preparation_formula_live,
             raw_material_split: postgres_pool::postgres_pool("raw_material_split")
                 .map(crate::db::postgres_raw_material_split::PostgresRawMaterialSplitStore::new),
             waste_bins,

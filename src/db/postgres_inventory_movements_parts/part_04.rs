@@ -112,6 +112,7 @@ async fn hydrate_transfers<'e>(
                 rejected_at_unix: row.rejected_at_unix,
                 cancelled_at_unix: row.cancelled_at_unix,
                 lines,
+                pending_preparation_lots: None,
             })
         })
         .collect()

@@ -98,6 +98,7 @@ impl MemoryInventoryMovementStore {
             rejected_at_unix: None,
             cancelled_at_unix: None,
             lines,
+            pending_preparation_lots: None,
         };
         if internal_transfer {
             complete_memory_transfer(&mut state, &mut transfer, actor, now_unix())?;

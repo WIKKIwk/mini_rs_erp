@@ -70,6 +70,9 @@ async fn fixture() -> (AppState, String, Arc<MemoryInventoryMovementStore>) {
         .await;
     store
         .seed_assets(vec![InventoryAsset {
+            stock_use: None,
+            preparation_qr: None,
+            paddon_code: None,
             is_metalayzer: false,
             kind: InventoryAssetKind::RawMaterial,
             asset_ref: "raw:30AA".into(),
@@ -178,6 +181,9 @@ async fn active_material_receipt_lists_unstaged_roll_and_records_delivery_before
     );
     store
         .seed_assets(vec![InventoryAsset {
+            stock_use: None,
+            preparation_qr: None,
+            paddon_code: None,
             is_metalayzer: false,
             kind: InventoryAssetKind::RawMaterial,
             asset_ref: "raw:30CC".into(),

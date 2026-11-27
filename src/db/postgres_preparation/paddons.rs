@@ -232,10 +232,18 @@ impl PostgresPreparationStore {
             .execute(&mut *tx)
             .await?;
         if actor.role == PrincipalRole::TayyorlovMasteri && !input.contents.is_empty() {
-            exclusive_warehouse(&mut tx, &actor.ref_, &input.warehouse).await?;
+            // Legacy scale materials still require an exclusive warehouse.
+            sqlx::query("LOCK TABLE mini_warehouse_assignments IN SHARE MODE")
+                .execute(&mut *tx)
+                .await?;
         }
-        let (warehouse_id, warehouse): (String, String) = sqlx::query_as(
-            "SELECT w.id, w.name FROM mini_warehouses w
+        let (warehouse_id, warehouse, exclusive): (String, String, bool) = sqlx::query_as(
+            "SELECT w.id, w.name, NOT EXISTS (
+                SELECT 1 FROM mini_warehouse_assignments other
+                WHERE lower(other.warehouse_name) = lower(w.name)
+                  AND other.assignment_kind = 'warehouse'
+                  AND (other.principal_role <> $2 OR other.principal_ref <> $3)
+             ) FROM mini_warehouses w
              JOIN mini_warehouse_assignments a ON lower(a.warehouse_name) = lower(w.name)
              WHERE lower(w.name) = lower($1) AND NOT w.is_group
                AND a.assignment_kind = 'warehouse' AND a.principal_role = $2
@@ -284,7 +292,7 @@ impl PostgresPreparationStore {
         .await?;
         for (index, line) in input.contents.iter().enumerate() {
             let (item_code, item_name) =
-                paddon_material(&mut tx, actor, &warehouse, line, material_groups).await?;
+                paddon_material(&mut tx, actor, &warehouse, line, material_groups, !exclusive).await?;
             let unit_kg = line.unit_kg.as_deref().map(decimal).transpose()?;
             let material = PaddonMaterial {
                 item_code,
@@ -373,13 +381,14 @@ async fn paddon_material(
     warehouse: &str,
     line: &PaddonLine,
     material_groups: &[String],
+    shared_warehouse: bool,
 ) -> Result<(String, String), PreparationError> {
     let code = line.item_code.trim();
     if actor.role == PrincipalRole::TayyorlovMasteri {
-        return match material_name_in_warehouse(tx, &actor.ref_, code, warehouse).await {
+        return match material_name_in_warehouse(tx, &actor.ref_, code, warehouse, shared_warehouse).await {
             Ok(name) => Ok((code.into(), name)),
             Err(PreparationError::MaterialNotInWarehouse)
-                if matches!(line.kind, UnitKind::Roll) =>
+                if !shared_warehouse && matches!(line.kind, UnitKind::Roll) =>
             {
                 assigned_rulon_item_for_receipt(tx, &actor.ref_, code).await
             }

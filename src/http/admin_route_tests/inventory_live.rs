@@ -119,6 +119,9 @@ fn location(warehouse_id: &str, name: &str) -> InventoryLocation {
 
 fn asset(id: &str, name: &str, location: &InventoryLocation) -> InventoryAsset {
     InventoryAsset {
+        stock_use: None,
+        preparation_qr: None,
+        paddon_code: None,
         is_metalayzer: false,
         kind: InventoryAssetKind::RawMaterial,
         asset_ref: id.into(),

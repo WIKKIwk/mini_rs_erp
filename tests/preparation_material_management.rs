@@ -133,7 +133,7 @@ async fn run_checks(pool: &PgPool, options: PgConnectOptions) {
             .await,
         Err(PreparationError::MaterialNotOwned)
     ));
-    for destination in ["Other", "Shared", "Missing"] {
+    for destination in ["Other", "Missing"] {
         assert!(matches!(
             store
                 .update_owned_material_warehouses(
@@ -141,7 +141,7 @@ async fn run_checks(pool: &PgPool, options: PgConnectOptions) {
                     warehouses(&second, &["Second", destination])
                 )
                 .await,
-            Err(PreparationError::WarehouseNotExclusive)
+            Err(PreparationError::Forbidden)
         ));
     }
     assert_eq!(

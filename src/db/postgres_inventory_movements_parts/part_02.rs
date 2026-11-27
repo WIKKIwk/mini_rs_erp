@@ -354,6 +354,7 @@ async fn receive_transfer_assets_tx(
             if actor.principal.role == crate::core::auth::models::PrincipalRole::TayyorlovMasteri {
                 crate::db::postgres_preparation::paddons::received_preparation_lot(
                     tx, &actor.principal, &line.asset_ref, &transfer.destination_warehouse,
+                    Some(&transfer.id),
                 ).await.map_err(|_| InventoryMovementError::StoreFailed)?;
             }
         }

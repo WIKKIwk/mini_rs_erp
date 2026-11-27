@@ -172,6 +172,25 @@ UPDATE mini_raw_material_stock SET warehouse = 'Renamed Preparation' WHERE id = 
     assert_eq!(sarf["entries"].as_array().unwrap().len(), 1);
     assert_eq!(sarf["entries"][0]["key"], "operation:used");
 
+    for (term, expected) in [
+        ("hist-pe", "transfer:confirmed"),
+        ("linked 1", "transfer:confirmed"),
+        ("direct", "operation:reversal"),
+        ("older", "operation:older-99"),
+    ] {
+        let filtered = store.history("master", &PreparationHistoryQuery {
+            q: term.into(),
+            limit: Some(1),
+            ..Default::default()
+        }).await.unwrap();
+        assert_eq!(filtered["entries"][0]["key"], expected);
+    }
+    let hidden_search = store.history("master", &PreparationHistoryQuery {
+        q: "other owner".into(),
+        ..Default::default()
+    }).await.unwrap();
+    assert_eq!(hidden_search["entries"], json!([]));
+
     pool.close().await;
     sqlx::query(&format!("DROP DATABASE {db}"))
         .execute(&admin)

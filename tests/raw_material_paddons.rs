@@ -409,7 +409,202 @@ async fn verify(pool: &PgPool, options: PgConnectOptions) {
     verify_batch_packing(pool, &store, &master, code, source_code, item).await;
     verify_cross_warehouse_packing(pool, &store, &master, supply_code, item).await;
     verify_material_inventory_packing(pool, &store, &supplier, supply_code, &empty_code).await;
+    verify_seriyo_workflow(pool, &runtime, &store, &master, &supplier).await;
     runtime.close().await;
+}
+
+async fn verify_seriyo_workflow(
+    pool: &PgPool,
+    runtime: &PgPool,
+    store: &PostgresPreparationStore,
+    master: &Principal,
+    supplier: &Principal,
+) {
+    use mini_rs_erp::core::inventory_movements::{
+        InventoryAssetKind, InventoryAssetQuery, InventoryAssetSelector, InventoryMovementStorePort,
+        InventoryStockUse, InventoryTransferCreate, InventoryTransferQuery, InventoryTransferStatus,
+    };
+    use mini_rs_erp::core::preparation::{
+        ConsumptionCreate, ConsumptionLine, MaterialWarehousesUpdate,
+        PreparationWarehouseMaterialScope, ReceiptCreate,
+    };
+    use mini_rs_erp::db::postgres_inventory_movements::PostgresInventoryMovementStore;
+
+    let material = store.create_material(master, MaterialCreate {
+        request_id: "shared-seriyo-catalog".into(),
+        name: "A Seriyo".into(),
+        warehouse: "Own".into(),
+    }).await.unwrap();
+    let item_code = material["item_code"].as_str().unwrap();
+    let direct = ReceiptCreate {
+        request_id: "shared-seriyo-direct".into(),
+        item_code: item_code.into(),
+        warehouse: "Shared".into(),
+        kg: "12.5".into(),
+    };
+    assert!(matches!(
+        store.receive(master, direct.clone()).await,
+        Err(PreparationError::MaterialNotInWarehouse)
+    ));
+    store.update_owned_material_warehouses(&master.ref_, MaterialWarehousesUpdate {
+        item_code: item_code.into(),
+        warehouses: vec!["Own".into(), "Shared".into()],
+    }).await.unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, String>("SELECT scope_kind FROM mini_preparation_material_warehouse_scopes
+             WHERE item_code=$1 AND warehouse_id='shared' AND active")
+            .bind(item_code).fetch_one(pool).await.unwrap(),
+        "shared"
+    );
+    let shared_item = store.create_material(master, MaterialCreate {
+        request_id: "new-seriyo-in-shared".into(),
+        name: "B Seriyo".into(),
+        warehouse: "Shared".into(),
+    }).await.unwrap();
+    let shared_item_code = shared_item["item_code"].as_str().unwrap();
+    let paddon = store.receive_raw_material_paddon(
+        master, receipt("Shared", shared_item_code, "shared-seriyo-paddon"), &[],
+    ).await.unwrap();
+    assert_eq!(paddon["warehouse"], "Shared");
+    let packed_kg: String = sqlx::query_scalar("SELECT sum(qty)::text FROM mini_raw_material_stock
+        WHERE warehouse='Shared' AND item_code=$1 AND status='on_paddon'")
+        .bind(shared_item_code).fetch_one(pool).await.unwrap();
+    assert_eq!(packed_kg, "75.000000");
+    sqlx::query("INSERT INTO mini_preparation_material_warehouse_scopes
+        (item_code,warehouse_id,scope_kind,created_by_role,created_by_ref)
+        VALUES ($1,'supply','shared','admin','admin-1')")
+        .bind(item_code).execute(pool).await.unwrap();
+    let (first, repeated) = tokio::join!(
+        store.receive(master, direct.clone()),
+        store.receive(master, direct.clone()),
+    );
+    assert_eq!(first.unwrap(), repeated.unwrap());
+    assert!(matches!(
+        store.receive(master, ReceiptCreate {
+            request_id: "outside-seriyo-direct".into(),
+            warehouse: "Supply".into(),
+            ..direct.clone()
+        }).await,
+        Err(PreparationError::Forbidden)
+    ));
+    assert!(matches!(
+        store.receive(supplier, direct).await,
+        Err(PreparationError::Forbidden)
+    ));
+    sqlx::query("INSERT INTO mini_raw_material_stock
+        (id,warehouse,item_code,item_name,barcode,qty) VALUES
+        ('external-seriyo','Supply',$1,'A Seriyo','SERIYO-EXTERNAL',100),
+        ('unaccepted-seriyo','Shared',$1,'A Seriyo','SERIYO-UNACCEPTED',15)")
+        .bind(item_code).execute(pool).await.unwrap();
+
+    let scopes = [("Shared".to_owned(), PreparationWarehouseMaterialScope::AssignedItemGroups(vec![]))]
+        .into_iter().collect();
+    let read_material = || async {
+        let snapshot = store.snapshot_with_warehouse_material_scopes(&master.ref_, &scopes).await.unwrap();
+        assert_eq!(snapshot["assigned_warehouse_ids"]["Shared"], "shared");
+        snapshot["materials"].as_array().unwrap().iter()
+            .find(|row| row["item_code"] == item_code).unwrap().clone()
+    };
+    let before = read_material().await;
+    assert_eq!(before["is_seriyo"], true);
+    assert_eq!(before["visible_warehouses"], json!(["Shared"]));
+    assert_eq!(before["receipt_warehouses"], json!(["Own", "Shared"]));
+    assert_eq!(before["balances"], json!([{"warehouse":"Shared","kg":"27.500000"}]));
+    assert_eq!(before["consumable_balances"], json!([{"warehouse":"Shared","kg":"12.500000"}]));
+    let hidden = store.snapshot_with_warehouse_material_scopes(&master.ref_, &Default::default())
+        .await.unwrap();
+    let hidden_item = hidden["materials"].as_array().unwrap().iter()
+        .find(|row| row["item_code"] == item_code).unwrap();
+    assert_eq!(hidden_item["visible_warehouses"], json!([]));
+    assert_eq!(hidden_item["balances"], json!([]));
+    assert_eq!(hidden_item["consumable_balances"], json!([]));
+
+    let moves = PostgresInventoryMovementStore::new(runtime.clone());
+    let master_inventory = InventoryActor::new(master.clone(), false, ["Own".into(), "Shared".into()]);
+    let supplier_inventory = InventoryActor::new(supplier.clone(), false, ["Supply".into(), "Shared".into()]);
+    let shared_reader = InventoryActor::new(supplier.clone(), false, ["Shared".into()]);
+    for (category, expected) in [
+        (InventoryStockUse::PreparationInput, "SERIYO"),
+        (InventoryStockUse::PreparedRoll, "INV-PACK-B"),
+    ] {
+        let rows = InventoryMovementStorePort::assets(
+            &moves, &shared_reader, &InventoryAssetQuery {
+                warehouse_id: "shared".into(),
+                stock_use: Some(category),
+                query: if category == InventoryStockUse::PreparedRoll { "INV-PACK-".into() } else { "A Seriyo".into() },
+                limit: 1,
+                ..Default::default()
+            },
+        ).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].stock_use, Some(category));
+        if category == InventoryStockUse::PreparedRoll {
+            assert_eq!(rows[0].identifier, expected);
+        } else {
+            assert_eq!(rows[0].item_code, item_code);
+        }
+    }
+    let transfer_id = "incoming-seriyo-transfer";
+    let transfer = InventoryMovementStorePort::create_transfer(&moves, &supplier_inventory, transfer_id, &InventoryTransferCreate {
+        source_warehouse_id: "supply".into(),
+        destination_warehouse_id: "shared".into(),
+        assets: vec![InventoryAssetSelector {
+            asset_kind: InventoryAssetKind::RawMaterial,
+            asset_ref: "external-seriyo".into(),
+        }],
+        note: String::new(),
+        idempotency_key: "request-seriyo-transfer".into(),
+    }).await.unwrap();
+    assert_eq!(transfer.status, InventoryTransferStatus::Received);
+    assert_eq!(transfer.received_by_name, supplier.display_name);
+    assert_eq!(read_material().await["consumable_balances"], before["consumable_balances"]);
+    let incoming = InventoryTransferQuery {
+        direction: "incoming".into(), limit: 100, ..Default::default()
+    };
+    let pending = async |actor: &InventoryActor| {
+        InventoryMovementStorePort::transfers(&moves, actor, &incoming).await.unwrap()
+            .into_iter().find(|row| row.id == transfer_id).unwrap().pending_preparation_lots
+    };
+    assert_eq!(pending(&master_inventory).await, Some(1));
+    assert_eq!(pending(&supplier_inventory).await, None);
+    assert!(matches!(store.accept_received_transfer(supplier, transfer_id).await, Err(PreparationError::Forbidden)));
+    let unassigned = actor(PrincipalRole::TayyorlovMasteri, "not-assigned");
+    assert!(matches!(store.accept_received_transfer(&unassigned, transfer_id).await, Err(PreparationError::Forbidden)));
+    let (accepted, retried) = tokio::join!(
+        store.accept_received_transfer(master, transfer_id),
+        store.accept_received_transfer(master, transfer_id),
+    );
+    assert_eq!(accepted.unwrap(), retried.unwrap());
+    assert_eq!(pending(&master_inventory).await, None);
+    let receipts: i64 = sqlx::query_scalar("SELECT count(*) FROM mini_preparation_receipts WHERE stock_id='external-seriyo'")
+        .fetch_one(pool).await.unwrap();
+    assert_eq!(receipts, 1);
+    assert_eq!(read_material().await["consumable_balances"], json!([{"warehouse":"Shared","kg":"112.500000"}]));
+
+    sqlx::raw_sql(r#"INSERT INTO mini_production_maps(id,product_code,title,code,map_json,lifecycle_status)
+        VALUES ('seriyo-order','P','P','seriyo-order','{"order_kg":60}','released');
+        INSERT INTO mini_orders(id,code,order_number,product_name)
+        VALUES ('seriyo-order','seriyo-order','seriyo-order','P');
+        INSERT INTO mini_order_products(id,order_id,product_name,layers_json)
+        VALUES ('seriyo-product','seriyo-order','P','[{"material_id":"paddon-input","material":"Paddon","micron":"12"}]');"#)
+        .execute(pool).await.unwrap();
+    let consume = ConsumptionCreate {
+        request_id: "consume-shared-seriyo".into(),
+        warehouse: "Shared".into(),
+        order_id: "seriyo-order".into(),
+        expected_order_kg: "60".into(),
+        lines: vec![ConsumptionLine {
+            item_code: item_code.into(),
+            percent: "100".into(),
+        }],
+    };
+    let first = store.consume(master, consume.clone()).await.unwrap();
+    assert_eq!(store.consume(master, consume).await.unwrap(), first);
+    assert_eq!(read_material().await["consumable_balances"], json!([{"warehouse":"Shared","kg":"52.500000"}]));
+    let stock_rows: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM mini_raw_material_stock WHERE barcode='SERIYO-EXTERNAL'",
+    ).fetch_one(pool).await.unwrap();
+    assert_eq!(stock_rows, 1);
 }
 
 async fn verify_material_inventory_packing(
@@ -508,6 +703,32 @@ async fn verify_material_inventory_packing(
         "SELECT status,barcode,qty::text,source_receipt_id FROM mini_raw_material_stock WHERE id=$1",
     ).bind(free).fetch_one(pool).await.unwrap();
     assert_eq!(stock, ("on_paddon".into(), "INV-PACK-A".into(), "12.750000".into(), free.into()));
+    use mini_rs_erp::core::inventory_movements::{InventoryAssetQuery, InventoryMovementStorePort};
+    use mini_rs_erp::db::postgres_inventory_movements::PostgresInventoryMovementStore;
+    let moves = PostgresInventoryMovementStore::new(pool.clone());
+    let supplier_inventory = InventoryActor::new(supplier.clone(), false, ["Shared".into()]);
+    let master_inventory = InventoryActor::new(
+        actor(PrincipalRole::TayyorlovMasteri, "prep-1"), false, ["Shared".into()],
+    );
+    let outside = InventoryActor::new(master_inventory.principal.clone(), false, ["Own".into()]);
+    let packed = InventoryAssetQuery {
+        identifier: "inv-pack-a".into(), include_prepared_paddons: true,
+        packed_item_groups: groups.to_vec(), limit: 10, ..Default::default()
+    };
+    for viewer in [&supplier_inventory, &master_inventory] {
+        let rows = InventoryMovementStorePort::assets(&moves, viewer, &packed).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].paddon_code.as_deref(), Some(code));
+        assert_eq!(rows[0].preparation_qr, Some(true));
+        assert_eq!(rows[0].status, "on_paddon");
+    }
+    assert!(InventoryMovementStorePort::assets(&moves, &outside, &packed).await.unwrap().is_empty());
+    let without_group = InventoryAssetQuery { packed_item_groups: vec![], ..packed.clone() };
+    assert!(InventoryMovementStorePort::assets(&moves, &supplier_inventory, &without_group).await.unwrap().is_empty());
+    let partial = InventoryAssetQuery { identifier: "INV-PACK-".into(), ..packed.clone() };
+    assert!(InventoryMovementStorePort::assets(&moves, &supplier_inventory, &partial).await.unwrap().is_empty());
+    let ordinary = InventoryAssetQuery { include_prepared_paddons: false, ..packed };
+    assert!(InventoryMovementStorePort::assets(&moves, &supplier_inventory, &ordinary).await.unwrap().is_empty());
     let audit: (i64, bool) = sqlx::query_as(
         "SELECT count(*), bool_and(owner_role='material_taminotchi' AND owner_ref='supply-1'
                 AND created_at IS NOT NULL)
@@ -729,7 +950,7 @@ async fn verify_empty_paddon(
     ));
     assert!(matches!(
         store.receive_raw_material_paddon(master, receipt("Shared", item, "shared-stock-1"), &[]).await,
-        Err(PreparationError::WarehouseNotExclusive)
+        Err(PreparationError::MaterialNotInWarehouse)
     ));
 
     let (created, retried) = tokio::join!(

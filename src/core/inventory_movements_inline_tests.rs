@@ -47,6 +47,9 @@ mod tests {
         store
             .seed_assets(vec![
                 InventoryAsset {
+                    stock_use: None,
+                    preparation_qr: None,
+                    paddon_code: None,
                     is_metalayzer: false,
                     kind: InventoryAssetKind::RawMaterial,
                     asset_ref: "raw:state".to_string(),
@@ -63,6 +66,9 @@ mod tests {
                     placement_version: 2,
                 },
                 InventoryAsset {
+                    stock_use: None,
+                    preparation_qr: None,
+                    paddon_code: None,
                     is_metalayzer: false,
                     kind: InventoryAssetKind::RawMaterial,
                     asset_ref: "raw:warehouse".to_string(),
@@ -127,6 +133,9 @@ mod tests {
             .await;
         store
             .seed_assets(vec![InventoryAsset {
+                stock_use: None,
+                preparation_qr: None,
+                paddon_code: None,
                 is_metalayzer: false,
                 kind: InventoryAssetKind::RawMaterial,
                 asset_ref: "raw:1".to_string(),
@@ -282,6 +291,9 @@ mod tests {
         store
             .seed_assets(vec![
                 InventoryAsset {
+                    stock_use: None,
+                    preparation_qr: None,
+                    paddon_code: None,
                     is_metalayzer: false,
                     kind: InventoryAssetKind::RawMaterial,
                     asset_ref: "raw:1".to_string(),
@@ -298,6 +310,9 @@ mod tests {
                     placement_version: 1,
                 },
                 InventoryAsset {
+                    stock_use: None,
+                    preparation_qr: None,
+                    paddon_code: None,
                     is_metalayzer: false,
                     kind: InventoryAssetKind::RawMaterial,
                     asset_ref: "raw:2".to_string(),
@@ -387,6 +402,9 @@ mod tests {
         store
             .seed_assets(vec![
                 InventoryAsset {
+                    stock_use: None,
+                    preparation_qr: None,
+                    paddon_code: None,
                     is_metalayzer: false,
                     kind: InventoryAssetKind::RawMaterial,
                     asset_ref: "raw:a".to_string(),
@@ -403,6 +421,9 @@ mod tests {
                     placement_version: 2,
                 },
                 InventoryAsset {
+                    stock_use: None,
+                    preparation_qr: None,
+                    paddon_code: None,
                     is_metalayzer: false,
                     kind: InventoryAssetKind::RawMaterial,
                     asset_ref: "raw:b".to_string(),
@@ -465,6 +486,9 @@ mod tests {
             .await;
         store
             .seed_assets(vec![InventoryAsset {
+                stock_use: None,
+                preparation_qr: None,
+                paddon_code: None,
                 is_metalayzer: false,
                 kind: InventoryAssetKind::RawMaterial,
                 asset_ref: "raw:1".to_string(),
@@ -515,6 +539,9 @@ mod tests {
             .await;
         store
             .seed_assets(vec![InventoryAsset {
+                stock_use: None,
+                preparation_qr: None,
+                paddon_code: None,
                 is_metalayzer: false,
                 kind: InventoryAssetKind::Qolip,
                 asset_ref: "qolip:1".to_string(),
@@ -629,6 +656,9 @@ mod tests {
         store
             .seed_assets(vec![
                 InventoryAsset {
+                    stock_use: None,
+                    preparation_qr: None,
+                    paddon_code: None,
                     is_metalayzer: false,
                     kind: InventoryAssetKind::RawMaterial,
                     asset_ref: "raw:1".to_string(),
@@ -645,6 +675,9 @@ mod tests {
                     placement_version: 1,
                 },
                 InventoryAsset {
+                    stock_use: None,
+                    preparation_qr: None,
+                    paddon_code: None,
                     is_metalayzer: false,
                     kind: InventoryAssetKind::RawMaterial,
                     asset_ref: "raw:2".to_string(),
@@ -699,6 +732,9 @@ mod tests {
 
         store
             .seed_assets(vec![InventoryAsset {
+                stock_use: None,
+                preparation_qr: None,
+                paddon_code: None,
                 is_metalayzer: false,
                 kind: InventoryAssetKind::RawMaterial,
                 asset_ref: "raw:2".to_string(),
@@ -771,6 +807,9 @@ mod tests {
             .await;
         store
             .seed_assets(vec![InventoryAsset {
+                stock_use: None,
+                preparation_qr: None,
+                paddon_code: None,
                 is_metalayzer: false,
                 kind: InventoryAssetKind::RawMaterial,
                 asset_ref: "raw:1".to_string(),
@@ -854,6 +893,9 @@ mod tests {
             .await;
         store
             .seed_assets(vec![InventoryAsset {
+                stock_use: None,
+                preparation_qr: None,
+                paddon_code: None,
                 is_metalayzer: false,
                 kind: InventoryAssetKind::FinishedGoods,
                 asset_ref: "finished:1".to_string(),

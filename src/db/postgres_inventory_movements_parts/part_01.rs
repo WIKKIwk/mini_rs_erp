@@ -15,10 +15,23 @@ include!("../postgres_inventory_movements_impl_parts/part_03.rs");
 
 include!("../postgres_inventory_movements_trait_impl.rs");
 
-const ASSET_LIST_SQL: &str = r#"
-WITH assets AS (
+static ASSET_LIST_SQL: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    let seriyo_groups = super::postgres_preparation::SERIYO_GROUPS_SQL;
+    format!(r#"
+WITH RECURSIVE {seriyo_groups}, assets AS (
     SELECT
         stock.is_metalayzer,
+        CASE
+            WHEN lower(btrim(item.item_group)) IN (SELECT lower(btrim(name)) FROM seriyo_groups)
+                THEN 'preparation_input'
+            WHEN receipt.name IS NOT NULL OR (stock.payload_json->>'source' = 'gscale_simple' AND EXISTS (
+                SELECT 1 FROM mini_preparation_receipts receipt
+                WHERE receipt.stock_id = stock.id
+            )) THEN 'prepared_roll'
+            ELSE 'other'
+        END AS stock_use,
+        (receipt.name IS NOT NULL) AS preparation_qr,
+        paddon.code AS paddon_code,
         'raw_material'::text AS asset_kind,
         stock.id AS asset_ref,
         stock.warehouse,
@@ -34,14 +47,32 @@ WITH assets AS (
         END AS status,
         COALESCE(stock.payload_json->>'inventory_transfer_id', '') AS transfer_id
     FROM mini_raw_material_stock stock
+    LEFT JOIN mini_items item ON item.code = stock.item_code
+    LEFT JOIN mini_gscale_receipts receipt ON receipt.name = stock.source_receipt_id
+        AND lower(receipt.barcode) = lower(stock.barcode)
+        AND receipt.status = 'submitted'
+        AND receipt.payload_json->>'actor_role' = 'tayyorlov_masteri'
+        AND btrim(COALESCE(receipt.payload_json->>'actor_ref', '')) <> ''
     LEFT JOIN mini_inventory_transfers transfer
       ON transfer.id = stock.payload_json->>'inventory_transfer_id'
-    WHERE stock.qty > 0 AND stock.status NOT IN ('consumed', 'deleted', 'on_paddon')
+    LEFT JOIN mini_raw_material_paddon_units unit ON $14
+        AND stock.status = 'on_paddon'
+        AND unit.stock_id = stock.id AND unit.issue_id IS NULL AND unit.prepared_roll
+    LEFT JOIN mini_raw_material_paddons paddon ON paddon.id = unit.paddon_id
+        AND EXISTS (SELECT 1 FROM mini_warehouses w
+                    WHERE w.id = paddon.warehouse_id AND lower(w.name) = lower(stock.warehouse))
+    WHERE stock.qty > 0 AND stock.status NOT IN ('consumed', 'deleted')
+      AND (stock.status <> 'on_paddon' OR (
+          paddon.code IS NOT NULL AND ($15::text[] IS NULL OR lower(btrim(item.item_group)) = ANY($15))
+      ))
 
     UNION ALL
 
     SELECT
         false AS is_metalayzer,
+        'other',
+        false,
+        NULL::text,
         'finished_goods'::text,
         stock.id,
         stock.warehouse,
@@ -65,6 +96,9 @@ WITH assets AS (
 
     SELECT
         false AS is_metalayzer,
+        'other',
+        false,
+        NULL::text,
         'qolip'::text,
         stock.id,
         stock.warehouse,
@@ -86,6 +120,9 @@ WITH assets AS (
 )
 SELECT
     assets.is_metalayzer,
+    assets.stock_use,
+    assets.preparation_qr,
+    assets.paddon_code,
     assets.asset_kind,
     assets.asset_ref,
     warehouse.id AS custody_warehouse_id,
@@ -139,9 +176,16 @@ WHERE (
   )
   AND ($9 = false OR location.kind = 'state')
   AND ($10 = false OR location.kind = 'warehouse')
+  AND ($12 = '' OR assets.stock_use = $12)
+  AND ($13 = '' OR lower(btrim(assets.identifier)) = lower($13))
+  AND (assets.paddon_code IS NULL OR (
+      ($1 OR lower(assets.warehouse) = ANY($2))
+      AND location.kind = 'warehouse' AND location.warehouse_id = warehouse.id
+  ))
 ORDER BY lower(assets.item_name), lower(assets.identifier), assets.asset_ref
 LIMIT $7 OFFSET $8
-"#;
+"#)
+});
 
 #[derive(sqlx::FromRow)]
 struct InventoryLocationRow {
@@ -165,6 +209,9 @@ struct RawMaterialStatePlacementRow {
 #[derive(sqlx::FromRow)]
 struct InventoryAssetRow {
     is_metalayzer: bool,
+    stock_use: String,
+    preparation_qr: bool,
+    paddon_code: Option<String>,
     asset_kind: String,
     asset_ref: String,
     custody_warehouse_id: String,
@@ -277,6 +324,13 @@ fn location_from_row(
 fn asset_from_row(row: InventoryAssetRow) -> Result<InventoryAsset, InventoryMovementError> {
     Ok(InventoryAsset {
         is_metalayzer: row.is_metalayzer,
+        stock_use: Some(match row.stock_use.as_str() {
+            "preparation_input" => InventoryStockUse::PreparationInput,
+            "prepared_roll" => InventoryStockUse::PreparedRoll,
+            _ => InventoryStockUse::Other,
+        }),
+        preparation_qr: (row.stock_use == "prepared_roll").then_some(row.preparation_qr),
+        paddon_code: row.paddon_code,
         kind: InventoryAssetKind::parse(&row.asset_kind)?,
         asset_ref: row.asset_ref,
         custody_warehouse_id: row.custody_warehouse_id,
@@ -302,7 +356,7 @@ async fn fetch_asset(
     kind: InventoryAssetKind,
     asset_ref: &str,
 ) -> Result<InventoryAsset, InventoryMovementError> {
-    let rows = sqlx::query_as::<_, InventoryAssetRow>(ASSET_LIST_SQL)
+    let rows = sqlx::query_as::<_, InventoryAssetRow>(&ASSET_LIST_SQL)
         .bind(true)
         .bind(Vec::<String>::new())
         .bind("")
@@ -314,6 +368,10 @@ async fn fetch_asset(
         .bind(false)
         .bind(false)
         .bind("")
+        .bind("")
+        .bind("")
+        .bind(false)
+        .bind(Option::<Vec<String>>::None)
         .fetch_all(pool)
         .await
         .map_err(store_error)?;

@@ -5,11 +5,24 @@ pub(crate) async fn received_preparation_lot(
     master: &Principal,
     stock_id: &str,
     warehouse: &str,
+    transfer_id: Option<&str>,
 ) -> Result<Option<String>, PreparationError> {
-    let row: Option<(String, String, String)> = sqlx::query_as(
-        "SELECT item_code,item_name,qty::text FROM mini_raw_material_stock
-         WHERE id=$1 AND warehouse=$2 AND payload_json->>'source'='raw_material_paddon' AND status='available'")
-        .bind(stock_id).bind(warehouse).fetch_optional(&mut **tx).await?;
+    let row: Option<(String, String, String)> = sqlx::query_as(&format!(
+        "WITH RECURSIVE {SERIYO_GROUPS_SQL}
+         SELECT s.item_code,s.item_name,s.qty::text FROM mini_raw_material_stock s
+         WHERE s.id=$1 AND s.warehouse=$2 AND s.status='available' AND s.qty>0 AND s.uom='kg'
+           AND (s.payload_json->>'source'='raw_material_paddon' OR EXISTS (
+                SELECT 1 FROM mini_preparation_materials m
+                JOIN mini_items i ON i.code=m.item_code
+                JOIN seriyo_groups g ON lower(btrim(g.name))=lower(btrim(i.item_group))
+                WHERE m.item_code=s.item_code AND m.owner_ref=$3
+           ))"
+    ))
+    .bind(stock_id)
+    .bind(warehouse)
+    .bind(&master.ref_)
+    .fetch_optional(&mut **tx)
+    .await?;
     let Some((code, name, kg)) = row else {
         return Ok(None);
     };
@@ -27,10 +40,10 @@ pub(crate) async fn received_preparation_lot(
         tx,
         &id,
         &master.ref_,
-        &format!("paddon-transfer-{id}"),
+        &format!("warehouse-transfer-{id}"),
         "receipt",
         None,
-        json!({"kind":"paddon_transfer","stock_id":stock_id}),
+        json!({"kind":"warehouse_transfer","stock_id":stock_id,"transfer_id":transfer_id}),
         &output,
     )
     .await?;

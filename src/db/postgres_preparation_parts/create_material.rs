@@ -4,6 +4,9 @@ impl PostgresPreparationStore {
         actor: &Principal,
         input: MaterialCreate,
     ) -> Result<Value, PreparationError> {
+        if actor.role != crate::core::auth::models::PrincipalRole::TayyorlovMasteri {
+            return Err(PreparationError::Forbidden);
+        }
         let name = input.name.split_whitespace().collect::<Vec<_>>().join(" ");
         if name.is_empty() || name.chars().count() > 160 {
             return Err(PreparationError::Invalid(
@@ -18,13 +21,8 @@ impl PostgresPreparationStore {
         if let Some(result) = replay(&mut tx, &actor.ref_, &input.request_id, &request).await? {
             return Ok(result);
         }
-        let warehouse = exclusive_warehouse(&mut tx, &actor.ref_, &input.warehouse).await?;
-        let warehouse_id: String = sqlx::query_scalar(
-            "SELECT id FROM mini_warehouses WHERE lower(name) = lower($1) FOR SHARE",
-        )
-        .bind(&warehouse)
-        .fetch_one(&mut *tx)
-        .await?;
+        let (warehouse_id, warehouse, exclusive) =
+            assigned_warehouse_binding(&mut tx, &actor.ref_, &input.warehouse).await?;
         let duplicate: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM mini_preparation_materials WHERE owner_ref = $1 AND name_key = lower($2))")
             .bind(&actor.ref_).bind(&name).fetch_one(&mut *tx).await?;
         if duplicate {
@@ -58,10 +56,11 @@ impl PostgresPreparationStore {
         sqlx::query(
             "INSERT INTO mini_preparation_material_warehouse_scopes
                  (item_code, warehouse_id, scope_kind, created_by_role, created_by_ref)
-             VALUES ($1, $2, 'exclusive', 'tayyorlov_masteri', $3)",
+             VALUES ($1, $2, $3, 'tayyorlov_masteri', $4)",
         )
         .bind(&code)
         .bind(&warehouse_id)
+        .bind(if exclusive { "exclusive" } else { "shared" })
         .bind(&actor.ref_)
         .execute(&mut *tx)
         .await?;
@@ -87,20 +86,20 @@ impl PostgresPreparationStore {
         actor: &Principal,
         input: ReceiptCreate,
     ) -> Result<Value, PreparationError> {
+        if actor.role != crate::core::auth::models::PrincipalRole::TayyorlovMasteri {
+            return Err(PreparationError::Forbidden);
+        }
         let kg = decimal(&input.kg)?;
         let request = json!({"kind": "receipt", "input": &input});
         let mut tx = self.begin(&actor.ref_, &input.request_id).await?;
+        let warehouse = assigned_warehouse(&mut tx, &actor.ref_, &input.warehouse).await?;
         if let Some(result) = replay(&mut tx, &actor.ref_, &input.request_id, &request).await? {
             return Ok(result);
         }
-        let warehouse = exclusive_warehouse(&mut tx, &actor.ref_, &input.warehouse)
-            .await
-            .map_err(|error| match error {
-                PreparationError::WarehouseNotExclusive => PreparationError::ReceiptRequiresQr,
-                other => other,
-            })?;
-        let name =
-            material_name_in_warehouse(&mut tx, &actor.ref_, &input.item_code, &warehouse).await?;
+        let name = material_name_in_warehouse(
+            &mut tx, &actor.ref_, &input.item_code, &warehouse, true,
+        )
+        .await?;
         let id = new_id();
         let stock_id = format!("raw:prep:{id}");
         let barcode = format!("PREP-{id}");

@@ -2,7 +2,17 @@ use super::*;
 
 impl PostgresPreparationStore {
     pub async fn formula_sets(&self, owner: &str) -> Result<Value, PreparationError> {
-        let sets: Vec<Value> = sqlx::query_scalar(
+        let sets = Self::formula_set_rows(&self.pool, owner, None, false).await?;
+        Ok(json!({"sets":sets}))
+    }
+
+    pub(super) async fn formula_set_rows<'e>(
+        db: impl sqlx::PgExecutor<'e>,
+        owner: &str,
+        products: Option<&[String]>,
+        include_sort: bool,
+    ) -> Result<Vec<Value>, PreparationError> {
+        Ok(sqlx::query_scalar(
             "WITH matched_orders AS (
                 SELECT DISTINCT m.id, COALESCE(NULLIF(btrim(m.code), ''), m.order_number) AS code,
                        m.product_code
@@ -11,7 +21,8 @@ impl PostgresPreparationStore {
                 JOIN mini_preparation_material_responsibilities r
                   ON r.principal_role='tayyorlov_masteri' AND r.principal_ref=$1
                  AND lower(r.material_id)=lower(f.material_id)
-                WHERE m.id NOT LIKE 'template-%' AND (EXISTS (
+                WHERE ($2::text[] IS NULL OR f.product_code=ANY($2))
+                  AND m.id NOT LIKE 'template-%' AND (EXISTS (
                     SELECT 1 FROM mini_order_products p
                     LEFT JOIN LATERAL jsonb_array_elements(COALESCE(p.layers_json,'[]'::jsonb)) l ON true
                     WHERE p.order_id=m.id AND (
@@ -46,21 +57,25 @@ impl PostgresPreparationStore {
                     'material_id',f.material_id,'material_name',COALESCE(r.material_name,f.material_name),
                     'formula_code',f.formula_code,'name',f.name,'lines',f.lines,'share_percent',f.share_percent::text,
                     'variant_id',f.variant_id,'variant_name',v.name)
-                    ORDER BY lower(COALESCE(r.material_name,f.material_name)),f.material_id,lower(f.name),f.name))
+                    ORDER BY lower(COALESCE(r.material_name,f.material_name)),f.material_id,lower(f.name),f.name)
+            ) || CASE WHEN $3 THEN jsonb_build_object('sort_at',
+                (extract(epoch FROM greatest(s.updated_at,max(f.updated_at))) * 1000000)::bigint)
+                ELSE '{}'::jsonb END
             FROM mini_preparation_formula_sets s
             JOIN mini_preparation_formulas f ON f.set_id=s.set_id
             JOIN mini_preparation_formula_variants v ON v.id=f.variant_id AND v.catalog_source_id IS NULL
             LEFT JOIN mini_preparation_material_responsibilities r
               ON r.principal_role='tayyorlov_masteri' AND r.principal_ref=s.owner_ref
              AND lower(r.material_id)=lower(f.material_id)
-            WHERE s.owner_ref=$1
+            WHERE s.owner_ref=$1 AND ($2::text[] IS NULL OR s.product_code=ANY($2))
             GROUP BY s.set_id
             ORDER BY greatest(s.updated_at,max(f.updated_at)) DESC,s.set_id",
         )
         .bind(owner)
-        .fetch_all(&self.pool)
-        .await?;
-        Ok(json!({"sets":sets}))
+        .bind(products)
+        .bind(include_sort)
+        .fetch_all(db)
+        .await?)
     }
 
     pub async fn rename_formula_set(

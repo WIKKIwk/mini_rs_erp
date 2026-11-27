@@ -42,12 +42,17 @@ pub async fn inventory_assets(
 pub(super) async fn inventory_asset_rows(
     state: &AppState,
     actor: &InventoryActor,
-    query: InventoryAssetQuery,
+    mut query: InventoryAssetQuery,
 ) -> Result<InventoryAssetRows, AdminError> {
     let include_order_assignment = query.include_order_assignment
         && matches!(actor.principal.role, PrincipalRole::MaterialTaminotchi | PrincipalRole::TayyorlovMasteri);
     if include_order_assignment && actor.principal.role == PrincipalRole::MaterialTaminotchi {
         require_capability(&state, &actor.principal, Capability::RawMaterialAssign).await?;
+    }
+    if query.include_prepared_paddons && actor.principal.role == PrincipalRole::MaterialTaminotchi {
+        query.packed_item_groups = state.admin.principal_assigned_item_group_scope(&actor.principal)
+            .await.map_err(|_| server_error("inventory_material_group_scope_failed"))?
+            .into_iter().map(|group| group.trim().to_lowercase()).collect();
     }
     let assets = state
         .inventory_movements

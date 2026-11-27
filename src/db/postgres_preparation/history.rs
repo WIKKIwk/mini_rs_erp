@@ -30,6 +30,7 @@ impl HistoryFilter {
 #[serde(default)]
 pub(crate) struct PreparationHistoryQuery {
     warehouse_id: String,
+    q: String,
     kind: HistoryFilter,
     before_time: Option<String>,
     before_key: Option<String>,
@@ -74,6 +75,7 @@ impl PostgresPreparationStore {
             .bind(query.before_time.as_deref())
             .bind(query.before_key.as_deref())
             .bind(limit + 1)
+            .bind(query.q.trim())
             .fetch_all(&mut *tx)
             .await?;
         let has_more = rows.len() > limit as usize;
@@ -231,6 +233,20 @@ SELECT key, id, kind, to_jsonb(occurred_at) #>> '{}' AS time,
        preparation_receipts
 FROM combined
 WHERE ($4::text IS NULL OR (occurred_at, key) < ($4::text::timestamptz, $5::text))
+  AND ($7 = '' OR
+       (kind = 'transfer' AND (strpos(lower(COALESCE(preparation_receipts::text, '')), lower($7)) > 0 OR EXISTS (
+           SELECT 1 FROM mini_inventory_transfer_lines l
+           WHERE l.transfer_id = combined.id
+             AND (strpos(lower(l.item_name), lower($7)) > 0
+                  OR strpos(lower(l.item_code), lower($7)) > 0
+                  OR strpos(lower(l.identifier), lower($7)) > 0)
+       ))) OR
+       (kind <> 'transfer' AND EXISTS (
+           SELECT 1 FROM mini_preparation_operations o
+           WHERE o.id = combined.id
+             AND (strpos(lower(o.request_json::text), lower($7)) > 0
+                  OR strpos(lower(o.response_json::text), lower($7)) > 0)
+       )))
 ORDER BY occurred_at DESC, key DESC
 LIMIT $6
 "#;

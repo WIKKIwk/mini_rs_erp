@@ -13,8 +13,9 @@ impl PostgresPreparationStore {
         if code.is_empty() || code.len() > 512 {
             return Err(PreparationError::Invalid("Homashyo kodi noto‘g‘ri"));
         }
-        let result: Option<Value> = sqlx::query_scalar(
-            "SELECT jsonb_build_object('item_code', i.code,
+        let result: Option<Value> = sqlx::query_scalar(&format!(
+            "WITH RECURSIVE {SERIYO_GROUPS_SQL}
+             SELECT jsonb_build_object('item_code', i.code,
                 'warehouses', COALESCE((SELECT jsonb_agg(w.name ORDER BY w.name)
                     FROM mini_preparation_material_warehouse_scopes s
                     JOIN mini_warehouses w ON w.id=s.warehouse_id
@@ -28,14 +29,21 @@ impl PostgresPreparationStore {
                         WHERE mine.assignment_kind='warehouse'
                           AND lower(mine.warehouse_name)=lower(w.name)
                           AND mine.principal_role='tayyorlov_masteri' AND mine.principal_ref=$1)
-                      AND NOT EXISTS (SELECT 1 FROM mini_warehouse_assignments other
-                        WHERE other.assignment_kind='warehouse'
-                          AND lower(other.warehouse_name)=lower(w.name)
-                          AND (other.principal_role<>'tayyorlov_masteri' OR other.principal_ref<>$1))
+                      AND (
+                        EXISTS (SELECT 1 FROM seriyo_groups g WHERE lower(btrim(g.name))=lower(btrim(i.item_group)))
+                        OR NOT EXISTS (SELECT 1 FROM mini_warehouse_assignments other
+                          WHERE other.assignment_kind='warehouse'
+                            AND lower(other.warehouse_name)=lower(w.name)
+                            AND (other.principal_role<>'tayyorlov_masteri' OR other.principal_ref<>$1))
+                      )
+                      AND NOT EXISTS (SELECT 1 FROM mini_preparation_material_warehouse_scopes binding
+                        WHERE binding.item_code=i.code AND binding.warehouse_id=w.id
+                          AND binding.created_by_role <> 'migration'
+                          AND (binding.created_by_role <> 'tayyorlov_masteri' OR binding.created_by_ref <> $1))
                 ), '[]'::jsonb))
              FROM mini_preparation_materials m JOIN mini_items i ON i.code=m.item_code
-             WHERE m.owner_ref=$1 AND m.item_code=$2",
-        )
+             WHERE m.owner_ref=$1 AND m.item_code=$2"
+        ))
         .bind(owner)
         .bind(code)
         .fetch_optional(&self.pool)
@@ -138,6 +146,14 @@ impl PostgresPreparationStore {
             .await
             .map_err(material_write_error)?;
         let (code, name) = owned_material(&mut tx, owner, &input.item_code).await?;
+        let is_seriyo: bool = sqlx::query_scalar(&format!(
+            "WITH RECURSIVE {SERIYO_GROUPS_SQL}
+             SELECT EXISTS (SELECT 1 FROM mini_items i JOIN seriyo_groups g
+               ON lower(btrim(g.name))=lower(btrim(i.item_group)) WHERE i.code=$1)"
+        ))
+        .bind(&code)
+        .fetch_one(&mut *tx)
+        .await?;
         sqlx::query(
             "LOCK TABLE mini_preparation_material_warehouse_scopes IN SHARE ROW EXCLUSIVE MODE",
         )
@@ -147,43 +163,49 @@ impl PostgresPreparationStore {
         sqlx::query("LOCK TABLE mini_raw_material_stock, mini_finished_goods_stock,
             mini_gscale_receipts, mini_inventory_transfers, mini_inventory_transfer_lines IN SHARE MODE")
             .execute(&mut *tx).await.map_err(material_write_error)?;
-        let current: Vec<(String, String)> = sqlx::query_as(
-            "SELECT w.id,w.name FROM mini_warehouses w
-             WHERE EXISTS(SELECT 1 FROM mini_preparation_material_warehouse_scopes s
-                 WHERE s.item_code=$1 AND s.warehouse_id=w.id AND s.active)
+        let current: Vec<(String, String, bool)> = sqlx::query_as(
+            "SELECT w.id,w.name,COALESCE(binding.created_by_role = 'migration'
+                OR (binding.created_by_role='tayyorlov_masteri' AND binding.created_by_ref=$2), true)
+             FROM mini_warehouses w
+             LEFT JOIN mini_preparation_material_warehouse_scopes binding
+               ON binding.item_code=$1 AND binding.warehouse_id=w.id AND binding.active
+             WHERE binding.item_code IS NOT NULL
                 OR (NOT EXISTS(SELECT 1 FROM mini_preparation_material_warehouse_scopes s
                         WHERE s.item_code=$1)
                     AND EXISTS(SELECT 1 FROM mini_preparation_materials m
                         WHERE m.item_code=$1 AND lower(m.warehouse_name)=lower(w.name)))",
         )
         .bind(&code)
+        .bind(owner)
         .fetch_all(&mut *tx)
         .await?;
         let mut selected = std::collections::BTreeMap::new();
         for requested in &input.warehouses {
-            let warehouse = if let Some((_, name)) = current
+            if let Some((id, name, _)) = current
                 .iter()
-                .find(|(_, name)| name.eq_ignore_ascii_case(requested.trim()))
+                .find(|(_, name, _)| name.eq_ignore_ascii_case(requested.trim()))
             {
-                name.clone()
-            } else {
-                exclusive_warehouse(&mut tx, owner, requested).await?
-            };
-            let id: String = sqlx::query_scalar("SELECT id FROM mini_warehouses WHERE name=$1")
-                .bind(&warehouse)
-                .fetch_one(&mut *tx)
-                .await?;
-            selected.insert(id, warehouse);
+                selected.insert(id.clone(), (name.clone(), None));
+                continue;
+            }
+            let (id, warehouse, exclusive) =
+                assigned_warehouse_binding(&mut tx, owner, requested).await?;
+            if !exclusive && !is_seriyo {
+                return Err(PreparationError::WarehouseNotExclusive);
+            }
+            selected.insert(id, (warehouse, Some(if exclusive { "exclusive" } else { "shared" })));
         }
-        for (id, warehouse) in &current {
+        for (id, warehouse, editable) in &current {
             if selected.contains_key(id) {
                 continue;
             }
-            // Existing administrator/shared bindings may be retained, never changed.
-            exclusive_warehouse(&mut tx, owner, warehouse).await?;
+            if !editable {
+                return Err(PreparationError::WarehouseNotExclusive);
+            }
+            assigned_warehouse(&mut tx, owner, warehouse).await?;
         }
         let selected_ids: Vec<String> = selected.keys().cloned().collect();
-        let current_ids: Vec<String> = current.iter().map(|(id, _)| id.clone()).collect();
+        let current_ids: Vec<String> = current.iter().map(|(id, _, _)| id.clone()).collect();
         let busy: bool = sqlx::query_scalar(
             "WITH removed AS (
                 SELECT w.id,w.name FROM mini_warehouses w WHERE NOT(w.id=ANY($2))
@@ -209,25 +231,38 @@ impl PostgresPreparationStore {
         // legacy unscoped/global fallback. No stock, formulas or history are moved.
         sqlx::query(
             "UPDATE mini_preparation_material_warehouse_scopes
-            SET active=false,updated_at=now() WHERE item_code=$1 AND active",
+            SET active=false,updated_at=now()
+            WHERE item_code=$1 AND active AND NOT warehouse_id=ANY($2)",
         )
         .bind(&code)
+        .bind(&selected_ids)
         .execute(&mut *tx)
         .await?;
-        for id in selected.keys() {
-            sqlx::query(
+        for (id, (_, scope)) in &selected {
+            // Legacy bindings may still exist only on the material row. Write a
+            // stable binding for those too before updating its warehouse name.
+            let result = sqlx::query(
                 "INSERT INTO mini_preparation_material_warehouse_scopes
                 (item_code,warehouse_id,scope_kind,created_by_role,created_by_ref)
-                VALUES($1,$2,'exclusive','tayyorlov_masteri',$3)
-                ON CONFLICT(item_code,warehouse_id) DO UPDATE SET active=true,updated_at=now()",
+                VALUES($1,$2,$3,'tayyorlov_masteri',$4)
+                ON CONFLICT(item_code,warehouse_id) DO UPDATE
+                SET active=true,scope_kind=excluded.scope_kind,updated_at=now()
+                WHERE NOT mini_preparation_material_warehouse_scopes.active
+                  AND (mini_preparation_material_warehouse_scopes.created_by_role='migration'
+                       OR (mini_preparation_material_warehouse_scopes.created_by_role='tayyorlov_masteri'
+                           AND mini_preparation_material_warehouse_scopes.created_by_ref=$4))",
             )
             .bind(&code)
             .bind(id)
+            .bind(scope.unwrap_or("exclusive"))
             .bind(owner)
             .execute(&mut *tx)
             .await?;
+            if scope.is_some() && result.rows_affected() == 0 {
+                return Err(PreparationError::WarehouseNotExclusive);
+            }
         }
-        let mut warehouses: Vec<String> = selected.into_values().collect();
+        let mut warehouses: Vec<String> = selected.into_values().map(|(name, _)| name).collect();
         warehouses.sort();
         sqlx::query("UPDATE mini_preparation_materials SET warehouse_name=$2 WHERE item_code=$1")
             .bind(&code)

@@ -28,21 +28,17 @@ impl PostgresPreparationStore {
             .await?;
         // Keep the catalog, ownership, explicit warehouse bindings and shared
         // warehouse group scope identical to snapshot_inner.
-        let material: Option<(String, String)> = sqlx::query_as(
+        let material: Option<(String, String)> = sqlx::query_as(&format!(
             "WITH RECURSIVE raw_groups AS (
                 SELECT name FROM mini_item_groups WHERE lower(btrim(name))=lower($6) AND is_group
                 UNION SELECT child.name FROM mini_item_groups child JOIN raw_groups parent
                   ON lower(btrim(child.parent_item_group))=lower(btrim(parent.name)) WHERE child.is_group
-             ), seriyo_groups AS (
-                SELECT name FROM mini_item_groups WHERE lower(btrim(name))=lower($7) AND is_group
-                UNION SELECT child.name FROM mini_item_groups child JOIN seriyo_groups parent
-                  ON lower(btrim(child.parent_item_group))=lower(btrim(parent.name)) WHERE child.is_group
-             )
+             ), {SERIYO_GROUPS_SQL}
              SELECT i.code,i.name FROM mini_items i
              LEFT JOIN mini_preparation_materials own ON own.item_code=i.code AND own.owner_ref=$1
              WHERE lower(i.code)=lower($3)
                AND (own.item_code IS NOT NULL OR EXISTS(SELECT 1 FROM raw_groups g WHERE lower(btrim(g.name))=lower(btrim(i.item_group))))
-               AND (($4 AND own.item_code IS NOT NULL AND EXISTS(SELECT 1 FROM seriyo_groups g WHERE lower(btrim(g.name))=lower(btrim(i.item_group))))
+               AND ((own.item_code IS NOT NULL AND EXISTS(SELECT 1 FROM seriyo_groups g WHERE lower(btrim(g.name))=lower(btrim(i.item_group))))
                     OR (NOT $4 AND lower(btrim(i.item_group))=ANY($5)))
                AND (EXISTS(SELECT 1 FROM mini_preparation_material_warehouse_scopes s
                         JOIN mini_warehouses w ON w.id=s.warehouse_id
@@ -51,9 +47,9 @@ impl PostgresPreparationStore {
                         AND (own.warehouse_name IS NULL OR lower(own.warehouse_name)=lower($2))))
                AND EXISTS(SELECT 1 FROM mini_warehouse_assignments a JOIN mini_warehouses w ON lower(w.name)=lower(a.warehouse_name)
                     WHERE a.assignment_kind='warehouse' AND a.principal_role='tayyorlov_masteri'
-                      AND a.principal_ref=$1 AND w.name=$2 AND NOT w.is_group)")
+                      AND a.principal_ref=$1 AND w.name=$2 AND NOT w.is_group)"))
             .bind(owner).bind(warehouse).bind(query.item_code.trim()).bind(own_seriyo).bind(groups)
-            .bind(PREPARATION_ITEM_GROUP).bind(PREPARATION_MATERIAL_CHILD_GROUP)
+            .bind(PREPARATION_ITEM_GROUP)
             .fetch_optional(&mut *tx).await?;
         let (code, name) = material.ok_or(PreparationError::Forbidden)?;
         let base = format!(

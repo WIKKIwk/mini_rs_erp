@@ -9,7 +9,7 @@ use crate::{
 };
 use axum::{
     Json,
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
 };
 use serde::Deserialize;
@@ -20,6 +20,7 @@ type ApiError = (StatusCode, Json<Value>);
 
 mod order_estimates;
 mod orders;
+mod formula_library;
 mod production_journal;
 mod production_journal_sync;
 mod material_stock;
@@ -36,6 +37,7 @@ pub use production_journal::{
 };
 pub use production_journal_sync::sync_production_journal;
 pub use orders::{order_detail, order_list, order_list_live};
+pub(crate) use formula_library::formula_library_live;
 
 async fn authorize(state: &AppState, headers: &HeaderMap) -> Result<Principal, ApiError> {
     let token = super::auth::bearer_token(headers).unwrap_or_default();
@@ -355,6 +357,23 @@ pub async fn receipt(
 ) -> Result<Json<Value>, ApiError> {
     let actor = authorize(&state, &headers).await?;
     let result = store(&state)?.receive(&actor, input).await.map_err(error)?;
+    state.warehouse_events.notify_updated(
+        result["warehouse"].as_str().unwrap_or_default(),
+        "raw_material_stock",
+    );
+    Ok(Json(result))
+}
+
+pub async fn accept_received_transfer(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(transfer_id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let actor = authorize(&state, &headers).await?;
+    let result = store(&state)?
+        .accept_received_transfer(&actor, &transfer_id)
+        .await
+        .map_err(error)?;
     state.warehouse_events.notify_updated(
         result["warehouse"].as_str().unwrap_or_default(),
         "raw_material_stock",

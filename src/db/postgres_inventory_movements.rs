@@ -7,7 +7,7 @@ use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::core::apparatus_standard::ApparatusId;
 use crate::core::inventory_movements::{
-    InventoryActor, InventoryAsset, InventoryAssetKind, InventoryAssetQuery, InventoryLocation,
+    InventoryActor, InventoryAsset, InventoryAssetKind, InventoryAssetQuery, InventoryLocation, InventoryStockUse,
     InventoryLocationApparatus, InventoryLocationKind, InventoryLocationRef,
     InventoryMovementError, InventoryMovementStorePort, InventoryOrderAssignment,
     InventoryRelocationBatchCreate, InventoryRelocationCreate, InventoryReturnBatchCreate,

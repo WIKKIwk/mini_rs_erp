@@ -91,13 +91,19 @@ pub async fn formula_orders(
 pub async fn formula_sets(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<FormulaCatalogQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let actor = authorize(&state, &headers).await?;
+    if query.library {
+        return formula_library::snapshot(&state, &actor.ref_).await;
+    }
     store(&state)?.formula_sets(&actor.ref_).await.map(Json).map_err(error)
 }
 
 #[derive(Debug, Default, Deserialize)]
 pub struct FormulaCatalogQuery {
+    #[serde(default)]
+    pub library: bool,
     #[serde(default)]
     pub product_code: String,
     #[serde(default)]
@@ -117,6 +123,9 @@ pub async fn formula_catalog(
         return store(&state)?.available_formula_variants(
             &actor.ref_, &query.product_code, &query.material_id, &query.order_id,
         ).await.map(Json).map_err(error);
+    }
+    if query.library {
+        return formula_library::snapshot(&state, &actor.ref_).await;
     }
     store(&state)?.formula_catalog(&actor.ref_).await.map(Json).map_err(error)
 }

@@ -333,11 +333,25 @@ async fn assigned_warehouse(
     owner: &str,
     name: &str,
 ) -> Result<String, PreparationError> {
-    sqlx::query_scalar(
-        "SELECT w.name FROM mini_warehouses w JOIN mini_warehouse_assignments a
+    let (_, name, _) = assigned_warehouse_binding(tx, owner, name).await?;
+    Ok(name)
+}
+
+async fn assigned_warehouse_binding(
+    tx: &mut Transaction<'_, Postgres>,
+    owner: &str,
+    name: &str,
+) -> Result<(String, String, bool), PreparationError> {
+    sqlx::query_as(
+        "SELECT w.id, w.name, NOT EXISTS (
+            SELECT 1 FROM mini_warehouse_assignments other
+            WHERE other.assignment_kind='warehouse'
+              AND lower(other.warehouse_name)=lower(w.name)
+              AND (other.principal_role <> 'tayyorlov_masteri' OR other.principal_ref <> $1)
+        ) FROM mini_warehouses w JOIN mini_warehouse_assignments a
             ON lower(a.warehouse_name)=lower(w.name)
         WHERE a.assignment_kind='warehouse' AND a.principal_role='tayyorlov_masteri'
-          AND a.principal_ref=$1 AND w.name=$2 AND NOT w.is_group FOR SHARE OF w, a",
+          AND a.principal_ref=$1 AND lower(w.name)=lower($2) AND NOT w.is_group FOR SHARE OF w, a",
     )
     .bind(owner)
     .bind(name.trim())
@@ -356,29 +370,11 @@ async fn exclusive_warehouse(
     sqlx::query("LOCK TABLE mini_warehouse_assignments IN SHARE MODE")
         .execute(&mut **tx)
         .await?;
-    sqlx::query_scalar(
-        "SELECT w.name FROM mini_warehouses w
-         JOIN mini_warehouse_assignments mine
-           ON lower(mine.warehouse_name) = lower(w.name)
-         WHERE mine.assignment_kind = 'warehouse'
-           AND mine.principal_role = 'tayyorlov_masteri'
-           AND mine.principal_ref = $1
-           AND lower(w.name) = lower($2)
-           AND NOT w.is_group
-           AND NOT EXISTS (
-               SELECT 1 FROM mini_warehouse_assignments other
-               WHERE other.assignment_kind = 'warehouse'
-                 AND lower(other.warehouse_name) = lower(w.name)
-                 AND (other.principal_role <> 'tayyorlov_masteri'
-                      OR other.principal_ref <> $1)
-           )
-         FOR SHARE OF w, mine",
-    )
-    .bind(owner)
-    .bind(name.trim())
-    .fetch_optional(&mut **tx)
-    .await?
-    .ok_or(PreparationError::WarehouseNotExclusive)
+    match assigned_warehouse_binding(tx, owner, name).await {
+        Ok((_, warehouse, true)) => Ok(warehouse),
+        Ok(_) | Err(PreparationError::Forbidden) => Err(PreparationError::WarehouseNotExclusive),
+        Err(error) => Err(error),
+    }
 }
 
 async fn preparation_material_group(

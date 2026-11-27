@@ -89,6 +89,10 @@ impl MemoryInventoryMovementStore {
             .assets
             .values()
             .filter(|asset| actor.can_manage_warehouse(&asset.custody_warehouse))
+            .filter(|asset| query.stock_use.is_none_or(|kind| asset.stock_use == Some(kind)))
+            .filter(|asset| query.include_prepared_paddons || asset.paddon_code.is_none())
+            .filter(|asset| query.identifier.trim().is_empty()
+                || asset.identifier.trim().eq_ignore_ascii_case(query.identifier.trim()))
             .filter(|asset| {
                 !query.current_user_states_only
                     || asset.physical_location.kind == InventoryLocationKind::State

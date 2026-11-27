@@ -3,11 +3,17 @@ async fn material_name_in_warehouse(
     owner: &str,
     code: &str,
     warehouse: &str,
+    seriyo_only: bool,
 ) -> Result<String, PreparationError> {
-    sqlx::query_scalar(
-        "SELECT i.name FROM mini_preparation_materials m
+    sqlx::query_scalar(&format!(
+        "WITH RECURSIVE {SERIYO_GROUPS_SQL}
+         SELECT i.name FROM mini_preparation_materials m
          JOIN mini_items i ON i.code=m.item_code
          WHERE m.owner_ref=$1 AND m.item_code=$2
+           AND (NOT $4 OR EXISTS (
+               SELECT 1 FROM seriyo_groups g
+               WHERE lower(btrim(g.name)) = lower(btrim(i.item_group))
+           ))
            AND (
                EXISTS (
                    SELECT 1
@@ -29,11 +35,12 @@ async fn material_name_in_warehouse(
                    )
                )
            )
-         FOR SHARE OF i",
-    )
+         FOR SHARE OF i"
+    ))
     .bind(owner)
     .bind(code)
     .bind(warehouse.trim())
+    .bind(seriyo_only)
     .fetch_optional(&mut **tx)
     .await?
     .ok_or(PreparationError::MaterialNotInWarehouse)

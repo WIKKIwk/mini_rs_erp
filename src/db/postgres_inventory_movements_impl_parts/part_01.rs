@@ -147,7 +147,15 @@ impl PostgresInventoryMovementStore {
             .map(InventoryAssetKind::as_str)
             .unwrap_or("");
         let needle = format!("%{}%", query.query.trim().to_ascii_lowercase());
-        let rows = sqlx::query_as::<_, InventoryAssetRow>(ASSET_LIST_SQL)
+        let role = &actor.principal.role;
+        let include_prepared_paddons = query.include_prepared_paddons && (
+            actor.is_admin || matches!(role,
+                crate::core::auth::models::PrincipalRole::TayyorlovMasteri
+                | crate::core::auth::models::PrincipalRole::MaterialTaminotchi)
+        );
+        let packed_item_groups = matches!(role, crate::core::auth::models::PrincipalRole::MaterialTaminotchi)
+            .then_some(query.packed_item_groups.as_slice());
+        let rows = sqlx::query_as::<_, InventoryAssetRow>(&ASSET_LIST_SQL)
             .bind(actor.is_admin)
             .bind(scope)
             .bind(query.warehouse_id.trim())
@@ -163,6 +171,10 @@ impl PostgresInventoryMovementStore {
             } else {
                 ""
             })
+            .bind(query.stock_use.map(InventoryStockUse::as_str).unwrap_or(""))
+            .bind(query.identifier.trim())
+            .bind(include_prepared_paddons)
+            .bind(packed_item_groups)
             .fetch_all(&self.pool)
             .await
             .map_err(store_error)?;

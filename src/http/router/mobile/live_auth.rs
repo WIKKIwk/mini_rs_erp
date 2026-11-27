@@ -73,7 +73,8 @@ fn is_private_live_path(path: &str) -> bool {
     matches!(path,
         "/v1/mobile/admin/warehouses/live" | "/v1/mobile/admin/system/monitor/live"
         | "/v1/mobile/admin/inventory/live" | "/v1/mobile/admin/production-maps/live"
-        | "/v1/mobile/production-tasks/live" | "/v1/mobile/preparation/orders/live")
+        | "/v1/mobile/production-tasks/live" | "/v1/mobile/preparation/orders/live"
+        | "/v1/mobile/preparation/formulas/live")
 }
 
 async fn role_allows(state: &AppState, actor: &Principal, method: &Method, path: &str) -> bool {

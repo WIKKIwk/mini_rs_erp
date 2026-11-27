@@ -403,6 +403,19 @@ impl PostgresInventoryMovementStore {
         .fetch_all(&self.pool)
         .await
         .map_err(store_error)?;
-        hydrate_transfers(&self.pool, rows).await
+        let mut transfers = hydrate_transfers(&self.pool, rows).await?;
+        if actor.principal.role == crate::core::auth::models::PrincipalRole::TayyorlovMasteri {
+            let ids = transfers.iter()
+                .filter(|transfer| transfer.status == InventoryTransferStatus::Received)
+                .map(|transfer| transfer.id.clone())
+                .collect::<Vec<_>>();
+            let mut pending = super::postgres_preparation::transfer_receipts::pending_counts(
+                &self.pool, &ids, &actor.principal.ref_,
+            ).await.map_err(store_error)?;
+            for transfer in &mut transfers {
+                transfer.pending_preparation_lots = pending.remove(&transfer.id);
+            }
+        }
+        Ok(transfers)
     }
 }

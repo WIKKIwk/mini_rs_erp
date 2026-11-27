@@ -3,13 +3,29 @@ use super::*;
 impl PostgresPreparationStore {
     /// List recipes, including empty and historical variants, once per owner.
     pub async fn formula_catalog(&self, owner: &str) -> Result<Value, PreparationError> {
-        let recipes: Vec<Value> = sqlx::query_scalar(
-            "WITH recipe_scopes AS (
-                SELECT product_code,material_id FROM mini_preparation_formula_variants
+        let recipes = Self::formula_catalog_rows(&self.pool, owner, None, false).await?;
+        Ok(json!({"formulas": recipes}))
+    }
+
+    pub(super) async fn formula_catalog_rows<'e>(
+        db: impl sqlx::PgExecutor<'e>,
+        owner: &str,
+        products: Option<&[String]>,
+        include_sort: bool,
+    ) -> Result<Vec<Value>, PreparationError> {
+        Ok(sqlx::query_scalar(
+            "WITH listed_variants AS (
+                SELECT * FROM mini_preparation_formula_variants
                 WHERE owner_ref=$1 AND catalog_source_id IS NULL
+                  AND ($2::text[] IS NULL OR product_code=ANY($2))
+            ), recipe_scopes AS (
+                SELECT product_code,material_id FROM listed_variants
                 UNION
-                SELECT product_code,material_id FROM mini_preparation_order_formula_selections
-                WHERE owner_ref=$1
+                SELECT chosen.product_code,chosen.material_id
+                FROM mini_preparation_order_formula_selections chosen
+                JOIN mini_preparation_formula_variants selected ON selected.id=chosen.variant_id
+                JOIN listed_variants v ON v.id=COALESCE(selected.catalog_source_id,selected.id)
+                WHERE chosen.owner_ref=$1
             ), matched_orders AS (
                 SELECT DISTINCT m.id AS order_id, v.product_code, v.material_id,
                     COALESCE(NULLIF(btrim(m.code), ''), m.order_number) AS code
@@ -83,17 +99,22 @@ impl PostgresPreparationStore {
                 ) codes),'[]'::jsonb),
                 'formula_count',f.formula_count,
                 'shares_complete',f.formula_count>0 AND f.formula_count=f.share_count AND f.share_total=100
-            )
-            FROM mini_preparation_formula_variants v
+            ) || CASE WHEN $3 THEN jsonb_build_object('sort_at',
+                (extract(epoch FROM v.created_at) * 1000000)::bigint)
+                ELSE '{}'::jsonb END
+            FROM listed_variants v
             LEFT JOIN mini_preparation_formula_sets s ON s.owner_ref=v.owner_ref AND s.product_code=v.product_code
             LEFT JOIN LATERAL (
                 SELECT count(*) AS formula_count, count(share_percent) AS share_count,
                        COALESCE(sum(share_percent),0) AS share_total
                 FROM mini_preparation_formulas WHERE variant_id=v.id
             ) f ON true
-            WHERE v.owner_ref=$1 AND v.catalog_source_id IS NULL
             ORDER BY v.created_at DESC,v.id",
-        ).bind(owner).fetch_all(&self.pool).await?;
-        Ok(json!({"formulas": recipes}))
+        )
+        .bind(owner)
+        .bind(products)
+        .bind(include_sort)
+        .fetch_all(db)
+        .await?)
     }
 }
