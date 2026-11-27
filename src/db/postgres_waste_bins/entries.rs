@@ -2,12 +2,11 @@ use super::*;
 use sqlx::{Postgres, Transaction};
 
 #[derive(Clone, Copy)]
-pub struct WasteEntry<'a> {
+pub(crate) struct WasteEntry<'a> {
     pub request_id: &'a str,
     pub apparatus_id: &'a str,
-    pub order_id: Option<&'a str>,
+    pub order_id: &'a str,
     pub session_id: Option<&'a str>,
-    pub expected_cycle_id: Option<&'a str>,
     pub kg: f64,
     pub reason: &'a str,
     pub actor: &'a QueueActionActor,
@@ -15,54 +14,27 @@ pub struct WasteEntry<'a> {
 }
 
 impl<'a> WasteEntry<'a> {
-    fn normalized(self, origin: Origin) -> Result<Self, WasteBinError> {
+    fn normalized(self) -> Result<Self, WasteBinError> {
         let reason = self.reason.trim();
-        let max_request_len = match origin {
-            Origin::Manual => 128,
-            Origin::Production => 1024,
-        };
-        let request_id = identity(self.request_id)?;
-        if request_id.len() > max_request_len
-            || reason.is_empty()
-            || reason.len() > 240
-            || units(self.kg)? == 0
-        {
+        if reason.is_empty() || reason.len() > 240 || units(self.kg)? == 0 {
             return Err(WasteBinError::InvalidInput);
         }
         identity(&self.actor.role)?;
         identity(&self.actor.ref_)?;
         Ok(Self {
-            request_id,
+            request_id: identity(self.request_id)?,
             apparatus_id: identity(self.apparatus_id)?,
-            order_id: self.order_id.map(identity).transpose()?,
+            order_id: identity(self.order_id)?,
             session_id: self.session_id.map(identity).transpose()?,
-            expected_cycle_id: self.expected_cycle_id.map(identity).transpose()?,
             reason,
-            reconcile_manual: origin == Origin::Production && self.reconcile_manual,
             ..self
         })
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Origin {
-    Manual,
-    Production,
-}
-
-impl Origin {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Manual => "manual",
-            Self::Production => "production",
-        }
     }
 }
 
 #[derive(sqlx::FromRow)]
 struct RecordedRequest {
     apparatus_id: String,
-    expected_cycle_id: Option<String>,
     order_id: Option<String>,
     session_id: Option<String>,
     reported_units: i64,
@@ -73,14 +45,13 @@ struct RecordedRequest {
 async fn previously_recorded(
     db: &mut PgConnection,
     entry: WasteEntry<'_>,
-    origin: Origin,
     reported: i64,
 ) -> Result<bool, WasteBinError> {
     let existing: Option<RecordedRequest> = sqlx::query_as(
-        "SELECT apparatus_id, expected_cycle_id, order_id, session_id, reported_units, reconcile_manual, reason
-         FROM mini_waste_bin_entries WHERE origin=$1 AND actor_role=$2 AND actor_ref=$3 AND request_id=$4",
+        "SELECT apparatus_id, order_id, session_id, reported_units, reconcile_manual, reason
+         FROM mini_waste_bin_entries
+         WHERE origin='production' AND actor_role=$1 AND actor_ref=$2 AND request_id=$3",
     )
-    .bind(origin.as_str())
     .bind(&entry.actor.role)
     .bind(&entry.actor.ref_)
     .bind(entry.request_id)
@@ -90,8 +61,7 @@ async fn previously_recorded(
         return Ok(false);
     };
     if stored.apparatus_id != entry.apparatus_id
-        || stored.expected_cycle_id.as_deref() != entry.expected_cycle_id
-        || stored.order_id.as_deref() != entry.order_id
+        || stored.order_id.as_deref() != Some(entry.order_id)
         || stored.session_id.as_deref() != entry.session_id
         || stored.reported_units != reported
         || stored.reconcile_manual != entry.reconcile_manual
@@ -108,42 +78,26 @@ pub(crate) async fn record_production_waste(
     tx: &mut Transaction<'_, Postgres>,
     entry: &WasteEntry<'_>,
 ) -> Result<(), WasteBinError> {
-    record(tx, *entry, Origin::Production).await
-}
-
-async fn record(
-    db: &mut PgConnection,
-    entry: WasteEntry<'_>,
-    origin: Origin,
-) -> Result<(), WasteBinError> {
-    let entry = entry.normalized(origin)?;
+    let db = &mut **tx;
+    let entry = entry.normalized()?;
     let reported = units(entry.kg)?;
     lock_apparatus(db, entry.apparatus_id).await?;
-    if previously_recorded(db, entry, origin, reported).await? {
+    if previously_recorded(db, entry, reported).await? {
         return Ok(());
     }
 
-    let mut cycle_id = access::open_cycle(db, entry.apparatus_id).await?;
-    if entry.expected_cycle_id.is_some() && entry.expected_cycle_id != cycle_id.as_deref() {
-        if origin == Origin::Manual {
-            return Err(WasteBinError::Conflict);
-        }
-        cycle_id = None;
-    }
-
+    let cycle_id = access::open_cycle(db, entry.apparatus_id).await?;
     let entry_id = new_id();
     let created = sqlx::query(
         "INSERT INTO mini_waste_bin_entries
-          (id, origin, request_id, apparatus_id, expected_cycle_id, order_id, session_id, reported_units,
+          (id, origin, request_id, apparatus_id, order_id, session_id, reported_units,
            units, reconcile_manual, reason, actor_role, actor_ref, actor_display_name)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,0,$9,$10,$11,$12,$13)
+         VALUES ($1,'production',$2,$3,$4,$5,$6,0,$7,$8,$9,$10,$11)
          ON CONFLICT (origin, actor_role, actor_ref, request_id) DO NOTHING",
     )
     .bind(&entry_id)
-    .bind(origin.as_str())
     .bind(entry.request_id)
     .bind(entry.apparatus_id)
-    .bind(entry.expected_cycle_id)
     .bind(entry.order_id)
     .bind(entry.session_id)
     .bind(reported)
@@ -153,20 +107,19 @@ async fn record(
     .bind(&entry.actor.ref_)
     .bind(&entry.actor.display_name)
     .execute(&mut *db)
-    .await?.rows_affected();
+    .await?
+    .rows_affected();
 
     if created == 0 {
-        return if previously_recorded(db, entry, origin, reported).await? {
+        return if previously_recorded(db, entry, reported).await? {
             Ok(())
         } else {
             Err(WasteBinError::Conflict)
         };
     }
 
-    let unrecorded = if entry.reconcile_manual
-        && let Some(order) = entry.order_id
-    {
-        cover_manual(db, &entry_id, entry, order, reported).await?
+    let unrecorded = if entry.reconcile_manual {
+        cover_manual(db, &entry_id, entry, reported).await?
     } else {
         reported
     };
@@ -185,11 +138,11 @@ async fn record(
     Ok(())
 }
 
+// Match legacy manual deposits to the report so their weight is counted once.
 async fn cover_manual(
     db: &mut PgConnection,
     report_id: &str,
     entry: WasteEntry<'_>,
-    order: &str,
     reported: i64,
 ) -> Result<i64, WasteBinError> {
     let manual: Vec<(String, i64)> = sqlx::query_as(
@@ -201,7 +154,7 @@ async fn cover_manual(
          ORDER BY e.created_at, e.id",
     )
     .bind(entry.apparatus_id)
-    .bind(order)
+    .bind(entry.order_id)
     .bind(&entry.actor.role)
     .bind(&entry.actor.ref_)
     .bind(entry.session_id)
@@ -225,38 +178,6 @@ async fn cover_manual(
 }
 
 impl PostgresWasteBinStore {
-    pub async fn add(
-        &self,
-        raw_code: &str,
-        cycle_id: &str,
-        entry: &WasteEntry<'_>,
-    ) -> Result<Value, WasteBinError> {
-        let code = code(raw_code)?;
-        let mut tx = self.pool.begin().await?;
-        let apparatus = cycle_apparatus(&mut tx, &code, cycle_id).await?;
-        if apparatus != entry.apparatus_id
-            || entry.expected_cycle_id.is_some_and(|id| id != cycle_id)
-        {
-            return Err(WasteBinError::Conflict);
-        }
-        lock_apparatus(&mut tx, &apparatus).await?;
-        let bins = lock_bins(&mut tx, std::slice::from_ref(&code)).await?;
-        if !read::load_cycle(&mut tx, cycle_id)
-            .await?
-            .allows(&bins[0])
-        {
-            return Err(WasteBinError::Forbidden);
-        }
-        let entry = WasteEntry {
-            expected_cycle_id: Some(cycle_id),
-            ..*entry
-        };
-        record(&mut tx, entry, Origin::Manual).await?;
-        let result = read::bin_snapshot(&mut tx, &code, Some(cycle_id)).await?;
-        tx.commit().await?;
-        Ok(operator_snapshot(result))
-    }
-
     pub async fn reconcile(
         &self,
         raw_code: &str,

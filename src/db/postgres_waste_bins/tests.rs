@@ -171,14 +171,17 @@ async fn waste_bin_lifecycle() {
     let pending = WasteEntry {
         request_id: "report-before-bin",
         apparatus_id: REZKA,
-        order_id: Some("order"),
+        order_id: "order",
         session_id: Some("session"),
-        expected_cycle_id: None,
         kg: 8.0,
         reason: "Atxot",
         actor: &vali,
         reconcile_manual: true,
     };
+    assert_eq!(
+        production_write(&pool, WasteEntry { order_id: "", ..pending }).await,
+        Err(WasteBinError::InvalidInput)
+    );
     production_write(&pool, pending).await.unwrap();
     let status = store.active(REZKA).await.unwrap();
     assert!(status["bin"].is_null());
@@ -195,15 +198,16 @@ async fn waste_bin_lifecycle() {
         store.assign(first_code, BOSMA, &vali).await,
         Err(WasteBinError::Conflict)
     );
-    let manual = WasteEntry {
-        request_id: "manual",
+    let report = WasteEntry {
+        request_id: "progress-first",
         kg: 12.0,
         actor: &ali,
         ..pending
     };
-    store.add(first_code, first, &manual).await.unwrap();
+    production_write(&pool, report).await.unwrap();
+    production_write(&pool, report).await.unwrap();
     assert_eq!(
-        store.add(first_code, first, &manual).await.unwrap()["cycle"]["expected_kg"],
+        store.detail(first_code).await.unwrap()["cycle"]["expected_kg"],
         12.0
     );
     assert_eq!(
@@ -230,42 +234,22 @@ async fn waste_bin_lifecycle() {
         store.submit(first_code, first, Some(second_code), &ali).await.unwrap(),
         swapped
     );
-    assert_eq!(
-        store
-            .add(
-                first_code,
-                first,
-                &WasteEntry {
-                    request_id: "too-late",
-                    ..manual
-                }
-            )
-            .await,
-        Err(WasteBinError::Conflict)
-    );
-
-    let closing = WasteEntry {
-        request_id: "first-closing",
-        expected_cycle_id: Some(second),
-        kg: 10.0,
-        ..manual
-    };
-    production_write(&pool, closing).await.unwrap();
+    production_write(&pool, report).await.unwrap();
+    production_write(&pool, pending).await.unwrap();
     assert_eq!(
         store.active(REZKA).await.unwrap()["bin"]["cycle"]["expected_kg"],
         0.0
     );
     let closing = WasteEntry {
-        request_id: "second-closing",
+        request_id: "progress-second",
         kg: 4.0,
-        ..closing
+        ..report
     };
     production_write(&pool, closing).await.unwrap();
     production_write(&pool, closing).await.unwrap();
-    production_write(&pool, pending).await.unwrap();
     assert_eq!(
         store.active(REZKA).await.unwrap()["bin"]["cycle"]["expected_kg"],
-        2.0
+        4.0
     );
 
     assert_eq!(

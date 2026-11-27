@@ -30,9 +30,8 @@ pub(super) async fn record_progress(
         WasteEntry {
             request_id: &format!("progress:{}", event.event_id),
             apparatus_id: &event.apparatus,
-            order_id: Some(&event.order_id),
+            order_id: &event.order_id,
             session_id: Some(&event.session_id),
-            expected_cycle_id: None,
             kg,
             reason: if splice {
                 "Rulon ulash chiqindisi"
@@ -70,9 +69,8 @@ pub(super) async fn record_astatka(
         WasteEntry {
             request_id: &format!("astatka:{report_id}"),
             apparatus_id,
-            order_id: Some(order_id),
+            order_id,
             session_id,
-            expected_cycle_id: None,
             kg,
             reason: "Astatka hisoboti",
             actor,

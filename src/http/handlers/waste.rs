@@ -14,9 +14,7 @@ use crate::{
         authz::Capability,
         production_map::{QueueActionActor, queue_state::apparatus_matches_assigned},
     },
-    db::postgres_waste_bins::{
-        PostgresWasteBinStore, WasteBinAccessInput, WasteBinError, WasteEntry,
-    },
+    db::postgres_waste_bins::{PostgresWasteBinStore, WasteBinAccessInput, WasteBinError},
 };
 
 mod operators;
@@ -35,7 +33,6 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/v1/mobile/waste/bins/configure", post(configure))
         .route("/v1/mobile/waste/bins/assign", post(assign))
         .route("/v1/mobile/waste/bins/submit", post(submit))
-        .route("/v1/mobile/waste/bins/entry", post(add))
         .route("/v1/mobile/waste/bins/reconcile", post(reconcile))
         .route("/v1/mobile/waste/warehouses", get(warehouses))
         .route("/v1/mobile/waste/bins/receive", post(receive))
@@ -473,55 +470,6 @@ async fn submit(
                 &input.cycle_id,
                 input.replacement_code.as_deref(),
                 &actor(&principal),
-            )
-            .await,
-    )
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct EntryRequest {
-    code: String,
-    cycle_id: String,
-    apparatus_id: String,
-    request_id: String,
-    kg: f64,
-    reason: String,
-    order_id: Option<String>,
-}
-
-async fn add(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(input): Json<EntryRequest>,
-) -> Result<ApiResponse, ApiError> {
-    let principal = principal(&state, &headers).await?;
-    let apparatus = input.apparatus_id.trim();
-    operator_scope(&state, &principal, apparatus, true).await?;
-    let store = store(&state)?;
-    if !store
-        .cycle_matches_apparatus(&input.code, &input.cycle_id, apparatus)
-        .await
-        .map_err(domain_error)?
-    {
-        return Err(forbidden());
-    }
-    result(
-        store
-            .add(
-                &input.code,
-                &input.cycle_id,
-                &WasteEntry {
-                    request_id: &input.request_id,
-                    apparatus_id: apparatus,
-                    order_id: input.order_id.as_deref(),
-                    session_id: None,
-                    expected_cycle_id: Some(&input.cycle_id),
-                    kg: input.kg,
-                    reason: &input.reason,
-                    actor: &actor(&principal),
-                    reconcile_manual: false,
-                },
             )
             .await,
     )

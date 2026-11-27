@@ -11,8 +11,7 @@ use serde_json::{Value, json};
 use sqlx::{PgConnection, PgPool};
 
 pub use access::WasteBinAccessInput;
-pub use entries::WasteEntry;
-pub(crate) use entries::record_production_waste;
+pub(crate) use entries::{WasteEntry, record_production_waste};
 
 const QR_PREFIX: &str = "ACCORD-WASTE:";
 const DEFAULT_TOLERANCE_KG: f64 = 0.5;

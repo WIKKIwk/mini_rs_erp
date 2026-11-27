@@ -253,4 +253,17 @@ async fn receiver_can_configure_bins_with_apparatuses_and_no_operator_selection(
         .0,
         StatusCode::SERVICE_UNAVAILABLE
     );
+    let legacy_entry = Request::post("/v1/mobile/waste/bins/entry")
+        .header("authorization", format!("Bearer {worker}"))
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({"code": "CQ-001", "cycle_id": "cycle", "apparatus_id": CUT,
+                   "request_id": "outside-report", "kg": 2.5, "reason": "Chiqindi"})
+            .to_string(),
+        ))
+        .unwrap();
+    assert_eq!(
+        router.oneshot(legacy_entry).await.unwrap().status(),
+        StatusCode::NOT_FOUND
+    );
 }

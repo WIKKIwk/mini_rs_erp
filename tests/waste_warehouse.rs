@@ -4,6 +4,7 @@ use mini_rs_erp::{
     core::{
         auth::models::PrincipalRole,
         production_map::{CanonicalServiceApparatusResolver, QueueActionActor},
+        quantity::erp_quantity_to_units,
         warehouses::{
             WarehouseAssignmentUpsert, WarehouseDeleteRequest, WarehouseError, WarehouseService,
             WarehouseUpsert,
@@ -12,9 +13,7 @@ use mini_rs_erp::{
     db::{
         postgres,
         postgres_warehouse::PostgresWarehouseStore,
-        postgres_waste_bins::{
-            PostgresWasteBinStore, WasteBinAccessInput, WasteBinError, WasteEntry,
-        },
+        postgres_waste_bins::{PostgresWasteBinStore, WasteBinAccessInput, WasteBinError},
     },
 };
 use sqlx::{
@@ -35,6 +34,36 @@ fn bin_access(name: &str, apparatuses: &[&str]) -> WasteBinAccessInput {
         name: name.into(),
         apparatus_ids: apparatuses.iter().map(|id| (*id).into()).collect(),
     }
+}
+
+async fn seed_reported_waste(
+    pool: &PgPool,
+    cycle: &str,
+    apparatus: &str,
+    actor: &QueueActionActor,
+    reason: &str,
+    kg: f64,
+) {
+    let report_id = format!("fixture-report-{cycle}-{}", actor.ref_);
+    sqlx::query(
+        "INSERT INTO mini_waste_bin_entries
+            (id, origin, request_id, cycle_id, apparatus_id, order_id, reported_units,
+             units, reconcile_manual, reason, actor_role, actor_ref, actor_display_name,
+             assigned_at, assigned_by_ref)
+         VALUES ($1,'production',$1,$2,$3,$4,$5,$5,true,$6,$7,$8,$9,now(),$8)",
+    )
+    .bind(&report_id)
+    .bind(cycle)
+    .bind(apparatus)
+    .bind(format!("fixture-order-{}", actor.ref_))
+    .bind(erp_quantity_to_units(kg).unwrap())
+    .bind(reason)
+    .bind(&actor.role)
+    .bind(&actor.ref_)
+    .bind(&actor.display_name)
+    .execute(pool)
+    .await
+    .unwrap();
 }
 
 fn assignment(warehouse: &str, role: PrincipalRole, id: &str) -> WarehouseAssignmentUpsert {
@@ -191,23 +220,7 @@ async fn waste_warehouse_receives_actual_kg_once_and_preserves_legacy_history() 
     );
     let active = bins.assign(bin_code, station, &worker).await.unwrap();
     let cycle = active["cycle"]["id"].as_str().unwrap();
-    bins.add(
-        bin_code,
-        cycle,
-        &WasteEntry {
-            request_id: "waste-warehouse-deposit",
-            apparatus_id: station,
-            order_id: None,
-            session_id: None,
-            expected_cycle_id: Some(cycle),
-            kg: 20.0,
-            reason: "Chet chiqindisi",
-            actor: &worker,
-            reconcile_manual: false,
-        },
-    )
-    .await
-    .unwrap();
+    seed_reported_waste(&runtime, cycle, station, &worker, "Chet chiqindisi", 20.0).await;
     bins.submit(bin_code, cycle, None, &worker)
         .await
         .unwrap();
@@ -505,23 +518,7 @@ async fn verify_bin_race_and_scope(
     );
     let deposits = [(holder, "Plyonka qirqimi", 3.25), (peer, "Brak plyonka", 1.75)];
     for (operator, reason, kg) in deposits {
-        bins.add(
-            shared_code,
-            cycle,
-            &WasteEntry {
-                request_id: "shift-deposit",
-                apparatus_id: apparatus,
-                order_id: None,
-                session_id: None,
-                expected_cycle_id: Some(cycle),
-                kg,
-                reason,
-                actor: operator,
-                reconcile_manual: false,
-            },
-        )
-        .await
-        .unwrap();
+        seed_reported_waste(runtime, cycle, apparatus, operator, reason, kg).await;
     }
     let detail = bins.detail(shared_code).await.unwrap();
     let entries = detail["cycle"]["entries"].as_array().unwrap();

@@ -617,7 +617,7 @@ async fn next_roll_does_not_erase_or_repeat_issue_cycle_waste() {
 async fn postgres_unsaved_issue_waste_survives_order_and_closed_history_reads() {
     use mini_rs_erp::db::{postgres, postgres_production_map::PostgresProductionMapStore};
     use mini_rs_erp::db::postgres_waste_bins::{
-        PostgresWasteBinStore, WasteBinAccessInput, WasteEntry,
+        PostgresWasteBinStore, WasteBinAccessInput,
     };
     let url = std::env::var("WASTE_TEST_DATABASE_URL").expect("disposable database URL required");
     let admin = sqlx::PgPool::connect(&url).await.unwrap();
@@ -675,17 +675,25 @@ async fn postgres_unsaved_issue_waste_survives_order_and_closed_history_reads() 
             let next_code = next["code"].as_str().unwrap();
             let bin = bins.assign(code, CUT, &actor()).await.unwrap();
             let cycle_id = bin["cycle"]["id"].as_str().unwrap();
-            bins.add(code, cycle_id, &WasteEntry {
-                request_id: "cut-manual-deposit",
-                apparatus_id: CUT,
-                order_id: Some(ORDER),
-                session_id: None,
-                expected_cycle_id: Some(cycle_id),
-                kg: 1.0,
-                reason: "Chet chiqindisi",
-                actor: &actor(),
-                reconcile_manual: false,
-            }).await.unwrap();
+            // Old deployments could already have counted part of this report.
+            let operator = actor();
+            sqlx::query(
+                "INSERT INTO mini_waste_bin_entries
+                    (id, origin, request_id, apparatus_id, order_id, expected_cycle_id, cycle_id,
+                     reported_units, units, reconcile_manual, reason, actor_role, actor_ref,
+                     actor_display_name, assigned_at, assigned_by_ref)
+                 VALUES ('legacy-cut-entry','manual','legacy-cut-entry',$1,$2,$3,$3,
+                         1000000,1000000,false,'Chet chiqindisi',$4,$5,$6,now(),$5)",
+            )
+            .bind(CUT)
+            .bind(ORDER)
+            .bind(cycle_id)
+            .bind(&operator.role)
+            .bind(&operator.ref_)
+            .bind(&operator.display_name)
+            .execute(&pool)
+            .await
+            .unwrap();
             let sealed = bins
                 .submit(code, cycle_id, Some(next_code), &actor())
                 .await
