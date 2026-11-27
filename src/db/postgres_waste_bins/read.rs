@@ -12,11 +12,13 @@ const CYCLES: &str = "
     SELECT c.id, c.bin_code, c.apparatus_id,
         COALESCE((SELECT name FROM mini_apparatus WHERE id = c.apparatus_id), c.apparatus_id) AS apparatus_name,
         EXTRACT(EPOCH FROM c.opened_at)::bigint AS opened_at_unix,
-        c.opened_by_role, c.opened_by_ref, c.opened_by_display_name, c.expected_units,
+        c.opened_by_role, c.opened_by_ref, c.opened_by_display_name,
         COALESCE(c.expected_units, (SELECT COALESCE(sum(units), 0)::bigint
             FROM mini_waste_bin_entries WHERE cycle_id = c.id)) AS visible_units,
         EXTRACT(EPOCH FROM c.sealed_at)::bigint AS sealed_at_unix,
         c.sealed_by_ref, c.sealed_by_display_name, c.replacement_cycle_id,
+        COALESCE(c.sealed_at = r.received_at AND c.sealed_by_ref = r.received_by_ref, false)
+            AS sealed_on_receipt,
         EXTRACT(EPOCH FROM c.reset_at)::bigint AS reset_at_unix,
         c.reset_by_ref, c.reset_by_display_name,
         CASE WHEN r.cycle_id IS NOT NULL THEN
@@ -43,11 +45,11 @@ pub(super) struct Cycle {
     pub opened_by_role: Option<String>,
     pub opened_by_ref: String,
     pub opened_by_display_name: String,
-    pub expected_units: Option<i64>,
     pub visible_units: i64,
     pub sealed_at_unix: Option<i64>,
     pub sealed_by_ref: Option<String>,
     pub sealed_by_display_name: Option<String>,
+    pub sealed_on_receipt: bool,
     pub replacement_cycle_id: Option<String>,
     pub reset_at_unix: Option<i64>,
     pub reset_by_ref: Option<String>,
@@ -148,6 +150,7 @@ impl Cycle {
             "sealed_at_unix": self.sealed_at_unix,
             "sealed_by_ref": self.sealed_by_ref,
             "sealed_by_display_name": self.sealed_by_display_name,
+            "sealed_on_receipt": self.sealed_on_receipt,
             "expected_kg": erp_quantity_from_units(self.visible_units),
             "receipt": self.receipt()?.map(|receipt| receipt.snapshot()),
             "reset_at_unix": self.reset_at_unix,
@@ -196,18 +199,6 @@ pub(super) async fn pending_entries(
     .bind(actor.map(|actor| actor.role.as_str()))
     .bind(actor.map(|actor| actor.ref_.as_str()))
     .fetch_all(db)
-    .await?)
-}
-
-pub(super) async fn cycle_units(
-    db: &mut PgConnection,
-    cycle_id: &str,
-) -> Result<i64, WasteBinError> {
-    Ok(sqlx::query_scalar(
-        "SELECT COALESCE(sum(units), 0)::bigint FROM mini_waste_bin_entries WHERE cycle_id=$1",
-    )
-    .bind(cycle_id)
-    .fetch_one(db)
     .await?)
 }
 

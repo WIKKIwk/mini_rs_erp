@@ -29,6 +29,8 @@ pub enum WasteBinError {
     Forbidden,
     #[error("record a reason for measurement outside tolerance")]
     DiscrepancyNoteRequired,
+    #[error("recorded waste weight changed since the measurement was confirmed")]
+    ExpectedWeightChanged,
     #[error("select the waste warehouse for this receipt")]
     WarehouseRequired,
     #[error("waste warehouse is not assigned to this receiver")]
@@ -45,6 +47,7 @@ impl WasteBinError {
             Self::Conflict => "waste_bin_conflict",
             Self::Forbidden => "waste_bin_forbidden",
             Self::DiscrepancyNoteRequired => "waste_discrepancy_note_required",
+            Self::ExpectedWeightChanged => "waste_expected_weight_changed",
             Self::WarehouseRequired => "waste_warehouse_required",
             Self::WarehouseNotAssigned => "waste_warehouse_not_assigned",
             Self::StoreFailed => "waste_bin_store_failed",
@@ -221,6 +224,25 @@ async fn create_cycle(
     .execute(db)
     .await?;
     Ok(id)
+}
+
+async fn seal_cycle(
+    db: &mut PgConnection,
+    cycle_id: &str,
+    expected: i64,
+    actor: &QueueActionActor,
+) -> Result<(), WasteBinError> {
+    sqlx::query(
+        "UPDATE mini_waste_bin_cycles SET expected_units=$2, sealed_at=now(), sealed_by_ref=$3,
+            sealed_by_display_name=$4 WHERE id=$1",
+    )
+    .bind(cycle_id)
+    .bind(expected)
+    .bind(&actor.ref_)
+    .bind(&actor.display_name)
+    .execute(db)
+    .await?;
+    Ok(())
 }
 
 async fn cycle_apparatus(
@@ -436,17 +458,7 @@ impl PostgresWasteBinStore {
             }
         }
         let replacement_id = if old.status() == "open" {
-            let total = read::cycle_units(&mut tx, cycle_id).await?;
-            sqlx::query(
-                "UPDATE mini_waste_bin_cycles SET expected_units=$2, sealed_at=now(), sealed_by_ref=$3,
-                    sealed_by_display_name=$4 WHERE id=$1",
-            )
-            .bind(cycle_id)
-            .bind(total)
-            .bind(&actor.ref_)
-            .bind(&actor.display_name)
-            .execute(&mut *tx)
-            .await?;
+            seal_cycle(&mut tx, cycle_id, old.visible_units, actor).await?;
             if let Some(next) = &next {
                 let next_id = create_cycle(&mut tx, next, &apparatus, actor).await?;
                 sqlx::query("UPDATE mini_waste_bin_cycles SET replacement_cycle_id=$2 WHERE id=$1")
@@ -493,19 +505,50 @@ impl PostgresWasteBinStore {
         note: &str,
         actor: &QueueActionActor,
     ) -> Result<Value, WasteBinError> {
+        self.receive_with_expected(
+            raw_code,
+            cycle_id,
+            warehouse_id,
+            gross_kg,
+            measurement_source,
+            note,
+            actor,
+            None,
+        )
+        .await
+    }
+
+    pub async fn receive_with_expected(
+        &self,
+        raw_code: &str,
+        cycle_id: &str,
+        warehouse_id: &str,
+        gross_kg: f64,
+        measurement_source: &str,
+        note: &str,
+        actor: &QueueActionActor,
+        checked_expected_kg: Option<f64>,
+    ) -> Result<Value, WasteBinError> {
         receiver(actor)?;
         let code = code(raw_code)?;
         let warehouse_id = warehouse::destination_id(warehouse_id)?;
         let gross = units(gross_kg)?;
+        let checked_expected = checked_expected_kg.map(units).transpose()?;
         let note = note.trim();
         if !matches!(measurement_source, "gscale" | "manual") || note.len() > 1000 {
             return Err(WasteBinError::InvalidInput);
         }
         let mut tx = self.pool.begin().await?;
+        let apparatus = cycle_apparatus(&mut tx, &code, cycle_id).await?;
+        // Keep the total stable until the bin is sealed and the receipt is saved.
+        lock_apparatus(&mut tx, &apparatus).await?;
         let bins = lock_bins(&mut tx, std::slice::from_ref(&code)).await?;
         let bin = &bins[0];
-        cycle_apparatus(&mut tx, &code, cycle_id).await?;
         let cycle = read::load_cycle(&mut tx, cycle_id).await?;
+        let expected = cycle.visible_units;
+        if checked_expected.is_some_and(|checked| checked != expected) {
+            return Err(WasteBinError::ExpectedWeightChanged);
+        }
         if let Some(receipt) = cycle.receipt()? {
             if receipt.gross_units != gross
                 || receipt.measurement_source != measurement_source
@@ -516,7 +559,6 @@ impl PostgresWasteBinStore {
                 return Err(WasteBinError::Conflict);
             }
         } else {
-            let expected = cycle.expected_units.ok_or(WasteBinError::Conflict)?;
             let net = gross
                 .checked_sub(bin.tare_units)
                 .filter(|n| *n >= 0)
@@ -526,6 +568,9 @@ impl PostgresWasteBinStore {
             }
             let warehouse =
                 warehouse::assigned_warehouse(&mut tx, warehouse_id, &actor.ref_).await?;
+            if cycle.status() == "open" {
+                seal_cycle(&mut tx, cycle_id, expected, actor).await?;
+            }
             sqlx::query(
                 "INSERT INTO mini_waste_bin_receipts(cycle_id, gross_units, tare_units, expected_units,
                     tolerance_units, measurement_source, note, received_by_ref, received_by_display_name)

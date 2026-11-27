@@ -221,11 +221,36 @@ async fn waste_warehouse_receives_actual_kg_once_and_preserves_legacy_history() 
     let active = bins.assign(bin_code, station, &worker).await.unwrap();
     let cycle = active["cycle"]["id"].as_str().unwrap();
     seed_reported_waste(&runtime, cycle, station, &worker, "Chet chiqindisi", 20.0).await;
-    bins.submit(bin_code, cycle, None, &worker)
-        .await
-        .unwrap();
 
-    // Wrong/missing destinations cannot leave behind an accepted measurement.
+    // Failed receipts must leave the bin open and available to the apparatus.
+    assert_eq!(
+        bins.receive_with_expected(
+            bin_code,
+            cycle,
+            destination,
+            23.0,
+            "manual",
+            "",
+            &receiver,
+            Some(18.0)
+        )
+        .await,
+        Err(WasteBinError::ExpectedWeightChanged),
+    );
+    assert_eq!(
+        bins.receive_with_expected(
+            bin_code,
+            cycle,
+            destination,
+            23.0,
+            "manual",
+            "",
+            &receiver,
+            Some(20.0)
+        )
+        .await,
+        Err(WasteBinError::DiscrepancyNoteRequired),
+    );
     assert_eq!(
         bins.receive(
             bin_code,
@@ -258,10 +283,12 @@ async fn waste_warehouse_receives_actual_kg_once_and_preserves_legacy_history() 
             Err(WasteBinError::WarehouseNotAssigned),
         );
     }
-    assert!(bins.detail(bin_code).await.unwrap()["cycle"]["receipt"].is_null());
+    let still_open = bins.detail(bin_code).await.unwrap();
+    assert_eq!(still_open["status"], "open");
+    assert!(still_open["cycle"]["receipt"].is_null());
     for _ in 0..2 {
         let received = bins
-            .receive(
+            .receive_with_expected(
                 bin_code,
                 cycle,
                 destination,
@@ -269,15 +296,20 @@ async fn waste_warehouse_receives_actual_kg_once_and_preserves_legacy_history() 
                 "manual",
                 "Qayta tortildi",
                 &receiver,
+                Some(20.0),
             )
             .await
             .unwrap();
+        assert_eq!(received["status"], "received");
+        assert_eq!(received["cycle"]["sealed_on_receipt"], true);
+        assert_eq!(received["cycle"]["sealed_by_ref"], receiver.ref_);
         let receipt = &received["cycle"]["receipt"];
         assert_eq!(receipt["warehouse"], "Chiqindi A");
         assert_eq!(receipt["warehouse_id"], destination);
         assert_eq!(receipt["net_kg"].as_f64(), Some(18.0));
         assert_eq!(receipt["difference_kg"].as_f64(), Some(-2.0));
     }
+    assert!(bins.active(station).await.unwrap()["bin"].is_null());
     assert_eq!(
         bins.reset(bin_code, cycle, &other).await,
         Err(WasteBinError::WarehouseNotAssigned)

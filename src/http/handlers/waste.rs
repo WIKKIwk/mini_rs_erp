@@ -68,6 +68,10 @@ fn domain_error(err: WasteBinError) -> ApiError {
         ),
         WasteBinError::Forbidden => (StatusCode::FORBIDDEN, "Bu amal uchun ruxsat yo‘q"),
         WasteBinError::DiscrepancyNoteRequired => (StatusCode::CONFLICT, "Tafovut sababini yozing"),
+        WasteBinError::ExpectedWeightChanged => (
+            StatusCode::CONFLICT,
+            "Qayd etilgan vazn o‘zgardi. Yangilangan vaznni tekshirib, qayta tasdiqlang",
+        ),
         WasteBinError::WarehouseRequired => (StatusCode::BAD_REQUEST, "Chiqindi omborini tanlang"),
         WasteBinError::WarehouseNotAssigned => (
             StatusCode::FORBIDDEN,
@@ -519,6 +523,7 @@ struct ReceiveRequest {
     #[serde(default)]
     warehouse_id: String,
     gross_kg: f64,
+    checked_expected_kg: Option<f64>,
     measurement_source: String,
     #[serde(default)]
     note: String,
@@ -533,7 +538,7 @@ async fn receive(
     warehouse_credit(
         &state,
         store(&state)?
-            .receive(
+            .receive_with_expected(
                 &input.code,
                 &input.cycle_id,
                 &input.warehouse_id,
@@ -541,6 +546,7 @@ async fn receive(
                 &input.measurement_source,
                 &input.note,
                 &actor,
+                input.checked_expected_kg,
             )
             .await,
     )

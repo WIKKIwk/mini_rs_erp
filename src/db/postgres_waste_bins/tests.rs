@@ -169,12 +169,12 @@ async fn waste_bin_lifecycle() {
     assert_ne!(second_code, first_code);
     assert_eq!(second_bin["tolerance_kg"], 0.5);
     let pending = WasteEntry {
-        request_id: "report-before-bin",
+        request_id: "astatka:before-bin",
         apparatus_id: REZKA,
         order_id: "order",
         session_id: Some("session"),
         kg: 8.0,
-        reason: "Atxot",
+        reason: "Astatka hisoboti",
         actor: &vali,
         reconcile_manual: true,
     };
@@ -183,12 +183,29 @@ async fn waste_bin_lifecycle() {
         Err(WasteBinError::InvalidInput)
     );
     production_write(&pool, pending).await.unwrap();
-    let status = store.active(REZKA).await.unwrap();
+    let later_pending = WasteEntry {
+        request_id: "progress:before-bin",
+        order_id: "next-order",
+        kg: 3.0,
+        reason: "Ishlab chiqarish hisoboti",
+        ..pending
+    };
+    production_write(&pool, later_pending).await.unwrap();
+    let status = store.active_for_operator(REZKA, &vali).await.unwrap();
     assert!(status["bin"].is_null());
-    let pending_id = status["pending"][0]["id"].as_str().unwrap().to_string();
+    let queued = status["pending"].as_array().unwrap();
+    assert_eq!(queued.len(), 2);
+    let pending_id = queued
+        .iter()
+        .find(|entry| entry["reason"] == pending.reason)
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
     let initial = store.assign(first_code, REZKA, &ali).await.unwrap();
     assert_eq!(initial["cycle"]["apparatus_name"], "Rezka");
+    assert_eq!(initial["cycle"]["expected_kg"], 0.0);
     let first = initial["cycle"]["id"].as_str().unwrap();
     assert_eq!(
         store.assign(second_code, REZKA, &vali).await,
@@ -222,6 +239,11 @@ async fn waste_bin_lifecycle() {
         .unwrap();
     assert_eq!(combined["cycle"]["expected_kg"], 20.0);
     assert_eq!(combined["cycle"]["entries"].as_array().unwrap().len(), 2);
+    let after_selection = store.active_for_operator(REZKA, &vali).await.unwrap();
+    let unselected = after_selection["pending"].as_array().unwrap();
+    assert_eq!(unselected.len(), 1);
+    assert_eq!(unselected[0]["order_id"], later_pending.order_id);
+    assert_eq!(unselected[0]["kg"], 3.0);
 
     let swapped = store.submit(first_code, first, Some(second_code), &ali).await.unwrap();
     assert_eq!(swapped["status"], "sealed");
