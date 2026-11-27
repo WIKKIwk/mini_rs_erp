@@ -6,14 +6,6 @@ use serde::{Deserialize, Serialize};
 pub struct WasteBinAccessInput {
     pub name: String,
     pub apparatus_ids: Vec<String>,
-    pub operators: Vec<WasteBinOperator>,
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct WasteBinOperator {
-    pub role: String,
-    pub r#ref: String,
 }
 
 impl WasteBinAccessInput {
@@ -22,7 +14,6 @@ impl WasteBinAccessInput {
         if !(1..=120).contains(&name.chars().count())
             || name.chars().any(char::is_control)
             || !(1..=128).contains(&self.apparatus_ids.len())
-            || !(1..=128).contains(&self.operators.len())
         {
             return Err(WasteBinError::InvalidInput);
         }
@@ -35,35 +26,11 @@ impl WasteBinAccessInput {
                     .map_err(|_| WasteBinError::InvalidInput)
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let mut operators = self
-            .operators
-            .iter()
-            .map(|operator| {
-                let role = operator.role.trim();
-                if !matches!(
-                    role,
-                    "aparatchi"
-                        | "rezka_master"
-                        | "tayyorlov_masteri"
-                        | "metalayzer"
-                        | "homashyo_rezkachi"
-                ) {
-                    return Err(WasteBinError::InvalidInput);
-                }
-                Ok(WasteBinOperator {
-                    role: role.to_owned(),
-                    r#ref: identity(&operator.r#ref)?.to_owned(),
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
         apparatus_ids.sort_unstable();
         apparatus_ids.dedup();
-        operators.sort_unstable();
-        operators.dedup();
         Ok(Self {
             name: name.to_owned(),
             apparatus_ids,
-            operators,
         })
     }
 }
@@ -88,45 +55,25 @@ pub(super) async fn write(
     )
     .bind(code)
     .bind(&access.apparatus_ids)
-    .execute(&mut *db)
-    .await?;
-    sqlx::query("DELETE FROM mini_waste_bin_operators WHERE bin_code = $1")
-        .bind(code)
-        .execute(&mut *db)
-        .await?;
-    sqlx::query(
-        "INSERT INTO mini_waste_bin_operators (bin_code, operator_role, operator_ref)
-                 SELECT $1, role, ref FROM jsonb_to_recordset($2) AS o(role text, ref text)",
-    )
-    .bind(code)
-    .bind(sqlx::types::Json(&access.operators))
     .execute(db)
     .await?;
     Ok(())
 }
 
-/// Automatic production entries must use the same scope as manual entries.
-/// A producer outside that scope still records the entry as pending.
-pub(super) async fn open_cycle_for_actor(
+// Both manual and production entries go to the apparatus's open cycle.
+pub(super) async fn open_cycle(
     db: &mut PgConnection,
     apparatus: &str,
-    actor: &QueueActionActor,
 ) -> Result<Option<String>, WasteBinError> {
     Ok(sqlx::query_scalar(
         "SELECT c.id FROM mini_waste_bin_cycles c
          WHERE c.apparatus_id = $1 AND c.sealed_at IS NULL AND (
-            (c.opened_by_role IS NULL AND c.opened_by_ref = $3)
-            OR (
-                EXISTS (SELECT 1 FROM mini_waste_bin_apparatuses a
-                        WHERE a.bin_code = c.bin_code AND a.apparatus_id = $1)
-                AND EXISTS (SELECT 1 FROM mini_waste_bin_operators o
-                            WHERE o.bin_code = c.bin_code AND o.operator_role = $2 AND o.operator_ref = $3)
-            )
+            c.opened_by_role IS NULL
+            OR EXISTS (SELECT 1 FROM mini_waste_bin_apparatuses a
+                       WHERE a.bin_code = c.bin_code AND a.apparatus_id = $1)
          )",
     )
     .bind(apparatus)
-    .bind(&actor.role)
-    .bind(&actor.ref_)
     .fetch_optional(db)
     .await?)
 }

@@ -31,6 +31,7 @@ use tower::ServiceExt;
 const CUT: &str = "apparatus:default:asset-010";
 const OTHER_CUT: &str = "apparatus:default:asset-011";
 const OPTIONS: &str = "/v1/mobile/waste/bins/options";
+const APPARATUS_OPTIONS: &str = "/v1/mobile/waste/bins/options?apparatus_only=true";
 const REGISTER: &str = "/v1/mobile/waste/bins/register";
 const CONFIGURE: &str = "/v1/mobile/waste/bins/configure";
 
@@ -115,7 +116,7 @@ async fn call(
 }
 
 #[tokio::test]
-async fn receiver_options_and_configuration_use_current_operator_assignments() {
+async fn receiver_can_configure_bins_with_apparatuses_and_no_operator_selection() {
     let temporary = tempfile::tempdir().unwrap();
     let config = config(temporary.path());
     let mut state = AppState::verification(config.clone());
@@ -165,7 +166,7 @@ async fn receiver_options_and_configuration_use_current_operator_assignments() {
     let router = build_router(state);
     for token in [&worker, &admin] {
         assert_eq!(
-            call(&router, OPTIONS, token, None).await.0,
+            call(&router, APPARATUS_OPTIONS, token, None).await.0,
             StatusCode::FORBIDDEN
         );
     }
@@ -190,19 +191,19 @@ async fn receiver_options_and_configuration_use_current_operator_assignments() {
             .unwrap()
             .contains(&json!(OTHER_CUT))
     );
+    let (status, apparatus_options) = call(&router, APPARATUS_OPTIONS, &receiver, None).await;
+    assert_eq!(status, StatusCode::OK, "{apparatus_options}");
+    assert_eq!(apparatus_options["apparatuses"], options["apparatuses"]);
+    assert!(apparatus_options.get("operators").is_none());
 
     let mut input = json!({
         "request_id": "waste-test-register", "name": "Qirqim", "tare_kg": 5,
-        "apparatus_ids": [CUT, OTHER_CUT],
-        "operators": [{"role": "aparatchi", "ref": "operator-a"}]
+        "apparatus_ids": []
     });
     let (status, error) = call(&router, REGISTER, &receiver, Some(input.clone())).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(error["code"], "waste_access_invalid");
-    input["operators"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!({"role": "rezka_master", "ref": master.id}));
+    input["apparatus_ids"] = json!([CUT, OTHER_CUT]);
     // In verification mode the store is absent after the valid access checks.
     assert_eq!(
         call(&router, REGISTER, &receiver, Some(input.clone()))
@@ -219,7 +220,13 @@ async fn receiver_options_and_configuration_use_current_operator_assignments() {
             .0,
         StatusCode::FORBIDDEN
     );
-    input["operators"] = json!([{"role": "aparatchi", "ref": "blocked"}]);
+    let mut legacy_input = input.clone();
+    legacy_input["operators"] = json!([{"role": "aparatchi", "ref": "blocked"}]);
+    assert_eq!(
+        call(&router, CONFIGURE, &receiver, Some(legacy_input)).await.0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    input["apparatus_ids"] = json!(["apparatus:default:missing"]);
     assert_eq!(
         call(&router, CONFIGURE, &receiver, Some(input)).await.0,
         StatusCode::BAD_REQUEST
@@ -234,5 +241,16 @@ async fn receiver_options_and_configuration_use_current_operator_assignments() {
         .await
         .0,
         StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(
+            &router,
+            &format!("/v1/mobile/waste/bins/active?apparatus_id={CUT}"),
+            &worker,
+            None
+        )
+        .await
+        .0,
+        StatusCode::SERVICE_UNAVAILABLE
     );
 }

@@ -10,7 +10,7 @@ use crate::core::quantity::{erp_quantity_from_units, erp_quantity_to_units};
 use serde_json::{Value, json};
 use sqlx::{PgConnection, PgPool};
 
-pub use access::{WasteBinAccessInput, WasteBinOperator};
+pub use access::WasteBinAccessInput;
 pub use entries::WasteEntry;
 pub(crate) use entries::record_production_waste;
 
@@ -78,22 +78,15 @@ struct Bin {
     tare_units: i64,
     tolerance_units: i64,
     apparatus_ids: Vec<String>,
-    operators: sqlx::types::Json<Vec<WasteBinOperator>>,
 }
 
 impl Bin {
-    fn allows(&self, apparatus: &str, actor: &QueueActionActor) -> bool {
+    fn allows(&self, apparatus: &str) -> bool {
         self.apparatus_ids.iter().any(|id| id == apparatus)
-            && self
-                .operators
-                .iter()
-                .any(|operator| operator.role == actor.role && operator.r#ref == actor.ref_)
     }
 
     fn matches_access(&self, access: &WasteBinAccessInput) -> bool {
-        self.name == access.name
-            && self.apparatus_ids == access.apparatus_ids
-            && self.operators.0 == access.operators
+        self.name == access.name && self.apparatus_ids == access.apparatus_ids
     }
 
     fn snapshot(&self, current_status: &str, cycle: Value) -> Value {
@@ -101,8 +94,7 @@ impl Bin {
             "code": self.code,
             "name": self.name,
             "apparatus_ids": self.apparatus_ids,
-            "operators": self.operators.0,
-            "configured": !self.apparatus_ids.is_empty() && !self.operators.is_empty(),
+            "configured": !self.apparatus_ids.is_empty(),
             "qr_payload": format!("{QR_PREFIX}{}", self.code),
             "tare_kg": erp_quantity_from_units(self.tare_units),
             "tolerance_kg": erp_quantity_from_units(self.tolerance_units),
@@ -115,10 +107,8 @@ impl Bin {
 fn operator_snapshot(mut snapshot: Value) -> Value {
     if let Some(fields) = snapshot.as_object_mut() {
         fields.remove("apparatus_ids");
-        fields.remove("operators");
         if let Some(replacement) = fields.get_mut("replacement").and_then(Value::as_object_mut) {
             replacement.remove("apparatus_ids");
-            replacement.remove("operators");
         }
     }
     snapshot
@@ -361,7 +351,7 @@ impl PostgresWasteBinStore {
         let mut tx = self.pool.begin().await?;
         lock_apparatus(&mut tx, apparatus).await?;
         let cycle_id = match actor {
-            Some(actor) => access::open_cycle_for_actor(&mut tx, apparatus, actor).await?,
+            Some(_) => access::open_cycle(&mut tx, apparatus).await?,
             None => open_cycle_id(&mut tx, apparatus).await?,
         };
         let bin = match cycle_id {
@@ -395,20 +385,14 @@ impl PostgresWasteBinStore {
         lock_apparatus(&mut tx, apparatus).await?;
         let bins = lock_bins(&mut tx, std::slice::from_ref(&code)).await?;
         let current = read::current_cycle(&mut tx, &code).await?;
-        let legacy_holder = current
+        let at_apparatus = current
             .as_ref()
-            .is_some_and(|cycle| cycle.apparatus_id == apparatus && cycle.is_legacy_holder(actor));
-        if !bins[0].allows(apparatus, actor) && !legacy_holder {
+            .is_some_and(|cycle| cycle.apparatus_id == apparatus && cycle.allows(&bins[0]));
+        if !bins[0].allows(apparatus) && !at_apparatus {
             return Err(WasteBinError::Forbidden);
         }
         let id = match current {
-            Some(cycle)
-                if cycle.status() == "open"
-                    && cycle.apparatus_id == apparatus
-                    && cycle.held_by(actor) =>
-            {
-                cycle.id
-            }
+            Some(cycle) if at_apparatus && cycle.status() == "open" => cycle.id,
             Some(_) => return Err(WasteBinError::Conflict),
             None => create_cycle(&mut tx, &code, apparatus, actor).await?,
         };
@@ -440,7 +424,7 @@ impl PostgresWasteBinStore {
             .find(|bin| bin.code == code)
             .ok_or(WasteBinError::NotFound)?;
         let old = read::load_cycle(&mut tx, cycle_id).await?;
-        if !old.allows(bin, actor) {
+        if !old.allows(bin) {
             return Err(WasteBinError::Forbidden);
         }
         if let Some(next) = &next {
@@ -448,7 +432,7 @@ impl PostgresWasteBinStore {
                 .iter()
                 .find(|bin| bin.code == *next)
                 .ok_or(WasteBinError::NotFound)?;
-            if !replacement.allows(&apparatus, actor) {
+            if !replacement.allows(&apparatus) {
                 return Err(WasteBinError::Forbidden);
             }
         }

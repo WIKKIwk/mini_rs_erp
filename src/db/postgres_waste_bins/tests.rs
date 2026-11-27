@@ -112,13 +112,6 @@ async fn waste_bin_lifecycle() {
     let access = WasteBinAccessInput {
         name: "Quruq chiqindi".into(),
         apparatus_ids: vec![REZKA.into(), BOSMA.into()],
-        operators: [&ali, &vali]
-            .into_iter()
-            .map(|actor| WasteBinOperator {
-                role: actor.role.clone(),
-                r#ref: actor.ref_.clone(),
-            })
-            .collect(),
     };
 
     assert_eq!(
@@ -135,17 +128,17 @@ async fn waste_bin_lifecycle() {
         .unwrap();
     assert_eq!(renamed["name"], "Quruq chiqindi");
     let operator_view = store
-        .detail_for_operator("OLD-EMPTY", None, REZKA, &ali)
+        .detail_for_operator("OLD-EMPTY", None, REZKA)
         .await
         .unwrap();
     assert_eq!(operator_view["name"], "Quruq chiqindi");
     assert!(operator_view.get("operators").is_none());
-    assert!(
+    assert_eq!(
         store
             .active_for_operator(LEGACY_STATION, &ali)
             .await
-            .unwrap()["bin"]
-            .is_null()
+            .unwrap()["bin"]["code"],
+        "OLD-ACTIVE"
     );
     assert_eq!(
         store

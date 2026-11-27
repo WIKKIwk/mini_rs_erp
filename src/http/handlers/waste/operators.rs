@@ -8,8 +8,7 @@ use crate::core::{
 };
 
 use super::{
-    ApiError, AppState, Principal, PrincipalRole, StatusCode, WasteBinAccessInput,
-    WasteBinOperator, actor_role, error, operator_capability,
+    ApiError, AppState, Principal, PrincipalRole, StatusCode, actor_role, error, operator_capability,
 };
 
 #[derive(Serialize)]
@@ -19,9 +18,11 @@ pub(super) struct Catalog {
 }
 
 #[derive(Serialize)]
-struct ApparatusOption {
+pub(super) struct ApparatusOption {
     id: String,
     name: String,
+    #[serde(skip)]
+    is_cutting: bool,
 }
 
 #[derive(Serialize)]
@@ -34,11 +35,11 @@ struct OperatorOption {
 }
 
 fn catalog_error(cause: impl std::fmt::Display) -> ApiError {
-    tracing::warn!(%cause, "waste bin operator options lookup failed");
+    tracing::warn!(%cause, "waste bin options lookup failed");
     error(
         StatusCode::SERVICE_UNAVAILABLE,
         "waste_options_unavailable",
-        "Apparat va aparatchilar ro‘yxatini yuklab bo‘lmadi",
+        "Chiqindi qutisi uchun tanlovlarni yuklab bo‘lmadi",
     )
 }
 
@@ -46,7 +47,7 @@ fn access_error() -> ApiError {
     error(
         StatusCode::BAD_REQUEST,
         "waste_access_invalid",
-        "Tanlangan har bir apparatga kamida bitta mos aparatchi biriktiring",
+        "Kamida bitta faol apparatni tanlang",
     )
 }
 
@@ -61,43 +62,34 @@ fn subject(role: PrincipalRole, ref_: String, display_name: String) -> Principal
     }
 }
 
-pub(super) async fn catalog(
-    state: &AppState,
-    selected: Option<&[WasteBinOperator]>,
-) -> Result<Catalog, ApiError> {
-    let wanted = |role, ref_: &str| {
-        selected.is_none_or(|items| {
-            items
-                .iter()
-                .any(|item| item.role.trim() == actor_role(role) && item.r#ref.trim() == ref_)
+pub(super) async fn apparatus_options(state: &AppState) -> Result<Vec<ApparatusOption>, ApiError> {
+    let mut apparatuses: Vec<_> = state
+        .production_maps
+        .active_canonical_apparatuses()
+        .await
+        .map_err(catalog_error)?
+        .into_iter()
+        .map(|configuration| ApparatusOption {
+            id: configuration.runtime.apparatus_id.to_string(),
+            name: configuration.runtime.display.display_name.clone(),
+            is_cutting: configuration.runtime.execution_profile.operation
+                == ExecutionOperation::Cut,
         })
-    };
-    let (configurations, assignments) = tokio::try_join!(
-        async {
-            state
-                .production_maps
-                .active_canonical_apparatuses()
-                .await
-                .map_err(catalog_error)
-        },
-        async { state.admin.role_assignments().await.map_err(catalog_error) }
-    )?;
-    let mut apparatuses = Vec::new();
-    let mut cutters = Vec::new();
-    let mut active_ids = BTreeSet::new();
-    for configuration in configurations {
-        let runtime = &configuration.runtime;
-        let id = runtime.apparatus_id.to_string();
-        if runtime.execution_profile.operation == ExecutionOperation::Cut {
-            cutters.push(id.clone());
-        }
-        active_ids.insert(id.clone());
-        apparatuses.push(ApparatusOption {
-            id,
-            name: runtime.display.display_name.clone(),
-        });
-    }
+        .collect();
     apparatuses.sort_by(|left, right| left.name.cmp(&right.name).then(left.id.cmp(&right.id)));
+    Ok(apparatuses)
+}
+
+pub(super) async fn catalog(state: &AppState) -> Result<Catalog, ApiError> {
+    let (apparatuses, assignments) = tokio::try_join!(apparatus_options(state), async {
+        state.admin.role_assignments().await.map_err(catalog_error)
+    })?;
+    let active_ids: BTreeSet<_> = apparatuses.iter().map(|option| option.id.as_str()).collect();
+    let cutters: Vec<_> = apparatuses
+        .iter()
+        .filter(|option| option.is_cutting)
+        .map(|option| option.id.clone())
+        .collect();
 
     let mut worker_ids = BTreeSet::new();
     let mut system_ids = BTreeSet::new();
@@ -105,42 +97,25 @@ pub(super) async fn catalog(
         if !assignment
             .assigned_apparatus
             .iter()
-            .any(|id| active_ids.contains(id))
+            .any(|id| active_ids.contains(id.as_str()))
         {
             continue;
         }
         let id = &assignment.principal_ref;
         match assignment.principal_role {
-            PrincipalRole::Aparatchi | PrincipalRole::Customer
-                if wanted(PrincipalRole::Aparatchi, id) =>
-            {
+            PrincipalRole::Aparatchi | PrincipalRole::Customer => {
                 worker_ids.insert(id.clone());
             }
-            role @ (PrincipalRole::TayyorlovMasteri
+            PrincipalRole::TayyorlovMasteri
             | PrincipalRole::HomashyoRezkachi
-            | PrincipalRole::Metalayzer)
-                if wanted(role, id) =>
-            {
+            | PrincipalRole::Metalayzer => {
                 system_ids.insert(id.clone());
             }
             _ => {}
         }
     }
     let worker_refs: Vec<_> = worker_ids.iter().cloned().collect();
-    let mut system_refs: Vec<_> = system_ids.into_iter().collect();
-    // A Rezka master is effectively assigned to all active cutting machines.
-    // Look up selected IDs directly when validating a write, even beyond the
-    // normal directory limit used for presenting choices.
-    if !cutters.is_empty()
-        && let Some(selected) = selected
-    {
-        system_refs.extend(
-            selected
-                .iter()
-                .filter(|item| item.role.trim() == actor_role(PrincipalRole::RezkaMaster))
-                .map(|item| item.r#ref.trim().to_owned()),
-        );
-    }
+    let system_refs: Vec<_> = system_ids.into_iter().collect();
     let (workers, mut system_users, masters) = tokio::try_join!(
         async {
             if worker_refs.is_empty() {
@@ -163,7 +138,7 @@ pub(super) async fn catalog(
                 .map_err(catalog_error)
         },
         async {
-            if selected.is_some() || cutters.is_empty() {
+            if cutters.is_empty() {
                 return Ok(Vec::new());
             }
             state
@@ -211,9 +186,7 @@ pub(super) async fn catalog(
     let mut operators = Vec::new();
     let mut added = BTreeSet::new();
     for principal in subjects {
-        if !wanted(principal.role, &principal.ref_)
-            || !added.insert(role_assignment_key(&principal.role, &principal.ref_))
-        {
+        if !added.insert(role_assignment_key(&principal.role, &principal.ref_)) {
             continue;
         }
         let scope = if principal.role == PrincipalRole::RezkaMaster {
@@ -238,7 +211,7 @@ pub(super) async fn catalog(
         };
         let apparatus_ids: Vec<_> = scope
             .iter()
-            .filter(|id| active_ids.contains(*id))
+            .filter(|id| active_ids.contains(id.as_str()))
             .cloned()
             .collect();
         let (Some(read), Some(write)) = (
@@ -274,36 +247,18 @@ pub(super) async fn catalog(
     })
 }
 
-pub(super) async fn validate_access(
+pub(super) async fn validate_apparatuses(
     state: &AppState,
-    input: &WasteBinAccessInput,
+    ids: &[String],
 ) -> Result<(), ApiError> {
-    if !(1..=128).contains(&input.apparatus_ids.len())
-        || !(1..=128).contains(&input.operators.len())
-    {
+    if !(1..=128).contains(&ids.len()) {
         return Err(access_error());
     }
-    let selected: BTreeSet<_> = input.apparatus_ids.iter().map(|id| id.trim()).collect();
-    let catalog = catalog(state, Some(&input.operators)).await?;
-    let mut covered = BTreeSet::new();
-    for operator in &input.operators {
-        let entry = catalog
-            .operators
-            .iter()
-            .find(|entry| entry.role == operator.role.trim() && entry.ref_ == operator.r#ref.trim())
-            .ok_or_else(access_error)?;
-        let assigned: BTreeSet<_> = entry
-            .apparatus_ids
-            .iter()
-            .map(String::as_str)
-            .filter(|id| selected.contains(id))
-            .collect();
-        if assigned.is_empty() {
-            return Err(access_error());
-        }
-        covered.extend(assigned);
-    }
-    if covered != selected {
+    let options = apparatus_options(state).await?;
+    if ids
+        .iter()
+        .any(|id| !options.iter().any(|option| option.id == id.trim()))
+    {
         return Err(access_error());
     }
     Ok(())

@@ -617,7 +617,7 @@ async fn next_roll_does_not_erase_or_repeat_issue_cycle_waste() {
 async fn postgres_unsaved_issue_waste_survives_order_and_closed_history_reads() {
     use mini_rs_erp::db::{postgres, postgres_production_map::PostgresProductionMapStore};
     use mini_rs_erp::db::postgres_waste_bins::{
-        PostgresWasteBinStore, WasteBinAccessInput, WasteBinOperator, WasteEntry,
+        PostgresWasteBinStore, WasteBinAccessInput, WasteEntry,
     };
     let url = std::env::var("WASTE_TEST_DATABASE_URL").expect("disposable database URL required");
     let admin = sqlx::PgPool::connect(&url).await.unwrap();
@@ -647,26 +647,21 @@ async fn postgres_unsaved_issue_waste_survives_order_and_closed_history_reads() 
                 ..actor()
             };
             let access = WasteBinAccessInput {
-                name: "Boshqa operator qutisi".into(),
+                name: "Smenalar uchun quti".into(),
                 apparatus_ids: vec![CUT.into()],
-                operators: vec![WasteBinOperator {
-                    role: other.role.clone(),
-                    r#ref: other.ref_.clone(),
-                }],
             };
             let private = bins
                 .register("cut-private-registration", 1.0, None, &access, &receiver)
                 .await
                 .unwrap();
-            bins.assign(private["code"].as_str().unwrap(), CUT, &other)
+            let active = bins.assign(private["code"].as_str().unwrap(), CUT, &other)
                 .await
                 .unwrap();
-            None
+            Some(active["cycle"]["id"].as_str().unwrap().to_owned())
         } else {
             let access = WasteBinAccessInput {
                 name: "Rezka chiqindisi".into(),
                 apparatus_ids: vec![CUT.into()],
-                operators: vec![WasteBinOperator { role: actor().role, r#ref: actor().ref_ }],
             };
             let saved = bins
                 .register("cut-test-registration", 1.0, None, &access, &receiver)

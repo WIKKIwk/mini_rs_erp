@@ -123,7 +123,7 @@ async fn record(
         return Ok(());
     }
 
-    let mut cycle_id = access::open_cycle_for_actor(db, entry.apparatus_id, entry.actor).await?;
+    let mut cycle_id = access::open_cycle(db, entry.apparatus_id).await?;
     if entry.expected_cycle_id.is_some() && entry.expected_cycle_id != cycle_id.as_deref() {
         if origin == Origin::Manual {
             return Err(WasteBinError::Conflict);
@@ -243,7 +243,7 @@ impl PostgresWasteBinStore {
         let bins = lock_bins(&mut tx, std::slice::from_ref(&code)).await?;
         if !read::load_cycle(&mut tx, cycle_id)
             .await?
-            .allows(&bins[0], entry.actor)
+            .allows(&bins[0])
         {
             return Err(WasteBinError::Forbidden);
         }
@@ -282,7 +282,7 @@ impl PostgresWasteBinStore {
         let bins = lock_bins(&mut tx, std::slice::from_ref(&code)).await?;
         if !read::load_cycle(&mut tx, cycle_id)
             .await?
-            .allows(&bins[0], actor)
+            .allows(&bins[0])
         {
             return Err(WasteBinError::Forbidden);
         }
@@ -311,11 +311,7 @@ impl PostgresWasteBinStore {
             .filter_map(|(id, assigned)| assigned.is_none().then_some(id.as_str()))
             .collect();
         if !pending.is_empty() {
-            if access::open_cycle_for_actor(&mut tx, &apparatus, actor)
-                .await?
-                .as_deref()
-                != Some(cycle_id)
-            {
+            if access::open_cycle(&mut tx, &apparatus).await?.as_deref() != Some(cycle_id) {
                 return Err(WasteBinError::Conflict);
             }
             sqlx::query(

@@ -15,7 +15,7 @@ use crate::{
         production_map::{QueueActionActor, queue_state::apparatus_matches_assigned},
     },
     db::postgres_waste_bins::{
-        PostgresWasteBinStore, WasteBinAccessInput, WasteBinError, WasteBinOperator, WasteEntry,
+        PostgresWasteBinStore, WasteBinAccessInput, WasteBinError, WasteEntry,
     },
 };
 
@@ -263,7 +263,7 @@ async fn list(
     operator_scope(&state, &principal, apparatus, false).await?;
     result(
         store(&state)?
-            .list_for_operator(status, apparatus, &actor(&principal))
+            .list_for_operator(status, apparatus)
             .await,
     )
 }
@@ -316,7 +316,7 @@ async fn detail(
     operator_scope(&state, &principal, apparatus, false).await?;
     result(
         store(&state)?
-            .detail_for_operator(&query.code, cycle_id, apparatus, &actor(&principal))
+            .detail_for_operator(&query.code, cycle_id, apparatus)
             .await,
     )
 }
@@ -338,12 +338,25 @@ async fn history(
     result(store(&state)?.history(&query.code).await)
 }
 
+#[derive(Deserialize)]
+struct OptionsQuery {
+    #[serde(default)]
+    apparatus_only: bool,
+}
+
 async fn options(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<OptionsQuery>,
 ) -> Result<ApiResponse, ApiError> {
     receiver(&state, &headers).await?;
-    let catalog = operators::catalog(&state, None).await?;
+    if query.apparatus_only {
+        return result(Ok(json!({
+            "apparatuses": operators::apparatus_options(&state).await?,
+        })));
+    }
+    // Older mobile builds still load the operator catalog for their form.
+    let catalog = operators::catalog(&state).await?;
     result(Ok(json!(catalog)))
 }
 
@@ -356,7 +369,8 @@ struct RegisterRequest {
     tolerance_kg: Option<f64>,
     name: String,
     apparatus_ids: Vec<String>,
-    operators: Vec<WasteBinOperator>,
+    #[serde(rename = "operators")]
+    _legacy_operators: Option<serde::de::IgnoredAny>,
 }
 
 async fn register(
@@ -368,9 +382,8 @@ async fn register(
     let access = WasteBinAccessInput {
         name: input.name,
         apparatus_ids: input.apparatus_ids,
-        operators: input.operators,
     };
-    operators::validate_access(&state, &access).await?;
+    operators::validate_apparatuses(&state, &access.apparatus_ids).await?;
     result(
         store(&state)?
             .register(
@@ -390,7 +403,8 @@ struct ConfigureRequest {
     code: String,
     name: String,
     apparatus_ids: Vec<String>,
-    operators: Vec<WasteBinOperator>,
+    #[serde(rename = "operators")]
+    _legacy_operators: Option<serde::de::IgnoredAny>,
 }
 
 async fn configure(
@@ -402,9 +416,8 @@ async fn configure(
     let access = WasteBinAccessInput {
         name: input.name,
         apparatus_ids: input.apparatus_ids,
-        operators: input.operators,
     };
-    operators::validate_access(&state, &access).await?;
+    operators::validate_apparatuses(&state, &access.apparatus_ids).await?;
     result(store(&state)?.configure(&input.code, &access, &actor).await)
 }
 

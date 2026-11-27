@@ -13,7 +13,7 @@ use mini_rs_erp::{
         postgres,
         postgres_warehouse::PostgresWarehouseStore,
         postgres_waste_bins::{
-            PostgresWasteBinStore, WasteBinAccessInput, WasteBinError, WasteBinOperator, WasteEntry,
+            PostgresWasteBinStore, WasteBinAccessInput, WasteBinError, WasteEntry,
         },
     },
 };
@@ -30,21 +30,10 @@ fn actor(role: &str, name: &str) -> QueueActionActor {
     }
 }
 
-fn bin_access(
-    name: &str,
-    apparatuses: &[&str],
-    actors: &[&QueueActionActor],
-) -> WasteBinAccessInput {
+fn bin_access(name: &str, apparatuses: &[&str]) -> WasteBinAccessInput {
     WasteBinAccessInput {
         name: name.into(),
         apparatus_ids: apparatuses.iter().map(|id| (*id).into()).collect(),
-        operators: actors
-            .iter()
-            .map(|actor| WasteBinOperator {
-                role: actor.role.clone(),
-                r#ref: actor.ref_.clone(),
-            })
-            .collect(),
     }
 }
 
@@ -188,7 +177,7 @@ async fn waste_warehouse_receives_actual_kg_once_and_preserves_legacy_history() 
             "receipt-registration",
             5.0,
             Some(0.5),
-            &bin_access("Ombor sinovi qutisi", &[station], &[&worker]),
+            &bin_access("Ombor sinovi qutisi", &[station]),
             &receiver,
         )
         .await
@@ -338,7 +327,7 @@ async fn waste_warehouse_receives_actual_kg_once_and_preserves_legacy_history() 
     assert_eq!(stock["warehouses"][0]["receipt_count"].as_i64(), Some(2));
 
     verify_legacy_bin_access(&bins, &receiver).await;
-    verify_bin_race_and_scope(&bins, &receiver).await;
+    verify_bin_race_and_scope(&bins, &runtime, &receiver, bin_code).await;
     runtime.close().await;
     setup.close().await;
     sqlx::query(&format!("DROP DATABASE {db_name}"))
@@ -358,15 +347,18 @@ async fn verify_legacy_bin_access(bins: &PostgresWasteBinStore, receiver: &Queue
         bins.assign("OLD-EMPTY", APPARATUS, &owner).await,
         Err(WasteBinError::Forbidden),
     );
-    assert!(bins.active_for_operator(APPARATUS, &other).await.unwrap()["bin"].is_null());
+    assert_eq!(
+        bins.active_for_operator(APPARATUS, &other).await.unwrap()["bin"]["code"],
+        "OLD-ACTIVE",
+    );
     assert_eq!(
         bins.active_for_operator(APPARATUS, &owner).await.unwrap()["bin"]["code"],
         "OLD-ACTIVE",
     );
-    bins.submit("OLD-ACTIVE", "old-waste-cycle", None, &owner)
+    bins.submit("OLD-ACTIVE", "old-waste-cycle", None, &other)
         .await
         .unwrap();
-    let access = bin_access("Eski bo‘sh quti", &[APPARATUS], &[&owner]);
+    let access = bin_access("Eski bo‘sh quti", &[APPARATUS]);
     let configured = bins
         .configure("OLD-EMPTY", &access, receiver)
         .await
@@ -375,13 +367,18 @@ async fn verify_legacy_bin_access(bins: &PostgresWasteBinStore, receiver: &Queue
     bins.assign("OLD-EMPTY", APPARATUS, &owner).await.unwrap();
 }
 
-async fn verify_bin_race_and_scope(bins: &PostgresWasteBinStore, receiver: &QueueActionActor) {
+async fn verify_bin_race_and_scope(
+    bins: &PostgresWasteBinStore,
+    runtime: &PgPool,
+    receiver: &QueueActionActor,
+    available_code: &str,
+) {
     const FIRST: &str = "apparatus:default:asset-010";
     const SECOND: &str = "apparatus:default:asset-011";
+    const THIRD: &str = "apparatus:default:asset-012";
     let ali = actor("aparatchi", "operator-ali");
     let vali = actor("aparatchi", "operator-vali");
-    let outsider = actor("aparatchi", "operator-other");
-    let access = bin_access("Umumiy plyonka", &[FIRST, SECOND], &[&ali, &vali]);
+    let access = bin_access("Umumiy plyonka", &[FIRST, SECOND]);
     let (bin, replay) = tokio::join!(
         bins.register("shared-registration", 4.0, None, &access, receiver),
         bins.register("shared-registration", 4.0, None, &access, receiver),
@@ -396,7 +393,7 @@ async fn verify_bin_race_and_scope(bins: &PostgresWasteBinStore, receiver: &Queu
         Err(WasteBinError::Conflict)
     );
     let shared_code = bin["code"].as_str().unwrap();
-    let access = bin_access("Plyonka qutisi", &[FIRST, SECOND], &[&ali, &vali]);
+    let access = bin_access("Plyonka qutisi", &[FIRST, SECOND]);
     assert_eq!(
         bins.configure(shared_code, &access, &ali).await,
         Err(WasteBinError::Forbidden),
@@ -404,13 +401,24 @@ async fn verify_bin_race_and_scope(bins: &PostgresWasteBinStore, receiver: &Queu
     let edited = bins.configure(shared_code, &access, receiver).await.unwrap();
     assert_eq!(edited["name"], "Plyonka qutisi");
     assert_eq!(edited["qr_payload"], bin["qr_payload"]);
+    // A bin configured by the old app already has an apparatus assignment.
+    sqlx::query(
+        "INSERT INTO mini_waste_bin_operators (bin_code, operator_role, operator_ref)
+         VALUES ($1, $2, $3)",
+    )
+    .bind(shared_code)
+    .bind(&ali.role)
+    .bind(&ali.ref_)
+    .execute(runtime)
+    .await
+    .unwrap();
 
     let private = bins
         .register(
             "private-registration",
             4.0,
             None,
-            &bin_access("Boshqa guruh", &[FIRST, SECOND], &[&outsider]),
+            &bin_access("Uchinchi apparat", &[THIRD]),
             receiver,
         )
         .await
@@ -421,19 +429,18 @@ async fn verify_bin_race_and_scope(bins: &PostgresWasteBinStore, receiver: &Queu
             "first-only-registration",
             4.0,
             None,
-            &bin_access("Faqat birinchi apparat", &[FIRST], &[&ali]),
+            &bin_access("Faqat birinchi apparat", &[FIRST]),
             receiver,
         )
         .await
         .unwrap();
     let first_only_code = first_only["code"].as_str().unwrap();
-    for (operator, apparatus, expected) in [
-        (&ali, FIRST, &[first_only_code, shared_code][..]),
-        (&ali, SECOND, &[shared_code][..]),
-        (&vali, SECOND, &[shared_code][..]),
+    for (apparatus, expected) in [
+        (FIRST, &[available_code, first_only_code, shared_code][..]),
+        (SECOND, &[shared_code][..]),
     ] {
         let list = bins
-            .list_for_operator(Some("empty"), apparatus, operator)
+            .list_for_operator(Some("empty"), apparatus)
             .await
             .unwrap();
         let mut codes: Vec<_> = list["bins"]
@@ -441,7 +448,7 @@ async fn verify_bin_race_and_scope(bins: &PostgresWasteBinStore, receiver: &Queu
             .unwrap()
             .iter()
             .map(|bin| {
-                assert!(bin.get("operators").is_none());
+                assert!(bin.get("apparatus_ids").is_none());
                 bin["code"].as_str().unwrap()
             })
             .collect();
@@ -455,22 +462,21 @@ async fn verify_bin_race_and_scope(bins: &PostgresWasteBinStore, receiver: &Queu
         Err(WasteBinError::Forbidden),
     );
     assert_eq!(
-        bins.assign(bin["qr_payload"].as_str().unwrap(), FIRST, &outsider).await,
+        bins.assign(bin["qr_payload"].as_str().unwrap(), THIRD, &vali).await,
         Err(WasteBinError::Forbidden),
     );
-    assert!(
-        bins.detail_for_operator(shared_code, None, FIRST, &outsider)
-            .await
-            .is_err()
+    assert_eq!(
+        bins.detail_for_operator(shared_code, None, THIRD).await,
+        Err(WasteBinError::NotFound),
     );
 
     let (first, second) = tokio::join!(
         bins.assign(shared_code, FIRST, &ali),
         bins.assign(shared_code, SECOND, &vali),
     );
-    let (held, apparatus, holder, peer) = match (first, second) {
-        (Ok(bin), Err(WasteBinError::Conflict)) => (bin, FIRST, &ali, &vali),
-        (Err(WasteBinError::Conflict), Ok(bin)) => (bin, SECOND, &vali, &ali),
+    let (held, apparatus, other_apparatus, holder, peer) = match (first, second) {
+        (Ok(bin), Err(WasteBinError::Conflict)) => (bin, FIRST, SECOND, &ali, &vali),
+        (Err(WasteBinError::Conflict), Ok(bin)) => (bin, SECOND, FIRST, &vali, &ali),
         unexpected => panic!("expected exactly one reservation: {unexpected:?}"),
     };
     let cycle = held["cycle"]["id"].as_str().unwrap();
@@ -478,9 +484,12 @@ async fn verify_bin_race_and_scope(bins: &PostgresWasteBinStore, receiver: &Queu
         bins.assign(shared_code, apparatus, holder).await.unwrap()["cycle"]["id"],
         cycle
     );
+    let handed_over = bins.assign(shared_code, apparatus, peer).await.unwrap();
+    assert_eq!(handed_over["cycle"]["id"], cycle);
+    assert_eq!(handed_over["cycle"]["opened_by_ref"], holder.ref_);
     assert_eq!(
-        bins.assign(shared_code, apparatus, peer).await,
-        Err(WasteBinError::Conflict),
+        bins.detail_for_operator(shared_code, None, other_apparatus).await,
+        Err(WasteBinError::NotFound),
     );
     assert_eq!(
         bins.submit(shared_code, cycle, Some(private_code), holder).await,
@@ -490,24 +499,55 @@ async fn verify_bin_race_and_scope(bins: &PostgresWasteBinStore, receiver: &Queu
         bins.active_for_operator(apparatus, holder).await.unwrap()["bin"]["cycle"]["id"],
         cycle
     );
-    assert!(
-        bins.active_for_operator(apparatus, &outsider)
-            .await
-            .unwrap()["bin"]
-            .is_null()
+    assert_eq!(
+        bins.active_for_operator(apparatus, peer).await.unwrap()["bin"]["cycle"]["id"],
+        cycle
     );
+    let deposits = [(holder, "Plyonka qirqimi", 3.25), (peer, "Brak plyonka", 1.75)];
+    for (operator, reason, kg) in deposits {
+        bins.add(
+            shared_code,
+            cycle,
+            &WasteEntry {
+                request_id: "shift-deposit",
+                apparatus_id: apparatus,
+                order_id: None,
+                session_id: None,
+                expected_cycle_id: Some(cycle),
+                kg,
+                reason,
+                actor: operator,
+                reconcile_manual: false,
+            },
+        )
+        .await
+        .unwrap();
+    }
+    let detail = bins.detail(shared_code).await.unwrap();
+    let entries = detail["cycle"]["entries"].as_array().unwrap();
+    assert_eq!(detail["cycle"]["expected_kg"], 5.0);
+    assert_eq!(entries.len(), 2);
+    for (operator, reason, kg) in deposits {
+        let entry = entries
+            .iter()
+            .find(|entry| entry["actor_ref"] == operator.ref_)
+            .unwrap();
+        assert_eq!(entry["reason"], reason);
+        assert_eq!(entry["kg"], kg);
+    }
     let next = bins
         .register("replacement-registration", 4.0, None, &access, receiver)
         .await
         .unwrap();
     let next_code = next["code"].as_str().unwrap();
     let replaced = bins
-        .submit(shared_code, cycle, Some(next_code), holder)
+        .submit(shared_code, cycle, Some(next_code), peer)
         .await
         .unwrap();
     assert_eq!(replaced["replacement"]["code"], next_code);
+    assert_eq!(replaced["cycle"]["sealed_by_ref"], peer.ref_);
     assert_eq!(
-        bins.submit(shared_code, cycle, Some(next_code), peer)
+        bins.submit(shared_code, cycle, Some(next_code), holder)
             .await,
         Err(WasteBinError::Conflict),
     );
