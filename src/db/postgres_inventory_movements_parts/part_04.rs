@@ -1,26 +1,26 @@
+const TRANSFER_COLUMNS: &str = "id, source_warehouse_id, source_warehouse,
+    destination_warehouse_id, destination_warehouse,
+    status, note,
+    requested_by_name, approved_by_name, dispatched_by_name,
+    received_by_name, rejected_by_name, cancelled_by_name,
+    EXTRACT(EPOCH FROM created_at)::bigint AS created_at_unix,
+    EXTRACT(EPOCH FROM approved_at)::bigint AS approved_at_unix,
+    EXTRACT(EPOCH FROM dispatched_at)::bigint AS dispatched_at_unix,
+    EXTRACT(EPOCH FROM received_at)::bigint AS received_at_unix,
+    EXTRACT(EPOCH FROM rejected_at)::bigint AS rejected_at_unix,
+    EXTRACT(EPOCH FROM cancelled_at)::bigint AS cancelled_at_unix";
 
 async fn load_transfer(
     pool: &PgPool,
     transfer_id: &str,
 ) -> Result<InventoryTransfer, InventoryMovementError> {
-    let row = sqlx::query_as::<_, InventoryTransferRow>(
+    let row = sqlx::query_as::<_, InventoryTransferRow>(&format!(
         r#"
-        SELECT
-            id, source_warehouse_id, source_warehouse,
-            destination_warehouse_id, destination_warehouse,
-            status, note,
-            requested_by_name, approved_by_name, dispatched_by_name,
-            received_by_name, rejected_by_name, cancelled_by_name,
-            EXTRACT(EPOCH FROM created_at)::bigint AS created_at_unix,
-            EXTRACT(EPOCH FROM approved_at)::bigint AS approved_at_unix,
-            EXTRACT(EPOCH FROM dispatched_at)::bigint AS dispatched_at_unix,
-            EXTRACT(EPOCH FROM received_at)::bigint AS received_at_unix,
-            EXTRACT(EPOCH FROM rejected_at)::bigint AS rejected_at_unix,
-            EXTRACT(EPOCH FROM cancelled_at)::bigint AS cancelled_at_unix
+        SELECT {TRANSFER_COLUMNS}
         FROM mini_inventory_transfers
         WHERE id = $1
         "#,
-    )
+    ))
     .bind(transfer_id.trim())
     .fetch_optional(pool)
     .await
@@ -32,8 +32,25 @@ async fn load_transfer(
         .ok_or(InventoryMovementError::TransferNotFound)
 }
 
-async fn hydrate_transfers(
-    pool: &PgPool,
+pub(super) async fn load_preparation_history_transfers(
+    tx: &mut Transaction<'_, Postgres>,
+    ids: &[String],
+) -> Result<Vec<InventoryTransfer>, InventoryMovementError> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows = sqlx::query_as::<_, InventoryTransferRow>(&format!(
+        "SELECT {TRANSFER_COLUMNS} FROM mini_inventory_transfers WHERE id = ANY($1)"
+    ))
+    .bind(ids)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(store_error)?;
+    hydrate_transfers(&mut **tx, rows).await
+}
+
+async fn hydrate_transfers<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
     rows: Vec<InventoryTransferRow>,
 ) -> Result<Vec<InventoryTransfer>, InventoryMovementError> {
     if rows.is_empty() {
@@ -52,7 +69,7 @@ async fn hydrate_transfers(
         "#,
     )
     .bind(ids)
-    .fetch_all(pool)
+    .fetch_all(executor)
     .await
     .map_err(store_error)?;
     let mut lines_by_transfer = BTreeMap::<String, Vec<InventoryTransferLine>>::new();

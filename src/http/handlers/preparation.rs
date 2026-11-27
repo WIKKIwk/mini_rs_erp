@@ -255,6 +255,22 @@ pub async fn snapshot(
         .map_err(error)
 }
 
+pub(crate) async fn history(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<crate::db::postgres_preparation::history::PreparationHistoryQuery>,
+) -> Result<impl axum::response::IntoResponse, ApiError> {
+    let actor = authorize(&state, &headers).await?;
+    let page = store(&state)?
+        .history(&actor.ref_, &query)
+        .await
+        .map_err(error)?;
+    Ok((
+        [(axum::http::header::CACHE_CONTROL, "private, no-store")],
+        Json(page),
+    ))
+}
+
 pub async fn material(
     State(state): State<AppState>,
     headers: HeaderMap,

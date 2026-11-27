@@ -22,6 +22,8 @@ mod production_journal;
 pub(crate) use production_journal::MAX_JOURNAL_WINDOW;
 mod production_notes;
 mod output_notes;
+pub(crate) mod history;
+mod history_documents;
 pub(crate) mod orders;
 mod order_customers;
 
@@ -57,6 +59,35 @@ pub mod paddons;
 
 const PREPARATION_ITEM_GROUP: &str = "Homashyo";
 const PREPARATION_MATERIAL_CHILD_GROUP: &str = "seriyo";
+
+pub(super) const SERIYO_GROUPS_SQL: &str = "seriyo_groups AS (
+    SELECT name FROM mini_item_groups WHERE lower(btrim(name)) = 'seriyo' AND is_group
+    UNION
+    SELECT child.name FROM mini_item_groups child JOIN seriyo_groups parent
+      ON lower(btrim(child.parent_item_group)) = lower(btrim(parent.name))
+    WHERE child.is_group
+)";
+
+// Share the receipt proof between the displayed balance and actual debits.
+// The transfer evidence also covers lots received before the receipt was linked.
+macro_rules! preparation_lot_for_master {
+    ($master:literal, $is_seriyo:literal) => {
+        concat!(
+            "(r.owner_ref = ", $master, " OR EXISTS (
+                SELECT 1 FROM mini_inventory_transfer_lines tl
+                JOIN mini_inventory_transfers t ON t.id = tl.transfer_id
+                JOIN mini_warehouses w ON w.id = t.destination_warehouse_id
+                WHERE tl.asset_kind = 'raw_material' AND tl.asset_ref = s.id
+                  AND t.status = 'received' AND lower(w.name) = lower(s.warehouse)
+                  AND (s.payload_json->>'source' = 'raw_material_paddon'
+                      OR (", $is_seriyo, " AND t.received_by_role = 'tayyorlov_masteri'
+                          AND t.received_by_ref = ", $master, "))
+            ))"
+        )
+    }
+}
+
+mod transfer_receipt_scope;
 
 #[derive(Clone)]
 pub struct PostgresPreparationStore {
