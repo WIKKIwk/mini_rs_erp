@@ -301,6 +301,12 @@ pub(super) const CAPABILITY_CATALOG: &[CapabilityDefinition] = &[
         default_roles: INVENTORY_MOVEMENT_ROLES,
     },
     CapabilityDefinition {
+        capability: Capability::MaterialPaddonPack,
+        code: "material.paddon.pack",
+        label: "Pack prepared rolls into own material paddons",
+        default_roles: &[PrincipalRole::MaterialTaminotchi],
+    },
+    CapabilityDefinition {
         capability: Capability::ApparatusQueueRead,
         code: "apparatus.queue.read",
         label: "Apparatus queue read",

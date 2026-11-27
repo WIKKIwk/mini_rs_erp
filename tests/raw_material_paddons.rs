@@ -7,7 +7,10 @@ use mini_rs_erp::db::{
     postgres::{apply_postgres_migrations_through_version, canonical_apparatus_service},
     postgres_preparation::{
         PostgresPreparationStore,
-        paddons::{PaddonCreate, PaddonIssueCreate, PaddonQuery, PaddonRollAttachment, PaddonRollOptions},
+        paddons::{
+            InventoryPaddonRollAttachment, InventoryPaddonRollOptions, PaddonCreate,
+            PaddonIssueCreate, PaddonQuery, PaddonRollAttachment, PaddonRollOptions,
+        },
     },
 };
 use serde_json::{Value, json};
@@ -15,6 +18,7 @@ use sqlx::{
     PgPool,
     postgres::{PgConnectOptions, PgPoolOptions},
 };
+use std::collections::BTreeSet;
 
 fn actor(role: PrincipalRole, id: &str) -> Principal {
     Principal {
@@ -81,7 +85,7 @@ async fn verify(pool: &PgPool, options: PgConnectOptions) {
         .await
         .unwrap();
     verify_paddon_upgrade(pool).await;
-    apply_postgres_migrations_through_version(pool, "0206")
+    apply_postgres_migrations_through_version(pool, "0212")
         .await
         .unwrap();
     sqlx::raw_sql(
@@ -404,7 +408,112 @@ async fn verify(pool: &PgPool, options: PgConnectOptions) {
     verify_prepared_roll_packing(pool, &store, &shared_inventory, &empty_code, supply_code, item).await;
     verify_batch_packing(pool, &store, &master, code, source_code, item).await;
     verify_cross_warehouse_packing(pool, &store, &master, supply_code, item).await;
+    verify_material_inventory_packing(pool, &store, &supplier, supply_code, &empty_code).await;
     runtime.close().await;
+}
+
+async fn verify_material_inventory_packing(
+    pool: &PgPool,
+    store: &PostgresPreparationStore,
+    supplier: &Principal,
+    other_warehouse_paddon: &str,
+    master_paddon: &str,
+) {
+    sqlx::raw_sql(
+        r#"INSERT INTO mini_items (code,name,uom,item_group)
+           VALUES ('PE-PACK-TEST','PE packing test','kg','Homashyo');
+           INSERT INTO mini_gscale_receipts (name,status,item_code,warehouse,qty,barcode,payload_json)
+           VALUES ('inventory-pack-free','submitted','PE-PACK-TEST','Shared',12.75,'INV-PACK-A',
+                   '{"actor_role":"tayyorlov_masteri","actor_ref":"prep-1"}'),
+                  ('inventory-pack-linked','submitted','PE-PACK-TEST','Shared',10,'INV-PACK-B',
+                   '{"actor_role":"tayyorlov_masteri","actor_ref":"prep-1"}'),
+                  ('inventory-pack-outside','submitted','PE-PACK-TEST','Own',8,'INV-PACK-C',
+                   '{"actor_role":"tayyorlov_masteri","actor_ref":"prep-1"}'),
+                  ('inventory-pack-received','submitted','PE-PACK-TEST','Shared',4,'INV-PACK-D',
+                   '{"actor_role":"material_taminotchi","actor_ref":"supply-1"}');
+           INSERT INTO mini_raw_material_stock (id,warehouse,item_code,barcode,qty,source_receipt_id)
+           SELECT name,warehouse,item_code,barcode,qty,name
+           FROM mini_gscale_receipts WHERE name LIKE 'inventory-pack-%';
+           INSERT INTO mini_raw_material_assignments
+               (barcode,order_id,apparatus,canonical_apparatus_id,item_code,item_group)
+           VALUES ('INV-PACK-B','paddon-prep-order','apparatus:default:bosma_7',
+                   'apparatus:default:bosma_7','PE-PACK-TEST','Homashyo');"#,
+    ).execute(pool).await.unwrap();
+    let groups = ["homashyo".to_owned()];
+    let first = store.receive_raw_material_paddon(
+        supplier, receipt("Shared", "PE-PACK-TEST", "inventory-pack-first"), &groups,
+    ).await.unwrap();
+    let second = store.receive_raw_material_paddon(
+        supplier, receipt("Shared", "PE-PACK-TEST", "inventory-pack-second"), &groups,
+    ).await.unwrap();
+    let (first, second) = (
+        first["paddon_code"].as_str().unwrap(),
+        second["paddon_code"].as_str().unwrap(),
+    );
+    let free = "inventory-pack-free";
+    let options = |refs: &[&str]| -> InventoryPaddonRollOptions {
+        serde_json::from_value(json!({"asset_refs": refs})).unwrap()
+    };
+    let attach = |target, key, refs: &[&str]| -> InventoryPaddonRollAttachment {
+        serde_json::from_value(json!({
+            "asset_refs": refs, "code": target, "request_id": key,
+        })).unwrap()
+    };
+    let page = store.inventory_paddon_options(supplier, &groups, options(&[free])).await.unwrap();
+    let codes: BTreeSet<_> = page["paddons"].as_array().unwrap().iter()
+        .map(|paddon| paddon["paddon_code"].as_str().unwrap()).collect();
+    assert_eq!(codes, BTreeSet::from([first, second]));
+    for denied in ["inventory-pack-linked", "inventory-pack-outside", "inventory-pack-received"] {
+        assert!(matches!(
+            store.inventory_paddon_options(supplier, &groups, options(&[free, denied])).await,
+            Err(PreparationError::Conflict(_))
+        ));
+    }
+    assert!(matches!(
+        store.inventory_paddon_options(supplier, &["other".into()], options(&[free])).await,
+        Err(PreparationError::Conflict(_))
+    ));
+    assert!(matches!(
+        store.attach_inventory_rolls(supplier, &groups, attach(master_paddon, "wrong-owner", &[free])).await,
+        Err(PreparationError::Forbidden)
+    ));
+    assert!(matches!(
+        store.attach_inventory_rolls(supplier, &groups, attach(other_warehouse_paddon, "wrong-warehouse", &[free])).await,
+        Err(PreparationError::Conflict(_))
+    ));
+    assert!(matches!(
+        store.attach_inventory_rolls(supplier, &groups, attach(first, "linked-stock", &[free, "inventory-pack-linked"])).await,
+        Err(PreparationError::Conflict(_))
+    ));
+    let untouched: bool = sqlx::query_scalar(
+        "SELECT status = 'available' FROM mini_raw_material_stock WHERE id=$1",
+    ).bind(free).fetch_one(pool).await.unwrap();
+    assert!(untouched);
+
+    let (a, b) = tokio::join!(
+        store.attach_inventory_rolls(supplier, &groups, attach(first, "inventory-pack-a", &[free])),
+        store.attach_inventory_rolls(supplier, &groups, attach(second, "inventory-pack-b", &[free])),
+    );
+    let (saved, code, key) = match (a, b) {
+        (Ok(saved), Err(PreparationError::Conflict(_))) => (saved, first, "inventory-pack-a"),
+        (Err(PreparationError::Conflict(_)), Ok(saved)) => (saved, second, "inventory-pack-b"),
+        results => panic!("expected one packed roll and one conflict: {results:?}"),
+    };
+    assert_eq!(saved["asset_refs"], json!([free]));
+    assert_eq!(
+        store.attach_inventory_rolls(supplier, &groups, attach(code, key, &[free])).await.unwrap(),
+        saved,
+    );
+    let stock: (String, String, String, String) = sqlx::query_as(
+        "SELECT status,barcode,qty::text,source_receipt_id FROM mini_raw_material_stock WHERE id=$1",
+    ).bind(free).fetch_one(pool).await.unwrap();
+    assert_eq!(stock, ("on_paddon".into(), "INV-PACK-A".into(), "12.750000".into(), free.into()));
+    let audit: (i64, bool) = sqlx::query_as(
+        "SELECT count(*), bool_and(owner_role='material_taminotchi' AND owner_ref='supply-1'
+                AND created_at IS NOT NULL)
+         FROM mini_raw_material_paddon_attachments WHERE stock_ids = ARRAY[$1]::text[]",
+    ).bind(free).fetch_one(pool).await.unwrap();
+    assert_eq!(audit, (1, true));
 }
 
 async fn verify_cross_warehouse_packing(

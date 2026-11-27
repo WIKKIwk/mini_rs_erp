@@ -26,6 +26,8 @@ pub(super) fn routes() -> Router<AppState> {
             get(crate::http::handlers::preparation::raw_material_paddons)
                 .post(crate::http::handlers::preparation::receive_raw_material_paddon),
         )
+        .route("/v1/mobile/raw-material-paddons/roll-options", post(crate::http::handlers::preparation::inventory_paddon_options))
+        .route("/v1/mobile/raw-material-paddons/roll-attach", post(crate::http::handlers::preparation::attach_inventory_rolls))
         .route(
             "/v1/mobile/raw-material-paddons/issues",
             get(crate::http::handlers::preparation::raw_material_paddon_issues)

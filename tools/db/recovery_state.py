@@ -266,7 +266,7 @@ def capture_state(runtime, root, stage, inherited):
 def capture_source(root, stage, executable=None):
     destination = stage / "source"
     names = ["Cargo.toml", "Cargo.lock", "LICENSE", "README.md", "Makefile", ".env.example",
-             "src", "crates", "migrations", "tools", "docs", "examples", "build.rs", ".cargo"]
+             "src", "crates", "third_party", "migrations", "tools", "docs", "examples", "build.rs", ".cargo"]
     for name in names:
         source = root / name
         if source.is_dir():

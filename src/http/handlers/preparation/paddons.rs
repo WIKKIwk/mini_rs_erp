@@ -1,6 +1,7 @@
 use super::*;
 use crate::core::inventory_movements::InventoryActor;
 use crate::db::postgres_preparation::paddons::{
+    InventoryPaddonRollAttachment, InventoryPaddonRollOptions,
     PaddonCreate, PaddonIdentity, PaddonIssueCreate, PaddonLabelPrint, PaddonQuery,
     PaddonRollAttachment, PaddonRollOptions,
 };
@@ -27,6 +28,52 @@ async fn paddon_actor(
         return Err(error(PreparationError::Forbidden));
     }
     Ok(actor)
+}
+
+async fn material_item_groups(state: &AppState, actor: &Principal) -> Result<Vec<String>, ApiError> {
+    Ok(state.admin.principal_assigned_item_group_scope(actor).await
+        .map_err(material_scope_admin_error)?
+        .into_iter().map(|group| group.trim().to_lowercase()).collect())
+}
+
+async fn inventory_paddon_actor(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<(Principal, Vec<String>), ApiError> {
+    let actor = paddon_actor(state, headers, false).await?;
+    if actor.role != PrincipalRole::MaterialTaminotchi
+        || !state.admin.principal_has_capability(&actor, Capability::InventoryMovementManage).await
+        || !state.admin.principal_has_capability(&actor, Capability::MaterialPaddonPack).await
+    {
+        return Err(error(PreparationError::Forbidden));
+    }
+    let item_groups = material_item_groups(state, &actor).await?;
+    Ok((actor, item_groups))
+}
+
+pub async fn inventory_paddon_options(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<InventoryPaddonRollOptions>,
+) -> Result<Json<Value>, ApiError> {
+    let (actor, item_groups) = inventory_paddon_actor(&state, &headers).await?;
+    store(&state)?.inventory_paddon_options(&actor, &item_groups, input)
+        .await.map(Json).map_err(error)
+}
+
+pub async fn attach_inventory_rolls(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<InventoryPaddonRollAttachment>,
+) -> Result<Json<Value>, ApiError> {
+    let (actor, item_groups) = inventory_paddon_actor(&state, &headers).await?;
+    let result = store(&state)?.attach_inventory_rolls(&actor, &item_groups, input)
+        .await.map_err(error)?;
+    if let Some(warehouse) = result["warehouse"].as_str() {
+        state.warehouse_events.notify_updated(warehouse, "raw_material_paddon");
+    }
+    state.production_maps.notify_live();
+    Ok(Json(result))
 }
 
 pub async fn raw_material_paddons(
@@ -57,14 +104,7 @@ pub async fn receive_raw_material_paddon(
 ) -> Result<Json<Value>, ApiError> {
     let actor = paddon_actor(&state, &headers, true).await?;
     let groups = if actor.role == PrincipalRole::MaterialTaminotchi {
-        state
-            .admin
-            .principal_assigned_item_group_scope(&actor)
-            .await
-            .map_err(material_scope_admin_error)?
-            .into_iter()
-            .map(|group| group.trim().to_lowercase())
-            .collect()
+        material_item_groups(&state, &actor).await?
     } else {
         Vec::new()
     };

@@ -6,9 +6,11 @@ use crate::db::postgres_raw_material_events::{
 use serde::{Deserialize, Serialize};
 
 mod attachments;
+mod inventory_attachments;
 mod issues;
 mod printing;
 pub use attachments::{PaddonRollAttachment, PaddonRollOptions};
+pub use inventory_attachments::{InventoryPaddonRollAttachment, InventoryPaddonRollOptions};
 pub use issues::{PaddonIdentity, PaddonIssueCreate};
 pub use printing::PaddonLabelPrint;
 

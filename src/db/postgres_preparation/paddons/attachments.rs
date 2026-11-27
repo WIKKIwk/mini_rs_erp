@@ -10,7 +10,7 @@ use crate::db::postgres_inventory_movements::{
 use crate::db::postgres_preparation::production_journal::BASE as JOURNAL_CTES;
 use std::collections::{BTreeMap, BTreeSet};
 
-const STOCK_WAREHOUSE: &str = "LEFT JOIN mini_warehouses w
+pub(super) const STOCK_WAREHOUSE: &str = "LEFT JOIN mini_warehouses w
     ON lower(w.name) = lower(s.warehouse) AND NOT w.is_group";
 const ROLL_BLOCKER: &str = concat!(
     "CASE WHEN s.id IS NULL THEN 'missing'
@@ -29,7 +29,7 @@ const ROLL_BLOCKER: &str = concat!(
      END",
 );
 
-const ROLL_STOCK: &str = "FROM mini_gscale_receipts r
+pub(super) const ROLL_STOCK: &str = "FROM mini_gscale_receipts r
     JOIN mini_raw_material_stock s ON s.source_receipt_id = r.name
         AND lower(s.barcode) = lower(r.barcode)";
 const SELECTED_RECEIPTS: &str = "WHERE r.name = ANY($2::text[]) AND r.status = 'submitted'
@@ -102,7 +102,7 @@ fn normalize_batch_ids(
     Ok(ids)
 }
 
-fn validate_roll_selection(
+pub(super) fn validate_roll_selection(
     names: &mut [String],
     from_batches: bool,
 ) -> Result<(), PreparationError> {
@@ -119,6 +119,17 @@ fn validate_roll_selection(
     names.sort_unstable();
     if names.windows(2).any(|pair| pair[0] == pair[1]) {
         return Err(PreparationError::Invalid("Rulon faqat bir marta tanlanadi"));
+    }
+    Ok(())
+}
+
+pub(super) fn validate_attachment_key(request_id: &str) -> Result<(), PreparationError> {
+    if !(8..=128).contains(&request_id.len())
+        || !request_id
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b"-_".contains(&c))
+    {
+        return Err(PreparationError::Invalid("Biriktirish kaliti noto‘g‘ri"));
     }
     Ok(())
 }
@@ -209,14 +220,7 @@ impl PostgresPreparationStore {
         let batch_ids = normalize_batch_ids(input.batch_id, input.batch_ids)?;
         validate_roll_selection(&mut input.receipt_names, !batch_ids.is_empty())?;
         let code = paddon_code(&input.code)?;
-        if !(8..=128).contains(&input.request_id.len())
-            || !input
-                .request_id
-                .bytes()
-                .all(|c| c.is_ascii_alphanumeric() || b"-_".contains(&c))
-        {
-            return Err(PreparationError::Invalid("Biriktirish kaliti noto‘g‘ri"));
-        }
+        validate_attachment_key(&input.request_id)?;
         let attachment_key = format!("paddon-attach:{}:{}", actor.ref_, input.request_id);
         let mut tx = self.pool.begin().await?;
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
@@ -230,7 +234,7 @@ impl PostgresPreparationStore {
         });
         let previous: Option<(String, Vec<String>)> = sqlx::query_as(
             "SELECT paddon_id, receipt_names FROM mini_raw_material_paddon_attachments
-             WHERE owner_ref = $1 AND request_id = $2",
+             WHERE owner_role = 'tayyorlov_masteri' AND owner_ref = $1 AND request_id = $2",
         )
         .bind(&actor.ref_)
         .bind(&input.request_id)
@@ -319,8 +323,30 @@ impl PostgresPreparationStore {
             stock_ids
         };
 
-        sqlx::query(
-            "INSERT INTO mini_raw_material_paddon_units
+        save_paddon_attachment(
+            &mut tx,
+            actor,
+            &input.request_id,
+            &paddon_id,
+            &input.receipt_names,
+            &stock_ids,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(result)
+    }
+}
+
+pub(super) async fn save_paddon_attachment(
+    tx: &mut Transaction<'_, Postgres>,
+    actor: &Principal,
+    request_id: &str,
+    paddon_id: &str,
+    receipt_names: &[String],
+    stock_ids: &[String],
+) -> Result<(), PreparationError> {
+    sqlx::query(
+        "INSERT INTO mini_raw_material_paddon_units
                  (paddon_id, line_no, unit_no, stock_id, kind, lot_number, unit_kg,
                   item_name, width_mm, micron, prepared_roll)
              SELECT $1, last.line_no + row_number() OVER (ORDER BY s.id)::int, 1, s.id,
@@ -332,31 +358,32 @@ impl PostgresPreparationStore {
                 FROM mini_raw_material_paddon_units WHERE paddon_id = $1
              ) last
              WHERE s.id = ANY($2::text[])",
-        )
-        .bind(&paddon_id)
-        .bind(&stock_ids)
-        .execute(&mut *tx)
-        .await?;
-        sqlx::query(
-            "UPDATE mini_raw_material_stock SET status = 'on_paddon', updated_at = now()
+    )
+    .bind(paddon_id)
+    .bind(stock_ids)
+    .execute(&mut **tx)
+    .await?;
+    sqlx::query(
+        "UPDATE mini_raw_material_stock SET status = 'on_paddon', updated_at = now()
                     WHERE id = ANY($1::text[])",
-        )
-        .bind(&stock_ids)
-        .execute(&mut *tx)
-        .await?;
-        sqlx::query(
-            "INSERT INTO mini_raw_material_paddon_attachments
-                 (owner_ref, request_id, paddon_id, receipt_names) VALUES ($1,$2,$3,$4)",
-        )
-        .bind(&actor.ref_)
-        .bind(&input.request_id)
-        .bind(&paddon_id)
-        .bind(&input.receipt_names)
-        .execute(&mut *tx)
-        .await?;
-        tx.commit().await?;
-        Ok(result)
-    }
+    )
+    .bind(stock_ids)
+    .execute(&mut **tx)
+    .await?;
+    sqlx::query(
+        "INSERT INTO mini_raw_material_paddon_attachments
+                 (owner_role, owner_ref, request_id, paddon_id, receipt_names, stock_ids)
+                 VALUES ($1,$2,$3,$4,$5,$6)",
+    )
+    .bind(role_code(actor)?)
+    .bind(&actor.ref_)
+    .bind(request_id)
+    .bind(paddon_id)
+    .bind(receipt_names)
+    .bind(stock_ids)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
 }
 
 fn require_preparation_master(actor: &Principal) -> Result<(), PreparationError> {

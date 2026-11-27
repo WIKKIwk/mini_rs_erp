@@ -47,6 +47,7 @@ pub enum Capability {
     ProductionMapManage,
     FactoryLocationManage,
     InventoryMovementManage,
+    MaterialPaddonPack,
     ApparatusQueueRead,
     ApparatusQueueManage,
     GscaleCatalogRead,
