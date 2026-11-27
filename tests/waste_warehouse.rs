@@ -84,7 +84,8 @@ async fn waste_warehouse_receives_actual_kg_once_and_preserves_legacy_history() 
     sqlx::raw_sql(
         "INSERT INTO mini_waste_bins(code,tare_units,tolerance_units,registered_by_ref)
          VALUES ('OLD-EMPTY',4000000,500000,'previous-receiver'),
-                ('OLD-ACTIVE',4000000,500000,'previous-receiver');
+                ('OLD-ACTIVE',4000000,500000,'previous-receiver'),
+                ('CQ-001',4000000,500000,'previous-receiver');
          INSERT INTO mini_waste_bin_cycles
              (id,bin_code,apparatus_id,opened_by_ref,opened_by_display_name)
          VALUES ('old-waste-cycle','OLD-ACTIVE','apparatus:default:asset-012',
@@ -182,19 +183,27 @@ async fn waste_warehouse_receives_actual_kg_once_and_preserves_legacy_history() 
     .unwrap();
 
     let station = "apparatus:default:asset-010";
-    bins.register(
-        "TEST-QUTI",
-        5.0,
-        Some(0.5),
-        &bin_access("Ombor sinovi qutisi", &[station], &[&worker]),
-        &receiver,
-    )
-    .await
-    .unwrap();
-    let active = bins.assign("TEST-QUTI", station, &worker).await.unwrap();
+    let saved = bins
+        .register(
+            "receipt-registration",
+            5.0,
+            Some(0.5),
+            &bin_access("Ombor sinovi qutisi", &[station], &[&worker]),
+            &receiver,
+        )
+        .await
+        .unwrap();
+    let bin_code = saved["code"].as_str().unwrap();
+    assert_eq!(bin_code, "CQ-002");
+    assert_eq!(saved["qr_payload"], "ACCORD-WASTE:CQ-002");
+    assert_eq!(
+        bins.detail("ACCORD-WASTE:CQ-001").await.unwrap()["name"],
+        "CQ-001"
+    );
+    let active = bins.assign(bin_code, station, &worker).await.unwrap();
     let cycle = active["cycle"]["id"].as_str().unwrap();
     bins.add(
-        "TEST-QUTI",
+        bin_code,
         cycle,
         &WasteEntry {
             request_id: "waste-warehouse-deposit",
@@ -210,14 +219,14 @@ async fn waste_warehouse_receives_actual_kg_once_and_preserves_legacy_history() 
     )
     .await
     .unwrap();
-    bins.submit("TEST-QUTI", cycle, None, &worker)
+    bins.submit(bin_code, cycle, None, &worker)
         .await
         .unwrap();
 
     // Wrong/missing destinations cannot leave behind an accepted measurement.
     assert_eq!(
         bins.receive(
-            "TEST-QUTI",
+            bin_code,
             cycle,
             "",
             23.0,
@@ -235,7 +244,7 @@ async fn waste_warehouse_receives_actual_kg_once_and_preserves_legacy_history() 
     {
         assert_eq!(
             bins.receive(
-                "TEST-QUTI",
+                bin_code,
                 cycle,
                 forbidden,
                 23.0,
@@ -247,11 +256,11 @@ async fn waste_warehouse_receives_actual_kg_once_and_preserves_legacy_history() 
             Err(WasteBinError::WarehouseNotAssigned),
         );
     }
-    assert!(bins.detail("TEST-QUTI").await.unwrap()["cycle"]["receipt"].is_null());
+    assert!(bins.detail(bin_code).await.unwrap()["cycle"]["receipt"].is_null());
     for _ in 0..2 {
         let received = bins
             .receive(
-                "TEST-QUTI",
+                bin_code,
                 cycle,
                 destination,
                 23.0,
@@ -268,11 +277,11 @@ async fn waste_warehouse_receives_actual_kg_once_and_preserves_legacy_history() 
         assert_eq!(receipt["difference_kg"].as_f64(), Some(-2.0));
     }
     assert_eq!(
-        bins.reset("TEST-QUTI", cycle, &other).await,
+        bins.reset(bin_code, cycle, &other).await,
         Err(WasteBinError::WarehouseNotAssigned)
     );
-    bins.reset("TEST-QUTI", cycle, &receiver).await.unwrap();
-    let history = bins.history("TEST-QUTI").await.unwrap();
+    bins.reset(bin_code, cycle, &receiver).await.unwrap();
+    let history = bins.history(bin_code).await.unwrap();
     assert_eq!(history["cycles"][0]["receipt"]["warehouse"], "Chiqindi A");
     let totals = warehouses
         .warehouse_summaries("Chiqindi A", 10)
@@ -291,9 +300,9 @@ async fn waste_warehouse_receives_actual_kg_once_and_preserves_legacy_history() 
         Err(WarehouseError::HasWasteReceipts),
     );
 
-    let active = bins.assign("TEST-QUTI", station, &worker).await.unwrap();
+    let active = bins.assign(bin_code, station, &worker).await.unwrap();
     let cycle = active["cycle"]["id"].as_str().unwrap();
-    bins.submit("TEST-QUTI", cycle, None, &worker)
+    bins.submit(bin_code, cycle, None, &worker)
         .await
         .unwrap();
     // This is the previous schema's accepted-but-unlocated receipt.
@@ -307,14 +316,14 @@ async fn waste_warehouse_receives_actual_kg_once_and_preserves_legacy_history() 
     .execute(&setup)
     .await
     .unwrap();
-    assert!(bins.detail("TEST-QUTI").await.unwrap()["cycle"]["receipt"]["warehouse"].is_null());
+    assert!(bins.detail(bin_code).await.unwrap()["cycle"]["receipt"]["warehouse"].is_null());
     assert_eq!(
-        bins.reset("TEST-QUTI", cycle, &receiver).await,
+        bins.reset(bin_code, cycle, &receiver).await,
         Err(WasteBinError::WarehouseRequired)
     );
     for _ in 0..2 {
         let located = bins
-            .record_legacy_destination("TEST-QUTI", cycle, destination, &receiver)
+            .record_legacy_destination(bin_code, cycle, destination, &receiver)
             .await
             .unwrap();
         assert_eq!(
@@ -323,7 +332,7 @@ async fn waste_warehouse_receives_actual_kg_once_and_preserves_legacy_history() 
         );
         assert_eq!(located["cycle"]["receipt"]["warehouse"], "Chiqindi A");
     }
-    bins.reset("TEST-QUTI", cycle, &receiver).await.unwrap();
+    bins.reset(bin_code, cycle, &receiver).await.unwrap();
     let stock = bins.warehouses(Some(&receiver.ref_)).await.unwrap();
     assert_eq!(stock["warehouses"][0]["on_hand_kg"].as_f64(), Some(21.0));
     assert_eq!(stock["warehouses"][0]["receipt_count"].as_i64(), Some(2));
@@ -373,42 +382,55 @@ async fn verify_bin_race_and_scope(bins: &PostgresWasteBinStore, receiver: &Queu
     let vali = actor("aparatchi", "operator-vali");
     let outsider = actor("aparatchi", "operator-other");
     let access = bin_access("Umumiy plyonka", &[FIRST, SECOND], &[&ali, &vali]);
-    let bin = bins
-        .register("SHARED", 4.0, None, &access, receiver)
-        .await
-        .unwrap();
+    let (bin, replay) = tokio::join!(
+        bins.register("shared-registration", 4.0, None, &access, receiver),
+        bins.register("shared-registration", 4.0, None, &access, receiver),
+    );
+    let bin = bin.unwrap();
+    assert_eq!(bin, replay.unwrap());
     assert_eq!(bin["name"], "Umumiy plyonka");
+    assert_eq!(bin["tolerance_kg"], 0.5);
+    assert_eq!(
+        bins.register("shared-registration", 5.0, None, &access, receiver)
+            .await,
+        Err(WasteBinError::Conflict)
+    );
+    let shared_code = bin["code"].as_str().unwrap();
     let access = bin_access("Plyonka qutisi", &[FIRST, SECOND], &[&ali, &vali]);
     assert_eq!(
-        bins.configure("SHARED", &access, &ali).await,
+        bins.configure(shared_code, &access, &ali).await,
         Err(WasteBinError::Forbidden),
     );
-    let edited = bins.configure("SHARED", &access, receiver).await.unwrap();
+    let edited = bins.configure(shared_code, &access, receiver).await.unwrap();
     assert_eq!(edited["name"], "Plyonka qutisi");
     assert_eq!(edited["qr_payload"], bin["qr_payload"]);
 
-    bins.register(
-        "PRIVATE",
-        4.0,
-        None,
-        &bin_access("Boshqa guruh", &[FIRST, SECOND], &[&outsider]),
-        receiver,
-    )
-    .await
-    .unwrap();
-    bins.register(
-        "FIRST-ONLY",
-        4.0,
-        None,
-        &bin_access("Faqat birinchi apparat", &[FIRST], &[&ali]),
-        receiver,
-    )
-    .await
-    .unwrap();
+    let private = bins
+        .register(
+            "private-registration",
+            4.0,
+            None,
+            &bin_access("Boshqa guruh", &[FIRST, SECOND], &[&outsider]),
+            receiver,
+        )
+        .await
+        .unwrap();
+    let private_code = private["code"].as_str().unwrap();
+    let first_only = bins
+        .register(
+            "first-only-registration",
+            4.0,
+            None,
+            &bin_access("Faqat birinchi apparat", &[FIRST], &[&ali]),
+            receiver,
+        )
+        .await
+        .unwrap();
+    let first_only_code = first_only["code"].as_str().unwrap();
     for (operator, apparatus, expected) in [
-        (&ali, FIRST, &["FIRST-ONLY", "SHARED"][..]),
-        (&ali, SECOND, &["SHARED"][..]),
-        (&vali, SECOND, &["SHARED"][..]),
+        (&ali, FIRST, &[first_only_code, shared_code][..]),
+        (&ali, SECOND, &[shared_code][..]),
+        (&vali, SECOND, &[shared_code][..]),
     ] {
         let list = bins
             .list_for_operator(Some("empty"), apparatus, operator)
@@ -424,25 +446,27 @@ async fn verify_bin_race_and_scope(bins: &PostgresWasteBinStore, receiver: &Queu
             })
             .collect();
         codes.sort_unstable();
-        assert_eq!(codes.as_slice(), expected);
+        let mut expected = expected.to_vec();
+        expected.sort_unstable();
+        assert_eq!(codes, expected);
     }
     assert_eq!(
-        bins.assign("FIRST-ONLY", SECOND, &ali).await,
+        bins.assign(first_only_code, SECOND, &ali).await,
         Err(WasteBinError::Forbidden),
     );
     assert_eq!(
-        bins.assign("ACCORD-WASTE:SHARED", FIRST, &outsider).await,
+        bins.assign(bin["qr_payload"].as_str().unwrap(), FIRST, &outsider).await,
         Err(WasteBinError::Forbidden),
     );
     assert!(
-        bins.detail_for_operator("SHARED", None, FIRST, &outsider)
+        bins.detail_for_operator(shared_code, None, FIRST, &outsider)
             .await
             .is_err()
     );
 
     let (first, second) = tokio::join!(
-        bins.assign("SHARED", FIRST, &ali),
-        bins.assign("SHARED", SECOND, &vali),
+        bins.assign(shared_code, FIRST, &ali),
+        bins.assign(shared_code, SECOND, &vali),
     );
     let (held, apparatus, holder, peer) = match (first, second) {
         (Ok(bin), Err(WasteBinError::Conflict)) => (bin, FIRST, &ali, &vali),
@@ -451,15 +475,15 @@ async fn verify_bin_race_and_scope(bins: &PostgresWasteBinStore, receiver: &Queu
     };
     let cycle = held["cycle"]["id"].as_str().unwrap();
     assert_eq!(
-        bins.assign("SHARED", apparatus, holder).await.unwrap()["cycle"]["id"],
+        bins.assign(shared_code, apparatus, holder).await.unwrap()["cycle"]["id"],
         cycle
     );
     assert_eq!(
-        bins.assign("SHARED", apparatus, peer).await,
+        bins.assign(shared_code, apparatus, peer).await,
         Err(WasteBinError::Conflict),
     );
     assert_eq!(
-        bins.submit("SHARED", cycle, Some("PRIVATE"), holder).await,
+        bins.submit(shared_code, cycle, Some(private_code), holder).await,
         Err(WasteBinError::Forbidden),
     );
     assert_eq!(
@@ -472,16 +496,18 @@ async fn verify_bin_race_and_scope(bins: &PostgresWasteBinStore, receiver: &Queu
             .unwrap()["bin"]
             .is_null()
     );
-    bins.register("NEXT-SHARED", 4.0, None, &access, receiver)
+    let next = bins
+        .register("replacement-registration", 4.0, None, &access, receiver)
         .await
         .unwrap();
+    let next_code = next["code"].as_str().unwrap();
     let replaced = bins
-        .submit("SHARED", cycle, Some("NEXT-SHARED"), holder)
+        .submit(shared_code, cycle, Some(next_code), holder)
         .await
         .unwrap();
-    assert_eq!(replaced["replacement"]["code"], "NEXT-SHARED");
+    assert_eq!(replaced["replacement"]["code"], next_code);
     assert_eq!(
-        bins.submit("SHARED", cycle, Some("NEXT-SHARED"), peer)
+        bins.submit(shared_code, cycle, Some(next_code), peer)
             .await,
         Err(WasteBinError::Conflict),
     );

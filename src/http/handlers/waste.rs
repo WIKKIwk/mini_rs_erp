@@ -350,7 +350,8 @@ async fn options(
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RegisterRequest {
-    code: String,
+    #[serde(alias = "code")]
+    request_id: String,
     tare_kg: f64,
     tolerance_kg: Option<f64>,
     name: String,
@@ -373,7 +374,7 @@ async fn register(
     result(
         store(&state)?
             .register(
-                &input.code,
+                &input.request_id,
                 input.tare_kg,
                 input.tolerance_kg,
                 &access,

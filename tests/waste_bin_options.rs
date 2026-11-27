@@ -192,7 +192,7 @@ async fn receiver_options_and_configuration_use_current_operator_assignments() {
     );
 
     let mut input = json!({
-        "code": "A-1", "name": "Qirqim", "tare_kg": 5,
+        "request_id": "waste-test-register", "name": "Qirqim", "tare_kg": 5,
         "apparatus_ids": [CUT, OTHER_CUT],
         "operators": [{"role": "aparatchi", "ref": "operator-a"}]
     });
@@ -211,6 +211,8 @@ async fn receiver_options_and_configuration_use_current_operator_assignments() {
         StatusCode::SERVICE_UNAVAILABLE
     );
     input.as_object_mut().unwrap().remove("tare_kg");
+    input.as_object_mut().unwrap().remove("request_id");
+    input["code"] = json!("CQ-001");
     assert_eq!(
         call(&router, CONFIGURE, &worker, Some(input.clone()))
             .await

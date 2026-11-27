@@ -81,6 +81,12 @@ async fn waste_bin_lifecycle() {
     .execute(&mut *init)
     .await
     .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/postgres/0213_waste_bin_generated_codes.sql"
+    ))
+    .execute(&mut *init)
+    .await
+    .unwrap();
     drop(init);
 
     let pool = PgPoolOptions::new()
@@ -156,17 +162,19 @@ async fn waste_bin_lifecycle() {
         "sealed"
     );
 
-    assert_eq!(
-        store
-            .register("ACCORD-WASTE:a1", 5.0, Some(0.5), &access, &receiver)
-            .await
-            .unwrap()["qr_payload"],
-        "ACCORD-WASTE:A1"
-    );
-    store
-        .register("b2", 3.0, None, &access, &receiver)
+    let first_bin = store
+        .register("first-registration", 5.0, Some(0.5), &access, &receiver)
         .await
         .unwrap();
+    let first_code = first_bin["code"].as_str().unwrap();
+    assert_eq!(first_bin["qr_payload"], format!("{QR_PREFIX}{first_code}"));
+    let second_bin = store
+        .register("second-registration", 3.0, None, &access, &receiver)
+        .await
+        .unwrap();
+    let second_code = second_bin["code"].as_str().unwrap();
+    assert_ne!(second_code, first_code);
+    assert_eq!(second_bin["tolerance_kg"], 0.5);
     let pending = WasteEntry {
         request_id: "report-before-bin",
         apparatus_id: REZKA,
@@ -183,15 +191,15 @@ async fn waste_bin_lifecycle() {
     assert!(status["bin"].is_null());
     let pending_id = status["pending"][0]["id"].as_str().unwrap().to_string();
 
-    let initial = store.assign("a1", REZKA, &ali).await.unwrap();
+    let initial = store.assign(first_code, REZKA, &ali).await.unwrap();
     assert_eq!(initial["cycle"]["apparatus_name"], "Rezka");
     let first = initial["cycle"]["id"].as_str().unwrap();
     assert_eq!(
-        store.assign("b2", REZKA, &vali).await,
+        store.assign(second_code, REZKA, &vali).await,
         Err(WasteBinError::Conflict)
     );
     assert_eq!(
-        store.assign("a1", BOSMA, &vali).await,
+        store.assign(first_code, BOSMA, &vali).await,
         Err(WasteBinError::Conflict)
     );
     let manual = WasteEntry {
@@ -200,25 +208,25 @@ async fn waste_bin_lifecycle() {
         actor: &ali,
         ..pending
     };
-    store.add("a1", first, &manual).await.unwrap();
+    store.add(first_code, first, &manual).await.unwrap();
     assert_eq!(
-        store.add("a1", first, &manual).await.unwrap()["cycle"]["expected_kg"],
+        store.add(first_code, first, &manual).await.unwrap()["cycle"]["expected_kg"],
         12.0
     );
     assert_eq!(
         store
-            .reconcile("a1", first, std::slice::from_ref(&pending_id), &ali)
+            .reconcile(first_code, first, std::slice::from_ref(&pending_id), &ali)
             .await,
         Err(WasteBinError::NotFound)
     );
     let combined = store
-        .reconcile("a1", first, &[pending_id], &vali)
+        .reconcile(first_code, first, &[pending_id], &vali)
         .await
         .unwrap();
     assert_eq!(combined["cycle"]["expected_kg"], 20.0);
     assert_eq!(combined["cycle"]["entries"].as_array().unwrap().len(), 2);
 
-    let swapped = store.submit("a1", first, Some("b2"), &ali).await.unwrap();
+    let swapped = store.submit(first_code, first, Some(second_code), &ali).await.unwrap();
     assert_eq!(swapped["status"], "sealed");
     let second = swapped["replacement"]["cycle"]["id"].as_str().unwrap();
     assert_eq!(
@@ -226,13 +234,13 @@ async fn waste_bin_lifecycle() {
         second
     );
     assert_eq!(
-        store.submit("a1", first, Some("b2"), &ali).await.unwrap(),
+        store.submit(first_code, first, Some(second_code), &ali).await.unwrap(),
         swapped
     );
     assert_eq!(
         store
             .add(
-                "a1",
+                first_code,
                 first,
                 &WasteEntry {
                     request_id: "too-late",
@@ -269,23 +277,23 @@ async fn waste_bin_lifecycle() {
 
     assert_eq!(
         store
-            .receive("a1", first, "main", 23.0, "gscale", "", &ali)
+            .receive(first_code, first, "main", 23.0, "gscale", "", &ali)
             .await,
         Err(WasteBinError::Forbidden)
     );
     assert_eq!(
-        store.reset("a1", first, &receiver).await,
+        store.reset(first_code, first, &receiver).await,
         Err(WasteBinError::Conflict)
     );
     assert_eq!(
         store
-            .receive("a1", first, "main", 23.0, "gscale", "", &receiver)
+            .receive(first_code, first, "main", 23.0, "gscale", "", &receiver)
             .await,
         Err(WasteBinError::DiscrepancyNoteRequired)
     );
     let accepted = store
         .receive(
-            "a1",
+            first_code,
             first,
             "main",
             23.0,
@@ -302,7 +310,7 @@ async fn waste_bin_lifecycle() {
     assert_eq!(
         store
             .receive(
-                "a1",
+                first_code,
                 first,
                 "main",
                 23.0,
@@ -316,27 +324,27 @@ async fn waste_bin_lifecycle() {
     );
     assert_eq!(
         store
-            .receive("a1", first, "main", 24.0, "manual", "Yangilash", &receiver)
+            .receive(first_code, first, "main", 24.0, "manual", "Yangilash", &receiver)
             .await,
         Err(WasteBinError::Conflict)
     );
     for prohibited in [&ali, &admin_actor] {
         assert_eq!(
-            store.reset("a1", first, prohibited).await,
+            store.reset(first_code, first, prohibited).await,
             Err(WasteBinError::Forbidden)
         );
     }
-    let reset = store.reset("a1", first, &receiver).await.unwrap();
+    let reset = store.reset(first_code, first, &receiver).await.unwrap();
     assert_eq!(reset["status"], "empty");
     assert_eq!(reset["cycle"]["receipt"], *receipt);
     assert_eq!(
-        store.history("a1").await.unwrap()["cycles"][0]["receipt"],
+        store.history(first_code).await.unwrap()["cycles"][0]["receipt"],
         *receipt
     );
-    let reopened = store.assign("a1", BOSMA, &vali).await.unwrap();
+    let reopened = store.assign(first_code, BOSMA, &vali).await.unwrap();
     assert_ne!(reopened["cycle"]["id"], first);
     assert_eq!(
-        store.detail_cycle("a1", first).await.unwrap()["cycle"]["receipt"],
+        store.detail_cycle(first_code, first).await.unwrap()["cycle"]["receipt"],
         *receipt
     );
     assert!(

@@ -256,42 +256,63 @@ impl PostgresWasteBinStore {
 
     pub async fn register(
         &self,
-        raw_code: &str,
+        request_id: &str,
         tare_kg: f64,
         tolerance_kg: Option<f64>,
         access: &WasteBinAccessInput,
         actor: &QueueActionActor,
     ) -> Result<Value, WasteBinError> {
         receiver(actor)?;
+        let request_id = identity(request_id)?;
         let access = access.normalized()?;
-        let code = code(raw_code)?;
         let tare = units(tare_kg)?;
         let tolerance = units(tolerance_kg.unwrap_or(DEFAULT_TOLERANCE_KG))?;
         let mut tx = self.pool.begin().await?;
-        lock_bin_keys(&mut tx, std::slice::from_ref(&code)).await?;
-        let inserted = sqlx::query(
-            "INSERT INTO mini_waste_bins(code, name, tare_units, tolerance_units, registered_by_ref)
-             VALUES ($1, $2, $3, $4, $5) ON CONFLICT (code) DO NOTHING",
-        )
-        .bind(&code)
-        .bind(&access.name)
-        .bind(tare)
-        .bind(tolerance)
-        .bind(&actor.ref_)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected();
-        if inserted == 1 {
-            access::write(&mut tx, &code, &access).await?;
-        } else {
-            let previous = read::load_bin(&mut tx, &code).await?;
-            if previous.tare_units != tare
-                || previous.tolerance_units != tolerance
-                || !previous.matches_access(&access)
-            {
-                return Err(WasteBinError::Conflict);
+        let code = loop {
+            let previous: Option<String> = sqlx::query_scalar(
+                "SELECT code FROM mini_waste_bins
+                 WHERE registered_by_ref = $1 AND registration_request_id = $2",
+            )
+            .bind(&actor.ref_)
+            .bind(request_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+            if let Some(code) = previous {
+                lock_bin_keys(&mut tx, std::slice::from_ref(&code)).await?;
+                let bin = read::load_bin(&mut tx, &code).await?;
+                if bin.tare_units != tare
+                    || bin.tolerance_units != tolerance
+                    || !bin.matches_access(&access)
+                {
+                    return Err(WasteBinError::Conflict);
+                }
+                break code;
             }
-        }
+
+            let number: i64 = sqlx::query_scalar("SELECT nextval('mini_waste_bin_code_seq')")
+                .fetch_one(&mut *tx)
+                .await?;
+            let code = format!("CQ-{number:03}");
+            // A legacy code or a concurrent replay can win the insert.
+            let inserted = sqlx::query(
+                "INSERT INTO mini_waste_bins
+                     (code, name, tare_units, tolerance_units, registered_by_ref, registration_request_id)
+                 VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING",
+            )
+            .bind(&code)
+            .bind(&access.name)
+            .bind(tare)
+            .bind(tolerance)
+            .bind(&actor.ref_)
+            .bind(request_id)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+            if inserted == 1 {
+                access::write(&mut tx, &code, &access).await?;
+                break code;
+            }
+        };
         let result = read::bin_snapshot(&mut tx, &code, None).await?;
         tx.commit().await?;
         Ok(result)

@@ -654,8 +654,13 @@ async fn postgres_unsaved_issue_waste_survives_order_and_closed_history_reads() 
                     r#ref: other.ref_.clone(),
                 }],
             };
-            bins.register("CUT-PRIVATE", 1.0, None, &access, &receiver).await.unwrap();
-            bins.assign("CUT-PRIVATE", CUT, &other).await.unwrap();
+            let private = bins
+                .register("cut-private-registration", 1.0, None, &access, &receiver)
+                .await
+                .unwrap();
+            bins.assign(private["code"].as_str().unwrap(), CUT, &other)
+                .await
+                .unwrap();
             None
         } else {
             let access = WasteBinAccessInput {
@@ -663,11 +668,19 @@ async fn postgres_unsaved_issue_waste_survives_order_and_closed_history_reads() 
                 apparatus_ids: vec![CUT.into()],
                 operators: vec![WasteBinOperator { role: actor().role, r#ref: actor().ref_ }],
             };
-            bins.register("CUT-TEST", 1.0, None, &access, &receiver).await.unwrap();
-            bins.register("CUT-NEXT", 1.0, None, &access, &receiver).await.unwrap();
-            let bin = bins.assign("CUT-TEST", CUT, &actor()).await.unwrap();
+            let saved = bins
+                .register("cut-test-registration", 1.0, None, &access, &receiver)
+                .await
+                .unwrap();
+            let next = bins
+                .register("cut-next-registration", 1.0, None, &access, &receiver)
+                .await
+                .unwrap();
+            let code = saved["code"].as_str().unwrap();
+            let next_code = next["code"].as_str().unwrap();
+            let bin = bins.assign(code, CUT, &actor()).await.unwrap();
             let cycle_id = bin["cycle"]["id"].as_str().unwrap();
-            bins.add("CUT-TEST", cycle_id, &WasteEntry {
+            bins.add(code, cycle_id, &WasteEntry {
                 request_id: "cut-manual-deposit",
                 apparatus_id: CUT,
                 order_id: Some(ORDER),
@@ -678,7 +691,10 @@ async fn postgres_unsaved_issue_waste_survives_order_and_closed_history_reads() 
                 actor: &actor(),
                 reconcile_manual: false,
             }).await.unwrap();
-            let sealed = bins.submit("CUT-TEST", cycle_id, Some("CUT-NEXT"), &actor()).await.unwrap();
+            let sealed = bins
+                .submit(code, cycle_id, Some(next_code), &actor())
+                .await
+                .unwrap();
             assert_eq!(sealed["cycle"]["expected_kg"], 1.0);
             Some(sealed["replacement"]["cycle"]["id"].as_str().unwrap().to_owned())
         };
