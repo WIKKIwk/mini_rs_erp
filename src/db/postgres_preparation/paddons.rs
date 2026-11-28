@@ -12,6 +12,7 @@ mod printing;
 pub use attachments::{PaddonRollAttachment, PaddonRollOptions};
 pub use inventory_attachments::{InventoryPaddonRollAttachment, InventoryPaddonRollOptions};
 pub use issues::{PaddonIdentity, PaddonIssueCreate};
+pub(crate) use issues::issue_prepared_roll_for_split;
 pub use printing::PaddonLabelPrint;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]

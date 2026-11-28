@@ -1,5 +1,10 @@
-use crate::core::gscale::{epc::GscaleEpcGenerator, ports::EpcSource};
-use crate::core::{auth::models::Principal, raw_material_split::*};
+use crate::core::{
+    auth::models::Principal,
+    gscale::{epc::GscaleEpcGenerator, ports::EpcSource},
+    preparation::PreparationError,
+    raw_material_split::*,
+};
+use crate::db::postgres_preparation::paddons::issue_prepared_roll_for_split;
 use serde_json::{Value, json};
 use sqlx::{PgPool, Row};
 
@@ -9,9 +14,15 @@ impl From<sqlx::Error> for SplitError {
         Self::StoreFailed
     }
 }
-// Identical stock eligibility to other inventory consumers; row locks serialize
-// splitting with assignment, correction, transfer and physical movement.
-const AVAILABLE: &str = "s.status='available' AND s.reserved_order_id='' AND s.uom='kg'
+// A split can unpack an existing QR roll from its current warehouse pallet.
+const PACKED_ROLL: &str = "LEFT JOIN LATERAL (
+ SELECT p.id,p.code FROM mini_raw_material_paddon_units u
+ JOIN mini_raw_material_paddons p ON p.id=u.paddon_id
+ JOIN mini_warehouses w ON w.id=p.warehouse_id
+ WHERE s.status='on_paddon' AND u.stock_id=s.id AND u.issue_id IS NULL AND u.prepared_roll
+ AND NOT w.is_group AND lower(w.name)=lower(s.warehouse)
+) packed ON true";
+const SPLITTABLE: &str = "(s.status='available' OR packed.id IS NOT NULL) AND s.reserved_order_id='' AND s.uom='kg'
  AND s.qty > 0 AND s.width_mm > 0 AND s.micron > 0
  AND btrim(COALESCE(s.payload_json->>'inventory_transfer_id',''))=''
  AND NOT EXISTS(SELECT 1 FROM mini_raw_material_assignments a WHERE lower(a.barcode)=lower(s.barcode)
@@ -68,8 +79,8 @@ impl PostgresRawMaterialSplitStore {
     }
     pub async fn source(&self, owner: &str, barcode: &str) -> Result<Value, SplitError> {
         sqlx::query_scalar(&format!(
-            "SELECT {SOURCE_JSON} FROM mini_raw_material_stock s
-            WHERE lower(s.barcode)=lower($2) AND {SCOPE} AND {AVAILABLE}"
+            "SELECT {SOURCE_JSON} FROM mini_raw_material_stock s {PACKED_ROLL}
+            WHERE lower(s.barcode)=lower($2) AND {SCOPE} AND {SPLITTABLE}"
         ))
         .bind(owner)
         .bind(barcode.trim())
@@ -157,17 +168,16 @@ impl PostgresRawMaterialSplitStore {
         if authorized.is_none() {
             return Err(SplitError::Forbidden);
         }
-        let available: bool = sqlx::query_scalar(&format!(
-            "SELECT EXISTS(SELECT 1 FROM mini_raw_material_stock s WHERE s.id=$1 AND {AVAILABLE})"
+        let (paddon_id, paddon_code): (Option<String>, Option<String>) = sqlx::query_as(&format!(
+            "SELECT packed.id,packed.code FROM mini_raw_material_stock s {PACKED_ROLL}
+             WHERE s.id=$1 AND {SPLITTABLE}"
         ))
         .bind(parent)
-        .fetch_one(&mut *tx)
-        .await?;
-        if !available {
-            return Err(SplitError::Conflict(
-                "Rulon band, ko‘chirilmoqda yoki allaqachon ishlatilgan",
-            ));
-        }
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(SplitError::Conflict(
+            "Rulon band, ko‘chirilmoqda yoki allaqachon ishlatilgan",
+        ))?;
         // Assignment and stock consumers all lock the source stock first. Keep
         // the preparation commitment while replacing its physical roll.
         let assignment = sqlx::query("SELECT order_id,apparatus,canonical_apparatus_id,item_group,payload_json
@@ -191,6 +201,23 @@ impl PostgresRawMaterialSplitStore {
             }
         }
         let id = data_encoding::HEXLOWER.encode(&rand::random::<[u8; 16]>());
+        if let (Some(paddon_id), Some(paddon_code)) =
+            (paddon_id.as_deref(), paddon_code.as_deref())
+        {
+            issue_prepared_roll_for_split(
+                &mut tx,
+                actor,
+                (paddon_id, paddon_code),
+                &source,
+                source_kg,
+                &id,
+            )
+            .await
+            .map_err(|error| match error {
+                PreparationError::Conflict(message) => SplitError::Conflict(message),
+                _ => SplitError::StoreFailed,
+            })?;
+        }
         let code = source["item_code"]
             .as_str()
             .ok_or(SplitError::StoreFailed)?;
@@ -264,7 +291,7 @@ impl PostgresRawMaterialSplitStore {
             "order_id":assignment.as_ref().map(|a| a.get::<String,_>("order_id")),
             "apparatus":assignment.as_ref().map(|a| a.get::<String,_>("canonical_apparatus_id")),
             "issue_id":input.issue_id,"issue_note":issue.as_ref().map(|(_, saved)| &saved["note"]),
-            "difference_kg":split_issue_decimal(difference)});
+            "difference_kg":split_issue_decimal(difference),"source_paddon_code":paddon_code});
         sqlx::query("INSERT INTO mini_raw_material_splits
             (id,owner_ref,request_id,parent_stock_id,source_kg,output_kg,waste_kg,request_json,response_json,issue_id,difference_kg)
             VALUES($1,$2,$3,$4,$5::text::numeric,$6::text::numeric,$7::text::numeric,$8,$9,$10,$11::text::numeric)")
@@ -309,6 +336,7 @@ impl PostgresRawMaterialSplitStore {
                 .bind(owner["role"].as_str().unwrap_or("")).bind(owner["ref"].as_str().unwrap_or(""))
                 .bind(owner["name"].as_str().unwrap_or("")).bind(&id)
                 .bind(json!({"split_id":id,"parent_stock_id":parent,"waste_kg":decimal_text(waste),
+                    "source_paddon_code":result["source_paddon_code"],
                     "order_id":result["order_id"],"apparatus":result["apparatus"],
                     "issue_id":input.issue_id,"difference_kg":split_issue_decimal(difference),
                     "gross_qty":entry["gross_kg"],"net_qty":entry["kg"],"tare_kg":entry["bobina_kg"],
@@ -349,8 +377,8 @@ impl PostgresRawMaterialSplitStore {
             return Ok(row.try_get("response_json")?);
         }
         let source: Value = sqlx::query_scalar(&format!(
-            "SELECT {SOURCE_JSON} FROM mini_raw_material_stock s
-            WHERE lower(s.barcode)=lower($2) AND {SCOPE} AND {AVAILABLE} FOR SHARE OF s"
+            "SELECT {SOURCE_JSON} FROM mini_raw_material_stock s {PACKED_ROLL}
+            WHERE lower(s.barcode)=lower($2) AND {SCOPE} AND {SPLITTABLE} FOR SHARE OF s"
         ))
         .bind(&actor.ref_)
         .bind(command.source_barcode.trim())

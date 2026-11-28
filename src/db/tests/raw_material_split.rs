@@ -1,10 +1,13 @@
 //! Store-native transaction, exact numeric, concurrency and immutability oracles.
 use crate::core::{
     auth::models::{Principal, PrincipalRole},
+    inventory_movements::InventoryActor,
+    preparation::PreparationError,
     raw_material_split::*,
 };
 use crate::db::{
     postgres::apply_foundation_migration,
+    postgres_preparation::{PostgresPreparationStore, paddons::PaddonQuery},
     postgres_raw_material_split::PostgresRawMaterialSplitStore,
 };
 use serde_json::{Value, json};
@@ -509,12 +512,124 @@ async fn raw_material_split_postgres_atomic_exact_retry_concurrency_scope_and_li
         assert!(store.split(&actor, completion).await.is_err());
     }
     preparation_receipt_assignment_survives_split(&pool, &actor, &store).await;
+    verify_packed_roll_split(&pool, &actor, &other, &store).await;
     pool.close().await;
     sqlx::query(&format!("DROP DATABASE {db} WITH (FORCE)"))
         .execute(&admin)
         .await
         .unwrap();
     admin.close().await;
+}
+
+async fn verify_packed_roll_split(
+    pool: &PgPool,
+    cutter: &Principal,
+    other: &Principal,
+    store: &PostgresRawMaterialSplitStore,
+) {
+    let owner = Principal {
+        role: PrincipalRole::MaterialTaminotchi,
+        ref_: "split-paddon-owner".into(),
+        ..cutter.clone()
+    };
+    let paddons = PostgresPreparationStore::new(pool.clone());
+    let code = "XP-C0FFEE0100000001";
+    for (barcode, item) in [
+        ("packed-cut", "FILM"),
+        ("packed-cut-failure", "FAIL"),
+        ("packed-unprepared", "FILM"),
+        ("packed-cut-race", "FILM"),
+    ] {
+        seed(pool, barcode, "Raw W", item).await;
+    }
+    sqlx::raw_sql(
+        "INSERT INTO mini_warehouse_assignments
+            (assignment_kind,warehouse,warehouse_name,principal_role,principal_ref)
+         VALUES ('warehouse','Raw W','Raw W','material_taminotchi','split-paddon-owner');
+         INSERT INTO mini_raw_material_paddons(id,code,owner_role,owner_ref,warehouse_id,request_id,request_json)
+         VALUES ('split-paddon','XP-C0FFEE0100000001','material_taminotchi','split-paddon-owner','split-w','split-paddon','{}');
+         UPDATE mini_raw_material_stock SET status='on_paddon'
+         WHERE id IN ('packed-cut','packed-cut-failure','packed-unprepared','packed-cut-race');
+         INSERT INTO mini_raw_material_paddon_units
+            (paddon_id,line_no,unit_no,kind,lot_number,unit_kg,stock_id,prepared_roll)
+         VALUES ('split-paddon',1,1,'roll','LOT-1',100,'packed-cut',true),
+                ('split-paddon',2,1,'roll','LOT-2',100,'packed-cut-failure',true),
+                ('split-paddon',3,1,'roll','LOT-3',100,'packed-unprepared',false),
+                ('split-paddon',4,1,'roll','LOT-4',100,'packed-cut-race',true);",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    let balance = || async {
+        let query: PaddonQuery = serde_json::from_value(json!({"code": code})).unwrap();
+        paddons.raw_material_paddons(&owner, query).await.unwrap()["paddons"][0].clone()
+    };
+    assert_eq!(balance().await["remaining_count"], 4);
+    assert!(matches!(store.source(&other.ref_, "packed-cut").await, Err(SplitError::Forbidden)));
+    assert!(matches!(store.source(&cutter.ref_, "packed-unprepared").await, Err(SplitError::Forbidden)));
+    assert_eq!(store.source(&cutter.ref_, "packed-cut").await.unwrap()["kg"], "100");
+    assert!(matches!(
+        store.split(other, input("packed-cut", "packed-cut-denied")).await,
+        Err(SplitError::Forbidden)
+    ));
+
+    let mut review = input("packed-cut-failure", "packed-cut-report");
+    review.waste_kg = "1".into();
+    store
+        .report_issue(cutter, SplitIssueCreate { command: review, note: "Vazn farqi".into() })
+        .await
+        .unwrap();
+    assert_eq!(balance().await["remaining_count"], 4);
+    assert!(store.split(cutter, input("packed-cut-failure", "packed-cut-rollback")).await.is_err());
+    assert_eq!(balance().await["remaining_count"], 4);
+    assert!(paddons.raw_material_paddon_issues(&owner, code).await.unwrap().is_empty());
+    assert_eq!(store.source(&cutter.ref_, "packed-cut-failure").await.unwrap()["kg"], "100");
+
+    let command = input("packed-cut", "packed-cut-save");
+    let (saved, replay) = tokio::join!(store.split(cutter, command.clone()), store.split(cutter, command));
+    let saved = saved.unwrap();
+    assert_eq!(saved, replay.unwrap());
+    assert_eq!(saved["source_paddon_code"], code);
+    assert_eq!(balance().await["remaining_count"], 3);
+    assert_eq!(balance().await["remaining_kg"], "300.000000");
+    let original: (String, String) = sqlx::query_as(
+        "SELECT s.status,u.issue_id FROM mini_raw_material_stock s
+         JOIN mini_raw_material_paddon_units u ON u.stock_id=s.id WHERE s.id='packed-cut'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(original.0, "consumed");
+    let history = paddons.raw_material_paddon_issues(&owner, code).await.unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0]["issue_id"], original.1);
+    assert_eq!(history[0]["raw_material_split_id"], saved["id"]);
+    let print = serde_json::from_value(json!({
+        "issue_id": original.1, "barcode":"packed-cut", "attempt":"split-print-attempt", "action":"start"
+    })).unwrap();
+    assert!(matches!(paddons.track_paddon_print(&owner, print).await, Err(PreparationError::Forbidden)));
+    for output in saved["outputs"].as_array().unwrap() {
+        let barcode = output["barcode"].as_str().unwrap();
+        let source = store.source(&cutter.ref_, barcode).await.unwrap();
+        assert_eq!(source["warehouse"], "Raw W");
+        assert_eq!(
+            quantity(source["kg"].as_str().unwrap(), false).unwrap(),
+            quantity(output["kg"].as_str().unwrap(), false).unwrap()
+        );
+    }
+
+    let inventory_actor = InventoryActor::new(owner.clone(), false, ["Raw W".into()]);
+    let manual_issue = serde_json::from_value(json!({
+        "request_id": "manual-race-unpack", "code": code, "line_no": 4, "weights": ["100"],
+    }))
+    .unwrap();
+    let (cut, unpack) = tokio::join!(
+        store.split(cutter, input("packed-cut-race", "packed-race-cut")),
+        paddons.issue_raw_material_paddon(&inventory_actor, manual_issue),
+    );
+    assert_ne!(cut.is_ok(), unpack.is_ok(), "cut={cut:?}, unpack={unpack:?}");
+    assert_eq!(balance().await["remaining_count"], 2);
+    assert_eq!(paddons.raw_material_paddon_issues(&owner, code).await.unwrap().len(), 2);
 }
 
 async fn preparation_receipt_assignment_survives_split(pool: &PgPool, actor: &Principal, cutter: &PostgresRawMaterialSplitStore) {

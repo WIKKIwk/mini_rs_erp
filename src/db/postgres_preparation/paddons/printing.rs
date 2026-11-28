@@ -36,6 +36,7 @@ impl PostgresPreparationStore {
             JOIN mini_warehouse_assignments a ON lower(a.warehouse_name)=lower(w.name)
             WHERE i.id=$1 AND p.owner_role=$2 AND p.owner_ref=$3 AND NOT w.is_group
               AND a.assignment_kind='warehouse' AND a.principal_role=$2 AND a.principal_ref=$3
+              AND NOT (i.response_json ? 'raw_material_split_id')
               AND i.response_json->'labels' @> jsonb_build_array(jsonb_build_object('barcode',$4::text)))")
             .bind(&input.issue_id).bind(role_code(actor)?).bind(&actor.ref_).bind(&input.barcode).fetch_one(&mut *tx).await?;
         if !allowed {

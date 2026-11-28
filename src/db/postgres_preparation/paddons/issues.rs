@@ -352,6 +352,59 @@ impl PostgresPreparationStore {
     }
 }
 
+// The split holds the stock row lock and checked the cutter's warehouse scope.
+pub(crate) async fn issue_prepared_roll_for_split(
+    tx: &mut Transaction<'_, Postgres>,
+    actor: &Principal,
+    (paddon_id, paddon_code): (&str, &str),
+    source: &Value,
+    kg: i64,
+    split_id: &str,
+) -> Result<(), PreparationError> {
+    let stock_id = source["stock_id"]
+        .as_str()
+        .ok_or(PreparationError::StoreFailed)?;
+    let warehouse = source["warehouse"]
+        .as_str()
+        .ok_or(PreparationError::StoreFailed)?;
+    let stock = release_prepared_roll(tx, warehouse, stock_id, kg).await?;
+    // The split creates its own output labels. This entry records the old roll's removal.
+    let issue_id = format!("raw-split:{split_id}");
+    let request = json!({
+        "raw_material_split_id": split_id, "actor_role": "homashyo_rezkachi",
+        "actor_ref": actor.ref_, "source_barcode": stock.barcode,
+    });
+    let result = json!({
+        "issue_id": issue_id, "paddon_code": paddon_code, "warehouse": warehouse,
+        "destination": warehouse, "label_warehouse": warehouse, "existing_qr": true,
+        "raw_material_split_id": split_id,
+        "labels": [{"barcode": stock.barcode, "item_code": source["item_code"],
+            "item_name": source["item_name"], "kg": source["kg"],
+            "width_mm": source["width_mm"], "micron": source["micron"]}],
+    });
+    let updated = sqlx::query(
+        "WITH issue AS (
+            INSERT INTO mini_raw_material_paddon_issues (id,paddon_id,request_id,request_json,response_json)
+            VALUES ($1,$2,$1,$3,$4) RETURNING id
+         )
+         UPDATE mini_raw_material_paddon_units u SET issue_id=issue.id FROM issue
+         WHERE u.paddon_id=$2 AND u.stock_id=$5 AND u.issue_id IS NULL AND u.prepared_roll",
+    )
+    .bind(issue_id)
+    .bind(paddon_id)
+    .bind(request)
+    .bind(result)
+    .bind(stock_id)
+    .execute(&mut **tx)
+    .await?;
+    if updated.rows_affected() != 1 {
+        return Err(PreparationError::Conflict(
+            "Rulonning paddoni o‘zgargan. Qayta skanerlang",
+        ));
+    }
+    Ok(())
+}
+
 async fn release_prepared_roll(
     tx: &mut Transaction<'_, Postgres>,
     warehouse: &str,
