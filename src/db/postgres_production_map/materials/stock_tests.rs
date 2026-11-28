@@ -79,7 +79,7 @@ fn consumption_event_identity_is_scoped_to_canonical_apparatus() {
 }
 
 #[tokio::test]
-async fn completion_consumes_in_use_and_unlinks_available_material_atomically() {
+async fn completion_consumes_used_material_and_unlinks_unused_material_in_place() {
     let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
         .unwrap_or_else(|_| "postgres://wikki@127.0.0.1:5432/postgres".to_string());
     let db_name = "mini_rs_erp_test_complete_material_settlement";
@@ -135,7 +135,10 @@ async fn completion_consumes_in_use_and_unlinks_available_material_atomically() 
                  ('raw:complete-unused', 'Warehouse B', 'BOPP', 'Unused roll',
                   'COMPLETE-UNUSED', 23, 'kg', 'available', 'ORDER-COMPLETE',
                   'receipt-unused',
-                  '{\"physical_marker\":\"keep\",\"in_use_order_id\":\"ORDER-COMPLETE\"}'::jsonb)",
+                  '{\"physical_marker\":\"keep\",\"in_use_order_id\":\"ORDER-COMPLETE\"}'::jsonb),
+                 ('raw:complete-packed', 'Warehouse B', 'BOPP', 'Packed roll',
+                  'COMPLETE-PACKED', 9, 'kg', 'on_paddon', 'ORDER-COMPLETE',
+                  'receipt-packed', '{}'::jsonb)",
     )
     .execute(&pool)
     .await
@@ -158,7 +161,7 @@ async fn completion_consumes_in_use_and_unlinks_available_material_atomically() 
     .execute(&pool)
     .await
     .expect("place unused stock in state");
-    for barcode in ["COMPLETE-USED", "COMPLETE-UNUSED"] {
+    for barcode in ["COMPLETE-USED", "COMPLETE-UNUSED", "COMPLETE-PACKED"] {
         sqlx::query(
             "INSERT INTO mini_raw_material_assignments (
                      barcode, order_id, apparatus, canonical_apparatus_id,
@@ -185,7 +188,7 @@ async fn completion_consumes_in_use_and_unlinks_available_material_atomically() 
         &mut tx,
         &[RawMaterialStockTransition::new(
             RawMaterialStockTransitionKind::Complete,
-            vec!["COMPLETE-USED".to_string(), "COMPLETE-UNUSED".to_string()],
+            vec!["COMPLETE-USED".into(), "COMPLETE-UNUSED".into(), "COMPLETE-PACKED".into()],
             "ORDER-COMPLETE",
         )],
         &QueueActionActor {
@@ -199,14 +202,15 @@ async fn completion_consumes_in_use_and_unlinks_available_material_atomically() 
     .expect("settle completion materials");
     tx.commit().await.expect("commit settlement");
 
-    assert_eq!(outcome.unused_unlinks.len(), 1);
-    assert_eq!(outcome.unused_unlinks[0].barcode, "COMPLETE-UNUSED");
+    assert_eq!(outcome.unused_unlinks.len(), 2);
+    assert_eq!(outcome.unused_unlinks[0].barcode, "COMPLETE-PACKED");
+    assert_eq!(outcome.unused_unlinks[1].barcode, "COMPLETE-UNUSED");
     let rows: Vec<(String, String, String, String, String, String)> = sqlx::query_as(
         "SELECT barcode, status, reserved_order_id, warehouse,
                     COALESCE(payload_json->>'physical_marker', ''),
                     COALESCE(payload_json->>'in_use_order_id', '')
              FROM mini_raw_material_stock
-             WHERE barcode IN ('COMPLETE-USED', 'COMPLETE-UNUSED')
+             WHERE barcode IN ('COMPLETE-USED', 'COMPLETE-UNUSED', 'COMPLETE-PACKED')
              ORDER BY barcode",
     )
     .fetch_all(&pool)
@@ -215,6 +219,14 @@ async fn completion_consumes_in_use_and_unlinks_available_material_atomically() 
     assert_eq!(
         rows,
         vec![
+            (
+                "COMPLETE-PACKED".to_string(),
+                "on_paddon".to_string(),
+                "".to_string(),
+                "Warehouse B".to_string(),
+                "".to_string(),
+                "".to_string(),
+            ),
             (
                 "COMPLETE-UNUSED".to_string(),
                 "available".to_string(),

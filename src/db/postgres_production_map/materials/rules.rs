@@ -262,7 +262,7 @@ pub(super) async fn delete_raw_material_assignment(
     .map_err(|_| ProductionMapError::StoreFailed)?;
     if stock_status
         .as_deref()
-        .is_some_and(|status| !status.trim().eq_ignore_ascii_case("available"))
+        .is_some_and(|status| !matches!(status, "available" | "on_paddon"))
     {
         return Err(ProductionMapError::RawMaterialAssignmentLocked);
     }
@@ -283,6 +283,19 @@ pub(super) async fn delete_raw_material_assignment(
     .fetch_optional(&mut *tx)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
+    if row.is_some() && stock_status.as_deref() == Some("on_paddon") {
+        sqlx::query(
+            "UPDATE mini_raw_material_stock
+             SET reserved_order_id = '', payload_json = payload_json - 'in_use_order_id',
+                 updated_at = now()
+             WHERE lower(barcode) = lower($1) AND reserved_order_id = $2",
+        )
+        .bind(barcode.trim())
+        .bind(order_id.trim())
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    }
     let result = row
         .map(|(canonical_apparatus_id, payload)| {
             raw_material_assignment_from_payload(canonical_apparatus_id, payload)

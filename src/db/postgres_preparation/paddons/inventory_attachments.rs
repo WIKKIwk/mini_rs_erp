@@ -179,11 +179,11 @@ async fn inventory_rolls(
             return Err(out_of_scope);
         }
     }
-    let free = free_in_warehouse!();
+    let in_warehouse = physically_in_warehouse!();
     let rolls = sqlx::query_as::<_, InventoryRoll>(&format!(
         "{groups} SELECT s.id AS stock_id, receipt.name AS receipt_name, s.item_code, w.id AS warehouse_id,
                 w.name AS warehouse, (s.status = 'available' AND s.qty > 0 AND s.uom = 'kg'
-                    AND {free} AND NOT EXISTS (
+                    AND {in_warehouse} AND NOT EXISTS (
                         SELECT 1 FROM mini_raw_material_paddon_units u
                         WHERE u.stock_id = s.id AND u.issue_id IS NULL
                     )) AS available
@@ -209,7 +209,7 @@ async fn inventory_rolls(
     }
     if rolls.iter().any(|roll| !roll.available) {
         return Err(PreparationError::Conflict(
-            "Band, buyurtmaga ulangan yoki omborda bo‘lmagan rulonni biriktirib bo‘lmaydi",
+            "Rulon band, boshqa paddonda yoki shu omborda emas",
         ));
     }
     let item_codes: BTreeSet<_> = rolls.iter().map(|roll| roll.item_code.as_str()).collect();

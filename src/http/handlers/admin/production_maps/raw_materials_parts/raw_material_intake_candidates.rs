@@ -317,7 +317,7 @@ async fn raw_material_unlink_stock_guard(
     }
     if let Some(stock) = stock.as_ref() {
         let status = stock.status.trim();
-        if !status.is_empty() && !status.eq_ignore_ascii_case("available") {
+        if !matches!(status.to_ascii_lowercase().as_str(), "" | "available" | "on_paddon") {
             return Err(raw_material_assignment_locked_error(state, assignment, status).await);
         }
     }

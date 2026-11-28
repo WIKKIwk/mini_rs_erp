@@ -87,7 +87,7 @@ impl PostgresOrderResetStore {
         report.raw_material_rows_restored = tx
             .execute(sqlx::query(
                 "UPDATE mini_raw_material_stock stock
-                 SET status = 'available',
+                 SET status = CASE WHEN stock.status = 'on_paddon' THEN stock.status ELSE 'available' END,
                      reserved_order_id = '',
                      payload_json = payload_json - ARRAY[
                          'in_use_order_id',

@@ -247,7 +247,9 @@ async fn settle_completion_raw_materials_tx(
         let reservation = row.reserved_order_id.trim();
         if matches!(status.as_str(), "in_use" | "consumed") && reservation == order_id {
             consumed_barcodes.push(barcode.clone());
-        } else if status == "available" && (reservation.is_empty() || reservation == order_id) {
+        } else if matches!(status.as_str(), "available" | "on_paddon")
+            && (reservation.is_empty() || reservation == order_id)
+        {
             unused_barcodes.push(barcode.clone());
         } else {
             return Err(ProductionMapError::RawMaterialStockUnavailable);
@@ -320,7 +322,7 @@ async fn unlink_unused_raw_material_assignments_tx(
              payload_json = payload_json - 'in_use_order_id',
              updated_at = now()
          WHERE lower(barcode) = ANY($1)
-           AND status = 'available'
+           AND status IN ('available', 'on_paddon')
            AND reserved_order_id = $2",
     )
     .bind(barcodes)
