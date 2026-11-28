@@ -1,16 +1,21 @@
 WITH receipts AS MATERIALIZED (
     SELECT upper(btrim(stock.barcode)) AS barcode, lower(receipt.barcode) AS epc,
-           receipt.name AS receipt_name, receipt.payload_json->>'actor_ref' AS owner_ref
+           receipt.name AS receipt_name, receipt.payload_json->>'actor_ref' AS owner_ref,
+           receipt.payload_json->>'actor_role'='tayyorlov_masteri' AS from_preparation
     FROM mini_raw_material_stock stock
     -- Cut pieces keep the source receipt but have their own barcode.
     JOIN mini_gscale_receipts receipt ON receipt.name=stock.source_receipt_id
       AND lower(receipt.barcode)=lower(stock.barcode)
     WHERE lower(stock.barcode)=ANY($1::text[]) AND receipt.status='submitted'
-      AND stock.status IN ('available','reserved','in_use')
-      AND receipt.payload_json->>'actor_role'='tayyorlov_masteri'
+      AND (stock.status IN ('available','reserved','in_use')
+           OR (stock.status='on_paddon' AND $2='material_taminotchi'))
+      AND ($4::text[] IS NULL OR EXISTS (
+          SELECT 1 FROM mini_items i
+          WHERE i.code=stock.item_code AND lower(btrim(i.item_group))=ANY($4)
+      ))
 ), owners AS (
     SELECT DISTINCT r.owner_ref FROM receipts r
-    WHERE EXISTS (SELECT 1 FROM mini_preparation_output_notes n
+    WHERE r.from_preparation AND EXISTS (SELECT 1 FROM mini_preparation_output_notes n
         WHERE n.owner_ref=r.owner_ref AND n.target_kind='batch' AND n.note<>'')
 ), raw_batches AS (
     SELECT o.owner_ref,b.batch_id,b.payload_json,b.updated_at AS recorded_at,0 AS priority

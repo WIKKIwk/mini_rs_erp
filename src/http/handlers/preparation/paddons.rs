@@ -36,19 +36,41 @@ async fn material_item_groups(state: &AppState, actor: &Principal) -> Result<Vec
         .into_iter().map(|group| group.trim().to_lowercase()).collect())
 }
 
-async fn inventory_paddon_actor(
+async fn inventory_material_actor(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<(Principal, Vec<String>), ApiError> {
     let actor = paddon_actor(state, headers, false).await?;
     if actor.role != PrincipalRole::MaterialTaminotchi
         || !state.admin.principal_has_capability(&actor, Capability::InventoryMovementManage).await
-        || !state.admin.principal_has_capability(&actor, Capability::MaterialPaddonPack).await
     {
         return Err(error(PreparationError::Forbidden));
     }
     let item_groups = material_item_groups(state, &actor).await?;
     Ok((actor, item_groups))
+}
+
+async fn inventory_paddon_actor(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<(Principal, Vec<String>), ApiError> {
+    let (actor, item_groups) = inventory_material_actor(state, headers).await?;
+    if !state.admin.principal_has_capability(&actor, Capability::MaterialPaddonPack).await {
+        return Err(error(PreparationError::Forbidden));
+    }
+    Ok((actor, item_groups))
+}
+
+pub async fn save_inventory_roll_notes(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<crate::db::postgres_preparation::InventoryRollNotesUpdate>,
+) -> Result<Json<Value>, ApiError> {
+    let (actor, item_groups) = inventory_material_actor(&state, &headers).await?;
+    let notes = store(&state)?.update_inventory_roll_notes(&actor, &item_groups, input)
+        .await.map_err(error)?;
+    state.warehouse_events.invalidate_inventory();
+    Ok(Json(json!({"notes":notes})))
 }
 
 pub async fn inventory_paddon_options(

@@ -830,6 +830,51 @@ async fn verify_material_inventory_packing(
         "SELECT status,barcode,qty::text,source_receipt_id FROM mini_raw_material_stock WHERE id=$1",
     ).bind(free).fetch_one(pool).await.unwrap();
     assert_eq!(stock, ("on_paddon".into(), "INV-PACK-A".into(), "12.750000".into(), free.into()));
+
+    use mini_rs_erp::core::preparation::{PreparationNoteViewerRole, PreparationOutputNoteUpdate};
+    use mini_rs_erp::db::postgres_preparation::InventoryRollNotesUpdate;
+    let note = |rolls: &[(&str, i64)], text: &str| -> InventoryRollNotesUpdate {
+        serde_json::from_value(json!({
+            "rolls": rolls.iter().map(|(id, revision)| json!({
+                "asset_ref": id, "expected_revision": revision,
+            })).collect::<Vec<_>>(),
+            "text": text,
+        })).unwrap()
+    };
+    let master = actor(PrincipalRole::TayyorlovMasteri, "prep-1");
+    let original: PreparationOutputNoteUpdate = serde_json::from_value(json!({
+        "scope": "rolls",
+        "rolls": [{"receipt_name": free, "expected_revision": 0}],
+        "text": "Avvalgi eslatma",
+    })).unwrap();
+    store.update_output_notes(&master, &original).await.unwrap().unwrap();
+    let get_packed_note = || store.output_notes_for_barcode(
+        "INV-PACK-A", PreparationNoteViewerRole::MaterialTaminotchi, &supplier.ref_,
+    );
+    assert_eq!(get_packed_note().await.unwrap().1.unwrap()["text"], "Avvalgi eslatma");
+    for (id, allowed_groups) in [
+        ("inventory-pack-outside", groups.clone()),
+        (free, ["wrong-group".into()]),
+    ] {
+        assert!(matches!(
+            store.update_inventory_roll_notes(supplier, &allowed_groups, note(&[(id, 0)], "Denied")).await,
+            Err(PreparationError::Forbidden)
+        ));
+    }
+    assert!(matches!(
+        store.update_inventory_roll_notes(supplier, &groups, note(&[(free, 0), (linked, 0)], "Stale")).await,
+        Err(PreparationError::Conflict(_))
+    ));
+    let (_, linked_note) = store.output_notes_for_barcode(
+        "INV-PACK-B", PreparationNoteViewerRole::MaterialTaminotchi, &supplier.ref_,
+    ).await.unwrap();
+    assert!(linked_note.is_none());
+    let revised = store.update_inventory_roll_notes(
+        supplier, &groups, note(&[(free, 1), (linked, 0)], "Yangi eslatma"),
+    ).await.unwrap();
+    assert_eq!(revised[free]["revision"], 2);
+    assert_eq!(revised[linked]["revision"], 1);
+    assert_eq!(get_packed_note().await.unwrap().1.unwrap()["text"], "Yangi eslatma");
     use mini_rs_erp::core::inventory_movements::{InventoryAssetQuery, InventoryMovementStorePort};
     use mini_rs_erp::db::postgres_inventory_movements::PostgresInventoryMovementStore;
     let moves = PostgresInventoryMovementStore::new(pool.clone());

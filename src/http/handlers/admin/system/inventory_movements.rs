@@ -54,12 +54,16 @@ pub(super) async fn inventory_asset_rows(
             .await.map_err(|_| server_error("inventory_material_group_scope_failed"))?
             .into_iter().map(|group| group.trim().to_lowercase()).collect();
     }
+    let include_material_roll_notes = query.include_prepared_paddons
+        && actor.principal.role == PrincipalRole::MaterialTaminotchi
+        && state.admin.principal_has_capability(&actor.principal, Capability::GscaleCatalogRead).await;
+    let note_groups = include_material_roll_notes.then(|| query.packed_item_groups.clone());
     let assets = state
         .inventory_movements
         .assets(&actor, query)
         .await
         .map_err(inventory_error)?;
-    if !include_order_assignment {
+    if !include_order_assignment && !include_material_roll_notes {
         return Ok(InventoryAssetRows::Plain(assets));
     }
     let barcodes = assets
@@ -67,31 +71,38 @@ pub(super) async fn inventory_asset_rows(
         .filter(|asset| asset.kind == InventoryAssetKind::RawMaterial)
         .map(|asset| asset.identifier.clone())
         .collect::<Vec<_>>();
-    let assigned_apparatus = state
-        .admin
-        .principal_assigned_apparatus(&actor.principal)
-        .await;
-    let mut assignments = state
-        .inventory_movements
-        .list_order_assignments(&actor, &barcodes, &assigned_apparatus)
-        .await
-        .map_err(inventory_error)?
-        .into_iter()
-        .map(|assignment| (assignment.barcode.trim().to_ascii_uppercase(), assignment))
-        .collect::<std::collections::BTreeMap<_, _>>();
+    let mut assignments = if include_order_assignment {
+        let assigned_apparatus = state.admin.principal_assigned_apparatus(&actor.principal).await;
+        state.inventory_movements
+            .list_order_assignments(&actor, &barcodes, &assigned_apparatus)
+            .await
+            .map_err(inventory_error)?
+            .into_iter()
+            .map(|assignment| (assignment.barcode.trim().to_ascii_uppercase(), assignment))
+            .collect::<std::collections::BTreeMap<_, _>>()
+    } else {
+        Default::default()
+    };
     let (mut production_notes, mut output_notes) = if let Some(store) = state.preparation.as_ref() {
-        let output_notes = async {
-            if actor.principal.role == PrincipalRole::TayyorlovMasteri {
-                store.output_notes_for_inventory(
-                    &barcodes,
-                    PreparationNoteViewerRole::TayyorlovMasteri,
-                    &actor.principal.ref_,
-                ).await
+        let production_notes = async {
+            if include_order_assignment {
+                store.production_notes_for_receipts(&barcodes).await
             } else {
                 Ok(Default::default())
             }
         };
-        tokio::try_join!(store.production_notes_for_receipts(&barcodes), output_notes)
+        let output_notes = async {
+            let viewer = match actor.principal.role {
+                PrincipalRole::TayyorlovMasteri => PreparationNoteViewerRole::TayyorlovMasteri,
+                PrincipalRole::MaterialTaminotchi if include_material_roll_notes =>
+                    PreparationNoteViewerRole::MaterialTaminotchi,
+                _ => return Ok(Default::default()),
+            };
+            store.output_notes_for_inventory_groups(
+                &barcodes, viewer, &actor.principal.ref_, note_groups.as_deref(),
+            ).await
+        };
+        tokio::try_join!(production_notes, output_notes)
             .map_err(|_| server_error("preparation_note_read_failed"))?
     } else {
         Default::default()
@@ -99,11 +110,13 @@ pub(super) async fn inventory_asset_rows(
     let rows = assets
         .into_iter()
         .map(|asset| {
-            let order_assignment = if asset.kind == InventoryAssetKind::RawMaterial {
-                assignments.remove(&asset.identifier.trim().to_ascii_uppercase())
-            } else {
-                None
-            };
+            let order_assignment = include_order_assignment.then(|| {
+                if asset.kind == InventoryAssetKind::RawMaterial {
+                    assignments.remove(&asset.identifier.trim().to_ascii_uppercase())
+                } else {
+                    None
+                }
+            });
             let (preparation_note, (batch_note, roll_note)) = if asset.kind == InventoryAssetKind::RawMaterial {
                 let code = asset.identifier.trim().to_ascii_uppercase();
                 (production_notes.remove(&code), output_notes.remove(&code).unwrap_or_default())
@@ -125,7 +138,8 @@ pub(super) enum InventoryAssetRows {
 pub(super) struct InventoryAssetListRow {
     #[serde(flatten)]
     asset: crate::core::inventory_movements::InventoryAsset,
-    order_assignment: Option<crate::core::inventory_movements::InventoryOrderAssignment>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    order_assignment: Option<Option<crate::core::inventory_movements::InventoryOrderAssignment>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     preparation_note: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -23,7 +23,6 @@ mod formula_print_snapshot;
 mod production_journal;
 pub(crate) use production_journal::MAX_JOURNAL_WINDOW;
 mod production_notes;
-mod output_notes;
 pub(crate) mod history;
 mod history_documents;
 pub(crate) mod orders;
@@ -57,6 +56,8 @@ macro_rules! free_in_warehouse {
 const AVAILABLE_STOCK: &str = concat!("s.status = 'available' AND ", free_in_warehouse!());
 const PADDON_STOCK: &str = concat!("s.status = 'on_paddon' AND ", free_in_warehouse!());
 
+mod output_notes;
+pub use output_notes::InventoryRollNotesUpdate;
 pub mod paddons;
 
 const PREPARATION_ITEM_GROUP: &str = "Homashyo";
