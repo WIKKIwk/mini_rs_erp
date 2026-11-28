@@ -16,9 +16,9 @@ include!("../postgres_inventory_movements_impl_parts/part_03.rs");
 include!("../postgres_inventory_movements_trait_impl.rs");
 
 static ASSET_LIST_SQL: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-    let seriyo_groups = super::postgres_preparation::SERIYO_GROUPS_SQL;
+    use super::postgres_preparation::{READY_ROLL_RECEIPT_SQL, RULON_GROUPS_SQL, SERIYO_GROUPS_SQL};
     format!(r#"
-WITH RECURSIVE {seriyo_groups}, assets AS (
+WITH RECURSIVE {SERIYO_GROUPS_SQL}, {RULON_GROUPS_SQL}, assets AS (
     SELECT
         stock.is_metalayzer,
         CASE
@@ -50,9 +50,7 @@ WITH RECURSIVE {seriyo_groups}, assets AS (
     LEFT JOIN mini_items item ON item.code = stock.item_code
     LEFT JOIN mini_gscale_receipts receipt ON receipt.name = stock.source_receipt_id
         AND lower(receipt.barcode) = lower(stock.barcode)
-        AND receipt.status = 'submitted'
-        AND receipt.payload_json->>'actor_role' = 'tayyorlov_masteri'
-        AND btrim(COALESCE(receipt.payload_json->>'actor_ref', '')) <> ''
+        AND {READY_ROLL_RECEIPT_SQL}
     LEFT JOIN mini_inventory_transfers transfer
       ON transfer.id = stock.payload_json->>'inventory_transfer_id'
     LEFT JOIN mini_raw_material_paddon_units unit ON $14

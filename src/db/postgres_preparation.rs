@@ -70,6 +70,32 @@ pub(super) const SERIYO_GROUPS_SQL: &str = "seriyo_groups AS (
     WHERE child.is_group
 )";
 
+pub(super) const RULON_GROUPS_SQL: &str = "rulon_groups AS (
+    SELECT name FROM mini_item_groups
+    WHERE lower(btrim(name)) IN ('rulon', 'rulon materiallari') AND is_group
+    UNION
+    SELECT child.name FROM mini_item_groups child JOIN rulon_groups parent
+      ON lower(btrim(child.parent_item_group)) = lower(btrim(parent.name))
+    WHERE child.is_group
+)";
+
+// Prepared output and cataloged roll receipts both have an existing roll QR.
+pub(super) const READY_ROLL_RECEIPT_SQL: &str = "
+    receipt.status = 'submitted'
+    AND btrim(receipt.barcode) <> ''
+    AND btrim(COALESCE(receipt.payload_json->>'actor_ref', '')) <> ''
+    AND NOT EXISTS (
+        SELECT 1 FROM seriyo_groups
+        WHERE lower(btrim(name)) = lower(btrim(item.item_group))
+    )
+    AND (
+        receipt.payload_json->>'actor_role' = 'tayyorlov_masteri'
+        OR EXISTS (
+            SELECT 1 FROM rulon_groups
+            WHERE lower(btrim(name)) = lower(btrim(item.item_group))
+        )
+    )";
+
 // Share the receipt proof between the displayed balance and actual debits.
 // The transfer evidence also covers lots received before the receipt was linked.
 macro_rules! preparation_lot_for_master {

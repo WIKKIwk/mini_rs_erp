@@ -1,18 +1,20 @@
 use super::attachments::{
-    ROLL_STOCK, STOCK_WAREHOUSE, save_paddon_attachment, validate_attachment_key,
-    validate_roll_selection,
+    STOCK_WAREHOUSE, save_paddon_attachment, validate_attachment_key, validate_roll_selection,
 };
 use super::issues::movement_error;
 use super::*;
 use crate::db::postgres_inventory_movements::ensure_raw_material_destination_scope_tx;
+use crate::db::postgres_preparation::{READY_ROLL_RECEIPT_SQL, RULON_GROUPS_SQL, SERIYO_GROUPS_SQL};
 use std::collections::BTreeSet;
 
+const INVENTORY_ROLL_STOCK: &str = "FROM mini_raw_material_stock s
+    JOIN mini_gscale_receipts receipt ON receipt.name = s.source_receipt_id
+        AND lower(receipt.barcode) = lower(s.barcode)";
+
 const INVENTORY_SCOPE: &str = "
-    JOIN mini_items i ON i.code = s.item_code
-    WHERE s.id = ANY($1) AND r.status = 'submitted'
-      AND r.payload_json->>'actor_role' = 'tayyorlov_masteri'
-      AND btrim(COALESCE(r.payload_json->>'actor_ref', '')) <> ''
-      AND lower(btrim(i.item_group)) = ANY($3)
+    JOIN mini_items item ON item.code = s.item_code
+    WHERE s.id = ANY($1)
+      AND lower(btrim(item.item_group)) = ANY($3)
       AND ($4 = '' OR w.id = $4)
       AND EXISTS (
           SELECT 1 FROM mini_warehouse_assignments a
@@ -155,14 +157,17 @@ async fn inventory_rolls(
     asset_refs: &[String],
     target_warehouse_id: Option<&str>,
 ) -> Result<Vec<InventoryRoll>, PreparationError> {
-    let scope = format!("{ROLL_STOCK} {STOCK_WAREHOUSE} {INVENTORY_SCOPE}");
+    let groups = format!("WITH RECURSIVE {SERIYO_GROUPS_SQL}, {RULON_GROUPS_SQL}");
+    let scope = format!(
+        "{INVENTORY_ROLL_STOCK} {STOCK_WAREHOUSE} {INVENTORY_SCOPE} AND {READY_ROLL_RECEIPT_SQL}"
+    );
     let warehouse_id = target_warehouse_id.unwrap_or_default();
     let out_of_scope = PreparationError::Conflict(
-        "Shu ombordagi va sizga biriktirilgan guruhdagi tayyorlov rulonlarini tanlang",
+        "Shu ombordagi va sizga biriktirilgan guruhdagi QR kodli tayyor rulonlarni tanlang",
     );
     if target_warehouse_id.is_some() {
         let locked: Vec<String> = sqlx::query_scalar(&format!(
-            "SELECT s.id {scope} ORDER BY s.id FOR UPDATE OF s FOR SHARE OF i"
+            "{groups} SELECT s.id {scope} ORDER BY s.id FOR UPDATE OF s FOR SHARE OF item"
         ))
         .bind(asset_refs)
         .bind(&actor.ref_)
@@ -176,7 +181,7 @@ async fn inventory_rolls(
     }
     let free = free_in_warehouse!();
     let rolls = sqlx::query_as::<_, InventoryRoll>(&format!(
-        "SELECT s.id AS stock_id, r.name AS receipt_name, s.item_code, w.id AS warehouse_id,
+        "{groups} SELECT s.id AS stock_id, receipt.name AS receipt_name, s.item_code, w.id AS warehouse_id,
                 w.name AS warehouse, (s.status = 'available' AND s.qty > 0 AND s.uom = 'kg'
                     AND {free} AND NOT EXISTS (
                         SELECT 1 FROM mini_raw_material_paddon_units u

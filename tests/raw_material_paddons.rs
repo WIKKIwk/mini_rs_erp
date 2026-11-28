@@ -410,7 +410,134 @@ async fn verify(pool: &PgPool, options: PgConnectOptions) {
     verify_cross_warehouse_packing(pool, &store, &master, supply_code, item).await;
     verify_material_inventory_packing(pool, &store, &supplier, supply_code, &empty_code).await;
     verify_seriyo_workflow(pool, &runtime, &store, &master, &supplier).await;
+    verify_kirim_inventory_rolls(pool, &runtime, &store, &supply_inventory, supply_code).await;
     runtime.close().await;
+}
+
+async fn verify_kirim_inventory_rolls(
+    pool: &PgPool,
+    runtime: &PgPool,
+    store: &PostgresPreparationStore,
+    supplier: &InventoryActor,
+    paddon_code: &str,
+) {
+    use mini_rs_erp::core::inventory_movements::{
+        InventoryAssetQuery, InventoryMovementStorePort, InventoryStockUse,
+    };
+    use mini_rs_erp::db::postgres_inventory_movements::PostgresInventoryMovementStore;
+
+    sqlx::raw_sql(
+        r#"INSERT INTO mini_item_groups (name,parent_item_group,is_group)
+           VALUES ('Rulon','Homashyo',true),('Purchased roll test subgroup','Rulon',true)
+           ON CONFLICT (name) DO NOTHING;
+           INSERT INTO mini_items (code,name,uom,item_group)
+           VALUES ('KIRIM-BOPP','Kirim BOPP roll','kg','Purchased roll test subgroup'),
+                  ('KIRIM-SERIYO','Kirim Seriyo','kg',
+                   (SELECT name FROM mini_item_groups WHERE lower(btrim(name)) = 'seriyo'));
+           INSERT INTO mini_gscale_receipts (name,status,item_code,warehouse,qty,barcode,payload_json)
+           VALUES ('kirim-pack-roll','submitted','KIRIM-BOPP','Supply',100,'KIRIM-BOPP-QR',
+                   '{"actor_role":"material_taminotchi","actor_ref":"supply-1"}'),
+                  ('kirim-pack-seriyo','submitted','KIRIM-SERIYO','Supply',7,'KIRIM-SERIYO-QR',
+                   '{"actor_role":"material_taminotchi","actor_ref":"supply-1"}');
+           INSERT INTO mini_raw_material_stock
+               (id,warehouse,item_code,item_name,barcode,qty,source_receipt_id)
+           SELECT receipt.name,receipt.warehouse,receipt.item_code,item.name,receipt.barcode,
+                  receipt.qty,receipt.name
+           FROM mini_gscale_receipts receipt JOIN mini_items item ON item.code = receipt.item_code
+           WHERE receipt.name IN ('kirim-pack-roll','kirim-pack-seriyo');"#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+
+    let groups = [String::from("purchased roll test subgroup"), String::from("seriyo")];
+    let movements = PostgresInventoryMovementStore::new(runtime.clone());
+    let query = InventoryAssetQuery {
+        warehouse_id: "supply".into(),
+        stock_use: Some(InventoryStockUse::PreparedRoll),
+        query: "Kirim".into(),
+        include_prepared_paddons: true,
+        packed_item_groups: groups.to_vec(),
+        limit: 10,
+        ..Default::default()
+    };
+    let assets = InventoryMovementStorePort::assets(&movements, supplier, &query)
+        .await
+        .unwrap();
+    assert_eq!(assets.len(), 1);
+    assert_eq!(assets[0].identifier, "KIRIM-BOPP-QR");
+    assert_eq!(assets[0].preparation_qr, Some(true));
+    let seriyo_query = InventoryAssetQuery {
+        stock_use: Some(InventoryStockUse::PreparationInput),
+        identifier: "KIRIM-SERIYO-QR".into(),
+        ..query.clone()
+    };
+    let seriyo = InventoryMovementStorePort::assets(&movements, supplier, &seriyo_query)
+        .await
+        .unwrap();
+    assert_eq!(seriyo.len(), 1);
+    assert_eq!(seriyo[0].identifier, "KIRIM-SERIYO-QR");
+
+    let options = |asset_ref: &str| {
+        serde_json::from_value(json!({"asset_refs": [asset_ref]})).unwrap()
+    };
+    let choices = store
+        .inventory_paddon_options(&supplier.principal, &groups, options("kirim-pack-roll"))
+        .await
+        .unwrap();
+    assert!(choices["paddons"].as_array().unwrap().iter().any(|p| p["paddon_code"] == paddon_code));
+    assert!(matches!(
+        store.inventory_paddon_options(&supplier.principal, &groups, options("kirim-pack-seriyo")).await,
+        Err(PreparationError::Conflict(_))
+    ));
+    store
+        .attach_inventory_rolls(
+            &supplier.principal,
+            &groups,
+            serde_json::from_value(json!({
+                "code": paddon_code,
+                "request_id": "kirim-pack-attach",
+                "asset_refs": ["kirim-pack-roll"],
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let packed = InventoryMovementStorePort::assets(&movements, supplier, &query)
+        .await
+        .unwrap();
+    assert_eq!(packed[0].paddon_code.as_deref(), Some(paddon_code));
+    assert_eq!(packed[0].status, "on_paddon");
+    let details = store
+        .raw_material_paddons(&supplier.principal, filter("all", paddon_code))
+        .await
+        .unwrap();
+    let unit = details["paddons"][0]["contents"].as_array().unwrap().iter()
+        .find(|unit| unit["prepared_barcode"] == "KIRIM-BOPP-QR").unwrap();
+    let released = store
+        .issue_raw_material_paddon(
+            supplier,
+            serde_json::from_value(json!({
+                "request_id": "kirim-pack-release",
+                "code": paddon_code,
+                "line_no": unit["line_no"],
+                "weights": ["100"],
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(released["existing_qr"], true);
+    assert_eq!(released["labels"][0]["barcode"], "KIRIM-BOPP-QR");
+    let stock: (String, String, String) = sqlx::query_as(
+        "SELECT status, qty::text, source_receipt_id FROM mini_raw_material_stock WHERE id = $1",
+    )
+    .bind("kirim-pack-roll")
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(stock, ("available".into(), "100.000000".into(), "kirim-pack-roll".into()));
 }
 
 async fn verify_seriyo_workflow(
