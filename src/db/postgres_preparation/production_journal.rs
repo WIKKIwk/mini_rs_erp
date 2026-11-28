@@ -29,6 +29,13 @@ fn roll_json() -> String {
         'net_kg',r.net_kg::text,'gross_kg',r.gross_kg::text,'length_m',r.length_m::text,
         'width_mm',r.width_mm::text,'micron',r.micron::text,'printed_at',r.printed_at,
         'preparation_formula',r.preparation_formula,
+        'on_paddon', EXISTS (
+            SELECT 1 FROM mini_raw_material_stock stock
+            JOIN mini_raw_material_paddon_units unit ON unit.stock_id=stock.id
+                AND unit.issue_id IS NULL AND unit.prepared_roll
+            WHERE lower(stock.barcode)=lower(r.epc)
+                AND stock.source_receipt_id=r.receipt_name AND stock.status='on_paddon' AND stock.qty>0
+        ),
         'batch_note',{},'roll_note',{})", output_note_json("bn"), output_note_json("rn"))
 }
 

@@ -223,7 +223,34 @@ async fn run_checks(pool: PgPool) {
             .unwrap()["orders"][0]["roll_count"],
         1
     );
+    check_roll_paddon_status(&pool, &journal).await;
     check_production_notes(&pool, &journal, &recipe).await;
+}
+
+async fn check_roll_paddon_status(pool: &PgPool, journal: &PostgresPreparationStore) {
+    let roll = || journal.production_journal_rolls("master-1", "EPC3", "all", 0, 50);
+    assert_eq!(roll().await.unwrap()["rolls"][0]["on_paddon"], false);
+
+    sqlx::raw_sql(
+        "INSERT INTO mini_raw_material_paddons(id,code,owner_role,owner_ref,request_id,request_json)
+         VALUES ('journal-paddon','XP-ABCDEF0123456789','material_taminotchi','supply-1','journal-paddon','{}');
+         INSERT INTO mini_raw_material_stock(id,warehouse,item_code,barcode,qty,uom,status,source_receipt_id)
+         VALUES ('journal-stock','Own W','PE PR','epc3',5,'kg','on_paddon','receipt-EPC3');
+         INSERT INTO mini_raw_material_paddon_units(paddon_id,line_no,unit_no,stock_id,kind,lot_number,unit_kg,prepared_roll)
+         VALUES ('journal-paddon',1,1,'journal-stock','roll','',5,true);",
+    ).execute(pool).await.unwrap();
+    assert_eq!(roll().await.unwrap()["rolls"][0]["on_paddon"], true);
+    let detail = journal.production_journal_batch("master-1", "receipt:EPC3", 0, 50)
+        .await.unwrap().unwrap();
+    assert_eq!(detail["rolls"][0]["on_paddon"], true);
+
+    sqlx::raw_sql(
+        "INSERT INTO mini_raw_material_paddon_issues(id,paddon_id,request_id,request_json,response_json)
+         VALUES ('journal-issue','journal-paddon','journal-issue','{}','{}');
+         UPDATE mini_raw_material_stock SET status='available' WHERE id='journal-stock';
+         UPDATE mini_raw_material_paddon_units SET issue_id='journal-issue' WHERE stock_id='journal-stock';",
+    ).execute(pool).await.unwrap();
+    assert_eq!(roll().await.unwrap()["rolls"][0]["on_paddon"], false);
 }
 
 async fn check_production_notes(pool: &PgPool, journal: &PostgresPreparationStore, recipe: &Value) {
