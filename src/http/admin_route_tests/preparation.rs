@@ -101,7 +101,7 @@ async fn preparation_receipt_reprint_and_scanned_note_visibility_are_scoped() {
     ).fetch_one(&seed).await.unwrap();
     assert_eq!(quantity.0, 1);
     assert!(quantity.1.starts_with("23"));
-    check_scanned_note_roles(&router, &state, &own).await;
+    check_scanned_note_roles(&router, &state, &own, &seed).await;
     drop(router);
     drop(state);
     runtime.close().await;
@@ -110,7 +110,12 @@ async fn preparation_receipt_reprint_and_scanned_note_visibility_are_scoped() {
     admin.close().await;
 }
 
-async fn check_scanned_note_roles(router: &axum::Router, state: &AppState, owner: &str) {
+async fn check_scanned_note_roles(
+    router: &axum::Router,
+    state: &AppState,
+    owner: &str,
+    seed: &sqlx::PgPool,
+) {
     state.apparatus.bootstrap_factory_defaults().await.unwrap();
     for (worker, apparatus) in [
         ("cut-worker", "apparatus:default:asset-010"),
@@ -162,11 +167,32 @@ async fn check_scanned_note_roles(router: &axum::Router, state: &AppState, owner
     let row = upserts.values().next().unwrap();
     assert_eq!(row["epc"], "QR-OWN");
     assert_eq!(row["roll_note"]["text"], "Restricted note");
-    for revision in [1, 2] {
-        if revision == 2 {
+    for (revision, audience) in [
+        (1, None),
+        (2, Some(serde_json::json!({"mode":"all"}))),
+        (3, Some(serde_json::json!({"mode":"roles","roles":["rezka_master"]}))),
+        (4, Some(serde_json::json!({"mode":"all"}))),
+    ] {
+        if revision == 3 {
+            sqlx::raw_sql(
+                "INSERT INTO mini_raw_material_paddons
+                    (id,code,owner_role,owner_ref,warehouse_id,request_id,request_json)
+                 VALUES ('scan-note-paddon','XP-0011223344556677','tayyorlov_masteri','prep-reprint',
+                         'reprint-w','scan-note-paddon','{}');
+                 INSERT INTO mini_raw_material_paddon_units
+                    (paddon_id,line_no,unit_no,stock_id,kind,lot_number,unit_kg,prepared_roll)
+                 VALUES ('scan-note-paddon',1,1,'raw:own','roll','',23,true);
+                 UPDATE mini_raw_material_stock SET status='on_paddon' WHERE id='raw:own';",
+            ).execute(seed).await.unwrap();
+        }
+        if let Some(audience) = audience {
+            let payload = serde_json::json!({
+                "scope": "rolls",
+                "rolls": [{"receipt_name": "receipt-own", "expected_revision": revision - 1}],
+                "audience": audience,
+            });
             let response = router.clone().oneshot(request_with_body(
-                "PATCH", "/v1/mobile/preparation/production/notes", owner,
-                r#"{"scope":"rolls","rolls":[{"receipt_name":"receipt-own","expected_revision":1}],"audience":{"mode":"all"}}"#,
+                "PATCH", "/v1/mobile/preparation/production/notes", owner, &payload.to_string(),
             )).await.unwrap();
             assert_eq!(response.status(), StatusCode::OK);
         }
@@ -183,7 +209,11 @@ async fn check_scanned_note_roles(router: &axum::Router, state: &AppState, owner
                 "GET", "/v1/mobile/preparation/production/notes/scan?barcode=qr-own", &token,
             )).await.unwrap();
             assert_eq!(response.status(), StatusCode::OK, "{viewer}");
-            let visible = if revision == 1 { selected } else { all_cutters };
+            let visible = match revision {
+                1 => selected,
+                3 => role == PrincipalRole::RezkaMaster,
+                _ => all_cutters,
+            };
             let expected = visible.then(|| serde_json::json!({"text":"Restricted note","revision":revision}));
             assert_eq!(json_body(response).await["roll_note"], serde_json::json!(expected), "{viewer}");
         }

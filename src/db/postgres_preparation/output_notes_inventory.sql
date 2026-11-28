@@ -8,7 +8,17 @@ WITH receipts AS MATERIALIZED (
       AND lower(receipt.barcode)=lower(stock.barcode)
     WHERE lower(stock.barcode)=ANY($1::text[]) AND receipt.status='submitted'
       AND (stock.status IN ('available','reserved','in_use')
-           OR (stock.status='on_paddon' AND $2='material_taminotchi'))
+           OR (stock.status='on_paddon' AND (
+               $2='material_taminotchi'
+               OR ($2 IN ('rezka_master','homashyo_rezkachi','rezka_worker')
+                   AND stock.qty>0 AND EXISTS (
+                       SELECT 1 FROM mini_raw_material_paddon_units u
+                       JOIN mini_raw_material_paddons p ON p.id=u.paddon_id
+                       JOIN mini_warehouses w ON w.id=p.warehouse_id
+                       WHERE u.stock_id=stock.id AND u.issue_id IS NULL AND u.prepared_roll
+                         AND NOT w.is_group AND lower(w.name)=lower(stock.warehouse)
+                   ))
+           )))
       AND ($4::text[] IS NULL OR EXISTS (
           SELECT 1 FROM mini_items i
           WHERE i.code=stock.item_code AND lower(btrim(i.item_group))=ANY($4)
